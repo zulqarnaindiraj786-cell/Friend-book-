@@ -16,18 +16,23 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **🎤 Voice messages** in chat (record/send/play, like Messenger)
 - **Message reactions** (long-press any message) + **🎨 chat themes** (8 bubble colors)
 - **Followers / Following lists** on profiles, **Activity log**, **Export your data**
-- **✓ Blue Tick system** — Option A **FREE**: invite 5 friends via
-  `friendbook.app/invite?ref=YOUR_ID` (referral signup auto-tracks; at 5/5 the tick
-  grants itself + congratulates you). Option B **Rs 100**: pay on JazzCash/Easypaisa
-  (numbers live from Firestore `config/payments`, admin-editable) + screenshot upload →
-  admin approves. Blue ✓ badge shows on your profile + next to your name everywhere.
+- **✓ Tick LEVELS** — Blue ✓ (5 invites or Rs 100), Gold ✓ #FFD700 (20 invites or Rs 500),
+  Diamond 💎 animated (50 invites or Rs 1000). Auto-granted on referral milestone; badges show
+  next to names everywhere. `users.tickLevel` = none/blue/gold/diamond
+- **⭐ Paid Subscriptions** — creators set $2/$5/$10 monthly (70% creator · 30% friendbook);
+  ⭐ Subscribe button on profiles; `subscriptions {creatorId, subscriberId, price, status, expiry}`
+- **🚀 Boosts** — "Boost Profile 24h – Rs 50" on your profile, "Boost Post – Rs 30" in post menu;
+  boosted creators pinned on TOP of Home; `boosts {userId, postId, type, expiry, status}`
+- **🔴 LIVE + Gifts** — Go Live on Home; viewers join, live chat, send Stars (1⭐ = Rs 10),
+  👑 top-gifter badge live. `lives`, `lives/*/chat`, `gifts` collections
 - **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
-  + 5 reels), Stars balance, fan Subscriptions with your own monthly price
-- **🛡 Admin Panel** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com` + promoted admins),
-  **5 tabs**: (1) Users + **Give Blue Tick button**, (2) Referral stats (who invited how many),
-  (3) Blue-tick payments — screenshot + **Approve/Reject**, (4) live Stats (users/referrals/
-  pending payments/verified), (5) **Direct tick control** — search any user, give/remove instantly.
-  Plus: content moderation, reports queue, feedback inbox, broadcast to all
+  + 5 reels), Stars balance with Rs value, fan Subscriptions toggle + price, live subscriber count
+- **🛡 Admin SUPER Dashboard** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com`), **6 tabs**:
+  (1) Users — search any user, give/remove ANY tick level, ban/promote; (2) Referrals;
+  (3) Payments — unified list (ticks/boosts/subscriptions) with screenshot + **Approve/Reject**
+  (approve activates instantly); (4) Boosts — approve/stop; (5) Live rooms — viewers/stars/end;
+  (6) **Earnings** — income by type, 70/30 subscription split, **6-month bar chart**, tools
+  (payment-number editor, broadcast, reports, moderation)
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`
