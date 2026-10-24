@@ -42,10 +42,32 @@ jobs:
           test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        id: dbg
+        run: |
+          set +e
+          gradle assembleDebug --console=plain > build-debug.log 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Surface compiler errors as annotations
+        if: steps.dbg.outputs.exit != '0'
+        run: |
+          echo "===== gradle tail ====="
+          tail -25 build-debug.log
+          echo "===== java errors ====="
+          grep -E "\.java:[0-9]+: (error|warning)" build-debug.log | head -50 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          grep -E "error: package|error: cannot|error: incompatible|error: method|error: ';'" build-debug.log | head -50 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+
+      - name: Fail if debug build failed
+        if: steps.dbg.outputs.exit != '0'
+        run: exit 1
 
       - name: Build release APK
-        run: gradle assembleRelease --stacktrace
+        run: gradle assembleRelease --console=plain --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
