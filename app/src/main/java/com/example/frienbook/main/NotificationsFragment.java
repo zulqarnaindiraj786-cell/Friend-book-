@@ -110,12 +110,12 @@ public class NotificationsFragment extends Fragment {
         if (me == null) return;
         reg = Fb.db().collection("notifications").whereEqualTo("toUserId", me)
                 .addSnapshotListener((snap, err) -> {
-                    android.app.Activity a = getActivity();
+                    android.app.Activity act = getActivity();
                     data.clear();
-                    if (snap != null && a != null) {
+                    if (snap != null && act != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.Notif n = Models.Notif.fromDoc(d);
-                            if (!allowedByPrefs(a, n.type)) continue; // Settings > Notifications toggles
+                            if (!allowedByPrefs(act, n.type)) continue; // Settings > Notifications toggles
                             if (unreadOnly && n.isRead) continue;
                             data.add(n);
                         }
