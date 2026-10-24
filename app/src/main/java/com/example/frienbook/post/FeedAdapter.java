@@ -252,6 +252,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    /** #hashtags aur @mentions ko Facebook jaisa blue+bold style karo. */
+    static CharSequence styleHashtags(String text) {
+        if (text == null) return "";
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("([#@])([A-Za-z0-9_\\p{IsArabic}\\p{IsArabic_Supplement}]+)")
+                .matcher(text);
+        while (m.find()) {
+            sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return sb;
+    }
+
     private String firstName() {
         String n = Fb.myName();
         int i = n.indexOf(' ');
@@ -281,7 +297,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = activity;
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
-        vh.name.setText(p.authorName + (hasFeeling ? " is feeling " + p.feeling : ""));
+        String nameLine = p.authorName + (hasFeeling ? " is feeling " + p.feeling : "");
+        if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
+            nameLine += " — with " + p.taggedNames.get(0)
+                    + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
+                    : p.taggedNames.size() == 2 ? " and " + p.taggedNames.get(1) : "");
+        }
+        vh.name.setText(nameLine);
         vh.tick.setImageDrawable(null);
         if (!"none".equals(p.authorTickLevel) && p.authorTickLevel != null) {
             vh.tick.setVisibility(View.VISIBLE);
@@ -319,7 +341,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
             Ui.pad(vh.content, 12, 4, 12, 8);
         }
-        vh.content.setText(p.content);
+        vh.content.setText(styleHashtags(p.content));
         vh.content.setVisibility(p.content == null || p.content.isEmpty() ? View.GONE : View.VISIBLE);
         // location line
         if (p.location != null && !p.location.isEmpty())
@@ -437,10 +459,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if ("video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
             vh.playBadge.setText("▶");
             vh.playBadge.setTextSize(34);
-            if (Prefs.dataSaver(c)) {
+            boolean holdForTap = Prefs.dataSaver(c) || !Prefs.autoplay(c);
+            if (holdForTap) {
                 vh.image.setVisibility(View.VISIBLE);
                 vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
-                vh.playBadge.setText("▶  Load video (Data Saver)");
+                vh.playBadge.setText(Prefs.dataSaver(c) ? "▶  Load video (Data Saver)" : "▶  Tap to play");
                 vh.playBadge.setTextSize(15);
                 vh.playBadge.setVisibility(View.VISIBLE);
                 vh.mediaBox.setOnClickListener(v -> { vh.playBadge.setText("⏳"); streamVideo(vh, p.mediaUrl, true); });
@@ -578,6 +601,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         else { vh.video.start(); vh.playBadge.setVisibility(View.GONE); }
     }
 
+    /** 📖 Share a post to my story (image posts reuse the photo; text → caption story). */
+    private void shareToStory(Models.Post p) {
+        java.util.Map<String, Object> s = new HashMap<>();
+        s.put("authorId", Fb.uid());
+        s.put("authorName", Fb.myName());
+        s.put("authorPhotoUrl", Fb.myPhoto());
+        boolean hasImg = "image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty();
+        s.put("mediaUrl", hasImg ? p.mediaUrl : "");
+        s.put("mediaType", hasImg ? "image" : "text");
+        String cap = p.content == null ? "" : (p.content.length() > 140 ? p.content.substring(0, 140) + "…" : p.content);
+        s.put("caption", "📌 " + p.authorName + (cap.isEmpty() ? "" : ": " + cap));
+        s.put("sharedPostId", p.id);
+        s.put("viewedBy", new ArrayList<String>());
+        s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        s.put("expiresAt", new com.google.firebase.Timestamp(
+                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
+        Fb.db().collection("stories").add(s)
+                .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖"))
+                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage()));
+    }
+
     // ---------- post overflow menu ----------
     private void postMenu(View anchor, Models.Post p) {
         Context c = activity;
@@ -601,6 +645,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (isAdmin && !mine) menu.getMenu().add("🛡 🗑 Delete post (admin)");
         menu.getMenu().add("📋 Copy text");
         menu.getMenu().add("🔗 Copy link");
+        menu.getMenu().add("📤 Share to other apps");
+        menu.getMenu().add("📖 Add to your story");
+        if (!mine) menu.getMenu().add("❓ Why am I seeing this?");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
@@ -631,6 +678,25 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Delete")) deletePost(p);
             else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
             else if (t.contains("Copy text")) copyText(p.content);
+            else if (t.contains("Share to other")) {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                String body = (p.content == null ? "" : p.content)
+                        + (p.mediaUrl != null && !p.mediaUrl.isEmpty() ? "\n" + p.mediaUrl : "")
+                        + "\n— via friendbook";
+                send.putExtra(Intent.EXTRA_TEXT, body.isEmpty() ? "friendbook://post/" + p.id : body);
+                activity.startActivity(Intent.createChooser(send, "Share post"));
+            }
+            else if (t.contains("Add to your story")) shareToStory(p);
+            else if (t.contains("Why am I seeing"))
+                Ui.info(activity, "Why this post?",
+                        (p.sharedFromId != null && !p.sharedFromId.isEmpty()
+                                ? "You follow " + p.authorName + " and they shared this post.\n"
+                                : "You follow " + p.authorName + ".\n")
+                                + ("Friends".equalsIgnoreCase(p.privacy) ? "Audience: friends only.\n"
+                                : "Only me".equalsIgnoreCase(p.privacy) ? "Audience: only the author.\n"
+                                : "Audience: public.\n")
+                                + "Posted " + Format.ago(p.createdAt) + ". Hide, snooze or block from this same menu.");
             else if (t.contains("Follow")) followUser(p.authorId);
             else if (t.contains("Block")) blockUser(p.authorId);
             else if (t.contains("Report")) reportPost(p);

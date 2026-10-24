@@ -49,8 +49,8 @@ public class Ui {
 
     // ---- dynamic colors ----
     public static boolean isDark(Context c) { return Prefs.dark(c); }
-    public static int bg(Context c)    { return isDark(c) ? 0xFF18191A : 0xFFF0F2F5; }
-    public static int card(Context c)  { return isDark(c) ? 0xFF242526 : 0xFFFFFFFF; }
+    public static int bg(Context c)    { return isDark(c) ? (Prefs.amoled(c) ? 0xFF000000 : 0xFF18191A) : 0xFFF0F2F5; }
+    public static int card(Context c)  { return isDark(c) ? (Prefs.amoled(c) ? 0xFF0A0A0A : 0xFF242526) : 0xFFFFFFFF; }
     public static int txt(Context c)   { return isDark(c) ? 0xFFE4E6EB : 0xFF050505; }
     public static int sub(Context c)   { return isDark(c) ? 0xFFB0B3B8 : 0xFF65676B; }
     public static int div(Context c)   { return isDark(c) ? 0xFF3E4042 : 0xFFCED0D4; }

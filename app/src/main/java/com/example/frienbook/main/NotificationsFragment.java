@@ -41,6 +41,8 @@ public class NotificationsFragment extends Fragment {
     private NotifAdapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
+    private TextView chipAll, chipUnread;
+    private boolean unreadOnly;
     private final List<Models.Notif> data = new ArrayList<>();
 
     @Nullable
@@ -59,6 +61,21 @@ public class NotificationsFragment extends Fragment {
         head.addView(markAll);
         markAll.setOnClickListener(v -> markAllReadReal());
         root.addView(head);
+
+        // filter chips: All / Unread (Facebook Lite)
+        LinearLayout chips = Ui.row(a);
+        Ui.pad(chips, 14, 0, 14, 6);
+        chipAll = Ui.roundChip(a, "All", Ui.BLUE, 0xFFFFFFFF, 12);
+        Ui.pad(chipAll, 12, 6, 12, 6);
+        chipUnread = Ui.roundChip(a, "Unread", Ui.inputBg(a), Ui.sub(a), 12);
+        Ui.pad(chipUnread, 12, 6, 12, 6);
+        chipAll.setOnClickListener(v -> setUnreadOnly(false));
+        chipUnread.setOnClickListener(v -> setUnreadOnly(true));
+        chips.addView(chipAll);
+        LinearLayout.LayoutParams cup = new LinearLayout.LayoutParams(-2, -2);
+        cup.leftMargin = Ui.dp(a, 8);
+        chips.addView(chipUnread, cup);
+        root.addView(chips);
 
         empty = Ui.tv(a, "No notifications yet.\nLikes, comments and friend requests appear here.", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
@@ -93,15 +110,47 @@ public class NotificationsFragment extends Fragment {
         if (me == null) return;
         reg = Fb.db().collection("notifications").whereEqualTo("toUserId", me)
                 .addSnapshotListener((snap, err) -> {
+                    android.app.Activity act = getActivity();
                     data.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) data.add(Models.Notif.fromDoc(d));
+                    if (snap != null && act != null) {
+                        for (DocumentSnapshot d : snap) {
+                            Models.Notif n = Models.Notif.fromDoc(d);
+                            if (!allowedByPrefs(act, n.type)) continue; // Settings > Notifications toggles
+                            if (unreadOnly && n.isRead) continue;
+                            data.add(n);
+                        }
                     }
                     Collections.sort(data, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     if (data.size() > 80) data.subList(80, data.size()).clear();
                     adapter.notifyDataSetChanged();
                     empty.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
                 });
+    }
+
+    private void setUnreadOnly(boolean on) {
+        unreadOnly = on;
+        android.app.Activity a = getActivity();
+        if (a == null) return;
+        chipAll.setBackground(Ui.round(a, on ? Ui.inputBg(a) : Ui.BLUE, 10));
+        chipAll.setTextColor(on ? Ui.sub(a) : 0xFFFFFFFF);
+        chipUnread.setBackground(Ui.round(a, on ? Ui.BLUE : Ui.inputBg(a), 10));
+        chipUnread.setTextColor(on ? 0xFFFFFFFF : Ui.sub(a));
+        if (reg != null) { reg.remove(); reg = null; }
+        onStart(); // re-register listener so the new filter applies
+    }
+
+    /** Settings > Notifications switches define what appears here. */
+    private boolean allowedByPrefs(android.app.Activity a, String type) {
+        if (type == null) return true;
+        switch (type) {
+            case "like":
+            case "reaction": return com.example.frienbook.core.Prefs.notifLikes(a);
+            case "comment": return com.example.frienbook.core.Prefs.notifComments(a);
+            case "friend_request":
+            case "friend_accept": return com.example.frienbook.core.Prefs.notifRequests(a);
+            case "message": return com.example.frienbook.core.Prefs.notifMessages(a);
+            default: return true; // ticks/payments/referrals/boosts always show
+        }
     }
 
     @Override

@@ -21,6 +21,7 @@ import android.widget.VideoView;
 import androidx.core.content.FileProvider;
 
 import com.example.frienbook.core.Fb;
+import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
 import com.google.firebase.firestore.FieldValue;
@@ -60,6 +61,9 @@ public class CreatePostActivity extends Activity {
     private String privacy;
     private String feeling = "";
     private String location = "";
+    private final java.util.List<String> taggedUids = new ArrayList<>();
+    private final java.util.List<String> taggedNames = new ArrayList<>();
+    private TextView tagChip;
     private int bgColor = 0;
     private final List<String> pollOptions = new ArrayList<>();
     private String editId = null;
@@ -172,6 +176,7 @@ public class CreatePostActivity extends Activity {
         attach.addView(Ui.divider(this));
         attach2.addView(attachBtn("🎨 Background", v -> pickBackground()));
         attach2.addView(attachBtn("📊 Poll", v -> pollDialog()));
+        attach2.addView(attachBtn("👥 Tag friends", v -> tagFriendsDialog()));
         attach2.addView(attachBtn("📍 Check in", v -> checkInDialog()));
         body.addView(attach2);
 
@@ -218,6 +223,56 @@ public class CreatePostActivity extends Activity {
             feeling = FEELINGS[w];
             feelingBtn.setText(feeling);
         });
+    }
+
+    /** 👥 Tag people — multi-pick from your friends; shows "— with X" on the post. */
+    private void tagFriendsDialog() {
+        String me = Fb.uid();
+        if (me == null) return;
+        Fb.db().collection("friends").whereArrayContains("participants", me).get()
+                .addOnSuccessListener(snap -> {
+                    java.util.List<String> ids = new ArrayList<>();
+                    for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        List<String> parts = com.example.frienbook.models.Models.ChatRoom.fromDoc(d).participants;
+                        for (String p : parts) if (!p.equals(me)) ids.add(p);
+                    }
+                    if (ids.isEmpty()) { Ui.toast(this, "No friends to tag yet"); return; }
+                    // resolve names in chunks of 10
+                    java.util.List<String> names = new ArrayList<>();
+                    java.util.List<String> uids = new ArrayList<>();
+                    java.util.List<java.util.List<String>> chunks = Ui.chunks(ids, 10);
+                    final int[] left = {chunks.size()};
+                    for (java.util.List<String> chunk : chunks) {
+                        Fb.db().collection("users").whereIn(
+                                com.google.firebase.firestore.FieldPath.documentId(), chunk).get()
+                                .addOnSuccessListener(s -> {
+                                    for (com.google.firebase.firestore.DocumentSnapshot d2 : s) {
+                                        uids.add(d2.getId());
+                                        names.add(Format.strOr(d2.getData(), "displayName", "User"));
+                                    }
+                                    if (--left[0] == 0) showTagPicker(uids, names);
+                                });
+                    }
+                });
+    }
+
+    private void showTagPicker(java.util.List<String> uids, java.util.List<String> names) {
+        boolean[] checked = new boolean[uids.size()];
+        for (int i = 0; i < uids.size(); i++) checked[i] = taggedUids.contains(uids.get(i));
+        String[] items = names.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+                .setTitle("👥 Tag friends")
+                .setMultiChoiceItems(items, checked, (d, which, on) -> checked[which] = on)
+                .setPositiveButton("Done", (d, w) -> {
+                    taggedUids.clear();
+                    taggedNames.clear();
+                    for (int i = 0; i < uids.size(); i++)
+                        if (checked[i]) { taggedUids.add(uids.get(i)); taggedNames.add(names.get(i)); }
+                    Ui.toast(this, taggedNames.isEmpty() ? "Tags cleared"
+                            : "Tagged: " + android.text.TextUtils.join(", ", taggedNames));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void checkInDialog() {
@@ -561,6 +616,9 @@ public class CreatePostActivity extends Activity {
         m.put("authorName", Fb.myName());
         m.put("authorPhotoUrl", Fb.myPhoto());
         m.put("authorVerified", Fb.me != null && Fb.me.isVerified);
+        m.put("authorTickLevel", Fb.me != null && Fb.me.tickLevel != null ? Fb.me.tickLevel : "none");
+        m.put("taggedUids", new ArrayList<>(taggedUids));
+        m.put("taggedNames", new ArrayList<>(taggedNames));
         if (uploadedUrl == null && bgColor == 0) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
         if (groupId != null) m.put("groupId", groupId);
         m.put("likes", 0);

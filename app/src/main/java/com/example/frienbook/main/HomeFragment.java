@@ -7,6 +7,10 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -53,6 +57,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
         android.app.Activity a = getActivity();
+        LinearLayout root = Ui.col(a);
+        root.setBackgroundColor(Ui.bg(a));
+        root.addView(filterChips(a));
         swipe = new SwipeRefreshLayout(a);
         RecyclerView rv = new RecyclerView(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
@@ -64,7 +71,43 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             restartPostsListener();
             swipe.postDelayed(() -> swipe.setRefreshing(false), 900);
         });
-        return swipe;
+        root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
+        return root;
+    }
+
+    /** Facebook-Lite style feed filters: All / Photos / Videos / Text-only. */
+    private View filterChips(android.app.Activity a) {
+        HorizontalScrollView sc = new HorizontalScrollView(a);
+        sc.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = Ui.row(a);
+        row.setPadding(Ui.dp(a, 4), Ui.dp(a, 6), Ui.dp(a, 4), Ui.dp(a, 6));
+        String[] labels = {"🏠 All", "🖼 Photos", "🎬 Videos", "📝 Text posts"};
+        String[] keys = {"all", "photos", "videos", "text"};
+        String cur = com.example.frienbook.core.Prefs.feedFilter(a);
+        for (int i = 0; i < labels.length; i++) {
+            final String key = keys[i];
+            boolean on = key.equals(cur);
+            TextView chip = Ui.roundChip(a, labels[i], on ? Ui.BLUE : Ui.card(a),
+                    on ? 0xFFFFFFFF : Ui.sub(a), 12);
+            chip.setBackground(Ui.roundStroke(a, on ? Ui.BLUE : Ui.card(a), 14, Ui.div(a), 1));
+            Ui.pad(chip, 12, 6, 12, 6);
+            chip.setOnClickListener(v -> {
+                com.example.frienbook.core.Prefs.setFeedFilter(a, key);
+                restartPostsListener();
+                // rebuild chip row to refresh selected state
+                android.view.View parent = (android.view.View) v.getParent().getParent().getParent();
+                if (parent instanceof LinearLayout) {
+                    ((LinearLayout) parent).removeViewAt(0);
+                    ((LinearLayout) parent).addView(filterChips(a), 0);
+                }
+            });
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+            cp.setMargins(Ui.dp(a, 4), 0, Ui.dp(a, 4), 0);
+            row.addView(chip, cp);
+        }
+        sc.addView(row);
+        sc.setBackgroundColor(Ui.bg(a));
+        return sc;
     }
 
     @Override
@@ -183,13 +226,35 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null) return;
                     if (!snap.isEmpty()) lastDoc = snap.getDocuments().get(snap.size() - 1);
+                    android.app.Activity a2 = getActivity();
+                    String filter = a2 == null ? "all" : com.example.frienbook.core.Prefs.feedFilter(a2);
                     List<Models.Post> list = new ArrayList<>();
                     for (DocumentSnapshot d : snap.getDocuments()) {
                         Models.Post p = Models.Post.fromDoc(d);
-                        if (visible(p)) list.add(p);
+                        if (!visible(p)) continue;
+                        if (!matchesFilter(p, filter)) continue;
+                        list.add(p);
+                    }
+                    // ⭐ Favorites first (FB Lite "Feed preferences") on the ALL view
+                    if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
+                        list.sort((x, y) -> {
+                            boolean xf = Fb.me.favoriteUids.contains(x.authorId);
+                            boolean yf = Fb.me.favoriteUids.contains(y.authorId);
+                            if (xf != yf) return xf ? -1 : 1;
+                            return Long.compare(y.createdAt, x.createdAt);
+                        });
                     }
                     adapter.setPosts(list);
                 });
+    }
+
+    /** Feed chip filter: photos / videos / text-only. */
+    private boolean matchesFilter(Models.Post p, String filter) {
+        if (filter == null || "all".equals(filter)) return true;
+        if ("photos".equals(filter)) return "image".equals(p.mediaType) || "photo".equals(p.mediaType);
+        if ("videos".equals(filter)) return "video".equals(p.mediaType);
+        if ("text".equals(filter)) return p.mediaType == null || p.mediaType.isEmpty() || "none".equals(p.mediaType);
+        return true;
     }
 
     private boolean visible(Models.Post p) {

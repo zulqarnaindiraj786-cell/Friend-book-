@@ -179,6 +179,30 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // ---- Events: everyone reads, host creates, RSVP via arrayUnion ----
+    match /events/{eid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.hostId == request.auth.uid;
+      allow update: if isAdmin() || resource.data.hostId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['interested']);
+      allow delete: if isAdmin() || resource.data.hostId == request.auth.uid;
+    }
+
+    // ---- Pages: everyone reads, owner manages, follow via arrayUnion ----
+    match /pages/{pid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isAdmin() || resource.data.ownerId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followers']);
+      allow delete: if isAdmin() || resource.data.ownerId == request.auth.uid;
+    }
+
+    // ---- sessions (own device list only) ----
+    match /users/{uid}/sessions/{sid} {
+      allow read, create: if signedIn() && uid == request.auth.uid;
+      allow delete: if (signedIn() && uid == request.auth.uid) || isAdmin();
+    }
+
     // ---- app config (payment numbers, AdMob banner id etc): world-readable, admin-editable ----
     match /config/{doc} {
       allow read: if true;           // banner id must be readable before sign-in too

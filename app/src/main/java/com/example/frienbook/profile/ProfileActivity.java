@@ -57,8 +57,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private com.google.firebase.firestore.ListenerRegistration subReg;
     private boolean subscribedActive;
     private ImageView cover, avatar;
-    private TextView postsTab, aboutTab, friendsTab;
-    private LinearLayout postsBox, aboutBox, friendsBox;
+    private TextView postsTab, aboutTab, friendsTab, photosTab;
+    private LinearLayout postsBox, aboutBox, friendsBox, photosBox;
+    private PhotosAdapter photosAdapter;
+    private LinearLayout lockBanner;
+    private View tabsRow;
     private FeedAdapter postsAdapter;
     private UsersAdapter friendsAdapter;
     private ListenerRegistration userReg, friendsReg, outReg, inReg, postsReg;
@@ -159,13 +162,31 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         body.addView(infoCol);
         body.addView(gap());
 
+        // 🔒 lock banner (visible when this profile is locked for the viewer)
+        lockBanner = Ui.col(this);
+        lockBanner.setBackground(Ui.round(this, Ui.card(this), 14));
+        lockBanner.setGravity(Gravity.CENTER);
+        Ui.pad(lockBanner, 20, 26, 20, 26);
+        lockBanner.setVisibility(View.GONE);
+        lockBanner.addView(Ui.tv(this, "🔒", 36, Ui.txt(this)));
+        TextView lockTitle = Ui.tvBold(this, "This profile is locked", 16, Ui.txt(this));
+        lockTitle.setPadding(0, Ui.dp(this, 8), 0, 0);
+        lockBanner.addView(lockTitle);
+        TextView lockSub = Ui.tv(this,
+                "Sirf friends is profile ki posts aur details dekh sakte hain — jaisi Facebook 'Profile lock' setting.", 12, Ui.sub(this));
+        lockSub.setGravity(Gravity.CENTER);
+        lockBanner.addView(lockSub);
+        body.addView(lockBanner);
+
         // tabs
         LinearLayout tabs = Ui.row(this);
         tabs.setBackgroundColor(Ui.card(this));
         Ui.pad(tabs, 12, 10, 12, 10);
+        tabsRow = tabs;
         postsTab = tabChip("Posts", tabs, 0);
         aboutTab = tabChip("About", tabs, 1);
         friendsTab = tabChip("Friends", tabs, 2);
+        photosTab = tabChip("Photos", tabs, 3);
         body.addView(tabs);
         body.addView(gap());
 
@@ -192,6 +213,16 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         frv.setAdapter(friendsAdapter);
         friendsBox.addView(frv, new LinearLayout.LayoutParams(-1, -2));
         body.addView(friendsBox);
+
+        // 📷 Photos grid (all media posts of this user — FB Lite profile Photos tab)
+        photosBox = Ui.col(this);
+        androidx.recyclerview.widget.RecyclerView prv = new androidx.recyclerview.widget.RecyclerView(this);
+        prv.setLayoutManager(new androidx.recyclerview.widget.GridLayoutManager(this, 3));
+        prv.setNestedScrollingEnabled(false);
+        photosAdapter = new PhotosAdapter();
+        prv.setAdapter(photosAdapter);
+        photosBox.addView(prv, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(photosBox);
 
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -238,8 +269,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postsBox.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
         aboutBox.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
         friendsBox.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
-        TextView[] all = {postsTab, aboutTab, friendsTab};
-        for (int i = 0; i < 3; i++) {
+        photosBox.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
+        TextView[] all = {postsTab, aboutTab, friendsTab, photosTab};
+        for (int i = 0; i < 4; i++) {
             all[i].setTextColor(i == idx ? Ui.BLUE : Ui.sub(this));
             all[i].setBackground(Ui.round(this, i == idx ? Ui.unread(this) : 0x00000000, 8));
         }
@@ -319,7 +351,53 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     }
                     Collections.sort(list, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     postsAdapter.setPosts(list);
+                    // photos grid: every image/video from this user's posts
+                    List<String> media = new ArrayList<>();
+                    for (Models.Post p : list) {
+                        if (p.mediaUrls != null) media.addAll(p.mediaUrls);
+                        if (p.mediaUrl != null && !p.mediaUrl.isEmpty()
+                                && !media.contains(p.mediaUrl)) media.add(p.mediaUrl);
+                    }
+                    photosAdapter.media.clear();
+                    photosAdapter.media.addAll(media);
+                    photosAdapter.notifyDataSetChanged();
                 });
+    }
+
+    /** 3-column media grid for the Photos tab. */
+    private class PhotosAdapter extends RecyclerView.Adapter<PhotosAdapter.VH> {
+        final List<String> media = new ArrayList<>();
+
+        class VH extends RecyclerView.ViewHolder {
+            ImageView iv;
+            VH(View v) {
+                super(v);
+                iv = (ImageView) v;
+            }
+        }
+
+        @androidx.annotation.NonNull
+        @Override public VH onCreateViewHolder(@androidx.annotation.NonNull android.view.ViewGroup p, int t) {
+            ImageView iv = new ImageView(p.getContext());
+            int s = (getResources().getDisplayMetrics().widthPixels - Ui.dp(ProfileActivity.this, 8)) / 3;
+            iv.setLayoutParams(new RecyclerView.LayoutParams(s, s));
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            int gap = Ui.dp(ProfileActivity.this, 1);
+            iv.setPadding(gap, gap, gap, gap);
+            return new VH(iv);
+        }
+
+        @Override public void onBindViewHolder(@androidx.annotation.NonNull VH h, int i) {
+            String url = media.get(i);
+            Ui.img(ProfileActivity.this, h.iv, url);
+            h.iv.setOnClickListener(v -> {
+                Intent in = new Intent(ProfileActivity.this, FullscreenMediaActivity.class);
+                in.putExtra("url", url);
+                startActivity(in);
+            });
+        }
+
+        @Override public int getItemCount() { return media.size(); }
     }
 
     private boolean canSee(Models.Post p) {
@@ -365,6 +443,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         Ui.avatar(this, avatar, user.photoUrl);
         if (user.coverUrl != null && !user.coverUrl.isEmpty()) Ui.img(this, cover, user.coverUrl);
         else cover.setBackground(Ui.round(this, Ui.div(this), 0));
+
+        // 🔒 Profile lock (FB Lite): friends/owner see everything — strangers get the lock card
+        boolean stranger = !mine && !friendIds.contains(uid);
+        boolean locked = user.profileLocked && stranger;
+        lockBanner.setVisibility(locked ? View.VISIBLE : View.GONE);
+        if (tabsRow != null) tabsRow.setVisibility(locked ? View.GONE : View.VISIBLE);
+        if (locked) {
+            postsBox.setVisibility(View.GONE);
+            aboutBox.setVisibility(View.GONE);
+            friendsBox.setVisibility(View.GONE);
+            photosBox.setVisibility(View.GONE);
+        } else {
+            showTab(0);
+        }
 
         if (mine) {
             primaryBtn.setText("✏️ Edit profile");
@@ -445,6 +537,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         else if (hasIn) friendState = "incoming";
         else friendState = "none";
         refreshButtons();
+        if (user != null) bindUser(); // re-apply profile-lock gate once friendships resolved
     }
 
     private void refreshButtons() {
@@ -560,6 +653,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             boolean blocked = Fb.me != null && Fb.me.blocked.contains(uid);
             pm.getMenu().add("💬 Message");
             pm.getMenu().add(blocked ? "🔓 Unblock user" : "🚫 Block user");
+            pm.getMenu().add("💙 See friendship");
+            pm.getMenu().add("🔗 Copy profile link");
             pm.getMenu().add("🚩 Report profile");
         } else {
             pm.getMenu().add("📷 Change profile photo");
@@ -573,6 +668,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             else if (t.contains("Block") && !t.contains("Unblock")) {
                 Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->
                         Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
+            } else if (t.contains("See friendship")) {
+                showFriendship();
+            } else if (t.contains("Copy profile link")) {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("profile",
+                        "https://friendbook.app/user/" + uid));
+                Ui.toast(this, "Profile link copied 🔗");
             } else if (t.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
                         "type", "profile", "createdAt", FieldValue.serverTimestamp()));
@@ -583,6 +686,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             return true;
         });
         pm.show();
+    }
+
+    /** 💙 See friendship — FB Lite style: since when + mutual friends count. */
+    private void showFriendship() {
+        if (user == null) return;
+        String me = Fb.uid();
+        StringBuilder sb = new StringBuilder();
+        sb.append(user.displayName).append(" & ").append(Fb.myName()).append("\n\n");
+        int mutual = 0;
+        if (Fb.me != null)
+            for (String f : user.followers) if (Fb.me.following.contains(f) || Fb.me.followers.contains(f)) mutual++;
+        sb.append("👥 ").append(mutual).append(" mutual connections\n");
+        sb.append(friendState.equals("friends") ? "✓ You are friends\n" : "Not friends yet\n");
+        if (user.createdAt > 0) sb.append("🗓 They joined ").append(Format.dateTime(user.createdAt));
+        Ui.info(this, "💙 Friendship", sb.toString());
     }
 
     private void renderAbout() {

@@ -30,6 +30,10 @@ public class Prefs {
     public static boolean dataSaver(Context c) { return p(c).getBoolean("dataSaver", false); }
     public static void setDataSaver(Context c, boolean v) { p(c).edit().putBoolean("dataSaver", v).apply(); }
 
+    // ---- AMOLED pure-black theme (needs dark mode on) ----
+    public static boolean amoled(Context c) { return p(c).getBoolean("amoled", false); }
+    public static void setAmoled(Context c, boolean v) { p(c).edit().putBoolean("amoled", v).apply(); }
+
     // ---- quiet mode: hides badges & mutes vibration ----
     public static boolean quiet(Context c) { return p(c).getBoolean("quiet", false); }
     public static void setQuiet(Context c, boolean v) { p(c).edit().putBoolean("quiet", v).apply(); }
@@ -62,6 +66,14 @@ public class Prefs {
     public static void setNotifRequests(Context c, boolean v) { p(c).edit().putBoolean("nRequests", v).apply(); }
     public static boolean notifMessages(Context c) { return p(c).getBoolean("nMessages", true); }
     public static void setNotifMessages(Context c, boolean v) { p(c).edit().putBoolean("nMessages", v).apply(); }
+
+    // feed filter chip: all | photos | videos | text
+    public static String feedFilter(Context c) { return p(c).getString("feedFilter", "all"); }
+    public static void setFeedFilter(Context c, String v) { p(c).edit().putString("feedFilter", v).apply(); }
+
+    // autoplay feed videos
+    public static boolean autoplay(Context c) { return p(c).getBoolean("autoplay", true); }
+    public static void setAutoplay(Context c, boolean v) { p(c).edit().putBoolean("autoplay", v).apply(); }
 
     // ---- pinned chats ----
     public static Set<String> pinnedChats(Context c) {

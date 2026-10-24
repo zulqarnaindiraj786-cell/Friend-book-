@@ -57,10 +57,19 @@ public class SettingsActivity extends Activity {
             recreate();
         }));
         body.addView(div());
+        body.addView(switchRowI(Icons.MOON, "AMOLED black theme", Prefs.amoled(this), (btn, on) -> {
+            Prefs.setAmoled(this, on);
+            Ui.toast(this, on ? "Pure black on 🔳 (with dark mode)" : "AMOLED off");
+            recreate();
+        }));
+        body.addView(div());
         body.addView(rowI(Icons.FONT, "Font size", fontLabel(), this::fontPicker));
         body.addView(div());
         body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver", Prefs.dataSaver(this),
                 (btn, on) -> Prefs.setDataSaver(this, on)));
+        body.addView(div());
+        body.addView(switchRowI(Icons.VIDEO, "Autoplay videos", Prefs.autoplay(this),
+                (btn, on) -> Prefs.setAutoplay(this, on)));
         body.addView(div());
         body.addView(switchRowI(Icons.QUIET, "Quiet mode", Prefs.quiet(this),
                 (btn, on) -> Prefs.setQuiet(this, on)));
@@ -83,6 +92,27 @@ public class SettingsActivity extends Activity {
         body.addView(div());
         body.addView(rowI(Icons.BAN, "Blocked users", "Manage your block list",
                 () -> startActivity(new Intent(this, BlockedUsersActivity.class))));
+        body.addView(div());
+        body.addView(switchRowI(Icons.LOCK, "Profile locking",
+                Fb.me != null && Fb.me.profileLocked,
+                (btn, on) -> {
+                    btn.setChecked(on);
+                    Fb.db().collection("users").document(Fb.uid())
+                            .set(Fb.map("profileLocked", on),
+                                    com.google.firebase.firestore.SetOptions.merge())
+                            .addOnSuccessListener(x -> {
+                                if (Fb.me != null) Fb.me.profileLocked = on;
+                                Ui.toast(SettingsActivity.this,
+                                        on ? "🔒 Profile locked — sirf friends dekh sakte hain"
+                                                : "Profile unlocked");
+                            });
+                }));
+        body.addView(div());
+        body.addView(rowI(Icons.SHIELD, "Privacy checkup", "3-step review — audience, blocks, profile lock",
+                this::privacyCheckup));
+        body.addView(div());
+        body.addView(rowI(Icons.STAR, "Feed preferences", "Favorites — unki posts feed ke top pe",
+                () -> startActivity(new Intent(this, FeedPreferencesActivity.class))));
         body.addView(cardEnd());
 
         // ============ YOUR ACTIVITY ============
@@ -137,6 +167,9 @@ public class SettingsActivity extends Activity {
         body.addView(rowI(Icons.SHAKE, "Shake to report", "Enabled — shake phone to report a problem",
                 () -> Ui.info(this, "Shake to report",
                         "Any time something looks wrong, shake your phone and a feedback form will open.")));
+        body.addView(div());
+        body.addView(rowI(Icons.ACTIVE, "Where you're logged in", "Devices & sessions — log out anywhere",
+                () -> startActivity(new Intent(this, SessionsActivity.class))));
         body.addView(cardEnd());
 
         // ============ NOTIFICATIONS ============
@@ -189,6 +222,28 @@ public class SettingsActivity extends Activity {
     }
 
     // ---------- rows ----------
+    /** 🛡 FB-style guided privacy checkup — 3 quick steps. */
+    private void privacyCheckup() {
+        boolean locked = Fb.me != null && Fb.me.profileLocked;
+        Ui.choose(this, "Privacy checkup ✓\n\n"
+                        + "1. Default audience: " + Prefs.defaultPrivacy(this) + "\n"
+                        + "2. Blocked people: " + (Fb.me != null ? Fb.me.blocked.size() : 0) + "\n"
+                        + "3. Profile lock: " + (locked ? "ON 🔒" : "OFF"),
+                new String[]{"🌐 Change audience", "🚫 Manage blocked", locked ? "🔓 Unlock profile" : "🔒 Lock profile"},
+                w -> {
+                    if (w == 0) audiencePicker();
+                    else if (w == 1) startActivity(new Intent(this, BlockedUsersActivity.class));
+                    else {
+                        boolean on = !locked;
+                        Fb.db().collection("users").document(Fb.uid())
+                                .set(Fb.map("profileLocked", on),
+                                        com.google.firebase.firestore.SetOptions.merge());
+                        if (Fb.me != null) Fb.me.profileLocked = on;
+                        Ui.toast(this, on ? "🔒 Profile locked" : "Profile unlocked");
+                    }
+                });
+    }
+
     private TextView header(String t) {
         TextView h = Ui.tvBold(this, t.toUpperCase(), 12, Ui.sub(this));
         h.setPadding(Ui.dp(this, 4), Ui.dp(this, 14), 0, Ui.dp(this, 6));

@@ -153,6 +153,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
         row.addView(photo);
 
+        ImageView sticker = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.SMILE, 23,
+                com.example.frienbook.core.Icons.GRAY);
+        sticker.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6));
+        sticker.setOnClickListener(v -> stickerSheet());
+        row.addView(sticker);
+
         mic = com.example.frienbook.core.Icons.icon(
                 this, com.example.frienbook.core.Icons.MIC, 23,
                 com.example.frienbook.core.Icons.GRAY);
@@ -382,6 +389,73 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         inner.put(Fb.uid(), 0);
         Fb.db().collection("chats").document(chatId)
                 .set(Fb.map("unreadCount", inner), SetOptions.merge());
+    }
+
+    /** ✨ Sticker pack — big emoji stickers, Facebook-Messenger style. */
+    private void stickerSheet() {
+        final String[] stickers = {
+                "😂", "😍", "🥰", "😘", "🤗", "😎", "🥳", "😇",
+                "👍", "👏", "🙌", "💪", "🤝", "✌️", "👌", "🫶",
+                "❤️", "💔", "💯", "🔥", "✨", "🎉", "🎂", "🌹",
+                "😢", "😡", "🤔", "😴", "🙏", "☕", "⚽", "❓"};
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this).create();
+        android.widget.GridView g = new android.widget.GridView(this);
+        g.setNumColumns(4);
+        Ui.pad(g, 8, 8, 8, 8);
+        g.setAdapter(new android.widget.BaseAdapter() {
+            @Override public int getCount() { return stickers.length; }
+            @Override public Object getItem(int p) { return stickers[p]; }
+            @Override public long getItemId(int p) { return p; }
+            @Override public android.view.View getView(int p, android.view.View v, android.view.ViewGroup par) {
+                android.widget.TextView t = new android.widget.TextView(ChatActivity.this);
+                t.setText(stickers[p]);
+                t.setTextSize(34);
+                t.setGravity(android.view.Gravity.CENTER);
+                t.setPadding(0, Ui.dp(ChatActivity.this, 8), 0, Ui.dp(ChatActivity.this, 8));
+                return t;
+            }
+        });
+        android.widget.LinearLayout box = Ui.col(this);
+        android.widget.TextView head = Ui.tvBold(this, "✨ Stickers", 16, Ui.txt(this));
+        Ui.pad(head, 16, 12, 16, 4);
+        box.addView(head);
+        box.addView(g);
+        d.setView(box);
+        g.setOnItemClickListener((par, v, p, id) -> { d.dismiss(); sendSticker(stickers[p]); });
+        d.show();
+    }
+
+    private void sendSticker(String emoji) {
+        if (busy) return;
+        busy = true;
+        String me = Fb.uid();
+        Map<String, Object> msg = Fb.map(
+                "senderId", me,
+                "receiverId", peerId,
+                "text", emoji,
+                "imageUrl", null,
+                "type", "sticker",
+                "isSeen", false,
+                "isDelivered", false,
+                "isDeleted", false,
+                "createdAt", FieldValue.serverTimestamp());
+        Map<String, Object> unread = new HashMap<>();
+        unread.put(peerId, FieldValue.increment(1));
+        Map<String, Object> typingOff = new HashMap<>();
+        typingOff.put(me, false);
+        Map<String, Object> chatDoc = Fb.map(
+                "participants", java.util.Arrays.asList(me, peerId),
+                "lastMessage", "✨ " + emoji + " sticker",
+                "lastMessageTime", FieldValue.serverTimestamp(),
+                "typing", typingOff,
+                "unreadCount", unread);
+        WriteBatch batch = Fb.db().batch();
+        batch.set(Fb.db().collection("chats").document(chatId)
+                .collection("messages").document(), msg);
+        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        batch.commit()
+                .addOnSuccessListener(x -> busy = false)
+                .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Couldn't send — " + e.getMessage()); });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {

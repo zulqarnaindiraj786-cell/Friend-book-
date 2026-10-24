@@ -4,6 +4,16 @@ A complete Facebook-Lite clone built with **native Android (Java)** and **real F
 Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Database
 (presence + typing) and Cloud Storage. **Zero dummy data.**
 
+### 🆕 Wave 2 (this build)
+- **📷 Profile Photos tab** — Facebook-style 3-column media grid on every profile (Posts / About / Friends / Photos)
+- **👥 Tag friends in posts** — 👥 Tag friends picker in the composer; feed shows "— with X and N others"
+- **📖 Add to your story** — post ⋮ menu shares any post to your 24h story (photos reused, text → caption)
+- **✨ Chat stickers** — sticker button in Messenger composer, 32-sticker sheet, big transparent bubble render
+- **✏️ Edit comment** — long-press your comment → Edit (saves `edited` flag)
+- **💙 See friendship** — profile ⋮ menu: mutual connections, friend status, join date
+- **🔗 Copy profile link** — profile ⋮ menu copies `https://friendbook.app/user/{uid}`
+- **🔳 AMOLED black theme** — Settings → Preferences: pure-black dark mode for OLED screens
+
 ### 🆕 What's new in v3 (Facebook Lite 2026 pack)
 - **Polls in feed** — create polls (2–4 options), tap to vote, live % + counts, tap again to undo
 - **Multi-photo posts** — attach up to 10 photos, swipeable in-feed album (ViewPager2) with counter
@@ -39,6 +49,19 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
   (approve activates instantly); (4) Boosts — approve/stop; (5) Live rooms — viewers/stars/end;
   (6) **Earnings** — income by type, 70/30 subscription split, **6-month bar chart**, tools
   (payment-number editor, broadcast, reports, moderation)
+- **🏠 Feed filter chips** — All / Photos / Videos / Text-only (persisted, realtime)
+- **📅 Memories (On this day)** — your posts from this date in past years, Menu > On this day
+- **🔔 Notification filters** — All/Unread chips + Settings toggles (reactions, comments,
+  friend requests, messages) honored in the list
+- **▶️ Autoplay videos toggle** (Settings → Preferences) + #hashtag/@mention blue styling
+- **🛡 Admin 1-tap Blue Tick** — search any user in the Users tab, one tap gives/removes
+  blue ✓; ⋯ menu for Gold/Diamond, make admin, ban, delete
+- **🔒 Profile locking** (Settings → Privacy) — strangers see a lock card, only friends see content
+- **📅 Events & 📄 Pages** — create/publish, ⭐ Interested RSVP, follow pages (live counts)
+- **⭐ Feed preferences** — favorite friends' posts pinned to top of Home
+- **🛡 Privacy checkup** — 3-step guided review (audience/blocks/profile lock)
+- **🔐 Where you're logged in** — device sessions list + log out everywhere
+- **Post ⋯ extras** — Share to other apps, "Why am I seeing this?" explainer
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`

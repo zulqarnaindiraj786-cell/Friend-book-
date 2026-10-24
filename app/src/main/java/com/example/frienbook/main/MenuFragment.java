@@ -94,6 +94,12 @@ public class MenuFragment extends Fragment {
                 () -> startActivity(new Intent(a, com.example.frienbook.groups.GroupsActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.CAKE, "Birthdays", "See whose birthday is coming",
                 () -> startActivity(new Intent(a, com.example.frienbook.friends.BirthdaysActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.ACTIVE, "Events", "Create events, RSVP, see what's on",
+                () -> startActivity(new Intent(a, com.example.frienbook.social.EventsActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.FLAG, "Pages", "Your pages & pages to follow",
+                () -> startActivity(new Intent(a, com.example.frienbook.social.PagesActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.SNOOZE, "On this day", "Your memories from past years",
+                () -> startActivity(new Intent(a, com.example.frienbook.post.MemoriesActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.LIST, "Activity log", "Your posts & comments in one place",
                 () -> startActivity(new Intent(a, com.example.frienbook.settings.ActivityLogActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.FRIENDS, "Friends", "Requests, suggestions, all friends",

@@ -180,11 +180,14 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
 
         h.itemView.setOnLongClickListener(v -> {
             boolean mine = c.authorId.equals(Fb.uid());
-            String[] opts = mine ? new String[]{"Reply", "Delete comment"} : new String[]{"Reply", "Report comment"};
+            String[] opts = mine ? new String[]{"Reply", "✏️ Edit comment", "Delete comment"}
+                    : new String[]{"Reply", "Report comment"};
             Ui.choose(activity, "Comment", opts, w -> {
                 if (w == 0) host.replyTo(c);
-                else if (mine) deleteComment(c);
-                else {
+                else if (mine) {
+                    if (w == 1) editComment(c);
+                    else deleteComment(c);
+                } else {
                     Fb.db().collection("reports").add(Fb.map(
                             "commentId", c.id, "reportedBy", Fb.uid(),
                             "createdAt", FieldValue.serverTimestamp()));
@@ -193,6 +196,32 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
             });
             return true;
         });
+    }
+
+    /** ✏️ Edit your own comment (FB Lite: Edit option on long-press). */
+    private void editComment(Models.Comment c) {
+        if (c.postId == null || c.id == null) return;
+        android.widget.EditText in = new android.widget.EditText(activity);
+        in.setText(c.content);
+        in.setSelection(in.getText().length());
+        android.widget.LinearLayout box = Ui.col(activity);
+        Ui.pad(box, 18, 8, 18, 0);
+        box.addView(in, new android.widget.LinearLayout.LayoutParams(-1, Ui.dp(activity, 48)));
+        new android.app.AlertDialog.Builder(activity)
+                .setTitle("✏️ Edit comment")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    String t = in.getText().toString().trim();
+                    if (t.isEmpty()) return;
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("content", t);
+                    m.put("edited", true);
+                    Fb.db().collection("comments").document(c.id).update(m)
+                            .addOnSuccessListener(x -> Ui.toast(activity, "Comment updated ✓"))
+                            .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void toggleLike(Models.Comment c) {
