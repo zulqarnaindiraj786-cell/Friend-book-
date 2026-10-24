@@ -888,8 +888,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             adView = new com.google.android.gms.ads.AdView(box.getContext());
             adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
             adView.setAdUnitId(bannerId);
-            box.setGravity(Gravity.CENTER);
-            box.addView(adView, new FrameLayout.LayoutParams(-2, -2));
+            box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
             adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
             Ui.pad(box, 0, 0, 0, 8);
         }
