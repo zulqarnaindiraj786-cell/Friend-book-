@@ -13,10 +13,11 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.example.frienbook.admin.frag.AdminDirectFragment;
+import com.example.frienbook.admin.frag.AdminBoostsFragment;
+import com.example.frienbook.admin.frag.AdminEarningsFragment;
+import com.example.frienbook.admin.frag.AdminLiveFragment;
 import com.example.frienbook.admin.frag.AdminPaymentsFragment;
 import com.example.frienbook.admin.frag.AdminReferralsFragment;
-import com.example.frienbook.admin.frag.AdminStatsFragment;
 import com.example.frienbook.admin.frag.AdminUsersFragment;
 import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
@@ -28,21 +29,25 @@ import com.google.firebase.firestore.WriteBatch;
 import java.util.List;
 
 /**
- * 🛡 Admin Panel — ONLY for zulqarnaindiraj786@gmail.com (or promoted admins).
- * Never shown to normal users. Five tabs:
- *   1) Users + Give Blue Tick   2) Referrals   3) Payments (Approve/Reject)
- *   4) Stats                     5) Direct tick control (search + give/remove)
+ * 🛡 Admin SUPER Dashboard — ONLY for zulqarnaindiraj786@gmail.com (or promoted admins).
+ * Normal users never see it. Six tabs:
+ *   1) Users    — every user + direct tick control (none/blue/gold/diamond), ban, promote
+ *   2) Referrals— who invited how many
+ *   3) Payments — every payment (ticks/boosts/subs) w/ screenshot + Approve/Reject
+ *   4) Boosts   — approve/stop profile & post boosts
+ *   5) Live     — all rooms, viewers, stars, end control
+ *   6) Earnings — income by type, 70/30 split, monthly chart, tools
  */
 public class AdminPanelActivity extends Activity {
 
     private FrameLayout container;
-    private final ImageView[] tabIcons = new ImageView[5];
-    private final TextView[] tabLabels = new TextView[5];
+    private final ImageView[] tabIcons = new ImageView[6];
+    private final TextView[] tabLabels = new TextView[6];
     private int active = -1;
 
-    private static final String[] TAB_NAMES = {"Users", "Referrals", "Payments", "Stats", "Direct"};
+    private static final String[] TAB_NAMES = {"Users", "Referrals", "Payments", "Boosts", "Live", "Earnings"};
     private static final int[] TAB_ICONS = {
-            Icons.FRIENDS, Icons.USER_PLUS, Icons.BANKNOTE, Icons.CHART, Icons.VERIFIED};
+            Icons.FRIENDS, Icons.USER_PLUS, Icons.BANKNOTE, Icons.BOOST, Icons.LIVE, Icons.CHART};
 
     @Override
     protected void onCreate(Bundle b) {
@@ -59,19 +64,19 @@ public class AdminPanelActivity extends Activity {
         container.setId(View.generateViewId());
         root.addView(container, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // ---- 5 tabs (outline icons, blue active / gray idle — Facebook Lite look) ----
+        // ---- 6 tabs (outline icons, blue active / gray idle — Facebook Lite look) ----
         LinearLayout tabs = Ui.row(this);
         tabs.setBackgroundColor(Ui.card(this));
         tabs.setElevation(Ui.dp(this, 6));
         Ui.pad(tabs, 0, 6, 0, 6);
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 6; i++) {
             final int tab = i;
             LinearLayout cell = Ui.col(this);
             cell.setGravity(Gravity.CENTER);
             ImageView ic = Icons.icon(this, TAB_ICONS[i], 22, Icons.GRAY);
             tabIcons[i] = ic;
             cell.addView(ic);
-            TextView lab = Ui.tv(this, TAB_NAMES[i], 10, Ui.sub(this));
+            TextView lab = Ui.tv(this, TAB_NAMES[i], 9, Ui.sub(this));
             lab.setGravity(Gravity.CENTER);
             lab.setPadding(0, Ui.dp(this, 2), 0, 0);
             tabLabels[i] = lab;
@@ -93,21 +98,22 @@ public class AdminPanelActivity extends Activity {
         switch (tab) {
             case 1: f = new AdminReferralsFragment(); break;
             case 2: f = new AdminPaymentsFragment(); break;
-            case 3: f = new AdminStatsFragment(); break;
-            case 4: f = new AdminDirectFragment(); break;
+            case 3: f = new AdminBoostsFragment(); break;
+            case 4: f = new AdminLiveFragment(); break;
+            case 5: f = new AdminEarningsFragment(); break;
             default: f = new AdminUsersFragment(); break;
         }
         FragmentTransaction ft = getFragmentManager().beginTransaction();
         ft.replace(container.getId(), f);
         ft.commitAllowingStateLoss();
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 6; i++) {
             boolean on = i == tab;
             Icons.setTint(tabIcons[i], on ? Icons.BLUE : Icons.GRAY);
             tabLabels[i].setTextColor(on ? Icons.BLUE : Icons.GRAY);
         }
     }
 
-    /** 📣 Broadcast: one notification doc per user, batched. Called from Stats tab. */
+    /** 📣 Broadcast: one notification doc per user, batched. Called from Earnings tab tools. */
     public void showBroadcastDialog() {
         LinearLayout box = Ui.col(this);
         Ui.pad(box, 20, 10, 20, 0);

@@ -120,13 +120,62 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // ---- blue-tick Rs 100 payments: user uploads screenshot, admin approves ----
+    // ---- blue-tick Rs 100 payments (legacy collection; new code uses `payments`) ----
     match /blueTickPayments/{pid} {
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'pending';
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- unified payments: ticks / boosts / subscriptions — user uploads, admin approves ----
+    match /payments/{pid} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- Profile/Post boosts: users create pending, everyone reads (Home shows active), admin activates ----
+    match /boosts/{bid} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- fan subscriptions ----
+    match /subscriptions/{sid} {
+      allow create: if signedIn()
+        && request.resource.data.subscriberId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin()
+        || (signedIn() && (resource.data.subscriberId == request.auth.uid
+                          || resource.data.creatorId == request.auth.uid));
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- 🔴 LIVE rooms + chat + gifts ----
+    match /lives/{lid} {
+      allow create: if signedIn() && request.resource.data.hostId == request.auth.uid;
+      allow read: if signedIn();
+      allow update: if isAdmin() || resource.data.hostId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'stars']);
+      allow delete: if isAdmin();
+      match /chat/{cid} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow delete: if isAdmin();
+      }
+    }
+    match /gifts/{gid} {
+      allow create: if signedIn() && request.resource.data.senderId == request.auth.uid;
+      allow read: if signedIn();
       allow update, delete: if isAdmin();
     }
 

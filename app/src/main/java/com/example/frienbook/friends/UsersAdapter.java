@@ -117,7 +117,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
         Row r = rows.get(position);
         Ui.avatar(activity, h.av, r.user.photoUrl);
         h.name.setText(r.user.displayName);
-        h.tick.setVisibility(r.user.isVerified ? View.VISIBLE : View.GONE);
+        com.example.frienbook.core.Icons.setTickBadge(h.tick, r.user.tickLevel, false);
         if (r.subtitle != null && !r.subtitle.isEmpty()) {
             h.sub.setVisibility(View.VISIBLE);
             h.sub.setText(r.subtitle);

@@ -25,6 +25,7 @@ import androidx.viewpager2.widget.ViewPager2;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
@@ -84,6 +85,25 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (showHeader) notifyItemChanged(0);
     }
 
+    // ---- boosts + live rows for the header ----
+    private final java.util.List<Models.User> boostedUsers = new ArrayList<>();
+    private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
+    public final java.util.Set<String> boostedPostIds = new HashSet<>();
+
+    public void setBoosted(java.util.List<Models.User> users, java.util.Set<String> postIds) {
+        boostedUsers.clear();
+        if (users != null) boostedUsers.addAll(users);
+        boostedPostIds.clear();
+        if (postIds != null) boostedPostIds.addAll(postIds);
+        notifyDataSetChanged();
+    }
+
+    public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
+        activeLives.clear();
+        if (lives != null) activeLives.addAll(lives);
+        if (showHeader) notifyItemChanged(0);
+    }
+
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
@@ -115,6 +135,80 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             };
             Ui.avatar(activity, hh.composeAvatar, Fb.myPhoto());
             hh.composeHint.setText("What's on your mind, " + firstName() + "?");
+            // 🚀 boosted profiles cards
+            hh.boostBox.setVisibility(boostedUsers.isEmpty() ? View.GONE : View.VISIBLE);
+            hh.boostCards.removeAllViews();
+            for (final Models.User u : boostedUsers) {
+                LinearLayout card = Ui.col(activity);
+                card.setGravity(android.view.Gravity.CENTER);
+                card.setBackground(Ui.roundStroke(activity, Ui.card(activity), 14, Ui.BLUE, 1));
+                Ui.pad(card, 12, 10, 12, 10);
+                ImageView av = new ImageView(activity);
+                Ui.avatar(activity, av, u.photoUrl);
+                int s = Ui.dp(activity, 54);
+                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+                avp.gravity = Gravity.CENTER;
+                card.addView(av, avp);
+                TextView nm = Ui.tvBold(activity, u.displayName, 12, Ui.txt(activity));
+                nm.setMaxWidth(Ui.dp(activity, 90));
+                nm.setSingleLine(true);
+                card.addView(nm);
+                ImageView tk = new ImageView(activity);
+                Icons.setTickBadge(tk, u.tickLevel, false);
+                int ts2 = Ui.dp(activity, 14);
+                card.addView(tk, new LinearLayout.LayoutParams(ts2, ts2));
+                TextView tag = Ui.roundChip(activity, "BOOSTED", 0x22E41E3F, 0xFFE41E3F, 9);
+                card.addView(tag);
+                card.setOnClickListener(v -> { if (host != null) host.openProfile(u.uid); });
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+                cp.setMargins(Ui.dp(activity, 4), Ui.dp(activity, 2), Ui.dp(activity, 4), Ui.dp(activity, 4));
+                hh.boostCards.addView(card, cp);
+            }
+            // 🔴 live rooms + go-live button
+            hh.goLiveBtn.setOnClickListener(v -> {
+                android.widget.EditText in = Ui.input(activity, "Live title (optional)");
+                new android.app.AlertDialog.Builder(activity)
+                        .setTitle("🔴 Go Live")
+                        .setView(in)
+                        .setPositiveButton("Start", (d, w) -> {
+                            Intent li = new Intent(activity, com.example.frienbook.live.LiveActivity.class);
+                            li.putExtra("title", in.getText().toString().trim());
+                            activity.startActivity(li);
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+            hh.liveBox.setVisibility(activeLives.isEmpty() ? View.VISIBLE : View.VISIBLE);
+            hh.liveCards.removeAllViews();
+            for (final java.util.Map<String, Object> live : activeLives) {
+                LinearLayout card = Ui.col(activity);
+                card.setGravity(Gravity.CENTER);
+                card.setBackground(Ui.round(activity, Ui.inputBg(activity), 14));
+                Ui.pad(card, 12, 8, 12, 8);
+                ImageView av = new ImageView(activity);
+                Ui.avatar(activity, av, Format.str(live, "hostPhotoUrl"));
+                int s = Ui.dp(activity, 46);
+                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+                avp.gravity = Gravity.CENTER;
+                card.addView(av, avp);
+                TextView nm = Ui.tvBold(activity, Format.strOr(live, "hostName", "Live"), 11, Ui.txt(activity));
+                nm.setSingleLine(true);
+                nm.setMaxWidth(Ui.dp(activity, 84));
+                card.addView(nm);
+                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(Format.intOf(live, "viewers")),
+                        0xFFE41E3F, 0xFFFFFFFF, 9));
+                final String lid = Format.str(live, "_id");
+                final String hostId = Format.str(live, "hostId");
+                card.setOnClickListener(v -> {
+                    Intent li = new Intent(activity, com.example.frienbook.live.LiveActivity.class);
+                    li.putExtra("live_id", lid);
+                    li.putExtra("host_id", hostId);
+                    activity.startActivity(li);
+                });
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+                cp.setMargins(Ui.dp(activity, 4), Ui.dp(activity, 2), Ui.dp(activity, 4), Ui.dp(activity, 4));
+                hh.liveCards.addView(card, cp);
+            }
         } else if (h instanceof FooterVH) {
             FooterVH fh = (FooterVH) h;
             boolean more = host != null && host.hasMore();
@@ -155,7 +249,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         vh.name.setText(p.authorName + (hasFeeling ? " is feeling " + p.feeling : ""));
-        vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
+        vh.tick.setImageDrawable(null);
+        if (!"none".equals(p.authorTickLevel) && p.authorTickLevel != null) {
+            vh.tick.setVisibility(View.VISIBLE);
+            vh.tick.setImageResource(com.example.frienbook.core.Icons.badgeFor(p.authorTickLevel));
+        } else {
+            vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
+            if (p.authorVerified) vh.tick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+        }
+        if (vh.boostTag != null)
+            vh.boostTag.setVisibility(boostedPostIds.contains(p.id) ? View.VISIBLE : View.GONE);
         String icon = "🌐";
         if ("Friends".equalsIgnoreCase(p.privacy)) icon = "👥";
         if ("Only me".equalsIgnoreCase(p.privacy)) icon = "🔒";
@@ -450,6 +553,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean isAdmin = com.example.frienbook.core.Admin.isAdmin();
         PopupMenu menu = new PopupMenu(c, anchor);
         menu.getMenu().add(saved ? "🔖 Unsave post" : "🔖 Save post");
+        if (!boostedPostIds.contains(p.id))
+            menu.getMenu().add("🚀 Boost Post — Rs " + com.example.frienbook.core.Admin.PRICE_BOOST_POST + " · more reach");
         if (mine) {
             menu.getMenu().add("✏️ Edit post");
             menu.getMenu().add("🌐 Who can see this? (" + p.privacy + ")");
@@ -468,6 +573,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String t = item.getTitle().toString();
             if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("Save post")) toggleSave(p, false);
+            else if (t.contains("Boost Post")) {
+                Intent bi = new Intent(activity, com.example.frienbook.pay.PayRequestActivity.class);
+                bi.putExtra("type", "boost_post");
+                bi.putExtra("target_id", p.id);
+                bi.putExtra("amount", com.example.frienbook.core.Admin.PRICE_BOOST_POST);
+                bi.putExtra("title", "Boost Post");
+                activity.startActivity(bi);
+            }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
             else if (t.contains("Who can see")) changePrivacyDialog(p);
             else if (t.contains("Hide this post")) {
@@ -594,6 +707,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "authorName", Fb.myName(),
                             "authorPhotoUrl", Fb.myPhoto(),
                             "authorVerified", Fb.me != null && Fb.me.isVerified,
+                            "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none",
                             "content", caption.getText().toString().trim(),
                             "mediaType", "none",
                             "mediaUrl", "",
@@ -622,6 +736,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final StoriesAdapter storiesAdapter;
         final ImageView composeAvatar;
         final TextView composeHint;
+        final LinearLayout boostBox, liveBox, boostCards, liveCards;
+        final TextView goLiveBtn;
 
         HeaderVH(Context c) {
             super(Ui.col(c));
@@ -661,6 +777,43 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 8)));
+
+            // 🔴 GO LIVE button + active lives strip (Facebook-Lite style)
+            liveBox = Ui.col(c);
+            liveBox.setBackgroundColor(Ui.card(c));
+            liveBox.setVisibility(View.GONE);
+            LinearLayout liveTop = Ui.row(c);
+            liveTop.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(liveTop, 12, 10, 12, 4);
+            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 13);
+            Ui.pad(goLiveBtn, 16, 8, 16, 8);
+            liveTop.addView(goLiveBtn);
+            TextView liveTitle = Ui.tvBold(c, "Live now", 14, Ui.txt(c));
+            liveTitle.setPadding(Ui.dp(c, 10), 0, 0, 0);
+            liveTop.addView(liveTitle);
+            liveBox.addView(liveTop);
+            android.widget.HorizontalScrollView lsv = new android.widget.HorizontalScrollView(c);
+            lsv.setHorizontalScrollBarEnabled(false);
+            liveCards = Ui.row(c);
+            Ui.pad(liveCards, 8, 0, 8, 8);
+            lsv.addView(liveCards);
+            liveBox.addView(lsv);
+            col.addView(liveBox);
+
+            // 🚀 boosted profiles strip (paid — pinned on top of Home)
+            boostBox = Ui.col(c);
+            boostBox.setBackgroundColor(Ui.card(c));
+            boostBox.setVisibility(View.GONE);
+            TextView boostTitle = Ui.tvBold(c, "🚀 Boosted creators", 14, Ui.txt(c));
+            Ui.pad(boostTitle, 12, 10, 12, 2);
+            boostBox.addView(boostTitle);
+            android.widget.HorizontalScrollView bsv = new android.widget.HorizontalScrollView(c);
+            bsv.setHorizontalScrollBarEnabled(false);
+            boostCards = Ui.row(c);
+            Ui.pad(boostCards, 8, 0, 8, 8);
+            bsv.addView(boostCards);
+            boostBox.addView(bsv);
+            col.addView(boostBox);
         }
     }
 
@@ -684,6 +837,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static class PostVH extends RecyclerView.ViewHolder {
         ImageView avatar, image, tick;
         TextView name, meta, more, content, like, comment, share;
+        TextView boostTag;
         TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge, pageBadge;
         LinearLayout sharedBox, pollBox;
         FrameLayout mediaBox;
@@ -715,6 +869,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             tll.leftMargin = Ui.dp(c, 5);
             nameRow.addView(name);
             nameRow.addView(tick, tll);
+            boostTag = Ui.roundChip(c, "🚀 BOOSTED", 0xFFE41E3F, 0xFFFFFFFF, 10);
+            boostTag.setVisibility(View.GONE);
+            LinearLayout.LayoutParams btl = new LinearLayout.LayoutParams(-2, -2);
+            btl.leftMargin = Ui.dp(c, 6);
+            nameRow.addView(boostTag, btl);
             meta = Ui.tv(c, "", 12, Ui.sub(c));
             nameCol.addView(nameRow);
             nameCol.addView(meta);

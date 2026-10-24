@@ -82,7 +82,7 @@ public class MenuFragment extends Fragment {
         body.addView(spacer(a, 12));
 
         // shortcuts (Facebook-Lite outline icons, gray chips)
-        body.addView(item(a, com.example.frienbook.core.Icons.VERIFIED, "Blue tick ✓", "FREE with 5 invites — or Rs 100",
+        body.addView(item(a, com.example.frienbook.core.Icons.VERIFIED, "✓ Tick levels", "Blue · Gold · Diamond — FREE with invites or paid",
                 () -> startActivity(new Intent(a, com.example.frienbook.bluetick.BlueTickActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.BOOKMARK, "Saved posts", "Everything you bookmarked",
                 () -> startActivity(new Intent(a, SavedPostsActivity.class))));

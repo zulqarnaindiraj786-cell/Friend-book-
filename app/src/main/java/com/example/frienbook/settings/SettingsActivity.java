@@ -109,7 +109,7 @@ public class SettingsActivity extends Activity {
                 () -> startActivity(new Intent(this,
                         com.example.frienbook.bluetick.MonetizationActivity.class))));
         body.addView(div());
-        body.addView(rowI(Icons.BANKNOTE, "Blue tick ✓", "FREE with 5 invites — or Rs 100 payment",
+        body.addView(rowI(Icons.BANKNOTE, "✓ Tick levels", "Blue / Gold / Diamond — invites se FREE ya paid",
                 () -> startActivity(new Intent(this,
                         com.example.frienbook.bluetick.BlueTickActivity.class))));
         body.addView(cardEnd());

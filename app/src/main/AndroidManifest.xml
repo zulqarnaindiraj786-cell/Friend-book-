@@ -77,6 +77,8 @@
 
         <activity android:name=".bluetick.BlueTickActivity" android:screenOrientation="portrait" />
         <activity android:name=".bluetick.MonetizationActivity" android:screenOrientation="portrait" />
+        <activity android:name=".pay.PayRequestActivity" android:screenOrientation="portrait" />
+        <activity android:name=".live.LiveActivity" android:configChanges="orientation|screenSize" />
 
         <activity android:name=".groups.GroupsActivity" android:screenOrientation="portrait" />
         <activity android:name=".groups.GroupDetailActivity" android:screenOrientation="portrait" />

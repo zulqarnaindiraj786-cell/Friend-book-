@@ -1,77 +1,83 @@
 package com.example.frienbook.admin.frag;
 
+import android.app.AlertDialog;
 import android.app.Fragment;
 import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
-import com.example.frienbook.post.FullscreenMediaActivity;
+import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
+import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.firestore.WriteBatch;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Date;
 
 /**
- * Admin Tab 3: Rs-100 blue-tick payment requests — screenshot preview + Approve/Reject.
- * Approve ⇒ users/{uid}.isVerified = true instantly.
+ * Admin Payments tab — ONE unified list of every payment type:
+ *   tick_blue / tick_gold / tick_diamond  → grant that tick level
+ *   boost_profile / boost_post            → activate boost for 24h
+ *   subscription                          → activate subscription for 30 days
+ * Screenshot thumbnail tappable, Approve / Reject buttons.
  */
 public class AdminPaymentsFragment extends Fragment {
 
-    private final List<DocumentSnapshot> items = new ArrayList<>();
-    private Adapter adapter;
+    private LinearLayout list;
+    private TextView countT;
     private ListenerRegistration reg;
-    private TextView empty;
 
     @Nullable
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
         android.app.Activity a = getActivity();
-        LinearLayout root = Ui.col(a);
-        root.setBackgroundColor(Ui.bg(a));
+        ScrollView sv = new ScrollView(a);
+        list = Ui.col(a);
+        list.setBackgroundColor(Ui.bg(a));
+        Ui.pad(list, 12, 10, 12, 24);
+        sv.addView(list);
 
-        empty = Ui.tv(a, "", 14, Ui.sub(a));
-        empty.setGravity(Gravity.CENTER);
-        Ui.pad(empty, 24, 50, 24, 0);
-        root.addView(empty);
-
-        RecyclerView rv = new RecyclerView(a);
-        rv.setLayoutManager(new LinearLayoutManager(a));
-        adapter = new Adapter();
-        rv.setAdapter(adapter);
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
-        return root;
+        countT = Ui.tv(a, "Loading payments…", 12, Ui.sub(a));
+        Ui.pad(countT, 2, 0, 2, 8);
+        list.addView(countT);
+        return sv;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("blueTickPayments")
+        reg = Fb.db().collection("payments")
                 .orderBy("date", Query.Direction.DESCENDING).limit(100)
                 .addSnapshotListener((snap, err) -> {
-                    items.clear();
-                    if (snap != null) items.addAll(snap.getDocuments());
-                    adapter.notifyDataSetChanged();
-                    empty.setText("No payment requests yet.\nUsers pay Rs 100 via JazzCash/Easypaisa and upload a screenshot.");
-                    empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+                    android.app.Activity a = getActivity();
+                    if (a == null) return;
+                    while (list.getChildCount() > 1) list.removeViewAt(1);
+                    if (snap == null || snap.isEmpty()) {
+                        countT.setText("0 payments yet");
+                        TextView empty = Ui.tv(a, "💵 Payments from users (ticks, boosts, subscriptions) will appear here with their screenshots.",
+                                13, Ui.sub(a));
+                        Ui.pad(empty, 4, 14, 4, 0);
+                        list.addView(empty);
+                        return;
+                    }
+                    countT.setText(snap.size() + " payment(s) — newest first");
+                    for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(a, d));
                 });
     }
 
@@ -81,129 +87,153 @@ public class AdminPaymentsFragment extends Fragment {
         if (reg != null) reg.remove();
     }
 
-    private void approve(DocumentSnapshot d) {
-        android.app.Activity a = getActivity();
-        if (a == null) return;
-        String uid = d.getString("userId");
-        if (uid == null) return;
-        Ui.confirm(a, "Approve Rs 100 payment?",
-                "The blue tick will turn on for this user instantly.", "Approve ✓", () -> {
-                    WriteBatch batch = Fb.db().batch();
-                    batch.update(d.getReference(), Fb.map(
-                            "status", "approved",
-                            "approvedBy", Fb.uid(),
-                            "approvedAt", FieldValue.serverTimestamp()));
-                    batch.set(Fb.db().collection("users").document(uid),
-                            Fb.map("isVerified", true),
-                            com.google.firebase.firestore.SetOptions.merge());
-                    batch.commit().addOnSuccessListener(x -> {
-                        Admin.syncAuthorVerifiedPublic(uid, true);
-                        Ui.toast(a, "✓ Approved — blue tick ON");
-                    }).addOnFailureListener(e -> Ui.toast(a, "Failed: " + e.getMessage()));
-                });
-    }
+    private View row(android.app.Activity a, DocumentSnapshot d) {
+        java.util.Map<String, Object> m = d.getData();
+        String userId = Format.str(m, "userId");
+        String email = Format.str(m, "userEmail");
+        String type = Format.str(m, "type");
+        String status = Format.strOr(m, "status", "pending");
+        String shot = Format.str(m, "screenshotUrl");
+        long amount = Format.intOf(m, "amount");
+        String currency = Format.strOr(m, "currency", "PKR");
+        long date = Format.ts(m == null ? null : m.get("date"));
 
-    private void reject(DocumentSnapshot d) {
-        android.app.Activity a = getActivity();
-        if (a == null) return;
-        Ui.confirm(a, "Reject this payment?", "The user can re-submit a new screenshot.",
-                "Reject", () -> {
-                    d.getReference().update(Fb.map(
-                            "status", "rejected",
-                            "rejectedBy", Fb.uid(),
-                            "rejectedAt", FieldValue.serverTimestamp()));
-                    Ui.toast(a, "Rejected");
-                });
-    }
+        LinearLayout card = Ui.col(a);
+        card.setBackground(Ui.round(a, Ui.card(a), 14));
+        Ui.pad(card, 12, 10, 12, 10);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+        cp.setMargins(0, 0, 0, Ui.dp(a, 10));
+        card.setLayoutParams(cp);
 
-    class Adapter extends RecyclerView.Adapter<Adapter.VH> {
-        @Override public int getItemCount() { return items.size(); }
+        LinearLayout top = Ui.row(a);
+        ImageView thumb = new ImageView(a);
+        int ts = Ui.dp(a, 64);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(ts, ts);
+        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumb.setBackground(Ui.round(a, Ui.inputBg(a), 10));
+        thumb.setClipToOutline(true);
+        Ui.img(a, thumb, shot);
+        thumb.setOnClickListener(v -> {
+            Intent i = new Intent(a, com.example.frienbook.post.FullscreenMediaActivity.class);
+            i.putExtra("url", shot);
+            a.startActivity(i);
+        });
+        top.addView(thumb, tp);
 
-        @NonNull
-        @Override
-        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            android.app.Activity a = getActivity();
-            LinearLayout col = Ui.col(a);
-            col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
-            col.setBackgroundColor(Ui.card(a));
-            Ui.pad(col, 12, 10, 12, 10);
+        LinearLayout info = Ui.col(a);
+        info.setPadding(Ui.dp(a, 12), 0, 0, 0);
+        info.addView(Ui.tvBold(a, typeLabel(type) + "  ·  " + ("USD".equals(currency) ? "$" : "Rs ") + amount,
+                14, Ui.txt(a)));
+        info.addView(Ui.tv(a, email, 12, Ui.sub(a)));
+        info.addView(Ui.tv(a, "uid: " + userId, 10, Ui.sub(a)));
+        info.addView(Ui.tv(a, Format.ago(date), 11, Ui.sub(a)));
+        top.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(top);
 
-            LinearLayout top = Ui.row(a);
-            ImageView shot = new ImageView(a);
-            shot.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            int w = Ui.dp(a, 84);
-            top.addView(shot, new LinearLayout.LayoutParams(w, w));
-            LinearLayout mid = Ui.col(a);
-            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
-            mp.leftMargin = Ui.dp(a, 12);
-            TextView email = Ui.tvBold(a, "", 14, Ui.txt(a));
-            TextView meta = Ui.tv(a, "", 12, Ui.sub(a));
-            TextView status = Ui.tvBold(a, "", 13, Ui.ORANGE);
-            status.setPadding(0, Ui.dp(a, 4), 0, 0);
-            mid.addView(email);
-            mid.addView(meta);
-            mid.addView(status);
-            top.addView(mid, mp);
-            col.addView(top);
+        TextView statusT = Ui.roundChip(a,
+                "pending".equals(status) ? "⏳ PENDING" : "approved".equals(status) ? "✅ APPROVED" : "❌ REJECTED",
+                "pending".equals(status) ? 0x22F7B928 : "approved".equals(status) ? 0x2231A24C : 0x22E41E3F,
+                "pending".equals(status) ? Ui.ORANGE : "approved".equals(status) ? Ui.GREEN : Ui.RED, 11);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
+        sp.setMargins(0, Ui.dp(a, 8), 0, 0);
+        card.addView(statusT, sp);
 
+        if ("pending".equals(status)) {
             LinearLayout btns = Ui.row(a);
             btns.setPadding(0, Ui.dp(a, 10), 0, 0);
-            TextView approve = Ui.btn(a, "✓ Approve tick");
-            approve.setBackground(Ui.round(a, Ui.GREEN, 8));
+            TextView approve = Ui.btn(a, "✓ Approve");
+            approve.setOnClickListener(v -> confirm(a, "Approve " + typeLabel(type) + "?",
+                    "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
-            reject.setBackground(Ui.round(a, Ui.RED, 8));
-            reject.setTextColor(0xFFFFFFFF);
-            LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
-            LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
-            lp2.leftMargin = Ui.dp(a, 10);
-            btns.addView(approve, lp1);
-            btns.addView(reject, lp2);
-            col.addView(btns);
-            col.addView(Ui.divider(a));
-
-            return new VH(col, shot, email, meta, status, approve, reject);
+            reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
+                    () -> d.getReference().update("status", "rejected",
+                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())));
+            LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
+            LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
+            b2.leftMargin = Ui.dp(a, 8);
+            btns.addView(approve, b1);
+            btns.addView(reject, b2);
+            card.addView(btns);
         }
+        return card;
+    }
 
-        @Override
-        public void onBindViewHolder(@NonNull VH h, int position) {
-            android.app.Activity a = getActivity();
-            DocumentSnapshot d = items.get(position);
-            String emailS = Format.str(d.getData(), "userEmail");
-            String uid = Format.str(d.getData(), "userId");
-            String shot = Format.str(d.getData(), "screenshotUrl");
-            String stat = Format.strOr(d.getData(), "status", "pending");
-            h.email.setText(emailS.isEmpty() ? uid : emailS);
-            h.meta.setText("uid " + (uid.length() > 10 ? uid.substring(0, 10) + "…" : uid)
-                    + " · " + Format.ago(Format.ts(d.getData() == null ? null : d.get("date"))));
-            h.status.setText("pending".equals(stat) ? "⏳ PENDING — needs your decision"
-                    : "approved".equals(stat) ? "✓ Approved" : "✕ Rejected");
-            h.status.setTextColor("pending".equals(stat) ? Ui.ORANGE
-                    : "approved".equals(stat) ? Ui.GREEN : Ui.RED);
-            if (!shot.isEmpty()) {
-                Ui.img(a, h.shot, shot);
-                h.shot.setOnClickListener(v -> {
-                    Intent i = new Intent(a, FullscreenMediaActivity.class);
-                    i.putExtra("type", "image");
-                    i.putExtra("url", shot);
-                    a.startActivity(i);
-                });
+    private String typeLabel(String type) {
+        if (type == null) return "Payment";
+        switch (type) {
+            case "tick_blue": return "✓ Blue Tick";
+            case "tick_gold": return "✨ Gold Tick";
+            case "tick_diamond": return "💎 Diamond Tick";
+            case "boost_profile": return "🚀 Profile Boost 24h";
+            case "boost_post": return "🚀 Post Boost";
+            case "subscription": return "⭐ Subscription";
+            default: return type;
+        }
+    }
+
+    private void confirm(android.app.Activity a, String t, String msg, Runnable go) {
+        new AlertDialog.Builder(a).setTitle(t).setMessage(msg)
+                .setPositiveButton("Yes", (d, w) -> go.run())
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    /** Approve = write payment approved + activate the purchased thing, in one batch. */
+    private void approve(DocumentSnapshot d, java.util.Map<String, Object> m) {
+        android.app.Activity a = getActivity();
+        String type = Format.str(m, "type");
+        String uid = Format.str(m, "userId");
+        WriteBatch batch = Fb.db().batch();
+        batch.update(d.getReference(), "status", "approved",
+                "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
+
+        if (type != null && type.startsWith("tick_")) {
+            String level = type.substring(5);
+            batch.set(Fb.db().collection("users").document(uid),
+                    Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
+        } else if ("boost_profile".equals(type) || "boost_post".equals(type)) {
+            String boostId = Format.str(m, "boostId");
+            if (!boostId.isEmpty()) {
+                DocumentReference bo = Fb.db().collection("boosts").document(boostId);
+                batch.update(bo, "status", "active",
+                        "expiry", new com.google.firebase.Timestamp(
+                                new Date(System.currentTimeMillis() + 24L * 3600 * 1000)));
             }
-            boolean pending = "pending".equals(stat);
-            h.approve.setEnabled(pending);
-            h.reject.setEnabled(pending);
-            h.approve.setAlpha(pending ? 1f : 0.4f);
-            h.reject.setAlpha(pending ? 1f : 0.4f);
-            h.approve.setOnClickListener(v -> { if (pending) approve(d); });
-            h.reject.setOnClickListener(v -> { if (pending) reject(d); });
-        }
-
-        class VH extends RecyclerView.ViewHolder {
-            ImageView shot;
-            TextView email, meta, status, approve, reject;
-            VH(View v, ImageView s, TextView e, TextView m, TextView st, TextView ap, TextView rj) {
-                super(v);
-                shot = s; email = e; meta = m; status = st; approve = ap; reject = rj;
+        } else if ("subscription".equals(type)) {
+            String subId = Format.str(m, "subscriptionId");
+            if (!subId.isEmpty()) {
+                DocumentReference su = Fb.db().collection("subscriptions").document(subId);
+                batch.update(su, "status", "active",
+                        "expiry", new com.google.firebase.Timestamp(
+                                new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
             }
         }
+        batch.commit().addOnSuccessListener(x -> {
+            if (a == null) return;
+            if (type != null && type.startsWith("tick_")) {
+                Admin.syncAuthorTickLevel(uid, type.substring(5));
+            }
+            notifyUser(uid, type);
+            Ui.toast(a, "Approved ✓ — activated");
+        }).addOnFailureListener(e -> { if (a != null) Ui.toast(a, "Error: " + e.getMessage()); });
+    }
+
+    private void notifyUser(String uid, String type) {
+        String text;
+        if (type != null && type.startsWith("tick_"))
+            text = "✓ Approved! Your " + Admin.tickLabel(type.substring(5)) + " is now live 🎉";
+        else if ("boost_profile".equals(type))
+            text = "🚀 Your profile is boosted for the next 24 hours!";
+        else if ("boost_post".equals(type)) text = "🚀 Your post is boosted — more people will see it!";
+        else text = "⭐ Your subscription payment was approved. Enjoy!";
+        java.util.Map<String, Object> n = Fb.map(
+                "toUserId", uid,
+                "fromUserId", Fb.uid(),
+                "fromUserName", "friendbook Team",
+                "fromUserPhotoUrl", "",
+                "type", "payment",
+                "text", text,
+                "isRead", false,
+                "createdAt", FieldValue.serverTimestamp());
+        Fb.db().collection("notifications").add(n);
     }
 }

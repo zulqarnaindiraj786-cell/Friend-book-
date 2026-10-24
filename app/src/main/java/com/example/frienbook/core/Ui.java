@@ -326,4 +326,32 @@ public class Ui {
             out.add(in.subList(i, Math.min(in.size(), i + size)));
         return out;
     }
+
+    /** Soft infinite pulse (used by the animated 💎 diamond tick). */
+    public static void pulse(View v) {
+        android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(v, View.ALPHA, 1f, 0.55f);
+        a.setDuration(700);
+        a.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        a.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        a.start();
+        v.setTag(a);
+    }
+
+    /** Small rounded chip label (e.g. 🚀 BOOSTED). */
+    public static TextView roundChip(Context c, String text, int bg, int fg, float sp) {
+        TextView t = tvBold(c, text, sp, fg);
+        t.setBackground(round(c, bg, 10));
+        t.setPadding(dp(c, 8), dp(c, 2), dp(c, 8), dp(c, 2));
+        return t;
+    }
+
+    /** Open a geo URI in the user's map app (or silently do nothing). */
+    public static void openMap(Context c, String location) {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode(location)));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+        } catch (Exception e) { Ui.toast(c, "No map app installed"); }
+    }
 }

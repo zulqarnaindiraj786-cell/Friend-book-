@@ -16,8 +16,10 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.frienbook.chat.ChatActivity;
+import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Presence;
 import com.example.frienbook.core.Ui;
@@ -50,6 +52,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private TextView nameT, bioT, statsT, presenceT, primaryBtn, secondaryBtn;
     private android.widget.ImageView nameTick;
+    private android.widget.LinearLayout moneyRow;
+    private android.widget.TextView boostBtn, subscribeBtn, tickBtn;
+    private com.google.firebase.firestore.ListenerRegistration subReg;
+    private boolean subscribedActive;
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab;
     private LinearLayout postsBox, aboutBox, friendsBox;
@@ -128,6 +134,26 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         actions.addView(primaryBtn, b1);
         actions.addView(secondaryBtn, b2);
         actions.addView(more, b3);
+
+        // monetization row: boost (own profile) / subscribe (creator profile) / get-a-tick
+        moneyRow = Ui.row(this);
+        moneyRow.setGravity(Gravity.CENTER);
+        moneyRow.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), 0);
+        moneyRow.setVisibility(View.GONE);
+        boostBtn = Ui.btnOutline(this, "🚀 Boost Profile · 24h · Rs " + Admin.PRICE_BOOST_PROFILE, Icons.BLUE);
+        boostBtn.setOnClickListener(v -> boostProfile());
+        subscribeBtn = Ui.btn(this, "");
+        subscribeBtn.setOnClickListener(v -> subscribe());
+        tickBtn = Ui.btnGrey(this, "✓ Get a tick");
+        tickBtn.setOnClickListener(v -> startActivity(
+                new Intent(this, com.example.frienbook.bluetick.BlueTickActivity.class)));
+        LinearLayout.LayoutParams m1 = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1);
+        LinearLayout.LayoutParams m2 = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1);
+        m2.leftMargin = Ui.dp(this, 8);
+        moneyRow.addView(boostBtn, m1);
+        moneyRow.addView(tickBtn, m2);
+        moneyRow.addView(subscribeBtn, new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1));
+        infoCol.addView(moneyRow);
         infoCol.addView(actions);
         more.setOnClickListener(this::moreMenu);
         body.addView(infoCol);
@@ -233,6 +259,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     user = Models.User.fromDoc(d);
                     bindUser();
                 });
+        watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
             friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
@@ -311,12 +338,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (outReg != null) outReg.remove();
         if (inReg != null) inReg.remove();
         if (postsReg != null) postsReg.remove();
+        if (subReg != null) subReg.remove();
         if (presenceH != null) presenceH.close();
     }
 
     private void bindUser() {
         nameT.setText(user.displayName);
-        nameTick.setVisibility(user.isVerified ? View.VISIBLE : View.GONE);
+        Icons.setTickBadge(nameTick, user.tickLevel, true);
         bioT.setText(user.bio);
         bioT.setVisibility(user.bio == null || user.bio.isEmpty() ? View.GONE : View.VISIBLE);
         statsT.setText(Format.count(user.friendsCount) + " friends · "
@@ -342,8 +370,72 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             primaryBtn.setText("✏️ Edit profile");
             secondaryBtn.setText("＋ Add to story");
             presenceT.setText("");
+            moneyRow.setVisibility(View.VISIBLE);
+            boostBtn.setVisibility(View.VISIBLE);
+            subscribeBtn.setVisibility(View.GONE);
+            tickBtn.setVisibility(user.tickRank() >= 3 ? View.GONE : View.VISIBLE);
+        } else {
+            boostBtn.setVisibility(View.GONE);
+            tickBtn.setVisibility(View.GONE);
+            moneyRow.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
+            subscribeBtn.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
+            updateSubscribeButton();
         }
         refreshButtons();
+    }
+
+    private void updateSubscribeButton() {
+        subscribeBtn.setText(subscribedActive ? "✓ Subscribed"
+                : "⭐ Subscribe $" + (user.subscriptionPrice > 0 ? user.subscriptionPrice : 5) + "/mo");
+    }
+
+    private void subscribe() {
+        if (subscribedActive) {
+            Ui.toast(this, "You're already subscribed to " + user.displayName);
+            return;
+        }
+        int price = user.subscriptionPrice > 0 ? user.subscriptionPrice : 5;
+        Intent i = new Intent(this, com.example.frienbook.pay.PayRequestActivity.class);
+        i.putExtra("type", "subscription");
+        i.putExtra("target_id", uid);
+        i.putExtra("amount", price);
+        i.putExtra("currency", "USD");
+        i.putExtra("title", "Subscribe to " + user.displayName);
+        startActivity(i);
+    }
+
+    private void boostProfile() {
+        Ui.confirm(this, "🚀 Boost Profile",
+                "Your profile will be pinned on TOP of the Home feed for 24 hours.\nCost: Rs "
+                        + Admin.PRICE_BOOST_PROFILE + " (JazzCash / Easypaisa).",
+                "Continue", () -> {
+                    Intent i = new Intent(this, com.example.frienbook.pay.PayRequestActivity.class);
+                    i.putExtra("type", "boost_profile");
+                    i.putExtra("amount", Admin.PRICE_BOOST_PROFILE);
+                    i.putExtra("title", "Boost Profile — 24h");
+                    startActivity(i);
+                });
+    }
+
+    /** live subscription state for viewers of this profile */
+    private void watchSubscription() {
+        if (subReg != null) subReg.remove();
+        if (mine || Fb.uid() == null) return;
+        subReg = Fb.db().collection("subscriptions")
+                .whereEqualTo("creatorId", uid)
+                .whereEqualTo("subscriberId", Fb.uid())
+                .limit(1)
+                .addSnapshotListener((snap, err) -> {
+                    subscribedActive = false;
+                    if (snap != null && !snap.isEmpty()) {
+                        com.google.firebase.firestore.DocumentSnapshot d = snap.getDocuments().get(0);
+                        java.util.Map<String, Object> m = d.getData();
+                        boolean active = "active".equals(Format.str(m, "status"));
+                        long exp = Format.ts(m == null ? null : m.get("expiry"));
+                        subscribedActive = active && (exp == 0 || exp > System.currentTimeMillis());
+                    }
+                    if (user != null && user.subscriptionsEnabled) updateSubscribeButton();
+                });
     }
 
     private void computeFriendState() {

@@ -35,6 +35,8 @@ public class MonetizationActivity extends Activity {
     private TextView adsStatus, adsProgressT, starsT, subsT;
     private ProgressBar adsBar;
     private Switch subsSwitch;
+    private TextView subsCountT;
+    private com.google.firebase.firestore.ListenerRegistration subsCountReg;
     private ListenerRegistration meReg;
     private int followersCount = 0;
 
@@ -106,6 +108,9 @@ public class MonetizationActivity extends Activity {
         priceRow.setPadding(0, Ui.dp(this, 8), 0, 0);
         priceRow.setOnClickListener(v -> priceDialog());
         subs.addView(priceRow);
+        subsCountT = Ui.tv(this, "Subscribers: …", 12, Ui.sub(this));
+        subsCountT.setPadding(0, Ui.dp(this, 6), 0, 0);
+        subs.addView(subsCountT);
         body.addView(subs);
 
         sv.addView(body);
@@ -141,18 +146,30 @@ public class MonetizationActivity extends Activity {
                     Object fol = d.get("followers");
                     if (fol instanceof java.util.List) followersCount = ((java.util.List<?>) fol).size();
                     long stars = Format.intOf(d.getData(), "stars");
-                    starsT.setText("Your Stars: " + Format.count(stars) + " ⭐");
+                    starsT.setText("Your Stars: " + Format.count(stars) + " ⭐  (≈ Rs "
+                            + Format.count(stars * com.example.frienbook.core.Admin.STAR_VALUE_PKR) + ")");
                     boolean subsOn = Boolean.TRUE.equals(d.getBoolean("subscriptionsEnabled"));
                     subsSwitch.setOnCheckedChangeListener(null);
                     subsSwitch.setChecked(subsOn);
                     subsSwitch.setOnCheckedChangeListener(this::toggleSubs);
                     Object price = d.get("subscriptionPrice");
-                    if (price != null) subsT.setText("Allow subscriptions — Rs " + price + "/month");
+                    int usd = 5;
+                    if (price instanceof Number) usd = ((Number) price).intValue();
+                    else if (price != null) { try { usd = Integer.parseInt(String.valueOf(price)); } catch (Exception ignored) { } }
+                    subsT.setText("Allow subscriptions — $" + usd + "/month (you keep 70%)");
                     checkEligibility(followersCount, -1);
                 });
         // real reels count for eligibility part 2
         Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
                 .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
+        // live subscribers count
+        if (subsCountReg != null) subsCountReg.remove();
+        subsCountReg = Fb.db().collection("subscriptions")
+                .whereEqualTo("creatorId", me)
+                .whereEqualTo("status", "active")
+                .addSnapshotListener((snap, err) ->
+                        subsCountT.setText("Subscribers: " + (snap == null ? 0 : snap.size())
+                                + " active  ·  70% yours / 30% friendbook"));
     }
 
     private void checkEligibility(int followers, int reels) {
@@ -176,30 +193,22 @@ public class MonetizationActivity extends Activity {
     }
 
     private void priceDialog() {
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 20, 10, 20, 0);
-        EditText p = Ui.input(this, "Monthly price in Rs (e.g. 99)");
-        p.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        box.addView(p, new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
-        new AlertDialog.Builder(this)
-                .setTitle("Subscription price")
-                .setView(box)
-                .setPositiveButton("Save", (d, w) -> {
-                    String v = p.getText().toString().trim();
-                    if (v.isEmpty()) return;
-                    try { Integer.parseInt(v); } catch (Exception e) { Ui.toast(this, "Enter a number"); return; }
-                    Fb.db().collection("users").document(Fb.uid())
-                            .set(Fb.map("subscriptionPrice", v), SetOptions.merge());
-                    subsT.setText("Allow subscriptions — Rs " + v + "/month");
-                    Ui.toast(this, "Price saved ✓");
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        // Facebook-style tiers — creator keeps 70%, friendbook keeps 30%
+        String[] tiers = {"$2 / month", "$5 / month", "$10 / month"};
+        int[] values = {2, 5, 10};
+        Ui.choose(this, "Monthly price — you keep 70%", tiers, w -> {
+            int v = values[w];
+            Fb.db().collection("users").document(Fb.uid())
+                    .set(Fb.map("subscriptionPrice", v), SetOptions.merge());
+            subsT.setText("Allow subscriptions — $" + v + "/month (you keep 70%)");
+            Ui.toast(this, "Price saved ✓");
+        });
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         if (meReg != null) meReg.remove();
+        if (subsCountReg != null) { subsCountReg.remove(); subsCountReg = null; }
     }
 }

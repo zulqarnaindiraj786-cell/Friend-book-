@@ -73,10 +73,12 @@ public class AdminUsersFragment extends Fragment {
         adapter = new UsersAdapter(a, new UsersAdapter.Handler() {
             @Override
             public void primary(UsersAdapter.Row r) {
-                // ✓ Give / ✕ Remove blue tick — admin's direct button
+                // ✓ Direct tick control — give ANY level to ANY user
                 Models.User u = r.user;
-                if (u.isVerified) Admin.removeBlueTick(a, u.uid, u.displayName);
-                else Admin.grantBlueTick(a, u.uid, u.displayName);
+                String[] opts = {"🚫 No tick", "✓ Blue tick", "✨ Gold tick", "💎 Diamond tick"};
+                String[] vals = {"none", "blue", "gold", "diamond"};
+                Ui.choose(a, "Tick for " + u.displayName + " (now: " + Admin.tickLabel(u.tickLevel) + ")",
+                        opts, w -> Admin.setTickLevel(a, u.uid, u.displayName, vals[w]));
             }
 
             @Override
@@ -128,7 +130,7 @@ public class AdminUsersFragment extends Fragment {
             s.append(u.email);
             r.subtitle = s.toString();
             // ✓ give/remove blue tick — admin marzi se
-            r.primaryLabel = u.isVerified ? "✕ Tick" : "✓ Tick";
+            r.primaryLabel = u.tickRank() == 0 ? "✓ Tick" : "✓ " + u.tickLevel;
             r.secondaryLabel = "⋯";
             rows.add(r);
         }

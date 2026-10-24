@@ -129,7 +129,7 @@ public class AdminReferralsFragment extends Fragment {
                 }
                 if (--pendingNames <= 0) {
                     int done = 0;
-                    for (Inviter i2 : inviters) if (i2.count >= Admin.REFERRALS_FOR_TICK) done++;
+                    for (Inviter i2 : inviters) if (i2.count >= Admin.REFERRALS_BLUE) done++;
                     summary.setText(total + " referral signups · " + inviters.size() + " inviters · "
                             + done + " reached 5/5 ✓");
                 }
@@ -148,8 +148,8 @@ public class AdminReferralsFragment extends Fragment {
         android.app.Activity a = getActivity();
         if (a == null) return;
         StringBuilder sb = new StringBuilder();
-        sb.append(it.count).append("/").append(Admin.REFERRALS_FOR_TICK).append(" referrals");
-        if (it.count >= Admin.REFERRALS_FOR_TICK) sb.append(" — free tick earned ✓");
+        sb.append(it.count).append("/").append(Admin.REFERRALS_BLUE).append(" referrals");
+        if (it.count >= Admin.REFERRALS_BLUE) sb.append(" — free tick earned ✓");
         sb.append("\n\nInvitees:\n");
         java.util.Set<String> seen = new java.util.HashSet<>(it.invitees);
         for (String uid : seen) sb.append("• ").append(uid, 0, Math.min(10, uid.length())).append("…\n");
@@ -204,8 +204,8 @@ public class AdminReferralsFragment extends Fragment {
             h.name.setText(it.name);
             h.tick.setVisibility(it.verified ? View.VISIBLE : View.GONE);
             h.sub.setText(it.email + " · last invite " + Format.ago(it.latest));
-            h.prog.setText(it.count + "/" + Admin.REFERRALS_FOR_TICK);
-            h.prog.setTextColor(it.count >= Admin.REFERRALS_FOR_TICK ? Ui.GREEN : Ui.BLUE);
+            h.prog.setText(it.count + "/" + Admin.REFERRALS_BLUE);
+            h.prog.setTextColor(it.count >= Admin.REFERRALS_BLUE ? Ui.GREEN : Ui.BLUE);
             h.itemView.setOnClickListener(v -> detail(it));
         }
 

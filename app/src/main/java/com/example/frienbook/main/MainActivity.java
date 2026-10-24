@@ -197,21 +197,8 @@ public class MainActivity extends Activity {
                 .whereEqualTo("refBy", me)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null) return;
-                    int count = snap.size();
-                    boolean already = Fb.me != null && Fb.me.isVerified;
-                    if (count >= com.example.frienbook.core.Admin.REFERRALS_FOR_TICK && !already) {
-                        Fb.db().collection("users").document(me).update("isVerified", true);
-                        Fb.db().collection("notifications").add(Fb.map(
-                                "toUserId", me,
-                                "fromUserId", me,
-                                "fromUserName", "friendbook",
-                                "fromUserPhotoUrl", "",
-                                "type", "announcement",
-                                "text", "🏆 Congrats! 5 friends joined via your invite — your FREE blue tick is live! ✓",
-                                "isRead", false,
-                                "createdAt", FieldValue.serverTimestamp()));
-                        Ui.toast(this, "🏆 You earned the FREE blue tick! ✓");
-                    }
+                    // 5 invites → blue ✓ · 20 → gold ✓ · 50 → diamond 💎 (auto, upgrades only)
+                    com.example.frienbook.core.Admin.autoGrantByReferrals(this, snap.size());
                 });
     }
 

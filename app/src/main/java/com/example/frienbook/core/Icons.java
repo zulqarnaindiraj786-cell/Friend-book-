@@ -74,6 +74,43 @@ public class Icons {
     public static final int BANKNOTE = R.drawable.ic_banknote_outline;
     public static final int STAR = R.drawable.ic_star_outline;
     public static final int SHARE2 = R.drawable.ic_share2_outline;
+    public static final int VERIFIED_GOLD = R.drawable.ic_verified_gold;
+    public static final int VERIFIED_DIAMOND = R.drawable.ic_verified_diamond;
+    public static final int BOOST = R.drawable.ic_rocket_outline;
+    public static final int LIVE = R.drawable.ic_live_outline;
+    public static final int GIFT = R.drawable.ic_gift_outline;
+
+    /** Native badge drawable for a tick level (untinted). */
+    public static int badgeFor(String tickLevel) {
+        if ("gold".equals(tickLevel)) return VERIFIED_GOLD;
+        if ("diamond".equals(tickLevel)) return VERIFIED_DIAMOND;
+        return VERIFIED;
+    }
+
+    public static int tickRank(String tickLevel) {
+        if ("blue".equals(tickLevel)) return 1;
+        if ("gold".equals(tickLevel)) return 2;
+        if ("diamond".equals(tickLevel)) return 3;
+        return 0;
+    }
+
+    /**
+     * Show the user's tick badge in an ImageView — blue / gold ✓ / animated diamond.
+     * Hidden view when level is none. Untinted so the badge keeps its official colors.
+     */
+    public static void setTickBadge(ImageView iv, String tickLevel, boolean animateDiamond) {
+        int rank = tickRank(tickLevel);
+        if (rank == 0) { iv.setVisibility(android.view.View.GONE); return; }
+        iv.setVisibility(android.view.View.VISIBLE);
+        // clear any previous tint so badge colors stay true (blue/gold/diamond)
+        iv.setImageDrawable(null);
+        iv.setImageResource(badgeFor(tickLevel));
+        Object old = iv.getTag();
+        if (old instanceof android.animation.ObjectAnimator) ((android.animation.ObjectAnimator) old).cancel();
+        iv.setTag(null);
+        iv.setAlpha(1f);
+        if (rank == 3 && animateDiamond) Ui.pulse(iv);
+    }
 
     /** A VectorDrawable tinted with the given color. */
     public static Drawable tinted(Context c, int resId, int color) {

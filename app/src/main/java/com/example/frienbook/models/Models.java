@@ -17,6 +17,20 @@ public class Models {
         public long lastSeen, createdAt;
         public int friendsCount;
         public int stars;     // Stars balance (monetization)
+        public String tickLevel = "none"; // none | blue | gold | diamond
+        public boolean subscriptionsEnabled;
+        public int subscriptionPrice;     // USD per month (2 / 5 / 10)
+
+        /** 0 none, 1 blue, 2 gold, 3 diamond — used for "only upgrade" checks. */
+        public int tickRank() {
+            if (tickLevel == null) return isVerified ? 1 : 0;
+            switch (tickLevel) {
+                case "blue": return 1;
+                case "gold": return 2;
+                case "diamond": return 3;
+                default: return isVerified ? 1 : 0;
+            }
+        }
         public List<String> followers = new ArrayList<>();
         public List<String> following = new ArrayList<>();
         public List<String> blocked = new ArrayList<>();
@@ -39,6 +53,9 @@ public class Models {
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");
+            u.tickLevel = Format.strOr(m, "tickLevel", u.isVerified ? "blue" : "none");
+            u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
+            u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
             u.blocked = Format.listOf(m, "blockedUsers");
@@ -59,6 +76,7 @@ public class Models {
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
 
         public boolean authorVerified; // copied from author's profile when the post is created
+        public String authorTickLevel = "none"; // none | blue | gold | diamond (denormalized)
 
         public boolean isPoll() { return pollOptions != null && pollOptions.size() >= 2; }
         public boolean isMultiPhoto() { return mediaUrls != null && mediaUrls.size() > 1; }
@@ -85,6 +103,7 @@ public class Models {
             p.shares = Format.intOf(m, "shares");
             p.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             p.authorVerified = Format.boolOf(m, "authorVerified");
+            p.authorTickLevel = Format.strOr(m, "authorTickLevel", p.authorVerified ? "blue" : "none");
             p.sharedFromId = Format.str(m, "sharedFromId");
             p.sharedFromAuthor = Format.str(m, "sharedFromAuthor");
             p.sharedFromContent = Format.str(m, "sharedFromContent");
