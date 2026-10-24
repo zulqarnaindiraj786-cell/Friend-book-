@@ -61,7 +61,7 @@ jobs:
             echo "::error::$line"
           done
           echo "===== gradle tail (as warnings so we can read them) ====="
-          grep -vE "^$" build-debug.log | tail -30 | while IFS= read -r line; do
+          grep -vE "^$" build-debug.log | tail -60 | while IFS= read -r line; do
             echo "::warning::${line:0:300}"
           done
 
