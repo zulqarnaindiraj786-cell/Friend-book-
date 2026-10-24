@@ -52,15 +52,12 @@ jobs:
       - name: Surface compiler errors as annotations
         if: steps.dbg.outputs.exit != '0'
         run: |
+          echo "===== error blocks ====="
+          grep -A4 -E "^.*\.java:[0-9]+: error:" build-debug.log | head -220 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
           echo "===== gradle tail ====="
-          tail -25 build-debug.log
-          echo "===== java errors ====="
-          grep -E "\.java:[0-9]+: (error|warning)" build-debug.log | head -50 | while IFS= read -r line; do
-            echo "::error::$line"
-          done
-          grep -E "error: package|error: cannot|error: incompatible|error: method|error: ';'" build-debug.log | head -50 | while IFS= read -r line; do
-            echo "::error::$line"
-          done
+          tail -12 build-debug.log
 
       - name: Fail if debug build failed
         if: steps.dbg.outputs.exit != '0'
