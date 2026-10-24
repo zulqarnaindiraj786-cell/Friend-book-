@@ -116,24 +116,9 @@ public class LoginActivity extends Activity {
     }
 
     private void forgotDialog() {
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 20, 12, 20, 0);
-        EditText e = Ui.input(this, "Email address");
-        e.setText(email.getText().toString());
-        box.addView(e, new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("Reset password")
-                .setMessage("We'll email you a reset link.")
-                .setView(box)
-                .setPositiveButton("Send", (d, w) -> {
-                    String em = e.getText().toString().trim();
-                    if (em.isEmpty()) return;
-                    Fb.auth().sendPasswordResetEmail(em)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Reset email sent"))
-                            .addOnFailureListener(err -> Ui.toast(this, human(err.getMessage())));
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        // Facebook-Lite 2026 recovery: Gmail OTP code screen
+        startActivity(new android.content.Intent(this,
+                com.example.frienbook.auth.ForgotPasswordActivity.class));
     }
 
     private String human(String m) {

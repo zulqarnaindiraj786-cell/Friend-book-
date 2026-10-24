@@ -121,6 +121,10 @@ public class SettingsActivity extends Activity {
             body.addView(rowI(Icons.SHIELD, "Admin Panel", "Dashboard, users, content, reports, broadcast",
                     () -> startActivity(new Intent(this,
                             com.example.frienbook.admin.AdminPanelActivity.class))));
+            body.addView(div());
+            body.addView(rowI(Icons.CHART, "AdMob Settings", "Banner ad unit ID, on/off — live for everyone",
+                    () -> startActivity(new Intent(this,
+                            com.example.frienbook.admin.AdMobSettingsActivity.class))));
             body.addView(cardEnd());
         }
 

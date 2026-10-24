@@ -75,6 +75,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startStoriesListener();
         startBoostsListener();
         startLivesListener();
+        // 📢 live banner config (admin edits apply instantly)
+        com.example.frienbook.core.AdsConfig.setChangeListener((id, en) -> {
+            if (adapter != null) adapter.setAdsConfig(id, en);
+        });
+        adapter.setAdsConfig(com.example.frienbook.core.AdsConfig.bannerId(),
+                com.example.frienbook.core.AdsConfig.bannersEnabled());
     }
 
     @Override
@@ -85,6 +91,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (friendsReg != null) friendsReg.remove();
         if (boostsReg != null) boostsReg.remove();
         if (livesReg != null) livesReg.remove();
+        com.example.frienbook.core.AdsConfig.setChangeListener(null);
     }
 
     // ---------- 🚀 boosted profiles/posts (paid → pinned on top of Home) ----------

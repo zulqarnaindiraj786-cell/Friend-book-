@@ -16,6 +16,9 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3387480177023669~5696528190"/>
         <activity android:name=".SplashActivity"
             android:screenOrientation="portrait"
             android:exported="true">
@@ -79,6 +82,8 @@
         <activity android:name=".bluetick.MonetizationActivity" android:screenOrientation="portrait" />
         <activity android:name=".pay.PayRequestActivity" android:screenOrientation="portrait" />
         <activity android:name=".live.LiveActivity" android:configChanges="orientation|screenSize" />
+        <activity android:name=".admin.AdMobSettingsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".auth.ForgotPasswordActivity" android:screenOrientation="portrait" />
 
         <activity android:name=".groups.GroupsActivity" android:screenOrientation="portrait" />
         <activity android:name=".groups.GroupDetailActivity" android:screenOrientation="portrait" />

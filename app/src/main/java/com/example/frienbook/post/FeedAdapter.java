@@ -56,7 +56,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean hasMore();
     }
 
-    private static final int VT_HEADER = 0, VT_POST = 1, VT_FOOTER = 2;
+    private static final int VT_HEADER = 0, VT_POST = 1, VT_FOOTER = 2, VT_AD = 3;
 
     private final Activity activity;
     private final Host host;
@@ -109,11 +109,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
-    @Override public int getItemCount() { return offset() + posts.size() + footerCount(); }
+    // ---- 📢 AdMob banner slots: one banner after every 3 posts ----
+    private String bannerId = com.example.frienbook.core.AdsConfig.bannerId();
+    private boolean adsEnabled = com.example.frienbook.core.AdsConfig.bannersEnabled();
+
+    public void setAdsConfig(String id, boolean enabled) {
+        bannerId = id == null || id.isEmpty() ? com.example.frienbook.core.AdsConfig.DEFAULT_BANNER_ID : id;
+        adsEnabled = enabled;
+        notifyDataSetChanged();
+    }
+
+    private int adCount() { return adsEnabled ? posts.size() / 3 : 0; }
+
+    /** Does this feed slot (after the header) hold an ad? Slots 3, 7, 11… */
+    private boolean isAdSlot(int slot) {
+        return adsEnabled && (slot + 1) % 4 == 0 && slot / 4 < adCount();
+    }
+
+    private int postIndexForSlot(int slot) {
+        if (!adsEnabled) return slot;
+        return slot - ((slot + 1) / 4);
+    }
+
+    private int slotCount() { return posts.size() + adCount(); }
+
+    @Override public int getItemCount() { return offset() + slotCount() + footerCount(); }
 
     @Override public int getItemViewType(int position) {
         if (showHeader && position == 0) return VT_HEADER;
         if (showFooter && position == getItemCount() - 1) return VT_FOOTER;
+        if (isAdSlot(position - offset())) return VT_AD;
         return VT_POST;
     }
 
@@ -123,7 +148,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = parent.getContext();
         if (viewType == VT_HEADER) return new HeaderVH(c);
         if (viewType == VT_FOOTER) return new FooterVH(c);
+        if (viewType == VT_AD) return new AdVH(c);
         return new PostVH(c);
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull RecyclerView.ViewHolder holder) {
+        super.onViewRecycled(holder);
+        if (holder instanceof AdVH) ((AdVH) holder).destroyAd();
     }
 
     @Override
@@ -217,8 +249,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
             fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
+        } else if (h instanceof AdVH) {
+            ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
         } else {
-            bindPost((PostVH) h, posts.get(position - offset()));
+            bindPost((PostVH) h, posts.get(postIndexForSlot(position - offset())));
         }
     }
 
@@ -833,6 +867,42 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             end.setGravity(Gravity.CENTER);
             Ui.pad(end, 0, 10, 0, 0);
             col.addView(end, new LinearLayout.LayoutParams(-1, -2));
+        }
+    }
+
+    /** 📢 AdMob banner slot — Google BANNER ad, loaded fresh on every bind. */
+    static class AdVH extends RecyclerView.ViewHolder {
+        final FrameLayout box;
+        com.google.android.gms.ads.AdView adView;
+
+        AdVH(Context c) {
+            super(cardRoot(c));
+            LinearLayout card = (LinearLayout) itemView;
+            TextView label = Ui.tv(c, "Sponsored", 11, Ui.sub(c));
+            label.setGravity(Gravity.CENTER);
+            Ui.pad(label, 0, 8, 0, 2);
+            card.addView(label, new LinearLayout.LayoutParams(-1, -2));
+            box = new FrameLayout(c);
+            card.addView(box, new LinearLayout.LayoutParams(-1, -2));
+        }
+
+        void loadAd(String bannerId) {
+            destroyAd();
+            adView = new com.google.android.gms.ads.AdView(box.getContext());
+            adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
+            adView.setAdUnitId(bannerId);
+            box.setGravity(Gravity.CENTER);
+            box.addView(adView, new FrameLayout.LayoutParams(-2, -2));
+            adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+            Ui.pad(box, 0, 0, 0, 8);
+        }
+
+        void destroyAd() {
+            if (adView != null) {
+                box.removeView(adView);
+                try { adView.destroy(); } catch (Throwable ignored) { }
+                adView = null;
+            }
         }
     }
 

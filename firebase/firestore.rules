@@ -179,10 +179,24 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // ---- app config (payment numbers etc): world-readable, admin-editable ----
+    // ---- app config (payment numbers, AdMob banner id etc): world-readable, admin-editable ----
     match /config/{doc} {
-      allow read: if signedIn();
+      allow read: if true;           // banner id must be readable before sign-in too
       allow write: if isAdmin();
+    }
+
+    // ---- password recovery (Facebook-Lite style OTP) ----
+    // unauthenticated, hash-only storage (SHA-256 of code+email), 10 min TTL, attempt-capped
+    match /passwordOtps/{emailKey} {
+      allow get: if true;    // hash lookup during verification (codes are never stored in plaintext)
+      allow list: if false;
+      allow create, update: if true;
+      allow delete: if true;
+    }
+    // outbound email queue for Firebase "Trigger Email" extension
+    match /mail/{mid} {
+      allow create: if true; // recovery emails must work pre-auth
+      allow read, update, delete: if isAdmin();
     }
 
     // ---- moderation inboxes: write by users, read/delete by admins only ----

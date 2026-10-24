@@ -27,6 +27,12 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
   👑 top-gifter badge live. `lives`, `lives/*/chat`, `gifts` collections
 - **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
   + 5 reels), Stars balance with Rs value, fan Subscriptions toggle + price, live subscriber count
+- **📢 Google AdMob banners** — real App ID `ca-app-pub-3387480177023669~5696528190`, live banner unit
+  `ca-app-pub-3387480177023669/2691090902` shown every 3 posts in Home (fresh load per bind);
+  admin-editable banner ID + on/off via Firestore `config/ads` (Settings → AdMob Settings, owner only),
+  plus Firebase Remote Config `ads_enabled` kill switch
+- **🔐 Facebook-Lite recovery** — forgot password → Gmail me 6-digit OTP code → verify →
+  secure password-set link (Firebase Auth) — `passwordOtps` (SHA-256 hashed, 10-min TTL) + `mail` queue
 - **🛡 Admin SUPER Dashboard** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com`), **6 tabs**:
   (1) Users — search any user, give/remove ANY tick level, ban/promote; (2) Referrals;
   (3) Payments — unified list (ticks/boosts/subscriptions) with screenshot + **Approve/Reject**
