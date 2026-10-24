@@ -57,6 +57,7 @@ public class Models {
 
         public boolean isPoll() { return pollOptions != null && pollOptions.size() >= 2; }
         public boolean isMultiPhoto() { return mediaUrls != null && mediaUrls.size() > 1; }
+        public boolean isBgPost() { return bgColor != 0; }
 
         @SuppressWarnings("unchecked")
         public static Post fromDoc(DocumentSnapshot d) {
