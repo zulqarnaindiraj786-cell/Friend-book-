@@ -99,7 +99,7 @@ public class LoginActivity extends Activity {
                             btn.setText("Log In");
                             btn.setEnabled(true);
                             Ui.info(this, "Account suspended",
-                                    "This account has been suspended by the FriendBook admin."
+                                    "This account has been suspended by the friendbook admin."
                                             + " Contact " + com.example.frienbook.core.Admin.OWNER_EMAIL
                                             + " if you think this is a mistake.");
                             return;

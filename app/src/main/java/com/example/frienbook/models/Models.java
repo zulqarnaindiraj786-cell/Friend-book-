@@ -13,9 +13,10 @@ public class Models {
 
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
-        public boolean isOnline, isAdmin, banned;
+        public boolean isOnline, isAdmin, banned, isVerified;
         public long lastSeen, createdAt;
         public int friendsCount;
+        public int stars;     // Stars balance (monetization)
         public List<String> followers = new ArrayList<>();
         public List<String> following = new ArrayList<>();
         public List<String> blocked = new ArrayList<>();
@@ -33,9 +34,11 @@ public class Models {
             u.isOnline = Format.boolOf(m, "isOnline");
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.banned = Format.boolOf(m, "banned");
+            u.isVerified = Format.boolOf(m, "isVerified");
             u.lastSeen = Format.ts(m == null ? null : m.get("lastSeen"));
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
+            u.stars = Format.intOf(m, "stars");
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
             u.blocked = Format.listOf(m, "blockedUsers");
@@ -54,6 +57,8 @@ public class Models {
         public List<String> mediaUrls = new ArrayList<>(); // multi-photo posts
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
+
+        public boolean authorVerified; // copied from author's profile when the post is created
 
         public boolean isPoll() { return pollOptions != null && pollOptions.size() >= 2; }
         public boolean isMultiPhoto() { return mediaUrls != null && mediaUrls.size() > 1; }
@@ -79,6 +84,7 @@ public class Models {
             p.comments = Format.intOf(m, "comments");
             p.shares = Format.intOf(m, "shares");
             p.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
+            p.authorVerified = Format.boolOf(m, "authorVerified");
             p.sharedFromId = Format.str(m, "sharedFromId");
             p.sharedFromAuthor = Format.str(m, "sharedFromAuthor");
             p.sharedFromContent = Format.str(m, "sharedFromContent");

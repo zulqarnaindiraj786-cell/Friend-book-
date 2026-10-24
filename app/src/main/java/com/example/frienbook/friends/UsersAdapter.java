@@ -78,7 +78,17 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
         TextView name = Ui.tvBold(c, "", 15, Ui.txt(c));
         TextView sub = Ui.tv(c, "", 12, Ui.sub(c));
         sub.setVisibility(View.GONE);
-        mid.addView(name);
+        // name row: displayName + blue tick badge
+        LinearLayout nameRow = Ui.row(c);
+        nameRow.addView(name, new LinearLayout.LayoutParams(-2, -2));
+        ImageView tick = new ImageView(c);
+        tick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+        tick.setVisibility(View.GONE);
+        int ts = Ui.dp(c, 16);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(ts, ts);
+        tlp.leftMargin = Ui.dp(c, 5);
+        nameRow.addView(tick, tlp);
+        mid.addView(nameRow);
         mid.addView(sub);
         row.addView(mid, mp);
 
@@ -99,7 +109,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
         row.addView(buttons);
 
         outer.addView(row);
-        return new VH(outer, av, name, sub, primary, secondary);
+        return new VH(outer, av, name, tick, sub, primary, secondary);
     }
 
     @Override
@@ -107,6 +117,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
         Row r = rows.get(position);
         Ui.avatar(activity, h.av, r.user.photoUrl);
         h.name.setText(r.user.displayName);
+        h.tick.setVisibility(r.user.isVerified ? View.VISIBLE : View.GONE);
         if (r.subtitle != null && !r.subtitle.isEmpty()) {
             h.sub.setVisibility(View.VISIBLE);
             h.sub.setText(r.subtitle);
@@ -138,11 +149,11 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
     }
 
     static class VH extends RecyclerView.ViewHolder {
-        ImageView av;
+        ImageView av, tick;
         TextView name, sub, primary, secondary;
-        VH(View v, ImageView a, TextView n, TextView s, TextView p, TextView sc) {
+        VH(View v, ImageView a, TextView n, ImageView tk, TextView s, TextView p, TextView sc) {
             super(v);
-            av = a; name = n; sub = s; primary = p; secondary = sc;
+            av = a; name = n; tick = tk; sub = s; primary = p; secondary = sc;
         }
     }
 }

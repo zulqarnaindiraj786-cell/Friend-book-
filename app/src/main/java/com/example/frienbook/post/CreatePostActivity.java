@@ -560,6 +560,7 @@ public class CreatePostActivity extends Activity {
         m.put("authorId", Fb.uid());
         m.put("authorName", Fb.myName());
         m.put("authorPhotoUrl", Fb.myPhoto());
+        m.put("authorVerified", Fb.me != null && Fb.me.isVerified);
         if (uploadedUrl == null && bgColor == 0) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
         if (groupId != null) m.put("groupId", groupId);
         m.put("likes", 0);

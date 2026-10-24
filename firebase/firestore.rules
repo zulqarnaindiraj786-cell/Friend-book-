@@ -111,6 +111,31 @@ service cloud.firestore {
       allow delete: if signedIn();
     }
 
+    // ---- referrals (5 invites → free blue tick) ----
+    // anyone signed-in can read referral records (progress + admin list), only users write them
+    match /referrals/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.refTo == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- blue-tick Rs 100 payments: user uploads screenshot, admin approves ----
+    match /blueTickPayments/{pid} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- app config (payment numbers etc): world-readable, admin-editable ----
+    match /config/{doc} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
     // ---- moderation inboxes: write by users, read/delete by admins only ----
     match /reports/{doc} {
       allow read: if isAdmin();

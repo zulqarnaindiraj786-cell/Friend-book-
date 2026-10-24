@@ -127,6 +127,7 @@ public class MainActivity extends Activity {
         setContentView(root);
         select(TAB_HOME);
         startBadgeListeners();
+        watchReferralsForFreeTick();
         askNotifPermission();
 
         // Secret: shake to report a problem.
@@ -181,6 +182,37 @@ public class MainActivity extends Activity {
             com.example.frienbook.core.Icons.setTint(navIcons[i],
                     on ? com.example.frienbook.core.Icons.BLUE : com.example.frienbook.core.Icons.GRAY);
         }
+    }
+
+    /**
+     * 💙 FREE BLUE TICK: whenever my completed referrals reach 5, grant isVerified
+     * automatically (self-write — allowed by rules) and celebrate once.
+     */
+    private ListenerRegistration referralReg;
+
+    private void watchReferralsForFreeTick() {
+        String me = Fb.uid();
+        if (me == null) return;
+        referralReg = Fb.db().collection("referrals")
+                .whereEqualTo("refBy", me)
+                .addSnapshotListener((snap, err) -> {
+                    if (snap == null) return;
+                    int count = snap.size();
+                    boolean already = Fb.me != null && Fb.me.isVerified;
+                    if (count >= com.example.frienbook.core.Admin.REFERRALS_FOR_TICK && !already) {
+                        Fb.db().collection("users").document(me).update("isVerified", true);
+                        Fb.db().collection("notifications").add(Fb.map(
+                                "toUserId", me,
+                                "fromUserId", me,
+                                "fromUserName", "friendbook",
+                                "fromUserPhotoUrl", "",
+                                "type", "announcement",
+                                "text", "🏆 Congrats! 5 friends joined via your invite — your FREE blue tick is live! ✓",
+                                "isRead", false,
+                                "createdAt", FieldValue.serverTimestamp()));
+                        Ui.toast(this, "🏆 You earned the FREE blue tick! ✓");
+                    }
+                });
     }
 
     private void startBadgeListeners() {
@@ -268,6 +300,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (referralReg != null) referralReg.remove();
         if (notifReg != null) notifReg.remove();
         if (chatReg != null) chatReg.remove();
         if (reqReg != null) reqReg.remove();

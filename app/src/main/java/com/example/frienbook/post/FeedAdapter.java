@@ -155,6 +155,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         vh.name.setText(p.authorName + (hasFeeling ? " is feeling " + p.feeling : ""));
+        vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
         String icon = "🌐";
         if ("Friends".equalsIgnoreCase(p.privacy)) icon = "👥";
         if ("Only me".equalsIgnoreCase(p.privacy)) icon = "🔒";
@@ -592,6 +593,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "authorId", Fb.uid(),
                             "authorName", Fb.myName(),
                             "authorPhotoUrl", Fb.myPhoto(),
+                            "authorVerified", Fb.me != null && Fb.me.isVerified,
                             "content", caption.getText().toString().trim(),
                             "mediaType", "none",
                             "mediaUrl", "",
@@ -680,7 +682,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     static class PostVH extends RecyclerView.ViewHolder {
-        ImageView avatar, image;
+        ImageView avatar, image, tick;
         TextView name, meta, more, content, like, comment, share;
         TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge, pageBadge;
         LinearLayout sharedBox, pollBox;
@@ -703,9 +705,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout nameCol = Ui.col(c);
             LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
             ncp.leftMargin = Ui.dp(c, 10);
+            LinearLayout nameRow = Ui.row(c);
             name = Ui.tvBold(c, "", 15, Ui.txt(c));
+            tick = new ImageView(c);
+            tick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+            tick.setVisibility(View.GONE);
+            int ts = Ui.dp(c, 15);
+            LinearLayout.LayoutParams tll = new LinearLayout.LayoutParams(ts, ts);
+            tll.leftMargin = Ui.dp(c, 5);
+            nameRow.addView(name);
+            nameRow.addView(tick, tll);
             meta = Ui.tv(c, "", 12, Ui.sub(c));
-            nameCol.addView(name);
+            nameCol.addView(nameRow);
             nameCol.addView(meta);
             head.addView(nameCol, ncp);
             more = Ui.tv(c, "•••", 16, Ui.sub(c));

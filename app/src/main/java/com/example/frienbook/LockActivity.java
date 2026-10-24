@@ -32,7 +32,7 @@ public class LockActivity extends Activity {
         lock.setGravity(Gravity.CENTER);
         root.addView(lock);
 
-        TextView title = Ui.tvBold(this, "FriendBook is locked", 20, Ui.txt(this));
+        TextView title = Ui.tvBold(this, "friendbook is locked", 20, Ui.txt(this));
         title.setGravity(Gravity.CENTER);
         title.setPadding(0, Ui.dp(this, 12), 0, Ui.dp(this, 18));
         root.addView(title);

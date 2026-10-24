@@ -70,6 +70,10 @@ public class Icons {
     public static final int MIC = R.drawable.ic_mic_outline;
     public static final int LIKE = R.drawable.ic_like_outline;
     public static final int SEND = R.drawable.ic_send_outline;
+    public static final int VERIFIED = R.drawable.ic_verified;
+    public static final int BANKNOTE = R.drawable.ic_banknote_outline;
+    public static final int STAR = R.drawable.ic_star_outline;
+    public static final int SHARE2 = R.drawable.ic_share2_outline;
 
     /** A VectorDrawable tinted with the given color. */
     public static Drawable tinted(Context c, int resId, int color) {

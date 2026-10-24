@@ -82,6 +82,8 @@ public class MenuFragment extends Fragment {
         body.addView(spacer(a, 12));
 
         // shortcuts (Facebook-Lite outline icons, gray chips)
+        body.addView(item(a, com.example.frienbook.core.Icons.VERIFIED, "Blue tick ✓", "FREE with 5 invites — or Rs 100",
+                () -> startActivity(new Intent(a, com.example.frienbook.bluetick.BlueTickActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.BOOKMARK, "Saved posts", "Everything you bookmarked",
                 () -> startActivity(new Intent(a, SavedPostsActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.VIDEO, "Watch", "All public videos in one feed",
@@ -143,8 +145,8 @@ public class MenuFragment extends Fragment {
         body.addView(item(a, com.example.frienbook.core.Icons.HELP, "Help & feedback", "Shake your phone anytime to report a problem",
                 () -> Ui.info(a, "Help & feedback",
                         "• Shake your phone to report a problem\n• Pull down the feed to refresh\n• Long-press 👍 for reactions\n• Long-press a chat for options")));
-        body.addView(item(a, com.example.frienbook.core.Icons.INFO, "About FriendBook", "Version and info",
-                () -> Ui.info(a, "FriendBook Lite", "Version 3.0\nA fast, light Facebook-Lite style community app powered by Firebase.")));
+        body.addView(item(a, com.example.frienbook.core.Icons.INFO, "About friendbook", "Version and info",
+                () -> Ui.info(a, "friendbook lite", "Version 3.0\nA fast, light Facebook-Lite style community app powered by Firebase.")));
         body.addView(spacer(a, 12));
 
         TextView logout = Ui.btn(a, "🚪 Log out");
@@ -163,7 +165,7 @@ public class MenuFragment extends Fragment {
         });
         body.addView(logout);
 
-        TextView ver = Ui.tv(a, "FriendBook Lite 2.0", 11, Ui.sub(a));
+        TextView ver = Ui.tv(a, "friendbook lite 3.0", 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, Ui.dp(a, 14), 0, 0);
         body.addView(ver);
@@ -186,12 +188,26 @@ public class MenuFragment extends Fragment {
         return w;
     }
 
-    /** Menu row with Facebook-Lite outline icon in a gray circle chip. */
+    /** Menu row with Facebook-Lite outline icon in a gray circle chip.
+     *  The verified badge keeps its native look (blue circle, white check). */
     private View item(android.app.Activity a, int iconRes, String title, String sub, Runnable action) {
         LinearLayout row = Ui.row(a);
         row.setBackgroundColor(Ui.card(a));
         Ui.pad(row, 12, 12, 12, 12);
-        row.addView(com.example.frienbook.core.Icons.chipIcon(a, iconRes, com.example.frienbook.core.Icons.GRAY));
+        if (iconRes == com.example.frienbook.core.Icons.VERIFIED) {
+            LinearLayout wrap0 = new LinearLayout(a);
+            wrap0.setGravity(Gravity.CENTER);
+            wrap0.setBackground(Ui.circle(Ui.inputBg(a)));
+            int s0 = Ui.dp(a, 38);
+            wrap0.setLayoutParams(new LinearLayout.LayoutParams(s0, s0));
+            ImageView iv = new ImageView(a);
+            iv.setImageResource(iconRes); // untinted: official blue badge with white check
+            int s1 = Ui.dp(a, 20);
+            wrap0.addView(iv, new LinearLayout.LayoutParams(s1, s1));
+            row.addView(wrap0);
+        } else {
+            row.addView(com.example.frienbook.core.Icons.chipIcon(a, iconRes, com.example.frienbook.core.Icons.GRAY));
+        }
         LinearLayout mid = Ui.col(a);
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
         mp.leftMargin = Ui.dp(a, 12);

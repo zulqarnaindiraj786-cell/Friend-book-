@@ -49,6 +49,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private boolean hasOut, hasIn;
 
     private TextView nameT, bioT, statsT, presenceT, primaryBtn, secondaryBtn;
+    private android.widget.ImageView nameTick;
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab;
     private LinearLayout postsBox, aboutBox, friendsBox;
@@ -98,7 +99,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         bioT.setGravity(Gravity.CENTER);
         statsT = Ui.tv(this, "", 13, Ui.sub(this));
         statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
-        infoCol.addView(nameT);
+        LinearLayout nameRow = Ui.row(this);
+        nameRow.setGravity(Gravity.CENTER);
+        nameRow.addView(nameT);
+        nameTick = new android.widget.ImageView(this);
+        nameTick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+        nameTick.setVisibility(View.GONE);
+        int nts = Ui.dp(this, 19);
+        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
+        ntp.leftMargin = Ui.dp(this, 6);
+        nameRow.addView(nameTick, ntp);
+        infoCol.addView(nameRow);
         infoCol.addView(presenceT);
         infoCol.addView(bioT);
         infoCol.addView(statsT);
@@ -305,6 +316,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void bindUser() {
         nameT.setText(user.displayName);
+        nameTick.setVisibility(user.isVerified ? View.VISIBLE : View.GONE);
         bioT.setText(user.bio);
         bioT.setVisibility(user.bio == null || user.bio.isEmpty() ? View.GONE : View.VISIBLE);
         statsT.setText(Format.count(user.friendsCount) + " friends · "
@@ -495,7 +507,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
         if (user.birthday != null && !user.birthday.isEmpty())
             addAboutRow(card, "🎂", "Birthday: " + user.birthday);
-        if (user.isAdmin) addAboutRow(card, "🛡", "FriendBook Team");
+        if (user.isAdmin) addAboutRow(card, "🛡", "friendbook Team");
         if (mine) addAboutRow(card, "📧", user.email);
         if (user.createdAt > 0) addAboutRow(card, "🗓", "Joined " + Format.dateTime(user.createdAt));
         aboutBox.addView(card);

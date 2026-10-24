@@ -102,7 +102,7 @@ public class Fb {
                         auth().signOut();
                         android.content.Context app = com.example.frienbook.App.instance;
                         if (app != null) {
-                            Ui.toast(app, "Your FriendBook account has been suspended by an admin.");
+                            Ui.toast(app, "Your friendbook account has been suspended by an admin.");
                             android.content.Intent i = new android.content.Intent(app,
                                     com.example.frienbook.auth.LoginActivity.class);
                             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK

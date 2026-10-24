@@ -146,4 +146,10 @@ public class Prefs {
     // ---- seen-intro flags ----
     public static boolean seen(Context c, String key) { return p(c).getBoolean("seen_" + key, false); }
     public static void markSeen(Context c, String key) { p(c).edit().putBoolean("seen_" + key, true).apply(); }
+
+    // ---- pending referral code (from the friendbook.app/invite deep link) ----
+    public static String pendingReferral(Context c) { return p(c).getString("pendingRef", ""); }
+    public static void setPendingReferral(Context c, String code) {
+        p(c).edit().putString("pendingRef", code == null ? "" : code).apply();
+    }
 }

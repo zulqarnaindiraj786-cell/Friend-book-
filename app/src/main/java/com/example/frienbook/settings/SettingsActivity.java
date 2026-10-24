@@ -104,6 +104,14 @@ public class SettingsActivity extends Activity {
         body.addView(rowI(Icons.SNOOZE, "Snoozed people", "Who you're hiding for 30 days", this::snoozedDialog));
         body.addView(div());
         body.addView(rowI(Icons.EXPORT, "Export your data", "Your profile data as text (share/save)", this::exportData));
+        body.addView(div());
+        body.addView(rowI(Icons.CHART, "Monetization", "In-stream ads, Stars, fan subscriptions",
+                () -> startActivity(new Intent(this,
+                        com.example.frienbook.bluetick.MonetizationActivity.class))));
+        body.addView(div());
+        body.addView(rowI(Icons.BANKNOTE, "Blue tick ✓", "FREE with 5 invites — or Rs 100 payment",
+                () -> startActivity(new Intent(this,
+                        com.example.frienbook.bluetick.BlueTickActivity.class))));
         body.addView(cardEnd());
 
         // ============ ADMIN (owner only) ============
@@ -119,7 +127,7 @@ public class SettingsActivity extends Activity {
         // ============ SECURITY ============
         body.addView(header("Security"));
         body.addView(card());
-        body.addView(rowI(Icons.LOCK, "App lock", Prefs.pin(this).isEmpty() ? "Off — set a PIN to lock FriendBook"
+        body.addView(rowI(Icons.LOCK, "App lock", Prefs.pin(this).isEmpty() ? "Off — set a PIN to lock friendbook"
                 : "On — PIN required to open", this::pinDialog));
         body.addView(div());
         body.addView(rowI(Icons.SHAKE, "Shake to report", "Enabled — shake phone to report a problem",
@@ -148,10 +156,10 @@ public class SettingsActivity extends Activity {
         body.addView(card());
         body.addView(rowI(Icons.TERMS, "Terms & policies", "Community standards", () -> Ui.info(this,
                 "Terms & policies",
-                "1. Be kind and respectful.\n2. No spam, hate speech or harassment.\n3. Respect others' privacy.\n4. Content you post is yours; you grant FriendBook a license to display it.\n5. Violating accounts may be removed.")));
+                "1. Be kind and respectful.\n2. No spam, hate speech or harassment.\n3. Respect others' privacy.\n4. Content you post is yours; you grant friendbook a license to display it.\n5. Violating accounts may be removed.")));
         body.addView(div());
-        body.addView(rowI(Icons.INFO, "About", "FriendBook Lite 2.0", () -> Ui.info(this, "About",
-                "FriendBook Lite 2.0\n\nA fast, light social app.\nRealtime feed, stories, reels, messenger and more — powered by Firebase.\n\nPackage: com.example.frienbook")));
+        body.addView(rowI(Icons.INFO, "About", "friendbook lite 3.0", () -> Ui.info(this, "About",
+                "friendbook lite 3.0\n\nA fast, light social app.\nRealtime feed, stories, reels, messenger and more — powered by Firebase.\n\nPackage: com.example.frienbook")));
         body.addView(cardEnd());
 
         // ============ LOG OUT ============
@@ -303,7 +311,7 @@ public class SettingsActivity extends Activity {
         if (me == null) return;
         Fb.db().collection("users").document(me).get().addOnSuccessListener(d -> {
             StringBuilder sb = new StringBuilder();
-            sb.append("FriendBook data export — ").append(java.text.DateFormat.getDateTimeInstance()
+            sb.append("friendbook data export — ").append(java.text.DateFormat.getDateTimeInstance()
                     .format(new java.util.Date())).append("\n\n");
             java.util.Map<String, Object> m = d.getData();
             if (m != null) for (java.util.Map.Entry<String, Object> en : m.entrySet()) {
@@ -354,7 +362,7 @@ public class SettingsActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("App lock")
                 .setMessage(has ? "App lock is ON. Enter a new PIN to change it, or leave empty to turn it off."
-                        : "Lock FriendBook behind a PIN every time it opens.")
+                        : "Lock friendbook behind a PIN every time it opens.")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     String p = pin.getText().toString().trim();
