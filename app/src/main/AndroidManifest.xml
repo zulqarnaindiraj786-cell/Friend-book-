@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="true"
+        android:label="FriendBook"
+        android:icon="@drawable/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="false">
+
+        <activity android:name=".SplashActivity"
+            android:screenOrientation="portrait"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name=".auth.LoginActivity" android:screenOrientation="portrait" />
+        <activity android:name=".auth.RegisterActivity" android:screenOrientation="portrait" />
+        <activity android:name=".LockActivity" android:screenOrientation="portrait" android:excludeFromRecents="true" />
+        <activity android:name=".main.MainActivity" android:screenOrientation="portrait" />
+
+        <activity android:name=".post.CreatePostActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".post.PostDetailActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".post.SavedPostsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".post.FullscreenMediaActivity" android:screenOrientation="portrait"
+            android:theme="@style/BlackTheme" />
+
+        <activity android:name=".story.AddStoryActivity" android:screenOrientation="portrait" />
+        <activity android:name=".story.StoryViewerActivity" android:screenOrientation="portrait"
+            android:theme="@style/BlackTheme" />
+
+        <activity android:name=".reels.AddReelActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".reels.ReelCommentsActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".friends.SearchActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".chat.ConversationsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".chat.NewChatActivity" android:screenOrientation="portrait" />
+        <activity android:name=".chat.ChatActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".profile.ProfileActivity" android:screenOrientation="portrait" />
+        <activity android:name=".profile.EditProfileActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".settings.SettingsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".settings.BlockedUsersActivity" android:screenOrientation="portrait" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>

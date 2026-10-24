@@ -1,0 +1,102 @@
+rules_version = '2';
+
+// FriendBook Firestore security rules
+// Deploy: Firebase Console → Firestore Database → Rules → paste → Publish
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // ---- users ----
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if isMe(uid);
+      allow update: if isMe(uid)
+        // friends/followers/blocked updates from other signed-in users
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['followers', 'following', 'friendsCount']));
+      allow delete: if isMe(uid);
+    }
+
+    // ---- posts ----
+    match /posts/{postId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();  // reactions/comments counters & saves are collaborative
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+
+      match /reactions/{rid} {
+        allow read: if signedIn();
+        allow write: if signedIn();
+      }
+    }
+
+    // ---- comments ----
+    match /comments/{cid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // likes are collaborative
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ---- stories (24h) ----
+    match /stories/{sid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // viewedBy marking
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ---- reels ----
+    match /reels/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // likes/comments counters
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ---- friends & requests ----
+    match /friends/{fid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow delete: if signedIn();
+    }
+    match /friend_requests/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if signedIn();
+    }
+
+    // ---- chats ----
+    match /chats/{chatId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+
+      match /messages/{mid} {
+        allow read: if signedIn();
+        allow write: if signedIn();
+      }
+    }
+
+    // ---- notifications ----
+    match /notifications/{nid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if signedIn();
+    }
+
+    // ---- meta collections ----
+    match /reports/{doc} {
+      allow read: if false;
+      allow create: if signedIn();
+    }
+    match /feedback/{doc} {
+      allow read: if false;
+      allow create: if signedIn();
+    }
+  }
+}

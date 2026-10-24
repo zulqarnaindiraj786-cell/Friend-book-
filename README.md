@@ -1,2 +1,109 @@
-# Friend-book-
-Friend 
+# FriendBook — Facebook-Lite style Android app (real Firebase)
+
+A complete Facebook-Lite clone built with **native Android (Java)** and **real Firebase**:
+Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Database
+(presence + typing) and Cloud Storage. **Zero dummy data.**
+
+- **Package:** `com.example.frienbook`
+- **App name:** FriendBook
+- **Firebase project:** `friendbook-17551` (config in `app/google-services.json`)
+- **CI:** GitHub Actions builds the APK automatically (see `.github/workflows/build-apk.yml`)
+
+> Interoperable with the Flutter `friendbook-lite-fixed` app — both apps read and write
+> the **same Firestore schema**, so posts, stories, comments, chats, friends and
+> notifications sync across them in real time.
+
+---
+
+## ✨ Features
+
+### Feed & Posts
+- Realtime news feed (pull-to-refresh, infinite "load more")
+- Create posts: text, **photo, video, camera**, feeling/activity, audience (🌐 Public / 👥 Friends / 🔒 Only me)
+- **6 reactions** (👍 ❤️ 😂 😮 😢 😡) — long-press Like for the picker, live reaction counts
+- **Double-tap photo to like**, fullscreen media viewer, inline video player
+- Comments with **nested replies**, comment likes, photo comments
+- **Share to feed** (with caption + embedded original), share via other apps
+- **Save/unsave** posts → Saved tab, copy text, report, edit & delete own posts
+- Privacy-aware filtering (blocks + audience respected client-side)
+
+### Stories (24-hour)
+- Photo & video stories with caption overlay
+- Unseen story **blue ring**, Auto-advance viewer with progress segments
+- Tap zones (left/right), **story replies land in chat**, view-count + viewer list for your own stories, delete
+- Auto expiry filtering via `expiresAt` (24 h)
+
+### Reels
+- **Vertical video pager** (TikTok-style), autoplay/pause per page
+- Double-tap like, reel comments (nested), share, follow from reel
+- Create reel from any video
+
+### Messenger (1:1 chat)
+- Realtime messages (`onSnapshot`), **typing…** indicator, **online / last-seen** presence
+- **Sent ✓ / Delivered ✓✓ / Seen ✓✓ (blue)** ticks, photo messages, quick 👍
+- Delete message *for everyone* or *for me*, copy, report
+- Conversation list with unread badges, **pin chats**, mark-read, hide conversation
+- New chat from friends, story replies open chats
+
+### Friends & profiles
+- Friend **requests** (send / confirm / delete / cancel), unfriend
+- **Follow / unfollow** (with counters), followers & following counts
+- **Block / unblock**, block list management, block filtering everywhere
+- People + post **search** (prefix search on names, contains search on posts)
+- Profile: cover + avatar viewer, edit profile (instant photo/cover upload), About tab, Friends tab, user posts feed
+- Friend suggestions, realtime "who's online" dots
+
+### Notifications
+- Realtime notification feed with type icons, unread highlight & **bottom-nav badge**
+- Deep links to posts / profiles / reels
+- "Mark all read"
+
+### Settings & pro / secret features
+- **Dark mode**, font size (small/default/large)
+- **Data Saver** (low-res images, tap-to-load video) — the classic Lite feature
+- **Quiet mode** (hides badges)
+- **App lock PIN**, change password, delete account
+- Active status on/off, read receipts on/off, default audience, friend-request privacy
+- 🔔 Android 13+ notification permission handling
+- **Shake your phone to report a problem** (secret feature, writes to `feedback` collection)
+- Offline reading/writing via Firestore persistence (Lite-style offline mode)
+
+---
+
+## 🚀 Firebase setup (one time, ~5 min)
+
+See **[SETUP.md](SETUP.md)** — enable Email/Password auth, create Firestore +
+Realtime Database + Storage, paste the rules from [`firebase/`](firebase/).
+
+## 📱 Build the APK
+
+**On GitHub (recommended, no PC needed):**
+1. Push this repo, open **Actions → Build FriendBook APK → Run workflow**
+2. Download `FriendBook-debug-apk` artifact and install it.
+
+**In Android Studio:** open the folder, let Gradle sync, then *Build → Build APK(s)*.
+
+---
+
+## 🗄 Firestore schema (shared with the Flutter app)
+
+| Collection | Key fields |
+|---|---|
+| `users/{uid}` | displayName, email, photoUrl, bio, coverUrl, isOnline, lastSeen, friendsCount, followers[], following[], blockedUsers[] |
+| `posts/{id}` | authorId, authorName, authorPhotoUrl, content, mediaUrl, mediaType, feeling, privacy, likes, comments, shares, savedBy[], sharedFromId…, createdAt |
+| `posts/{id}/reactions/{uid}` | type (like/love/haha/wow/sad/angry), createdAt |
+| `comments/{id}` | postId, authorId…, content, imageUrl, likes, likedBy[], parentId (nesting) |
+| `stories/{id}` | authorId…, mediaUrl, mediaType, caption, viewedBy[], createdAt, expiresAt (+24h) |
+| `reels/{id}` | authorId…, videoUrl, caption, likes, comments, shares, likedBy[] |
+| `friends/{id}` | participants[], createdAt |
+| `friend_requests/{id}` | fromUid, toUid, status, fromUserName, fromUserPhotoUrl |
+| `chats/{chatId}` | participants[], lastMessage, lastMessageTime, typing{}, unreadCount{} |
+| `chats/{chatId}/messages/{id}` | senderId, receiverId, text, imageUrl, type, isSeen, isDelivered, isDeleted |
+| `notifications/{id}` | toUserId, fromUser…, type, text, postId, isRead |
+| `reports`, `feedback` | moderation + shake-to-report |
+
+Realtime Database: `status/{uid}` (online/offline + lastChanged via `onDisconnect`),
+`typing/{chatId}/{uid}` (fast typing path).
+
+All queries are designed to need **zero composite indexes** — works on a brand-new
+Firestore project with only single-field indexes.
