@@ -46,6 +46,12 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **▶️ Autoplay videos toggle** (Settings → Preferences) + #hashtag/@mention blue styling
 - **🛡 Admin 1-tap Blue Tick** — search any user in the Users tab, one tap gives/removes
   blue ✓; ⋯ menu for Gold/Diamond, make admin, ban, delete
+- **🔒 Profile locking** (Settings → Privacy) — strangers see a lock card, only friends see content
+- **📅 Events & 📄 Pages** — create/publish, ⭐ Interested RSVP, follow pages (live counts)
+- **⭐ Feed preferences** — favorite friends' posts pinned to top of Home
+- **🛡 Privacy checkup** — 3-step guided review (audience/blocks/profile lock)
+- **🔐 Where you're logged in** — device sessions list + log out everywhere
+- **Post ⋯ extras** — Share to other apps, "Why am I seeing this?" explainer
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`
