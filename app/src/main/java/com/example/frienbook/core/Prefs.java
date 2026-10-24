@@ -63,6 +63,14 @@ public class Prefs {
     public static boolean notifMessages(Context c) { return p(c).getBoolean("nMessages", true); }
     public static void setNotifMessages(Context c, boolean v) { p(c).edit().putBoolean("nMessages", v).apply(); }
 
+    // feed filter chip: all | photos | videos | text
+    public static String feedFilter(Context c) { return p(c).getString("feedFilter", "all"); }
+    public static void setFeedFilter(Context c, String v) { p(c).edit().putString("feedFilter", v).apply(); }
+
+    // autoplay feed videos
+    public static boolean autoplay(Context c) { return p(c).getBoolean("autoplay", true); }
+    public static void setAutoplay(Context c, boolean v) { p(c).edit().putBoolean("autoplay", v).apply(); }
+
     // ---- pinned chats ----
     public static Set<String> pinnedChats(Context c) {
         return new HashSet<>(p(c).getStringSet("pinnedChats", new HashSet<>()));

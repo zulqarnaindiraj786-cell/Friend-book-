@@ -73,12 +73,10 @@ public class AdminUsersFragment extends Fragment {
         adapter = new UsersAdapter(a, new UsersAdapter.Handler() {
             @Override
             public void primary(UsersAdapter.Row r) {
-                // ✓ Direct tick control — give ANY level to ANY user
+                // ✓ ONE-TAP blue tick — search the user, tap, done. Admin ka full direct control.
                 Models.User u = r.user;
-                String[] opts = {"🚫 No tick", "✓ Blue tick", "✨ Gold tick", "💎 Diamond tick"};
-                String[] vals = {"none", "blue", "gold", "diamond"};
-                Ui.choose(a, "Tick for " + u.displayName + " (now: " + Admin.tickLabel(u.tickLevel) + ")",
-                        opts, w -> Admin.setTickLevel(a, u.uid, u.displayName, vals[w]));
+                String next = "none".equals(u.tickLevel) ? "blue" : "none";
+                Admin.setTickLevel(a, u.uid, u.displayName, next);
             }
 
             @Override
@@ -126,11 +124,11 @@ public class AdminUsersFragment extends Fragment {
             if (Admin.isOwnerEmail(u.email)) s.append("👑 OWNER · ");
             else if (u.isAdmin) s.append("🛡 Admin · ");
             if (u.banned) s.append("🚫 BANNED · ");
-            if (u.isVerified) s.append("✓ Verified · ");
+            if (!"none".equals(u.tickLevel)) s.append(Admin.tickLabel(u.tickLevel)).append(" · ");
             s.append(u.email);
             r.subtitle = s.toString();
-            // ✓ give/remove blue tick — admin marzi se
-            r.primaryLabel = u.tickRank() == 0 ? "✓ Tick" : "✓ " + u.tickLevel;
+            // ✓ one-tap blue tick — search kr k khud do (full levels in the ⋯ menu)
+            r.primaryLabel = "none".equals(u.tickLevel) ? "✓ Blue tick" : "✕ Tick";
             r.secondaryLabel = "⋯";
             rows.add(r);
         }
@@ -142,7 +140,9 @@ public class AdminUsersFragment extends Fragment {
         android.app.Activity a = getActivity();
         if (a == null) return;
         List<String> opts = new ArrayList<>();
-        opts.add(u.isVerified ? "✕ Remove blue tick" : "✓ Give blue tick");
+        opts.add(u.isVerified ? "✕ Remove ALL ticks" : "✓ Give BLUE tick (instant)");
+        opts.add("✨ Give GOLD tick");
+        opts.add("💎 Give DIAMOND tick");
         if (Admin.isOwnerEmail(u.email)) {
             opts.add("ℹ️ Owner account (protected)");
         } else {
@@ -153,8 +153,10 @@ public class AdminUsersFragment extends Fragment {
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(a, u.displayName + "\n" + u.email, arr, w -> {
             String sel = arr[w];
-            if (sel.contains("Give blue tick")) Admin.grantBlueTick(a, u.uid, u.displayName);
-            else if (sel.contains("Remove blue tick")) Admin.removeBlueTick(a, u.uid, u.displayName);
+            if (sel.contains("Give BLUE tick")) Admin.setTickLevel(a, u.uid, u.displayName, "blue");
+            else if (sel.contains("Give GOLD")) Admin.setTickLevel(a, u.uid, u.displayName, "gold");
+            else if (sel.contains("Give DIAMOND")) Admin.setTickLevel(a, u.uid, u.displayName, "diamond");
+            else if (sel.contains("Remove ALL ticks")) Admin.setTickLevel(a, u.uid, u.displayName, "none");
             else if (sel.contains("Make admin"))
                 Fb.db().collection("users").document(u.uid).update("isAdmin", true);
             else if (sel.contains("Remove admin"))

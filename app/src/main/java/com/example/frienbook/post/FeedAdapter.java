@@ -252,6 +252,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    /** #hashtags aur @mentions ko Facebook jaisa blue+bold style karo. */
+    static CharSequence styleHashtags(String text) {
+        if (text == null) return "";
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("([#@])([A-Za-z0-9_\\p{IsArabic}\\p{IsArabic_Supplement}]+)")
+                .matcher(text);
+        while (m.find()) {
+            sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return sb;
+    }
+
     private String firstName() {
         String n = Fb.myName();
         int i = n.indexOf(' ');
@@ -319,7 +335,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
             Ui.pad(vh.content, 12, 4, 12, 8);
         }
-        vh.content.setText(p.content);
+        vh.content.setText(styleHashtags(p.content));
         vh.content.setVisibility(p.content == null || p.content.isEmpty() ? View.GONE : View.VISIBLE);
         // location line
         if (p.location != null && !p.location.isEmpty())
@@ -437,10 +453,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if ("video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
             vh.playBadge.setText("▶");
             vh.playBadge.setTextSize(34);
-            if (Prefs.dataSaver(c)) {
+            boolean holdForTap = Prefs.dataSaver(c) || !Prefs.autoplay(c);
+            if (holdForTap) {
                 vh.image.setVisibility(View.VISIBLE);
                 vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
-                vh.playBadge.setText("▶  Load video (Data Saver)");
+                vh.playBadge.setText(Prefs.dataSaver(c) ? "▶  Load video (Data Saver)" : "▶  Tap to play");
                 vh.playBadge.setTextSize(15);
                 vh.playBadge.setVisibility(View.VISIBLE);
                 vh.mediaBox.setOnClickListener(v -> { vh.playBadge.setText("⏳"); streamVideo(vh, p.mediaUrl, true); });

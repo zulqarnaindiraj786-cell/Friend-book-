@@ -76,6 +76,7 @@
         <activity android:name=".settings.ActivityLogActivity" android:screenOrientation="portrait" />
 
         <activity android:name=".post.WatchActivity" android:screenOrientation="portrait" />
+        <activity android:name=".post.MemoriesActivity" android:screenOrientation="portrait" />
         <activity android:name=".friends.BirthdaysActivity" android:screenOrientation="portrait" />
 
         <activity android:name=".bluetick.BlueTickActivity" android:screenOrientation="portrait" />

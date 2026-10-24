@@ -62,6 +62,9 @@ public class SettingsActivity extends Activity {
         body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver", Prefs.dataSaver(this),
                 (btn, on) -> Prefs.setDataSaver(this, on)));
         body.addView(div());
+        body.addView(switchRowI(Icons.VIDEO, "Autoplay videos", Prefs.autoplay(this),
+                (btn, on) -> Prefs.setAutoplay(this, on)));
+        body.addView(div());
         body.addView(switchRowI(Icons.QUIET, "Quiet mode", Prefs.quiet(this),
                 (btn, on) -> Prefs.setQuiet(this, on)));
         body.addView(cardEnd());
