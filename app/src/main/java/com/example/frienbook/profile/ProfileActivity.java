@@ -310,6 +310,18 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         statsT.setText(Format.count(user.friendsCount) + " friends · "
                 + Format.count(user.followers.size()) + " followers · "
                 + Format.count(user.following.size()) + " following");
+        statsT.setOnClickListener(v -> {
+            if (user.followers.isEmpty() && user.following.isEmpty()) {
+                Ui.toast(this, "No followers yet");
+                return;
+            }
+            Ui.choose(this, "Open list", new String[]{"Followers", "Following"}, w -> {
+                Intent i = new Intent(this, com.example.frienbook.friends.FollowListActivity.class);
+                i.putExtra("uid", uid);
+                i.putExtra("mode", w == 0 ? "followers" : "following");
+                startActivity(i);
+            });
+        });
         Ui.avatar(this, avatar, user.photoUrl);
         if (user.coverUrl != null && !user.coverUrl.isEmpty()) Ui.img(this, cover, user.coverUrl);
         else cover.setBackground(Ui.round(this, Ui.div(this), 0));
@@ -481,6 +493,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         addAboutRow(card, "📝", user.bio == null || user.bio.isEmpty() ? "No bio yet" : user.bio);
         addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
         addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
+        if (user.birthday != null && !user.birthday.isEmpty())
+            addAboutRow(card, "🎂", "Birthday: " + user.birthday);
+        if (user.isAdmin) addAboutRow(card, "🛡", "FriendBook Team");
         if (mine) addAboutRow(card, "📧", user.email);
         if (user.createdAt > 0) addAboutRow(card, "🗓", "Joined " + Format.dateTime(user.createdAt));
         aboutBox.addView(card);

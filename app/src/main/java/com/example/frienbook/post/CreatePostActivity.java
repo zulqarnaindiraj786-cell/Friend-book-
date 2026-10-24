@@ -1,6 +1,8 @@
 package com.example.frienbook.post;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
@@ -9,6 +11,7 @@ import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -25,23 +28,42 @@ import com.google.firebase.firestore.FieldValue;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
-/** Create / edit post: text, photo or video, feeling, audience. */
+/** Create / edit post: text, photos (multi), video, feeling, background, poll, check-in, audience. */
 public class CreatePostActivity extends Activity {
 
     private static final int PICK_IMAGE = 11, PICK_VIDEO = 12, CAPTURE_IMAGE = 13;
+
+    /** Facebook-style background colors for text posts. */
+    private static final int[] BG_COLORS = {
+            0xFFF02849, // red
+            0xFF9360F7, // purple
+            0xFF45BD62, // green
+            0xFFF7B928, // yellow
+            0xFFE66A23, // orange
+            0xFF1877F2, // blue
+            0xFF2ABBA7, // teal
+            0xFF222222, // dark
+            0xFFFF66C4, // pink
+            0xFF5D4067  // plum
+    };
 
     private EditText text;
     private TextView privacyBtn, feelingBtn, postBtn, mediaLabel;
     private ImageView preview;
     private VideoView videoPreview;
-    private LinearLayout previewWrap;
-    private Uri mediaUri;
-    private String mediaType = "none";
+    private LinearLayout previewWrap, multiThumbs;
+    private final List<Uri> mediaUris = new ArrayList<>();
+    private String mediaType = "none"; // none | image | images | video
     private String privacy;
     private String feeling = "";
+    private String location = "";
+    private int bgColor = 0;
+    private final List<String> pollOptions = new ArrayList<>();
     private String editId = null;
+    private String groupId = null;
     private Uri cameraFile;
     private boolean busy;
 
@@ -54,13 +76,15 @@ public class CreatePostActivity extends Activity {
         super.onCreate(b);
         Ui.statusBarBlue(this);
         editId = getIntent().getStringExtra("edit_id");
+        groupId = getIntent().getStringExtra("group_id");
         privacy = Prefs.defaultPrivacy(this);
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
         // bar
-        LinearLayout bar = Ui.pageBar(this, editId == null ? "Create post" : "Edit post");
+        LinearLayout bar = Ui.pageBar(this,
+                editId != null ? "Edit post" : groupId != null ? "New group post" : "Create post");
         postBtn = Ui.btn(this, "POST");
         postBtn.setMinHeight(Ui.dp(this, 34));
         bar.addView(postBtn);
@@ -91,6 +115,11 @@ public class CreatePostActivity extends Activity {
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-2, -2);
         fp.leftMargin = Ui.dp(this, 6);
         chips.addView(feelingBtn, fp);
+        if (location.isEmpty()) {
+            TextView locChip = chip("📍 Check in");
+            locChip.setOnClickListener(v -> checkInDialog());
+            chips.addView(locChip, fp);
+        }
         nameCol.addView(chips);
         meRow.addView(nameCol, ncp);
         body.addView(meRow);
@@ -101,7 +130,7 @@ public class CreatePostActivity extends Activity {
         tp.topMargin = Ui.dp(this, 10);
         body.addView(text, tp);
 
-        // media preview
+        // media preview (single + multi thumbs)
         previewWrap = Ui.col(this);
         previewWrap.setVisibility(View.GONE);
         preview = new ImageView(this);
@@ -110,6 +139,11 @@ public class CreatePostActivity extends Activity {
         videoPreview = new VideoView(this);
         videoPreview.setVisibility(View.GONE);
         previewWrap.addView(videoPreview, new LinearLayout.LayoutParams(-1, Ui.dp(this, 240)));
+        HorizontalScrollView thumbsScroll = new HorizontalScrollView(this);
+        multiThumbs = Ui.row(this);
+        thumbsScroll.addView(multiThumbs);
+        thumbsScroll.setVisibility(View.GONE);
+        previewWrap.addView(thumbsScroll);
         mediaLabel = Ui.tv(this, "", 13, Ui.sub(this));
         mediaLabel.setGravity(Gravity.CENTER);
         Ui.pad(mediaLabel, 0, 4, 0, 4);
@@ -120,17 +154,26 @@ public class CreatePostActivity extends Activity {
         previewWrap.addView(remove, new LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL));
         body.addView(previewWrap);
 
-        // attachment row
+        // attachment rows
         LinearLayout attach = Ui.row(this);
         attach.setBackgroundColor(Ui.card(this));
         Ui.pad(attach, 8, 10, 8, 10);
         LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, -2);
         ap.topMargin = Ui.dp(this, 14);
         attach.setLayoutParams(ap);
-        attach.addView(attachBtn("🖼️ Photo", v -> pick(PICK_IMAGE, "image/*")));
+        attach.addView(attachBtn("🖼️ Photos", v -> pickMultiImages()));
         attach.addView(attachBtn("🎥 Video", v -> pick(PICK_VIDEO, "video/*")));
         attach.addView(attachBtn("📷 Camera", v -> camera()));
         body.addView(attach);
+
+        LinearLayout attach2 = Ui.row(this);
+        attach2.setBackgroundColor(Ui.card(this));
+        Ui.pad(attach2, 8, 10, 8, 10);
+        attach.addView(Ui.divider(this));
+        attach2.addView(attachBtn("🎨 Background", v -> pickBackground()));
+        attach2.addView(attachBtn("📊 Poll", v -> pollDialog()));
+        attach2.addView(attachBtn("📍 Check in", v -> checkInDialog()));
+        body.addView(attach2);
 
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -177,6 +220,157 @@ public class CreatePostActivity extends Activity {
         });
     }
 
+    private void checkInDialog() {
+        EditText in = Ui.input(this, "Where are you?  (e.g. Lahore Fort)");
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 8, 18, 0);
+        box.addView(in, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
+        new AlertDialog.Builder(this)
+                .setTitle("📍 Check in")
+                .setView(box)
+                .setPositiveButton("Add", (d, w) -> {
+                    location = in.getText().toString().trim();
+                    if (!location.isEmpty()) Ui.toast(this, "📍 " + location + " added to post");
+                })
+                .setNeutralButton("Remove", (d, w) -> location = "")
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ---------- background color ----------
+    private void pickBackground() {
+        LinearLayout grid = Ui.col(this);
+        Ui.pad(grid, 16, 12, 16, 16);
+        TextView title = Ui.tvBold(this, "Tap a color — same as Facebook backgrounds", 14, Ui.txt(this));
+        grid.addView(title);
+        LinearLayout row = Ui.row(this);
+        row.setPadding(0, Ui.dp(this, 10), 0, 0);
+        grid.addView(row);
+        final View[] swatches = new View[BG_COLORS.length + 1];
+        // none option
+        swatches[0] = swatch(0, "✕");
+        row.addView(swatches[0], swatchLp());
+        for (int i = 0; i < BG_COLORS.length; i++) {
+            swatches[i + 1] = swatch(BG_COLORS[i], "");
+            row.addView(swatches[i + 1], swatchLp());
+        }
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("🎨 Post background")
+                .setView(grid)
+                .setNegativeButton("Close", null)
+                .create();
+        for (int i = 0; i < swatches.length; i++) {
+            final int color = i == 0 ? 0 : BG_COLORS[i - 1];
+            swatches[i].setOnClickListener(v -> {
+                applyBackground(color);
+                dlg.dismiss();
+            });
+        }
+        dlg.show();
+    }
+
+    private LinearLayout.LayoutParams swatchLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Ui.dp(this, 44), 1);
+        lp.leftMargin = Ui.dp(this, 3);
+        lp.rightMargin = Ui.dp(this, 3);
+        return lp;
+    }
+
+    private View swatch(int color, String glyph) {
+        TextView t = new TextView(this);
+        t.setText(glyph);
+        t.setGravity(Gravity.CENTER);
+        t.setTextColor(0xFFFFFFFF);
+        t.setTextSize(18);
+        t.setBackground(color == 0
+                ? Ui.roundStroke(this, Ui.inputBg(this), 8, Ui.div(this), 1)
+                : Ui.round(this, color, 8));
+        return t;
+    }
+
+    private void applyBackground(int color) {
+        bgColor = color;
+        if (color != 0) {
+            text.setBackground(Ui.gradient(color, darker(color), Ui.dp(this, 12)));
+            text.setTextColor(0xFFFFFFFF);
+            text.setHintTextColor(0xCCFFFFFF);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setMinLines(4);
+            Ui.pad(text, 18, 18, 18, 18);
+        } else {
+            text.setBackgroundColor(Color.TRANSPARENT);
+            text.setTextColor(Ui.txt(this));
+            text.setHintTextColor(Ui.sub(this));
+            text.setGravity(Gravity.TOP);
+            text.setMinLines(5);
+            Ui.pad(text, 0, 18, 0, 18);
+        }
+    }
+
+    private int darker(int color) {
+        int a = (color >> 24) & 0xFF;
+        int r = (int) (((color >> 16) & 0xFF) * 0.55f);
+        int g = (int) (((color >> 8) & 0xFF) * 0.55f);
+        int bl = (int) ((color & 0xFF) * 0.55f);
+        return (a << 24) | (r << 16) | (g << 8) | bl;
+    }
+
+    // ---------- poll ----------
+    private void pollDialog() {
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 10, 18, 0);
+        final EditText[] inputs = new EditText[4];
+        for (int i = 0; i < 4; i++) {
+            inputs[i] = Ui.input(this, "Option " + (i + 1) + (i < 2 ? " (required)" : " (optional)"));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
+            lp.topMargin = i == 0 ? 0 : Ui.dp(this, 8);
+            box.addView(inputs[i], lp);
+            if (i < pollOptions.size()) inputs[i].setText(pollOptions.get(i));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("📊 Create poll")
+                .setView(box)
+                .setPositiveButton("Attach poll", (d, w) -> {
+                    pollOptions.clear();
+                    for (EditText e : inputs) {
+                        String o = e.getText().toString().trim();
+                        if (!o.isEmpty()) pollOptions.add(o);
+                    }
+                    if (pollOptions.size() < 2) {
+                        pollOptions.clear();
+                        Ui.toast(this, "A poll needs at least 2 options");
+                        return;
+                    }
+                    Ui.toast(this, "Poll attached: " + pollOptions.size() + " options 📊");
+                    text.append(pollOptionsPreview());
+                })
+                .setNeutralButton("Remove poll", (d, w) -> {
+                    pollOptions.clear();
+                    Ui.toast(this, "Poll removed");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String pollOptionsPreview() {
+        if (pollOptions.isEmpty()) return "";
+        String q = text.getText().toString();
+        if (!q.trim().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("📊 Which do you pick?\n");
+        for (int i = 0; i < pollOptions.size(); i++)
+            sb.append(i + 1).append(". ").append(pollOptions.get(i)).append("\n");
+        return sb.toString().trim();
+    }
+
+    // ---------- media ----------
+    private void pickMultiImages() {
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("image/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(Intent.createChooser(i, "Select up to 10 photos"), PICK_IMAGE);
+    }
+
     private void pick(int code, String type) {
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType(type);
@@ -201,33 +395,64 @@ public class CreatePostActivity extends Activity {
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (res != RESULT_OK) return;
+        applyBackground(0); // media and text-background don't mix
         if (req == CAPTURE_IMAGE && cameraFile != null) {
-            setMedia(cameraFile, "image");
-        } else if ((req == PICK_IMAGE || req == PICK_VIDEO) && data != null && data.getData() != null) {
-            setMedia(data.getData(), req == PICK_IMAGE ? "image" : "video");
+            mediaUris.clear();
+            mediaUris.add(cameraFile);
+            showMedia("image");
+        } else if (req == PICK_IMAGE && data != null) {
+            mediaUris.clear();
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+                for (int i = 0; i < clip.getItemCount() && mediaUris.size() < 10; i++)
+                    mediaUris.add(clip.getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                mediaUris.add(data.getData());
+            }
+            if (!mediaUris.isEmpty()) showMedia("image");
+        } else if (req == PICK_VIDEO && data != null && data.getData() != null) {
+            mediaUris.clear();
+            mediaUris.add(data.getData());
+            showMedia("video");
         }
     }
 
-    private void setMedia(Uri uri, String type) {
-        mediaUri = uri;
-        mediaType = type;
+    private void showMedia(String type) {
+        mediaType = mediaUris.size() > 1 && "image".equals(type) ? "images" : type;
         previewWrap.setVisibility(View.VISIBLE);
-        if ("video".equals(type)) {
+        multiThumbs.removeAllViews();
+        if ("video".equals(mediaType)) {
             preview.setVisibility(View.GONE);
             videoPreview.setVisibility(View.VISIBLE);
-            videoPreview.setVideoURI(uri);
+            videoPreview.setVideoURI(mediaUris.get(0));
             videoPreview.setOnPreparedListener(mp -> { mp.setLooping(true); videoPreview.start(); });
             mediaLabel.setText("🎥 Video attached");
         } else {
             videoPreview.setVisibility(View.GONE);
             preview.setVisibility(View.VISIBLE);
-            preview.setImageURI(uri);
-            mediaLabel.setText("🖼️ Photo attached");
+            preview.setImageURI(mediaUris.get(0));
+            if (mediaUris.size() > 1) {
+                for (Uri u : mediaUris) {
+                    ImageView th = new ImageView(this);
+                    th.setImageURI(u);
+                    int sz = Ui.dp(this, 64);
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sz, sz);
+                    lp.setMargins(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+                    th.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    th.setBackground(Ui.roundStroke(this, Color.TRANSPARENT, 6, Ui.BLUE, 2));
+                    multiThumbs.addView(th, lp);
+                }
+                ((View) multiThumbs.getParent()).setVisibility(View.VISIBLE);
+                mediaLabel.setText("🖼️ " + mediaUris.size() + " photos selected (swipe album in feed)");
+            } else {
+                ((View) multiThumbs.getParent()).setVisibility(View.GONE);
+                mediaLabel.setText("🖼️ Photo attached");
+            }
         }
     }
 
     private void clearMedia() {
-        mediaUri = null;
+        mediaUris.clear();
         mediaType = "none";
         previewWrap.setVisibility(View.GONE);
         videoPreview.stopPlayback();
@@ -241,11 +466,13 @@ public class CreatePostActivity extends Activity {
             if (f != null && !f.isEmpty()) { feeling = f; feelingBtn.setText(f); }
             String p = d.getString("privacy");
             if (p != null) { privacy = p; privacyBtn.setText(privacyLabel()); }
+            String loc = d.getString("location");
+            if (loc != null) location = loc;
             String mt = d.getString("mediaType");
             String mu = d.getString("mediaUrl");
             if (mt != null && !"none".equals(mt) && mu != null && !mu.isEmpty()) {
                 previewWrap.setVisibility(View.VISIBLE);
-                if ("image".equals(mt)) {
+                if ("image".equals(mt) || "images".equals(mt)) {
                     preview.setVisibility(View.VISIBLE);
                     Ui.img(this, preview, mu);
                     mediaLabel.setText("🖼️ Current photo (remove to replace)");
@@ -256,13 +483,17 @@ public class CreatePostActivity extends Activity {
                 }
                 mediaType = mt; // keep old media unless removed
             }
+            Long c = d.getLong("bgColor");
+            if (c != null && c != 0) applyBackground(c.intValue());
         });
     }
 
+    // ---------- submit ----------
     private void submit() {
         if (busy) return;
         String content = text.getText().toString().trim();
-        if (content.isEmpty() && mediaUri == null && editId == null) {
+        boolean hasPoll = !pollOptions.isEmpty();
+        if (content.isEmpty() && mediaUris.isEmpty() && !hasPoll && bgColor == 0 && editId == null) {
             Ui.toast(this, "Say something first");
             return;
         }
@@ -271,28 +502,53 @@ public class CreatePostActivity extends Activity {
         postBtn.setEnabled(false);
         Ui.hideKeyboard(this);
 
-        if (mediaUri != null) {
-            String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
-            String path = "posts/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
-            Fb.upload(path, mediaUri)
-                    .addOnSuccessListener(url -> save(content, url.toString()))
-                    .addOnFailureListener(e -> fail("Upload failed: " + e.getMessage()));
+        if (!mediaUris.isEmpty()) {
+            uploadAll(content, new ArrayList<>());
         } else {
-            save(content, null);
+            save(content, null, null);
         }
     }
 
-    private void save(String content, String uploadedUrl) {
+    private void uploadAll(String content, List<String> done) {
+        if (done.size() >= mediaUris.size()) {
+            save(content, done.isEmpty() ? null : done.get(0), done);
+            return;
+        }
+        Uri uri = mediaUris.get(done.size());
+        String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
+        String path = "posts/" + Fb.uid() + "/" + System.currentTimeMillis() + "_" + done.size() + ext;
+        postBtn.setText("Uploading " + (done.size() + 1) + "/" + mediaUris.size() + "…");
+        Fb.upload(path, uri)
+                .addOnSuccessListener(url -> {
+                    done.add(url.toString());
+                    uploadAll(content, done);
+                })
+                .addOnFailureListener(e -> fail("Upload failed: " + e.getMessage()));
+    }
+
+    private void save(String content, String uploadedUrl, List<String> allUrls) {
         Map<String, Object> m = new HashMap<>();
         m.put("content", content);
         m.put("feeling", feeling);
         m.put("privacy", privacy);
+        m.put("location", location == null ? "" : location);
         if (uploadedUrl != null) {
             m.put("mediaUrl", uploadedUrl);
             m.put("mediaType", mediaType);
+            if (allUrls != null && allUrls.size() > 1) m.put("mediaUrls", new ArrayList<>(allUrls));
         } else if (mediaType.equals("none") && editId != null) {
             m.put("mediaUrl", "");
             m.put("mediaType", "none");
+            m.put("mediaUrls", new ArrayList<String>());
+        }
+        if (bgColor != 0) {
+            m.put("bgColor", (long) (bgColor & 0xFFFFFFFFL));
+            m.put("mediaType", "none");
+            m.put("mediaUrl", "");
+        }
+        if (!pollOptions.isEmpty()) {
+            m.put("pollOptions", new ArrayList<>(pollOptions));
+            m.put("pollVotes", new HashMap<String, Long>());
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
@@ -304,7 +560,8 @@ public class CreatePostActivity extends Activity {
         m.put("authorId", Fb.uid());
         m.put("authorName", Fb.myName());
         m.put("authorPhotoUrl", Fb.myPhoto());
-        if (uploadedUrl == null) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
+        if (uploadedUrl == null && bgColor == 0) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
+        if (groupId != null) m.put("groupId", groupId);
         m.put("likes", 0);
         m.put("comments", 0);
         m.put("shares", 0);

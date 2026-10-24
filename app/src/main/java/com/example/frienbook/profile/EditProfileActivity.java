@@ -27,7 +27,8 @@ public class EditProfileActivity extends Activity {
 
     private ImageView cover, avatar;
     private EditText name, bio;
-    private TextView save;
+    private TextView save, birthdayBtn;
+    private String birthday = "";
     private ListenerRegistration userReg;
     private String avatarUrl = "", coverUrl = "";
     private boolean busy;
@@ -76,11 +77,18 @@ public class EditProfileActivity extends Activity {
         name = Ui.input(this, "Your name");
         TextView bl = Ui.tvBold(this, "Bio", 13, Ui.sub(this));
         bio = Ui.multi(this, "Tell people about yourself…", 3);
+        TextView bd = Ui.tvBold(this, "🎂 Birthday", 13, Ui.sub(this));
+        birthdayBtn = Ui.btnGrey(this, "Set your birthday");
+        birthdayBtn.setMinHeight(Ui.dp(this, 44));
+        birthdayBtn.setOnClickListener(v -> pickBirthday());
         form.addView(nl);
         form.addView(name, lpm());
         form.addView(sp(10));
         form.addView(bl);
         form.addView(bio, lpm());
+        form.addView(sp(10));
+        form.addView(bd);
+        form.addView(birthdayBtn, lpm());
         body.addView(form);
 
         save = Ui.btn(this, "Save changes");
@@ -117,6 +125,9 @@ public class EditProfileActivity extends Activity {
                     name.setText(u.displayName);
                     name.setSelection(name.getText().length());
                     bio.setText(u.bio);
+                    birthday = u.birthday == null ? "" : u.birthday;
+                    birthdayBtn.setText(birthday.isEmpty() ? "Set your birthday"
+                            : "🎂 " + birthday + "  (tap to change)");
                     avatarUrl = u.photoUrl;
                     coverUrl = u.coverUrl;
                     Ui.avatar(this, avatar, avatarUrl);
@@ -129,6 +140,24 @@ public class EditProfileActivity extends Activity {
     protected void onStop() {
         super.onStop();
         if (userReg != null) userReg.remove();
+    }
+
+    private void pickBirthday() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        if (!birthday.isEmpty()) {
+            try {
+                String[] parts = birthday.split("/");
+                cal.set(java.util.Calendar.DAY_OF_MONTH, Integer.parseInt(parts[0]));
+                cal.set(java.util.Calendar.MONTH, Integer.parseInt(parts[1]) - 1);
+                if (parts.length > 2) cal.set(java.util.Calendar.YEAR, Integer.parseInt(parts[2]));
+            } catch (Exception ignored) { }
+        }
+        new android.app.DatePickerDialog(this, (vw, y, m, d) -> {
+            birthday = String.format(java.util.Locale.US, "%02d/%02d/%04d", d, m + 1, y);
+            birthdayBtn.setText("🎂 " + birthday + "  (tap to change)");
+        }, cal.get(java.util.Calendar.YEAR) - 20,
+                cal.get(java.util.Calendar.MONTH),
+                cal.get(java.util.Calendar.DAY_OF_MONTH)).show();
     }
 
     private void pick(int code) {
@@ -165,6 +194,7 @@ public class EditProfileActivity extends Activity {
         Map<String, Object> m = new HashMap<>();
         m.put("displayName", n);
         m.put("bio", bio.getText().toString().trim());
+        m.put("birthday", birthday == null ? "" : birthday);
         Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     Ui.toast(this, "Profile updated ✓");

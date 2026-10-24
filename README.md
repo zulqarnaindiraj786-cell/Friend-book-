@@ -1,8 +1,25 @@
-# FriendBook — Facebook-Lite style Android app (real Firebase)
+# FriendBook — Facebook-Lite 2026 style Android app (real Firebase)
 
 A complete Facebook-Lite clone built with **native Android (Java)** and **real Firebase**:
 Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Database
 (presence + typing) and Cloud Storage. **Zero dummy data.**
+
+### 🆕 What's new in v3 (Facebook Lite 2026 pack)
+- **Polls in feed** — create polls (2–4 options), tap to vote, live % + counts, tap again to undo
+- **Multi-photo posts** — attach up to 10 photos, swipeable in-feed album (ViewPager2) with counter
+- **Colored text backgrounds** — 10 Facebook-style gradient backgrounds for text posts
+- **Check-in** — 📍 location line on posts
+- **Hide post / Snooze 30 days / per-post privacy change / copy link** in the post ⋮ menu
+- **📺 Watch tab** — all public videos in one feed
+- **👨‍👩‍👧‍👦 Groups** — create, join/leave, dedicated group feeds
+- **🎂 Birthdays** — set your birthday in Edit Profile; friends' upcoming birthdays list with 1-tap wish
+- **🎤 Voice messages** in chat (record/send/play, like Messenger)
+- **Message reactions** (long-press any message) + **🎨 chat themes** (8 bubble colors)
+- **Followers / Following lists** on profiles, **Activity log**, **Export your data**
+- **🛡 Admin Panel** (only for `zulqarnaindiraj786@gmail.com` + promoted admins):
+  live stats dashboard, user search (ban/unban/promote/delete), content moderation
+  (posts/reels/stories/comments), reports queue, feedback inbox, and **broadcast to all users**
+- **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`
 - **App name:** FriendBook

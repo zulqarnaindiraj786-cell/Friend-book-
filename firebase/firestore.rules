@@ -1,6 +1,7 @@
 rules_version = '2';
 
-// FriendBook Firestore security rules
+// FriendBook Firestore security rules (v2 — with Admin Panel + Groups + Polls)
+// Owner admin: zulqarnaindiraj786@gmail.com
 // Deploy: Firebase Console → Firestore Database → Rules → paste → Publish
 
 service cloud.firestore {
@@ -9,23 +10,36 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function isMe(uid) { return signedIn() && request.auth.uid == uid; }
 
+    // owner email works instantly; promoted admins via users/{uid}.isAdmin
+    function isAdmin() {
+      return signedIn()
+        && (request.auth.token.email == 'zulqarnaindiraj786@gmail.com'
+            || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true));
+    }
+
     // ---- users ----
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if isMe(uid);
       allow update: if isMe(uid)
+          // normal users can never change their own admin/ban state
+          && !request.resource.data.diff(resource.data).affectedKeys()
+                .hasAny(['isAdmin', 'banned'])
         // friends/followers/blocked updates from other signed-in users
         || (signedIn() && request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['followers', 'following', 'friendsCount']));
-      allow delete: if isMe(uid);
+              .hasOnly(['followers', 'following', 'friendsCount']))
+        // admins manage everything (ban, promote, edit)
+        || isAdmin();
+      allow delete: if isMe(uid) || isAdmin();
     }
 
-    // ---- posts ----
+    // ---- posts (incl. polls, multi-photo, backgrounds, group posts) ----
     match /posts/{postId} {
       allow read: if signedIn();
       allow create: if signedIn();
-      allow update: if signedIn();  // reactions/comments counters & saves are collaborative
-      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow update: if signedIn();  // reactions/votes/saves/counters are collaborative
+      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
 
       match /reactions/{rid} {
         allow read: if signedIn();
@@ -38,7 +52,7 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // likes are collaborative
-      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
     // ---- stories (24h) ----
@@ -46,7 +60,7 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // viewedBy marking
-      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
     }
 
     // ---- reels ----
@@ -54,14 +68,22 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // likes/comments counters
-      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+    }
+
+    // ---- groups (create = everyone, manage = members/admin) ----
+    match /groups/{gid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // join/leave via arrayUnion/arrayRemove
+      allow delete: if (signedIn() && resource.data.adminId == request.auth.uid) || isAdmin();
     }
 
     // ---- friends & requests ----
     match /friends/{fid} {
       allow read: if signedIn();
       allow create: if signedIn();
-      allow delete: if signedIn();
+      allow delete: if signedIn() || isAdmin();
     }
     match /friend_requests/{rid} {
       allow read: if signedIn();
@@ -70,7 +92,7 @@ service cloud.firestore {
       allow delete: if signedIn();
     }
 
-    // ---- chats ----
+    // ---- chats + messages (incl. voice notes & message reactions) ----
     match /chats/{chatId} {
       allow read: if signedIn();
       allow write: if signedIn();
@@ -81,7 +103,7 @@ service cloud.firestore {
       }
     }
 
-    // ---- notifications ----
+    // ---- notifications (admin broadcast writes many user docs) ----
     match /notifications/{nid} {
       allow read: if signedIn();
       allow create: if signedIn();
@@ -89,14 +111,16 @@ service cloud.firestore {
       allow delete: if signedIn();
     }
 
-    // ---- meta collections ----
+    // ---- moderation inboxes: write by users, read/delete by admins only ----
     match /reports/{doc} {
-      allow read: if false;
+      allow read: if isAdmin();
       allow create: if signedIn();
+      allow delete: if isAdmin();
     }
     match /feedback/{doc} {
-      allow read: if false;
+      allow read: if isAdmin();
       allow create: if signedIn();
+      allow delete: if isAdmin();
     }
   }
 }

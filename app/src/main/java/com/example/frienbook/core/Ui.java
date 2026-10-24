@@ -78,6 +78,24 @@ public class Ui {
         return g;
     }
 
+    /** Vertical gradient with corner radius (radius in PXELS — pass Ui.dp(c, r)). */
+    public static GradientDrawable gradient(int from, int to, float radiusPx) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{from, to});
+        g.setCornerRadius(radiusPx);
+        return g;
+    }
+
+    /** Color lerp: t=0 → b, t=1 → a. */
+    public static int blend(int a, int b, float t) {
+        int ra = (a >> 16) & 0xFF, ga = (a >> 8) & 0xFF, ba = a & 0xFF;
+        int rb = (b >> 16) & 0xFF, gb = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int r = (int) (rb + (ra - rb) * t);
+        int g = (int) (gb + (ga - gb) * t);
+        int bl = (int) (bb + (ba - bb) * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | bl;
+    }
+
     // ---- text ----
     public static TextView tv(Context c, String text, float sp, int color) {
         TextView t = new TextView(c);

@@ -46,6 +46,14 @@ public class Format {
         return String.format(Locale.US, "%.1fM", n / 1_000_000f).replace(".0M", "M");
     }
 
+    /** mm:ss for short durations (voice notes, videos). */
+    public static String duration(int seconds) {
+        if (seconds < 0) seconds = 0;
+        int m = seconds / 60;
+        int s = seconds % 60;
+        return m + ":" + (s < 10 ? "0" + s : String.valueOf(s));
+    }
+
     public static String cap(String s) {
         if (s == null || s.isEmpty()) return "";
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);

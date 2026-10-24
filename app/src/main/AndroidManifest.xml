@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".App"
@@ -48,6 +49,7 @@
 
         <activity android:name=".friends.SearchActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".friends.FollowListActivity" android:screenOrientation="portrait" />
 
         <activity android:name=".chat.ConversationsActivity" android:screenOrientation="portrait" />
         <activity android:name=".chat.NewChatActivity" android:screenOrientation="portrait" />
@@ -60,6 +62,19 @@
 
         <activity android:name=".settings.SettingsActivity" android:screenOrientation="portrait" />
         <activity android:name=".settings.BlockedUsersActivity" android:screenOrientation="portrait" />
+        <activity android:name=".settings.ActivityLogActivity" android:screenOrientation="portrait" />
+
+        <activity android:name=".post.WatchActivity" android:screenOrientation="portrait" />
+        <activity android:name=".friends.BirthdaysActivity" android:screenOrientation="portrait" />
+
+        <activity android:name=".groups.GroupsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".groups.GroupDetailActivity" android:screenOrientation="portrait" />
+
+        <activity android:name=".admin.AdminPanelActivity" android:screenOrientation="portrait" />
+        <activity android:name=".admin.AdminUsersActivity" android:screenOrientation="portrait" />
+        <activity android:name=".admin.AdminContentActivity" android:screenOrientation="portrait" />
+        <activity android:name=".admin.AdminReportsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".admin.AdminFeedbackActivity" android:screenOrientation="portrait" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

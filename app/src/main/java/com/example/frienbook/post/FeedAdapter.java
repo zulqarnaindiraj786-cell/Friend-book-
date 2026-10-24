@@ -21,6 +21,7 @@ import android.widget.VideoView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
@@ -137,9 +138,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (h instanceof PostVH) {
             PostVH vh = (PostVH) h;
             if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
+            if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
             vh.video.stopPlayback();
             vh.video.setVisibility(View.GONE);
             vh.playBadge.setVisibility(View.GONE);
+            vh.pager.setVisibility(View.GONE);
+            vh.pageBadge.setVisibility(View.GONE);
             vh.mediaBox.setOnTouchListener(null);
         }
     }
@@ -156,8 +160,76 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if ("Only me".equalsIgnoreCase(p.privacy)) icon = "🔒";
         vh.meta.setText(Format.ago(p.createdAt) + " · " + icon
                 + (p.sharedFromId != null && !p.sharedFromId.isEmpty() ? " · shared" : ""));
+        // colored-background text posts (Facebook style)
+        if (p.isBgPost() && p.content != null && !p.content.isEmpty()) {
+            vh.content.setBackground(Ui.gradient(p.bgColor, shade(p.bgColor, 0.55f), Ui.dp(c, 12)));
+            vh.content.setTextColor(0xFFFFFFFF);
+            vh.content.setTextSize(23);
+            vh.content.setGravity(Gravity.CENTER);
+            vh.content.setMinHeight(Ui.dp(c, 200));
+            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+            clp.setMargins(Ui.dp(c, 12), Ui.dp(c, 4), Ui.dp(c, 12), Ui.dp(c, 8));
+            vh.content.setLayoutParams(clp);
+            Ui.pad(vh.content, 18, 24, 18, 24);
+        } else {
+            vh.content.setBackground(null);
+            vh.content.setTextColor(Ui.txt(c));
+            vh.content.setTextSize(15);
+            vh.content.setGravity(Gravity.START);
+            vh.content.setMinHeight(0);
+            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
+            vh.content.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+            Ui.pad(vh.content, 12, 4, 12, 8);
+        }
         vh.content.setText(p.content);
         vh.content.setVisibility(p.content == null || p.content.isEmpty() ? View.GONE : View.VISIBLE);
+        // location line
+        if (p.location != null && !p.location.isEmpty())
+            vh.meta.append(" · 📍 " + p.location);
+
+        // ---------- poll ----------
+        vh.pollBox.removeAllViews();
+        vh.pollBox.setVisibility(p.isPoll() ? View.VISIBLE : View.GONE);
+        if (p.isPoll()) {
+            String meId = Fb.uid();
+            int total = p.pollVotes != null ? p.pollVotes.size() : 0;
+            java.util.Map<String, Integer> perOpt = new HashMap<>();
+            if (p.pollVotes != null) {
+                for (Long ix : p.pollVotes.values()) {
+                    if (ix == null) continue;
+                    Integer cur = perOpt.get(String.valueOf(ix.intValue()));
+                    perOpt.put(String.valueOf(ix.intValue()), cur == null ? 1 : cur + 1);
+                }
+            }
+            Integer myVote = p.pollVotes != null && meId != null && p.pollVotes.containsKey(meId)
+                    ? (p.pollVotes.get(meId) == null ? null : p.pollVotes.get(meId).intValue()) : null;
+            for (int i = 0; i < p.pollOptions.size(); i++) {
+                final int idx = i;
+                Integer count = perOpt.get(String.valueOf(i));
+                int votes = count == null ? 0 : count;
+                int pct = total == 0 ? 0 : Math.round(votes * 100f / total);
+                boolean mine = myVote != null && myVote == i;
+                TextView opt = new TextView(c);
+                String txt = (mine ? "✓ " : "") + p.pollOptions.get(i)
+                        + (total > 0 ? "  —  " + pct + "% (" + votes + ")" : "");
+                opt.setText(txt);
+                opt.setTextSize(15);
+                opt.setTextColor(mine ? Ui.BLUE : Ui.txt(c));
+                if (mine) opt.setTypeface(null, android.graphics.Typeface.BOLD);
+                opt.setBackground(Ui.roundStroke(c,
+                        mine ? Ui.blend(Ui.BLUE, Ui.card(c), 0.18f) : Ui.inputBg(c), 8, Ui.div(c), 1));
+                Ui.pad(opt, 12, 10, 12, 10);
+                LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(-1, -2);
+                olp.bottomMargin = Ui.dp(c, 8);
+                opt.setLayoutParams(olp);
+                opt.setOnClickListener(v -> votePoll(p, idx));
+                vh.pollBox.addView(opt);
+            }
+            TextView hint = Ui.tv(c, total + (total == 1 ? " vote" : " votes") + " · tap to vote / again to undo",
+                    11, Ui.sub(c));
+            vh.pollBox.addView(hint);
+        }
 
         View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
         vh.avatar.setOnClickListener(prof);
@@ -181,15 +253,31 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.video.setVisibility(View.GONE);
         vh.playBadge.setVisibility(View.GONE);
         vh.image.setVisibility(View.GONE);
+        vh.pager.setVisibility(View.GONE);
+        vh.pageBadge.setVisibility(View.GONE);
+        if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
         vh.mediaBox.setOnClickListener(null);
         vh.mediaBox.setOnTouchListener(null);
-        boolean hasMedia = p.mediaType != null && !"none".equals(p.mediaType)
-                && p.mediaUrl != null && !p.mediaUrl.isEmpty();
+        boolean multiPhoto = p.isMultiPhoto();
+        boolean hasMedia = multiPhoto || (p.mediaType != null && !"none".equals(p.mediaType)
+                && p.mediaUrl != null && !p.mediaUrl.isEmpty());
         ViewGroup.LayoutParams mlp = vh.mediaBox.getLayoutParams();
         mlp.height = Ui.dp(c, hasMedia ? 280 : 0);
         vh.mediaBox.setLayoutParams(mlp);
         vh.mediaBox.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
-        if ("image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+        if (multiPhoto) {
+            // multi-photo carousel (Facebook-style swipeable album)
+            vh.pager.setVisibility(View.VISIBLE);
+            vh.pageBadge.setVisibility(View.VISIBLE);
+            vh.pager.setAdapter(new PhotoPager(p.mediaUrls));
+            vh.pageBadge.setText("1/" + p.mediaUrls.size());
+            vh.pageCb = new ViewPager2.OnPageChangeCallback() {
+                @Override public void onPageSelected(int position) {
+                    vh.pageBadge.setText((position + 1) + "/" + p.mediaUrls.size());
+                }
+            };
+            vh.pager.registerOnPageChangeCallback(vh.pageCb);
+        } else if ("image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
             vh.image.setVisibility(View.VISIBLE);
             Ui.img(c, vh.image, p.mediaUrl);
             GestureDetector gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
@@ -276,6 +364,67 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 });
     }
 
+    private void votePoll(Models.Post p, int idx) {
+        String me = Fb.uid();
+        if (me == null) return;
+        Long cur = p.pollVotes != null ? p.pollVotes.get(me) : null;
+        java.util.Map<String, Object> upd = new HashMap<>();
+        if (cur != null && cur.intValue() == idx) {
+            // toggle off
+            upd.put("pollVotes." + me, FieldValue.delete());
+            if (p.pollVotes != null) p.pollVotes.remove(me);
+        } else {
+            upd.put("pollVotes." + me, idx);
+            if (p.pollVotes == null) p.pollVotes = new HashMap<>();
+            p.pollVotes.put(me, (long) idx);
+        }
+        Fb.db().collection("posts").document(p.id).update(upd)
+                .addOnFailureListener(e -> Ui.toast(activity, "Vote failed: " + e.getMessage()));
+        notifyDataSetChanged();
+    }
+
+    private static int shade(int color, float factor) {
+        int a = (color >> 24) & 0xFF;
+        int r = (int) (((color >> 16) & 0xFF) * factor);
+        int g = (int) (((color >> 8) & 0xFF) * factor);
+        int b = (int) ((color & 0xFF) * factor);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    /** Tiny pager adapter for multi-photo posts (full-screen zoom on tap). */
+    class PhotoPager extends RecyclerView.Adapter<PhotoPager.PVH> {
+        final List<String> urls;
+        PhotoPager(List<String> urls) { this.urls = urls; }
+        @Override public int getItemCount() { return urls.size(); }
+
+        @NonNull
+        @Override
+        public PVH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            ImageView img = new ImageView(parent.getContext());
+            img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            img.setLayoutParams(new ViewGroup.LayoutParams(-1, -1));
+            return new PVH(img);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull PVH h, int position) {
+            Ui.img(activity, h.img, urls.get(position));
+            h.img.setOnClickListener(v -> {
+                Intent i = new Intent(activity, FullscreenMediaActivity.class);
+                i.putExtra("type", "image");
+                i.putExtra("url", urls.get(position));
+                i.putExtra("urls", new ArrayList<>(urls));
+                i.putExtra("index", position);
+                activity.startActivity(i);
+            });
+        }
+
+        class PVH extends RecyclerView.ViewHolder {
+            ImageView img;
+            PVH(ImageView v) { super(v); img = v; }
+        }
+    }
+
     private void streamVideo(PostVH vh, String url, boolean autoPlay) {
         vh.video.setVisibility(View.VISIBLE);
         vh.video.setVideoURI(android.net.Uri.parse(url));
@@ -297,30 +446,61 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = activity;
         boolean mine = p.authorId != null && p.authorId.equals(Fb.uid());
         boolean saved = p.savedBy != null && p.savedBy.contains(Fb.uid());
+        boolean isAdmin = com.example.frienbook.core.Admin.isAdmin();
         PopupMenu menu = new PopupMenu(c, anchor);
         menu.getMenu().add(saved ? "🔖 Unsave post" : "🔖 Save post");
         if (mine) {
             menu.getMenu().add("✏️ Edit post");
+            menu.getMenu().add("🌐 Who can see this? (" + p.privacy + ")");
             menu.getMenu().add("🗑 Delete post");
         } else {
             menu.getMenu().add("➕ Follow " + p.authorName);
+            menu.getMenu().add("🙈 Hide this post");
+            menu.getMenu().add("😴 Snooze " + p.authorName + " for 30 days");
             menu.getMenu().add("🚫 Block " + p.authorName);
         }
+        if (isAdmin && !mine) menu.getMenu().add("🛡 🗑 Delete post (admin)");
         menu.getMenu().add("📋 Copy text");
+        menu.getMenu().add("🔗 Copy link");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
             if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("Save post")) toggleSave(p, false);
-            else if (t.contains("Edit")) { if (host != null) host.editPost(p); }
+            else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
+            else if (t.contains("Who can see")) changePrivacyDialog(p);
+            else if (t.contains("Hide this post")) {
+                Prefs.hidePost(c, p.id);
+                posts.remove(p);
+                notifyDataSetChanged();
+                Ui.toast(activity, "Hidden. Manage in Settings → Posts you've hidden");
+            } else if (t.contains("Snooze")) {
+                Prefs.snooze(c, p.authorId, 30);
+                Ui.toast(activity, "Snoozed " + p.authorName + " for 30 days 😴");
+                java.util.Iterator<Models.Post> it = posts.iterator();
+                while (it.hasNext()) if (p.authorId.equals(it.next().authorId)) it.remove();
+                notifyDataSetChanged();
+            } else if (t.contains("Delete post (admin)")) deletePost(p);
             else if (t.contains("Delete")) deletePost(p);
-            else if (t.contains("Copy")) copyText(p.content);
+            else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
+            else if (t.contains("Copy text")) copyText(p.content);
             else if (t.contains("Follow")) followUser(p.authorId);
             else if (t.contains("Block")) blockUser(p.authorId);
             else if (t.contains("Report")) reportPost(p);
             return true;
         });
         menu.show();
+    }
+
+    private void changePrivacyDialog(Models.Post p) {
+        String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
+        String[] vals = {"Public", "Friends", "Only me"};
+        Ui.choose(activity, "Who can see this post?", opts, w -> {
+            Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
+            p.privacy = vals[w];
+            notifyDataSetChanged();
+            Ui.toast(activity, "Privacy updated: " + vals[w]);
+        });
     }
 
     private void toggleSave(Models.Post p, boolean unsave) {
@@ -501,10 +681,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static class PostVH extends RecyclerView.ViewHolder {
         ImageView avatar, image;
         TextView name, meta, more, content, like, comment, share;
-        TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge;
-        LinearLayout sharedBox;
+        TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge, pageBadge;
+        LinearLayout sharedBox, pollBox;
         FrameLayout mediaBox;
         VideoView video;
+        ViewPager2 pager;
+        ViewPager2.OnPageChangeCallback pageCb;
         ListenerRegistration reactReg;
 
         PostVH(Context c) {
@@ -534,6 +716,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Ui.pad(content, 12, 4, 12, 8);
             card.addView(content);
 
+            // poll options go here (dynamically rebuilt per post)
+            pollBox = Ui.col(c);
+            Ui.pad(pollBox, 12, 2, 12, 6);
+            card.addView(pollBox);
+
             // shared embed
             sharedBox = Ui.col(c);
             sharedBox.setBackground(Ui.roundStroke(c, Ui.bg(c), 10, Ui.div(c), 1));
@@ -554,6 +741,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             image = new ImageView(c);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             mediaBox.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            pager = new ViewPager2(c);
+            pager.setVisibility(View.GONE);
+            mediaBox.addView(pager, new FrameLayout.LayoutParams(-1, -1));
             video = new VideoView(c);
             video.setVisibility(View.GONE);
             mediaBox.addView(video, new FrameLayout.LayoutParams(-1, -1));
@@ -561,6 +751,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             playBadge.setGravity(Gravity.CENTER);
             playBadge.setVisibility(View.GONE);
             mediaBox.addView(playBadge, new FrameLayout.LayoutParams(-1, -1));
+            pageBadge = Ui.tvBold(c, "", 12, 0xFFFFFFFF);
+            pageBadge.setBackground(Ui.round(c, 0x99000000, 20));
+            Ui.pad(pageBadge, 8, 4, 8, 4);
+            pageBadge.setVisibility(View.GONE);
+            FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP);
+            blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
+            mediaBox.addView(pageBadge, blp);
 
             // reaction summary
             LinearLayout summary = Ui.row(c);

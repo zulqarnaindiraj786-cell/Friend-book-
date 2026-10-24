@@ -126,6 +126,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String me = Fb.uid();
         if (p.authorId == null) return false;
         if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) return false;
+        android.app.Activity ctx = getActivity();
+        if (ctx != null) {
+            if (com.example.frienbook.core.Prefs.isPostHidden(ctx, p.id)) return false;
+            if (com.example.frienbook.core.Prefs.isSnoozed(ctx, p.authorId)) return false;
+        }
         if (p.authorId.equals(me)) return true;
         if ("Only me".equalsIgnoreCase(p.privacy)) return false;
         if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(p.authorId);

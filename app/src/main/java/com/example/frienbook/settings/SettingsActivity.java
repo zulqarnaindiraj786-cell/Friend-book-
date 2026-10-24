@@ -84,6 +84,37 @@ public class SettingsActivity extends Activity {
                 () -> startActivity(new Intent(this, BlockedUsersActivity.class))));
         body.addView(cardEnd());
 
+        // ============ YOUR ACTIVITY ============
+        body.addView(header("Your activity"));
+        body.addView(card());
+        body.addView(row("📋", "Activity log", "Your posts & comments timeline",
+                () -> startActivity(new Intent(this, ActivityLogActivity.class))));
+        body.addView(div());
+        body.addView(row("🙈", "Posts you've hidden", "Restore hidden feed posts", () -> {
+            int n = Prefs.hiddenPosts(this).size();
+            if (n == 0) { Ui.toast(this, "No hidden posts"); return; }
+            Ui.confirm(this, "Unhide " + n + " post(s)?",
+                    "Hidden posts will appear in your feed again.", "Unhide all", () -> {
+                        Prefs.unhideAllPosts(this);
+                        Ui.toast(this, "All posts restored ✓");
+                    });
+        }));
+        body.addView(div());
+        body.addView(row("😴", "Snoozed people", "Who you're hiding for 30 days", this::snoozedDialog));
+        body.addView(div());
+        body.addView(row("📤", "Export your data", "Your profile data as text (share/save)", this::exportData));
+        body.addView(cardEnd());
+
+        // ============ ADMIN (owner only) ============
+        if (com.example.frienbook.core.Admin.isAdmin()) {
+            body.addView(header("Admin"));
+            body.addView(card());
+            body.addView(row("🛡", "Admin Panel", "Dashboard, users, content, reports, broadcast",
+                    () -> startActivity(new Intent(this,
+                            com.example.frienbook.admin.AdminPanelActivity.class))));
+            body.addView(cardEnd());
+        }
+
         // ============ SECURITY ============
         body.addView(header("Security"));
         body.addView(card());
@@ -239,6 +270,49 @@ public class SettingsActivity extends Activity {
             Prefs.setFriendRequestPrivacy(this, w == 1 ? "Friends of friends" : "Everyone");
             recreate();
         });
+    }
+
+    private void snoozedDialog() {
+        StringBuilder sb = new StringBuilder();
+        java.util.List<String> uids = new java.util.ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (String e : getSharedPreferences("fb_prefs", MODE_PRIVATE)
+                .getStringSet("snoozed", new java.util.HashSet<>())) {
+            int i = e.indexOf(':');
+            if (i <= 0) continue;
+            String uid = e.substring(0, i);
+            long until;
+            try { until = Long.parseLong(e.substring(i + 1)); } catch (Exception ex) { continue; }
+            if (until <= now) continue;
+            uids.add(uid);
+            long days = (until - now) / 86400_000L + 1;
+            sb.append(uid.substring(0, Math.min(8, uid.length()))).append("…  ·  ")
+                    .append(days).append(" day(s) left\n");
+        }
+        if (uids.isEmpty()) { Ui.toast(this, "Nobody snoozed 😊"); return; }
+        Ui.confirm(this, "Snoozed people", sb.toString().trim(), "Unsnooze everyone", () -> {
+            for (String uid : uids) Prefs.unsnooze(this, uid);
+            Ui.toast(this, "All unsnoozed ✓");
+        });
+    }
+
+    private void exportData() {
+        Ui.toast(this, "Collecting your data…");
+        String me = Fb.uid();
+        if (me == null) return;
+        Fb.db().collection("users").document(me).get().addOnSuccessListener(d -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append("FriendBook data export — ").append(java.text.DateFormat.getDateTimeInstance()
+                    .format(new java.util.Date())).append("\n\n");
+            java.util.Map<String, Object> m = d.getData();
+            if (m != null) for (java.util.Map.Entry<String, Object> en : m.entrySet()) {
+                sb.append(en.getKey()).append(": ").append(String.valueOf(en.getValue())).append("\n");
+            }
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("text/plain");
+            share.putExtra(Intent.EXTRA_TEXT, sb.toString());
+            startActivity(Intent.createChooser(share, "Export your data"));
+        }).addOnFailureListener(e -> Ui.toast(this, "Export failed"));
     }
 
     private void changePassword() {

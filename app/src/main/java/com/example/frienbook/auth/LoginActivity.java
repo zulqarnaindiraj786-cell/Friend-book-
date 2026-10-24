@@ -86,8 +86,27 @@ public class LoginActivity extends Activity {
         Ui.hideKeyboard(this);
         Fb.auth().signInWithEmailAndPassword(e, p)
                 .addOnSuccessListener(r -> {
-                    Prefs.setUnlockedSession(this, true);
-                    openMain();
+                    // banned-account gate: verify profile before letting them in
+                    String uid = Fb.auth().getCurrentUser() != null
+                            ? Fb.auth().getCurrentUser().getUid() : null;
+                    if (uid == null) { openMain(); return; }
+                    Fb.db().collection("users").document(uid).get().addOnSuccessListener(d -> {
+                        boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
+                        String em = Fb.auth().getCurrentUser() != null
+                                ? Fb.auth().getCurrentUser().getEmail() : "";
+                        if (banned && !com.example.frienbook.core.Admin.isOwnerEmail(em)) {
+                            Fb.auth().signOut();
+                            btn.setText("Log In");
+                            btn.setEnabled(true);
+                            Ui.info(this, "Account suspended",
+                                    "This account has been suspended by the FriendBook admin."
+                                            + " Contact " + com.example.frienbook.core.Admin.OWNER_EMAIL
+                                            + " if you think this is a mistake.");
+                            return;
+                        }
+                        Prefs.setUnlockedSession(this, true);
+                        openMain();
+                    });
                 })
                 .addOnFailureListener(err -> {
                     btn.setText("Log In");

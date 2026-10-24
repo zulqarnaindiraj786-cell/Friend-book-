@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.media.MediaPlayer;
 import android.text.util.Linkify;
 import android.view.Gravity;
 import android.view.View;
@@ -17,6 +18,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.post.FullscreenMediaActivity;
@@ -24,7 +26,8 @@ import com.example.frienbook.post.FullscreenMediaActivity;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Chat bubbles: mine (blue, right) / theirs (grey, left), images, ticks, deleted state. */
+/** Chat bubbles: mine (theme color, right) / theirs (grey, left),
+ *  text ✦ photos ✦ voice notes ✦ message reactions ✦ ticks ✦ deleted state. */
 public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
     public interface Actions { void longPress(Models.Message m); }
@@ -33,6 +36,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final Actions actions;
     private final List<Models.Message> data = new ArrayList<>();
     private String peerPhoto = "";
+
+    /** one MediaPlayer at a time for voice notes */
+    private static MediaPlayer voicePlayer;
+    private static String playingId;
 
     public MessagesAdapter(Activity a, Actions actions) {
         this.activity = a;
@@ -75,27 +82,43 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         Linkify.addLinks(text, Linkify.WEB_URLS);
         ImageView img = new ImageView(c);
         img.setVisibility(View.GONE);
+
+        // voice row: ▶ icon + duration
+        LinearLayout voiceRow = Ui.row(c);
+        voiceRow.setVisibility(View.GONE);
+        TextView play = Ui.tvBold(c, "▶", 18, 0);
+        TextView dur = Ui.tv(c, "", 13, 0);
+        dur.setPadding(Ui.dp(c, 8), 0, Ui.dp(c, 4), 0);
+        voiceRow.addView(play);
+        voiceRow.addView(dur);
+        bubble.addView(text);
+        bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 170), -2));
+        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 160)));
+
         TextView ticks = Ui.tv(c, "", 10, 0);
         ticks.setGravity(Gravity.END);
         Ui.pad(ticks, 0, 2, 0, 0);
 
-        bubble.addView(text);
-        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 160)));
+        TextView react = Ui.tvBold(c, "", 11, 0);
+        Ui.pad(react, 6, 2, 6, 2);
+        react.setVisibility(View.GONE);
+
         bubbleCol.addView(bubble);
+        bubbleCol.addView(react);
         bubbleCol.addView(ticks);
 
         row.addView(av, ap);
         row.addView(bubbleCol);
         if (viewType == 1) {
-            // mine: right aligned
             row.setGravity(Gravity.END);
+            bubbleCol.setGravity(Gravity.END);
             row.removeView(av);
             av.setVisibility(View.GONE);
-            row.addView(av); // keep layout spot (invisible)
+            row.addView(av);
         } else {
             row.setGravity(Gravity.START);
         }
-        VH vh = new VH(row, av, bubble, text, img, ticks);
+        VH vh = new VH(row, av, bubble, text, img, ticks, voiceRow, play, dur, react);
         vh.mine = viewType == 1;
         return vh;
     }
@@ -109,7 +132,9 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             Ui.avatar(c, h.av, peerPhoto);
             h.av.setVisibility(View.VISIBLE);
         }
-        h.bubble.setBackground(Ui.round(c, h.mine ? Ui.BLUE : Ui.inputBg(c), 16));
+        int mineBg = Prefs.chatBg(c);
+        int mineTxt = Prefs.chatTxt(c);
+        h.bubble.setBackground(Ui.round(c, h.mine ? mineBg : Ui.inputBg(c), 16));
 
         // last mine message shows state ticks
         boolean lastMine = h.mine && position == lastMineIndex();
@@ -124,14 +149,40 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             else h.ticks.setText("…");
         }
 
+        // reactions pill
+        String rs = m.reactionSummary();
+        if (rs.isEmpty()) {
+            h.react.setVisibility(View.GONE);
+        } else {
+            h.react.setVisibility(View.VISIBLE);
+            h.react.setText(rs);
+            h.react.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
+            h.react.setTextColor(Ui.txt(c));
+        }
+
+        boolean isVoice = "voice".equals(m.type) && m.voiceUrl != null && !m.voiceUrl.isEmpty();
+        boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
+
         if (m.isDeleted) {
             h.text.setText("🚫 This message was removed");
             h.text.setTextColor(h.mine ? 0xCCFFFFFF : Ui.sub(c));
             h.text.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
+            h.text.setVisibility(View.VISIBLE);
             h.img.setVisibility(View.GONE);
+            h.voiceRow.setVisibility(View.GONE);
+        } else if (isVoice) {
+            h.text.setVisibility(View.GONE);
+            h.img.setVisibility(View.GONE);
+            h.voiceRow.setVisibility(View.VISIBLE);
+            h.play.setTextColor(h.mine ? Color.WHITE : Ui.BLUE);
+            h.dur.setTextColor(h.mine ? 0xDDFFFFFF : Ui.txt(c));
+            h.dur.setText("Voice note · " + Format.duration(m.voiceDurationSec)
+                    + (m.id.equals(playingId) ? "  ▶ playing…" : ""));
+            h.voiceRow.setOnClickListener(v -> toggleVoice(h, m));
         } else {
+            h.voiceRow.setVisibility(View.GONE);
+            h.text.setVisibility(View.VISIBLE);
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-            boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
             if (hasImage) {
                 h.img.setVisibility(View.VISIBLE);
                 Ui.img(c, h.img, m.imageUrl);
@@ -143,7 +194,8 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                 });
             } else h.img.setVisibility(View.GONE);
             h.text.setText(m.text);
-            h.text.setTextColor(h.mine ? Color.WHITE : Ui.txt(c));
+            h.text.setTextColor(h.mine ? mineTxt : Ui.txt(c));
+            if (hasImage && (m.text == null || m.text.isEmpty())) h.text.setVisibility(View.GONE);
         }
 
         String time = Format.ago(m.createdAt);
@@ -153,6 +205,37 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             if (actions != null && !m.isDeleted) actions.longPress(m);
             return true;
         });
+    }
+
+    private void toggleVoice(VH h, Models.Message m) {
+        if (m.id.equals(playingId)) {
+            stopVoice();
+            notifyDataSetChanged();
+            return;
+        }
+        stopVoice();
+        try {
+            voicePlayer = new MediaPlayer();
+            voicePlayer.setDataSource(m.voiceUrl);
+            voicePlayer.setOnPreparedListener(mp -> {
+                playingId = m.id;
+                voicePlayer.start();
+                notifyDataSetChanged();
+            });
+            voicePlayer.setOnCompletionListener(mp -> stopVoice());
+            voicePlayer.prepareAsync();
+            Ui.toast(activity, "▶ Playing voice note…");
+        } catch (Exception e) {
+            Ui.toast(activity, "Couldn't play voice note");
+        }
+    }
+
+    public static void stopVoice() {
+        playingId = null;
+        if (voicePlayer != null) {
+            try { voicePlayer.release(); } catch (Throwable ignored) { }
+            voicePlayer = null;
+        }
     }
 
     private int lastMineIndex() {
@@ -165,12 +248,14 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
     static class VH extends RecyclerView.ViewHolder {
         ImageView av, img;
-        LinearLayout bubble;
-        TextView text, ticks;
+        LinearLayout bubble, voiceRow;
+        TextView text, ticks, play, dur, react;
         boolean mine;
-        VH(View v, ImageView a, LinearLayout b, TextView t, ImageView i, TextView tk) {
+        VH(View v, ImageView a, LinearLayout b, TextView t, ImageView i, TextView tk,
+           LinearLayout vr, TextView pl, TextView du, TextView re) {
             super(v);
             av = a; bubble = b; text = t; img = i; ticks = tk;
+            voiceRow = vr; play = pl; dur = du; react = re;
         }
     }
 }

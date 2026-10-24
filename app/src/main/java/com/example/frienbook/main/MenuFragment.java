@@ -84,12 +84,40 @@ public class MenuFragment extends Fragment {
         // shortcuts
         body.addView(item(a, "💾", "Saved posts", "Everything you bookmarked",
                 () -> startActivity(new Intent(a, SavedPostsActivity.class))));
+        body.addView(item(a, "📺", "Watch", "All public videos in one feed",
+                () -> startActivity(new Intent(a, com.example.frienbook.post.WatchActivity.class))));
+        body.addView(item(a, "👨‍👩‍👧‍👦", "Groups", "Communities with their own feeds",
+                () -> startActivity(new Intent(a, com.example.frienbook.groups.GroupsActivity.class))));
+        body.addView(item(a, "🎂", "Birthdays", "See whose birthday is coming",
+                () -> startActivity(new Intent(a, com.example.frienbook.friends.BirthdaysActivity.class))));
+        body.addView(item(a, "📋", "Activity log", "Your posts & comments in one place",
+                () -> startActivity(new Intent(a, com.example.frienbook.settings.ActivityLogActivity.class))));
         body.addView(item(a, "👥", "Friends", "Requests, suggestions, all friends",
                 () -> ((MainActivity) a).select(MainActivity.TAB_FRIENDS)));
         body.addView(item(a, "🎞️", "Reels", "Watch short videos",
                 () -> ((MainActivity) a).select(MainActivity.TAB_REELS)));
         body.addView(item(a, "🔔", "Notifications", "Your latest activity",
                 () -> ((MainActivity) a).select(MainActivity.TAB_NOTIFS)));
+
+        // ===== ADMIN ONLY (zulqarnaindiraj786@gmail.com / flagged admins) =====
+        if (com.example.frienbook.core.Admin.isAdmin()) {
+            body.addView(spacer(a, 10));
+            LinearLayout adminCard = Ui.col(a);
+            adminCard.setBackground(Ui.roundStroke(a, Ui.card(a), 12, Ui.ORANGE, 2));
+            TextView crown = Ui.tvBold(a, "🛡 ADMIN ZONE", 12, Ui.ORANGE);
+            crown.setGravity(Gravity.CENTER);
+            Ui.pad(crown, 0, 8, 0, 0);
+            adminCard.addView(crown);
+            TextView open = Ui.tvBold(a, "⚡ Open Admin Panel — stats · users · content · reports · broadcast", 14, Ui.txt(a));
+            Ui.pad(open, 14, 8, 14, 12);
+            adminCard.addView(open);
+            adminCard.setOnClickListener(v ->
+                    startActivity(new Intent(a, com.example.frienbook.admin.AdminPanelActivity.class)));
+            LinearLayout.LayoutParams acp = new LinearLayout.LayoutParams(-1, -2);
+            acp.setMargins(0, Ui.dp(a, 8), 0, 0);
+            adminCard.setLayoutParams(acp);
+            body.addView(adminCard);
+        }
         body.addView(spacer(a, 10));
 
         // quick preferences

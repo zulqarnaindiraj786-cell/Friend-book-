@@ -84,14 +84,32 @@ public class Fb {
         });
     }
 
-    /** Start (or restart) the live listener that keeps {@link #me} fresh. */
+    /** Start (or restart) the live listener that keeps {@link #me} fresh.
+     *  Also enforces admin bans: banned accounts are signed out immediately. */
     public static void startMeListener() {
         String uid = uid();
         if (uid == null) return;
         if (meReg != null) meReg.remove();
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
-                    if (doc != null && doc.exists()) me = Models.User.fromDoc(doc);
+                    if (doc == null || !doc.exists()) return;
+                    Models.User u = Models.User.fromDoc(doc);
+                    me = u;
+                    if (u.banned && !Admin.isOwnerEmail(u.email)) {
+                        // ban enforcement: kick the user out to the login screen
+                        me = null;
+                        Presence.goOffline();
+                        auth().signOut();
+                        android.content.Context app = com.example.frienbook.App.instance;
+                        if (app != null) {
+                            Ui.toast(app, "Your FriendBook account has been suspended by an admin.");
+                            android.content.Intent i = new android.content.Intent(app,
+                                    com.example.frienbook.auth.LoginActivity.class);
+                            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                    | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            app.startActivity(i);
+                        }
+                    }
                 });
         meLastRefresh = System.currentTimeMillis();
     }
