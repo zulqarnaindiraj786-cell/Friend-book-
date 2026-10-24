@@ -207,7 +207,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
         android.widget.LinearLayout box = Ui.col(activity);
         Ui.pad(box, 18, 8, 18, 0);
         box.addView(in, new android.widget.LinearLayout.LayoutParams(-1, Ui.dp(activity, 48)));
-        new androidx.appcompat.app.AlertDialog.Builder(activity)
+        new android.app.AlertDialog.Builder(activity)
                 .setTitle("✏️ Edit comment")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
