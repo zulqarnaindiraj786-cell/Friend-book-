@@ -52,9 +52,15 @@ jobs:
       - name: Surface compiler errors as annotations
         if: steps.dbg.outputs.exit != '0'
         run: |
-          echo "===== javac errors ====="
-          grep -E "\.java:[0-9]+: error:" build-debug.log | head -40 | while IFS= read -r line; do
-            echo "::error::$line"
+          echo "===== javac error blocks (with symbol details) ====="
+          grep -A8 -E "\.java:[0-9]+: error:" build-debug.log | head -120 | while IFS= read -r line; do
+            echo "::error::${line:0:250}"
+          done
+          echo "===== failing source lines ====="
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-debug.log | sort -u | while IFS= read -r hit; do
+            f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
+            content=$(sed -n "${ln}p" "$f")
+            echo "::error file=$f,line=$ln,title=source::${content:0:250}"
           done
           echo "===== aapt/resource errors ====="
           grep -Ei "aapt|resource|merge|duplicate" build-debug.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
