@@ -38,8 +38,10 @@ import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** The feed: header (stories rail + composer), post cards, load-more footer. */
 public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
