@@ -21,9 +21,11 @@ import android.widget.VideoView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
@@ -36,8 +38,10 @@ import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** The feed: header (stories rail + composer), post cards, load-more footer. */
 public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
@@ -52,7 +56,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean hasMore();
     }
 
-    private static final int VT_HEADER = 0, VT_POST = 1, VT_FOOTER = 2;
+    private static final int VT_HEADER = 0, VT_POST = 1, VT_FOOTER = 2, VT_AD = 3;
 
     private final Activity activity;
     private final Host host;
@@ -83,14 +87,58 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (showHeader) notifyItemChanged(0);
     }
 
+    // ---- boosts + live rows for the header ----
+    private final java.util.List<Models.User> boostedUsers = new ArrayList<>();
+    private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
+    public final java.util.Set<String> boostedPostIds = new HashSet<>();
+
+    public void setBoosted(java.util.List<Models.User> users, java.util.Set<String> postIds) {
+        boostedUsers.clear();
+        if (users != null) boostedUsers.addAll(users);
+        boostedPostIds.clear();
+        if (postIds != null) boostedPostIds.addAll(postIds);
+        notifyDataSetChanged();
+    }
+
+    public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
+        activeLives.clear();
+        if (lives != null) activeLives.addAll(lives);
+        if (showHeader) notifyItemChanged(0);
+    }
+
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
-    @Override public int getItemCount() { return offset() + posts.size() + footerCount(); }
+    // ---- 📢 AdMob banner slots: one banner after every 3 posts ----
+    private String bannerId = com.example.frienbook.core.AdsConfig.bannerId();
+    private boolean adsEnabled = com.example.frienbook.core.AdsConfig.bannersEnabled();
+
+    public void setAdsConfig(String id, boolean enabled) {
+        bannerId = id == null || id.isEmpty() ? com.example.frienbook.core.AdsConfig.DEFAULT_BANNER_ID : id;
+        adsEnabled = enabled;
+        notifyDataSetChanged();
+    }
+
+    private int adCount() { return adsEnabled ? posts.size() / 3 : 0; }
+
+    /** Does this feed slot (after the header) hold an ad? Slots 3, 7, 11… */
+    private boolean isAdSlot(int slot) {
+        return adsEnabled && (slot + 1) % 4 == 0 && slot / 4 < adCount();
+    }
+
+    private int postIndexForSlot(int slot) {
+        if (!adsEnabled) return slot;
+        return slot - ((slot + 1) / 4);
+    }
+
+    private int slotCount() { return posts.size() + adCount(); }
+
+    @Override public int getItemCount() { return offset() + slotCount() + footerCount(); }
 
     @Override public int getItemViewType(int position) {
         if (showHeader && position == 0) return VT_HEADER;
         if (showFooter && position == getItemCount() - 1) return VT_FOOTER;
+        if (isAdSlot(position - offset())) return VT_AD;
         return VT_POST;
     }
 
@@ -100,8 +148,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = parent.getContext();
         if (viewType == VT_HEADER) return new HeaderVH(c);
         if (viewType == VT_FOOTER) return new FooterVH(c);
+        if (viewType == VT_AD) return new AdVH(c);
         return new PostVH(c);
     }
+
+
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
@@ -114,14 +165,90 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             };
             Ui.avatar(activity, hh.composeAvatar, Fb.myPhoto());
             hh.composeHint.setText("What's on your mind, " + firstName() + "?");
+            // 🚀 boosted profiles cards
+            hh.boostBox.setVisibility(boostedUsers.isEmpty() ? View.GONE : View.VISIBLE);
+            hh.boostCards.removeAllViews();
+            for (final Models.User u : boostedUsers) {
+                LinearLayout card = Ui.col(activity);
+                card.setGravity(android.view.Gravity.CENTER);
+                card.setBackground(Ui.roundStroke(activity, Ui.card(activity), 14, Ui.BLUE, 1));
+                Ui.pad(card, 12, 10, 12, 10);
+                ImageView av = new ImageView(activity);
+                Ui.avatar(activity, av, u.photoUrl);
+                int s = Ui.dp(activity, 54);
+                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+                avp.gravity = Gravity.CENTER;
+                card.addView(av, avp);
+                TextView nm = Ui.tvBold(activity, u.displayName, 12, Ui.txt(activity));
+                nm.setMaxWidth(Ui.dp(activity, 90));
+                nm.setSingleLine(true);
+                card.addView(nm);
+                ImageView tk = new ImageView(activity);
+                Icons.setTickBadge(tk, u.tickLevel, false);
+                int ts2 = Ui.dp(activity, 14);
+                card.addView(tk, new LinearLayout.LayoutParams(ts2, ts2));
+                TextView tag = Ui.roundChip(activity, "BOOSTED", 0x22E41E3F, 0xFFE41E3F, 9);
+                card.addView(tag);
+                card.setOnClickListener(v -> { if (host != null) host.openProfile(u.uid); });
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+                cp.setMargins(Ui.dp(activity, 4), Ui.dp(activity, 2), Ui.dp(activity, 4), Ui.dp(activity, 4));
+                hh.boostCards.addView(card, cp);
+            }
+            // 🔴 live rooms + go-live button
+            hh.goLiveBtn.setOnClickListener(v -> {
+                android.widget.EditText in = Ui.input(activity, "Live title (optional)");
+                new android.app.AlertDialog.Builder(activity)
+                        .setTitle("🔴 Go Live")
+                        .setView(in)
+                        .setPositiveButton("Start", (d, w) -> {
+                            Intent li = new Intent(activity, com.example.frienbook.live.LiveActivity.class);
+                            li.putExtra("title", in.getText().toString().trim());
+                            activity.startActivity(li);
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+            hh.liveBox.setVisibility(activeLives.isEmpty() ? View.VISIBLE : View.VISIBLE);
+            hh.liveCards.removeAllViews();
+            for (final java.util.Map<String, Object> live : activeLives) {
+                LinearLayout card = Ui.col(activity);
+                card.setGravity(Gravity.CENTER);
+                card.setBackground(Ui.round(activity, Ui.inputBg(activity), 14));
+                Ui.pad(card, 12, 8, 12, 8);
+                ImageView av = new ImageView(activity);
+                Ui.avatar(activity, av, Format.str(live, "hostPhotoUrl"));
+                int s = Ui.dp(activity, 46);
+                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+                avp.gravity = Gravity.CENTER;
+                card.addView(av, avp);
+                TextView nm = Ui.tvBold(activity, Format.strOr(live, "hostName", "Live"), 11, Ui.txt(activity));
+                nm.setSingleLine(true);
+                nm.setMaxWidth(Ui.dp(activity, 84));
+                card.addView(nm);
+                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(Format.intOf(live, "viewers")),
+                        0xFFE41E3F, 0xFFFFFFFF, 9));
+                final String lid = Format.str(live, "_id");
+                final String hostId = Format.str(live, "hostId");
+                card.setOnClickListener(v -> {
+                    Intent li = new Intent(activity, com.example.frienbook.live.LiveActivity.class);
+                    li.putExtra("live_id", lid);
+                    li.putExtra("host_id", hostId);
+                    activity.startActivity(li);
+                });
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+                cp.setMargins(Ui.dp(activity, 4), Ui.dp(activity, 2), Ui.dp(activity, 4), Ui.dp(activity, 4));
+                hh.liveCards.addView(card, cp);
+            }
         } else if (h instanceof FooterVH) {
             FooterVH fh = (FooterVH) h;
             boolean more = host != null && host.hasMore();
             fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
             fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
+        } else if (h instanceof AdVH) {
+            ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
         } else {
-            bindPost((PostVH) h, posts.get(position - offset()));
+            bindPost((PostVH) h, posts.get(postIndexForSlot(position - offset())));
         }
     }
 
@@ -134,12 +261,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @Override
     public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
         super.onViewRecycled(h);
+        if (h instanceof AdVH) ((AdVH) h).destroyAd();
         if (h instanceof PostVH) {
             PostVH vh = (PostVH) h;
             if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
+            if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
             vh.video.stopPlayback();
             vh.video.setVisibility(View.GONE);
             vh.playBadge.setVisibility(View.GONE);
+            vh.pager.setVisibility(View.GONE);
+            vh.pageBadge.setVisibility(View.GONE);
             vh.mediaBox.setOnTouchListener(null);
         }
     }
@@ -151,13 +282,91 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         vh.name.setText(p.authorName + (hasFeeling ? " is feeling " + p.feeling : ""));
+        vh.tick.setImageDrawable(null);
+        if (!"none".equals(p.authorTickLevel) && p.authorTickLevel != null) {
+            vh.tick.setVisibility(View.VISIBLE);
+            vh.tick.setImageResource(com.example.frienbook.core.Icons.badgeFor(p.authorTickLevel));
+        } else {
+            vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
+            if (p.authorVerified) vh.tick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+        }
+        if (vh.boostTag != null)
+            vh.boostTag.setVisibility(boostedPostIds.contains(p.id) ? View.VISIBLE : View.GONE);
         String icon = "🌐";
         if ("Friends".equalsIgnoreCase(p.privacy)) icon = "👥";
         if ("Only me".equalsIgnoreCase(p.privacy)) icon = "🔒";
         vh.meta.setText(Format.ago(p.createdAt) + " · " + icon
                 + (p.sharedFromId != null && !p.sharedFromId.isEmpty() ? " · shared" : ""));
+        // colored-background text posts (Facebook style)
+        if (p.isBgPost() && p.content != null && !p.content.isEmpty()) {
+            vh.content.setBackground(Ui.gradient(p.bgColor, shade(p.bgColor, 0.55f), Ui.dp(c, 12)));
+            vh.content.setTextColor(0xFFFFFFFF);
+            vh.content.setTextSize(23);
+            vh.content.setGravity(Gravity.CENTER);
+            vh.content.setMinHeight(Ui.dp(c, 200));
+            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+            clp.setMargins(Ui.dp(c, 12), Ui.dp(c, 4), Ui.dp(c, 12), Ui.dp(c, 8));
+            vh.content.setLayoutParams(clp);
+            Ui.pad(vh.content, 18, 24, 18, 24);
+        } else {
+            vh.content.setBackground(null);
+            vh.content.setTextColor(Ui.txt(c));
+            vh.content.setTextSize(15);
+            vh.content.setGravity(Gravity.START);
+            vh.content.setMinHeight(0);
+            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
+            vh.content.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+            Ui.pad(vh.content, 12, 4, 12, 8);
+        }
         vh.content.setText(p.content);
         vh.content.setVisibility(p.content == null || p.content.isEmpty() ? View.GONE : View.VISIBLE);
+        // location line
+        if (p.location != null && !p.location.isEmpty())
+            vh.meta.append(" · 📍 " + p.location);
+
+        // ---------- poll ----------
+        vh.pollBox.removeAllViews();
+        vh.pollBox.setVisibility(p.isPoll() ? View.VISIBLE : View.GONE);
+        if (p.isPoll()) {
+            String meId = Fb.uid();
+            int total = p.pollVotes != null ? p.pollVotes.size() : 0;
+            java.util.Map<String, Integer> perOpt = new HashMap<>();
+            if (p.pollVotes != null) {
+                for (Long ix : p.pollVotes.values()) {
+                    if (ix == null) continue;
+                    Integer cur = perOpt.get(String.valueOf(ix.intValue()));
+                    perOpt.put(String.valueOf(ix.intValue()), cur == null ? 1 : cur + 1);
+                }
+            }
+            Integer myVote = p.pollVotes != null && meId != null && p.pollVotes.containsKey(meId)
+                    ? (p.pollVotes.get(meId) == null ? null : p.pollVotes.get(meId).intValue()) : null;
+            for (int i = 0; i < p.pollOptions.size(); i++) {
+                final int idx = i;
+                Integer count = perOpt.get(String.valueOf(i));
+                int votes = count == null ? 0 : count;
+                int pct = total == 0 ? 0 : Math.round(votes * 100f / total);
+                boolean mine = myVote != null && myVote == i;
+                TextView opt = new TextView(c);
+                String txt = (mine ? "✓ " : "") + p.pollOptions.get(i)
+                        + (total > 0 ? "  —  " + pct + "% (" + votes + ")" : "");
+                opt.setText(txt);
+                opt.setTextSize(15);
+                opt.setTextColor(mine ? Ui.BLUE : Ui.txt(c));
+                if (mine) opt.setTypeface(null, android.graphics.Typeface.BOLD);
+                opt.setBackground(Ui.roundStroke(c,
+                        mine ? Ui.blend(Ui.BLUE, Ui.card(c), 0.18f) : Ui.inputBg(c), 8, Ui.div(c), 1));
+                Ui.pad(opt, 12, 10, 12, 10);
+                LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(-1, -2);
+                olp.bottomMargin = Ui.dp(c, 8);
+                opt.setLayoutParams(olp);
+                opt.setOnClickListener(v -> votePoll(p, idx));
+                vh.pollBox.addView(opt);
+            }
+            TextView hint = Ui.tv(c, total + (total == 1 ? " vote" : " votes") + " · tap to vote / again to undo",
+                    11, Ui.sub(c));
+            vh.pollBox.addView(hint);
+        }
 
         View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
         vh.avatar.setOnClickListener(prof);
@@ -181,15 +390,31 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.video.setVisibility(View.GONE);
         vh.playBadge.setVisibility(View.GONE);
         vh.image.setVisibility(View.GONE);
+        vh.pager.setVisibility(View.GONE);
+        vh.pageBadge.setVisibility(View.GONE);
+        if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
         vh.mediaBox.setOnClickListener(null);
         vh.mediaBox.setOnTouchListener(null);
-        boolean hasMedia = p.mediaType != null && !"none".equals(p.mediaType)
-                && p.mediaUrl != null && !p.mediaUrl.isEmpty();
+        boolean multiPhoto = p.isMultiPhoto();
+        boolean hasMedia = multiPhoto || (p.mediaType != null && !"none".equals(p.mediaType)
+                && p.mediaUrl != null && !p.mediaUrl.isEmpty());
         ViewGroup.LayoutParams mlp = vh.mediaBox.getLayoutParams();
         mlp.height = Ui.dp(c, hasMedia ? 280 : 0);
         vh.mediaBox.setLayoutParams(mlp);
         vh.mediaBox.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
-        if ("image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+        if (multiPhoto) {
+            // multi-photo carousel (Facebook-style swipeable album)
+            vh.pager.setVisibility(View.VISIBLE);
+            vh.pageBadge.setVisibility(View.VISIBLE);
+            vh.pager.setAdapter(new PhotoPager(p.mediaUrls));
+            vh.pageBadge.setText("1/" + p.mediaUrls.size());
+            vh.pageCb = new ViewPager2.OnPageChangeCallback() {
+                @Override public void onPageSelected(int position) {
+                    vh.pageBadge.setText((position + 1) + "/" + p.mediaUrls.size());
+                }
+            };
+            vh.pager.registerOnPageChangeCallback(vh.pageCb);
+        } else if ("image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
             vh.image.setVisibility(View.VISIBLE);
             Ui.img(c, vh.image, p.mediaUrl);
             GestureDetector gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
@@ -276,6 +501,67 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 });
     }
 
+    private void votePoll(Models.Post p, int idx) {
+        String me = Fb.uid();
+        if (me == null) return;
+        Long cur = p.pollVotes != null ? p.pollVotes.get(me) : null;
+        java.util.Map<String, Object> upd = new HashMap<>();
+        if (cur != null && cur.intValue() == idx) {
+            // toggle off
+            upd.put("pollVotes." + me, FieldValue.delete());
+            if (p.pollVotes != null) p.pollVotes.remove(me);
+        } else {
+            upd.put("pollVotes." + me, idx);
+            if (p.pollVotes == null) p.pollVotes = new HashMap<>();
+            p.pollVotes.put(me, (long) idx);
+        }
+        Fb.db().collection("posts").document(p.id).update(upd)
+                .addOnFailureListener(e -> Ui.toast(activity, "Vote failed: " + e.getMessage()));
+        notifyDataSetChanged();
+    }
+
+    private static int shade(int color, float factor) {
+        int a = (color >> 24) & 0xFF;
+        int r = (int) (((color >> 16) & 0xFF) * factor);
+        int g = (int) (((color >> 8) & 0xFF) * factor);
+        int b = (int) ((color & 0xFF) * factor);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    /** Tiny pager adapter for multi-photo posts (full-screen zoom on tap). */
+    class PhotoPager extends RecyclerView.Adapter<PhotoPager.PVH> {
+        final List<String> urls;
+        PhotoPager(List<String> urls) { this.urls = urls; }
+        @Override public int getItemCount() { return urls.size(); }
+
+        @NonNull
+        @Override
+        public PVH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            ImageView img = new ImageView(parent.getContext());
+            img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            img.setLayoutParams(new ViewGroup.LayoutParams(-1, -1));
+            return new PVH(img);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull PVH h, int position) {
+            Ui.img(activity, h.img, urls.get(position));
+            h.img.setOnClickListener(v -> {
+                Intent i = new Intent(activity, FullscreenMediaActivity.class);
+                i.putExtra("type", "image");
+                i.putExtra("url", urls.get(position));
+                i.putExtra("urls", new ArrayList<>(urls));
+                i.putExtra("index", position);
+                activity.startActivity(i);
+            });
+        }
+
+        class PVH extends RecyclerView.ViewHolder {
+            ImageView img;
+            PVH(ImageView v) { super(v); img = v; }
+        }
+    }
+
     private void streamVideo(PostVH vh, String url, boolean autoPlay) {
         vh.video.setVisibility(View.VISIBLE);
         vh.video.setVideoURI(android.net.Uri.parse(url));
@@ -297,30 +583,71 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = activity;
         boolean mine = p.authorId != null && p.authorId.equals(Fb.uid());
         boolean saved = p.savedBy != null && p.savedBy.contains(Fb.uid());
+        boolean isAdmin = com.example.frienbook.core.Admin.isAdmin();
         PopupMenu menu = new PopupMenu(c, anchor);
         menu.getMenu().add(saved ? "🔖 Unsave post" : "🔖 Save post");
+        if (!boostedPostIds.contains(p.id))
+            menu.getMenu().add("🚀 Boost Post — Rs " + com.example.frienbook.core.Admin.PRICE_BOOST_POST + " · more reach");
         if (mine) {
             menu.getMenu().add("✏️ Edit post");
+            menu.getMenu().add("🌐 Who can see this? (" + p.privacy + ")");
             menu.getMenu().add("🗑 Delete post");
         } else {
             menu.getMenu().add("➕ Follow " + p.authorName);
+            menu.getMenu().add("🙈 Hide this post");
+            menu.getMenu().add("😴 Snooze " + p.authorName + " for 30 days");
             menu.getMenu().add("🚫 Block " + p.authorName);
         }
+        if (isAdmin && !mine) menu.getMenu().add("🛡 🗑 Delete post (admin)");
         menu.getMenu().add("📋 Copy text");
+        menu.getMenu().add("🔗 Copy link");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
             if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("Save post")) toggleSave(p, false);
-            else if (t.contains("Edit")) { if (host != null) host.editPost(p); }
+            else if (t.contains("Boost Post")) {
+                Intent bi = new Intent(activity, com.example.frienbook.pay.PayRequestActivity.class);
+                bi.putExtra("type", "boost_post");
+                bi.putExtra("target_id", p.id);
+                bi.putExtra("amount", com.example.frienbook.core.Admin.PRICE_BOOST_POST);
+                bi.putExtra("title", "Boost Post");
+                activity.startActivity(bi);
+            }
+            else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
+            else if (t.contains("Who can see")) changePrivacyDialog(p);
+            else if (t.contains("Hide this post")) {
+                Prefs.hidePost(c, p.id);
+                posts.remove(p);
+                notifyDataSetChanged();
+                Ui.toast(activity, "Hidden. Manage in Settings → Posts you've hidden");
+            } else if (t.contains("Snooze")) {
+                Prefs.snooze(c, p.authorId, 30);
+                Ui.toast(activity, "Snoozed " + p.authorName + " for 30 days 😴");
+                java.util.Iterator<Models.Post> it = posts.iterator();
+                while (it.hasNext()) if (p.authorId.equals(it.next().authorId)) it.remove();
+                notifyDataSetChanged();
+            } else if (t.contains("Delete post (admin)")) deletePost(p);
             else if (t.contains("Delete")) deletePost(p);
-            else if (t.contains("Copy")) copyText(p.content);
+            else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
+            else if (t.contains("Copy text")) copyText(p.content);
             else if (t.contains("Follow")) followUser(p.authorId);
             else if (t.contains("Block")) blockUser(p.authorId);
             else if (t.contains("Report")) reportPost(p);
             return true;
         });
         menu.show();
+    }
+
+    private void changePrivacyDialog(Models.Post p) {
+        String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
+        String[] vals = {"Public", "Friends", "Only me"};
+        Ui.choose(activity, "Who can see this post?", opts, w -> {
+            Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
+            p.privacy = vals[w];
+            notifyDataSetChanged();
+            Ui.toast(activity, "Privacy updated: " + vals[w]);
+        });
     }
 
     private void toggleSave(Models.Post p, boolean unsave) {
@@ -412,6 +739,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "authorId", Fb.uid(),
                             "authorName", Fb.myName(),
                             "authorPhotoUrl", Fb.myPhoto(),
+                            "authorVerified", Fb.me != null && Fb.me.isVerified,
+                            "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none",
                             "content", caption.getText().toString().trim(),
                             "mediaType", "none",
                             "mediaUrl", "",
@@ -440,6 +769,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final StoriesAdapter storiesAdapter;
         final ImageView composeAvatar;
         final TextView composeHint;
+        final LinearLayout boostBox, liveBox, boostCards, liveCards;
+        final TextView goLiveBtn;
 
         HeaderVH(Context c) {
             super(Ui.col(c));
@@ -466,8 +797,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, -2, 1);
             hp.leftMargin = Ui.dp(c, 10);
             row.addView(composeHint, hp);
-            TextView photo = Ui.tv(c, "🖼️", 22, Ui.GREEN);
-            photo.setPadding(Ui.dp(c, 10), 0, 0, 0);
+            ImageView photo = com.example.frienbook.core.Icons.icon(
+                    c, com.example.frienbook.core.Icons.IMAGE, 24, Ui.GREEN);
+            photo.setPadding(Ui.dp(c, 10), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
             row.addView(photo);
             View.OnClickListener go = v -> c.startActivity(new Intent(c, CreatePostActivity.class));
             composeHint.setOnClickListener(go);
@@ -478,6 +810,43 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 8)));
+
+            // 🔴 GO LIVE button + active lives strip (Facebook-Lite style)
+            liveBox = Ui.col(c);
+            liveBox.setBackgroundColor(Ui.card(c));
+            liveBox.setVisibility(View.GONE);
+            LinearLayout liveTop = Ui.row(c);
+            liveTop.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(liveTop, 12, 10, 12, 4);
+            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 13);
+            Ui.pad(goLiveBtn, 16, 8, 16, 8);
+            liveTop.addView(goLiveBtn);
+            TextView liveTitle = Ui.tvBold(c, "Live now", 14, Ui.txt(c));
+            liveTitle.setPadding(Ui.dp(c, 10), 0, 0, 0);
+            liveTop.addView(liveTitle);
+            liveBox.addView(liveTop);
+            android.widget.HorizontalScrollView lsv = new android.widget.HorizontalScrollView(c);
+            lsv.setHorizontalScrollBarEnabled(false);
+            liveCards = Ui.row(c);
+            Ui.pad(liveCards, 8, 0, 8, 8);
+            lsv.addView(liveCards);
+            liveBox.addView(lsv);
+            col.addView(liveBox);
+
+            // 🚀 boosted profiles strip (paid — pinned on top of Home)
+            boostBox = Ui.col(c);
+            boostBox.setBackgroundColor(Ui.card(c));
+            boostBox.setVisibility(View.GONE);
+            TextView boostTitle = Ui.tvBold(c, "🚀 Boosted creators", 14, Ui.txt(c));
+            Ui.pad(boostTitle, 12, 10, 12, 2);
+            boostBox.addView(boostTitle);
+            android.widget.HorizontalScrollView bsv = new android.widget.HorizontalScrollView(c);
+            bsv.setHorizontalScrollBarEnabled(false);
+            boostCards = Ui.row(c);
+            Ui.pad(boostCards, 8, 0, 8, 8);
+            bsv.addView(boostCards);
+            boostBox.addView(bsv);
+            col.addView(boostBox);
         }
     }
 
@@ -498,13 +867,51 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    /** 📢 AdMob banner slot — Google BANNER ad, loaded fresh on every bind. */
+    static class AdVH extends RecyclerView.ViewHolder {
+        final FrameLayout box;
+        com.google.android.gms.ads.AdView adView;
+
+        AdVH(Context c) {
+            super(PostVH.cardRoot(c));
+            LinearLayout card = (LinearLayout) itemView;
+            TextView label = Ui.tv(c, "Sponsored", 11, Ui.sub(c));
+            label.setGravity(Gravity.CENTER);
+            Ui.pad(label, 0, 8, 0, 2);
+            card.addView(label, new LinearLayout.LayoutParams(-1, -2));
+            box = new FrameLayout(c);
+            card.addView(box, new LinearLayout.LayoutParams(-1, -2));
+        }
+
+        void loadAd(String bannerId) {
+            destroyAd();
+            adView = new com.google.android.gms.ads.AdView(box.getContext());
+            adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
+            adView.setAdUnitId(bannerId);
+            box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+            adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+            Ui.pad(box, 0, 0, 0, 8);
+        }
+
+        void destroyAd() {
+            if (adView != null) {
+                box.removeView(adView);
+                try { adView.destroy(); } catch (Throwable ignored) { }
+                adView = null;
+            }
+        }
+    }
+
     static class PostVH extends RecyclerView.ViewHolder {
-        ImageView avatar, image;
+        ImageView avatar, image, tick;
         TextView name, meta, more, content, like, comment, share;
-        TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge;
-        LinearLayout sharedBox;
+        TextView boostTag;
+        TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge, pageBadge;
+        LinearLayout sharedBox, pollBox;
         FrameLayout mediaBox;
         VideoView video;
+        ViewPager2 pager;
+        ViewPager2.OnPageChangeCallback pageCb;
         ListenerRegistration reactReg;
 
         PostVH(Context c) {
@@ -520,9 +927,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout nameCol = Ui.col(c);
             LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
             ncp.leftMargin = Ui.dp(c, 10);
+            LinearLayout nameRow = Ui.row(c);
             name = Ui.tvBold(c, "", 15, Ui.txt(c));
+            tick = new ImageView(c);
+            tick.setImageResource(com.example.frienbook.R.drawable.ic_verified);
+            tick.setVisibility(View.GONE);
+            int ts = Ui.dp(c, 15);
+            LinearLayout.LayoutParams tll = new LinearLayout.LayoutParams(ts, ts);
+            tll.leftMargin = Ui.dp(c, 5);
+            nameRow.addView(name);
+            nameRow.addView(tick, tll);
+            boostTag = Ui.roundChip(c, "🚀 BOOSTED", 0xFFE41E3F, 0xFFFFFFFF, 10);
+            boostTag.setVisibility(View.GONE);
+            LinearLayout.LayoutParams btl = new LinearLayout.LayoutParams(-2, -2);
+            btl.leftMargin = Ui.dp(c, 6);
+            nameRow.addView(boostTag, btl);
             meta = Ui.tv(c, "", 12, Ui.sub(c));
-            nameCol.addView(name);
+            nameCol.addView(nameRow);
             nameCol.addView(meta);
             head.addView(nameCol, ncp);
             more = Ui.tv(c, "•••", 16, Ui.sub(c));
@@ -533,6 +954,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             content = Ui.tv(c, "", 15, Ui.txt(c));
             Ui.pad(content, 12, 4, 12, 8);
             card.addView(content);
+
+            // poll options go here (dynamically rebuilt per post)
+            pollBox = Ui.col(c);
+            Ui.pad(pollBox, 12, 2, 12, 6);
+            card.addView(pollBox);
 
             // shared embed
             sharedBox = Ui.col(c);
@@ -554,6 +980,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             image = new ImageView(c);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
             mediaBox.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            pager = new ViewPager2(c);
+            pager.setVisibility(View.GONE);
+            mediaBox.addView(pager, new FrameLayout.LayoutParams(-1, -1));
             video = new VideoView(c);
             video.setVisibility(View.GONE);
             mediaBox.addView(video, new FrameLayout.LayoutParams(-1, -1));
@@ -561,6 +990,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             playBadge.setGravity(Gravity.CENTER);
             playBadge.setVisibility(View.GONE);
             mediaBox.addView(playBadge, new FrameLayout.LayoutParams(-1, -1));
+            pageBadge = Ui.tvBold(c, "", 12, 0xFFFFFFFF);
+            pageBadge.setBackground(Ui.round(c, 0x99000000, 20));
+            Ui.pad(pageBadge, 8, 4, 8, 4);
+            pageBadge.setVisibility(View.GONE);
+            FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP);
+            blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
+            mediaBox.addView(pageBadge, blp);
 
             // reaction summary
             LinearLayout summary = Ui.row(c);

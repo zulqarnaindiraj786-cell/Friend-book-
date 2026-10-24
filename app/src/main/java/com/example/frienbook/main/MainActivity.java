@@ -33,9 +33,18 @@ import java.util.Map;
 public class MainActivity extends Activity {
 
     public static final int TAB_HOME = 0, TAB_FRIENDS = 1, TAB_REELS = 2, TAB_NOTIFS = 3, TAB_MENU = 4;
+
+    /** Facebook-Lite v525 outline icons: Home, Friends, Video, Notifications, Menu. */
+    private static final int[] TAB_ICON_RES = {
+            com.example.frienbook.core.Icons.HOME,
+            com.example.frienbook.core.Icons.FRIENDS,
+            com.example.frienbook.core.Icons.VIDEO,
+            com.example.frienbook.core.Icons.NOTIFICATIONS,
+            com.example.frienbook.core.Icons.MENU};
+
     private FrameLayout container;
     private LinearLayout navRow;
-    private final TextView[] navIcons = new TextView[5];
+    private final android.widget.ImageView[] navIcons = new android.widget.ImageView[5];
     private final View[] navIndicators = new View[5];
     private TextView msgBadge, notifBadge, friendsBadge;
     private int active = -1;
@@ -49,6 +58,21 @@ public class MainActivity extends Activity {
         Fb.ensureMeFresh();
         Presence.init();
 
+        // 📢 AdMob init (once per process) + live banner config + Remote Config kill switch
+        try {
+            com.google.android.gms.ads.MobileAds.initialize(this, status -> { });
+        } catch (Throwable ignored) { }
+        com.example.frienbook.core.AdsConfig.startWatching();
+        try {
+            com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
+                    com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
+            rc.setConfigSettingsAsync(new com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings.Builder()
+                    .setMinimumFetchIntervalInSeconds(3600).build());
+            rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled", true));
+            rc.fetchAndActivate().addOnCompleteListener(t ->
+                    com.example.frienbook.core.AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
+        } catch (Throwable ignored) { }
+
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
@@ -61,8 +85,10 @@ public class MainActivity extends Activity {
         TextView logo = Ui.tvBold(this, "friendbook", 24, Ui.BLUE);
         bar.addView(logo, new LinearLayout.LayoutParams(0, -2, 1));
 
-        bar.addView(topIcon("➕", v -> startActivity(new Intent(this, CreatePostActivity.class))));
-        bar.addView(topIcon("🔍", v -> startActivity(new Intent(this, SearchActivity.class))));
+        bar.addView(topIcon(com.example.frienbook.core.Icons.PLUS,
+                v -> startActivity(new Intent(this, CreatePostActivity.class))));
+        bar.addView(topIcon(com.example.frienbook.core.Icons.SEARCH,
+                v -> startActivity(new Intent(this, SearchActivity.class))));
         bar.addView(messengerIcon());
         root.addView(bar);
         root.addView(Ui.divider(this));
@@ -72,26 +98,29 @@ public class MainActivity extends Activity {
         container.setId(View.generateViewId());
         root.addView(container, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // ---- Bottom nav ----
+        // ---- Bottom nav (thin OUTLINE icons, 2px stroke — Facebook Lite v525 style) ----
         navRow = Ui.row(this);
         navRow.setBackgroundColor(Ui.card(this));
         navRow.setElevation(Ui.dp(this, 8));
         navRow.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4));
-        String[] icons = {"🏠", "👥", "🎞️", "🔔", "☰"};
         for (int i = 0; i < 5; i++) {
             final int tab = i;
             LinearLayout cell = Ui.col(this);
             cell.setGravity(Gravity.CENTER);
             View ind = new View(this);
-            ind.setBackgroundColor(Ui.BLUE);
+            ind.setBackgroundColor(com.example.frienbook.core.Icons.BLUE);
             ind.setVisibility(View.GONE);
-            cell.addView(ind, new LinearLayout.LayoutParams(Ui.dp(this, 48), Ui.dp(this, 3)));
+            cell.addView(ind, new LinearLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 3)));
             navIndicators[i] = ind;
 
             FrameLayout iconWrap = new FrameLayout(this);
-            TextView ic = Ui.tv(this, icons[i], 21, Ui.sub(this));
-            ic.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
-            iconWrap.addView(ic);
+            // outline icon: gray when idle, blue when active (2dp stroke vector)
+            android.widget.ImageView ic = com.example.frienbook.core.Icons.icon(
+                    this, TAB_ICON_RES[i], 24, com.example.frienbook.core.Icons.GRAY);
+            FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(
+                    Ui.dp(this, 24), Ui.dp(this, 24), Gravity.CENTER);
+            iconWrap.addView(ic, ip);
+            iconWrap.setMinimumHeight(Ui.dp(this, 40));
             if (i == TAB_NOTIFS) {
                 notifBadge = Ui.badge(this);
                 FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
@@ -113,32 +142,30 @@ public class MainActivity extends Activity {
         setContentView(root);
         select(TAB_HOME);
         startBadgeListeners();
+        watchReferralsForFreeTick();
         askNotifPermission();
 
         // Secret: shake to report a problem.
         App.instance.setShakeListener(this::feedbackDialog);
     }
 
-    private View topIcon(String emoji, View.OnClickListener l) {
-        TextView t = Ui.tv(this, emoji, 20, Ui.sub(this));
-        t.setGravity(Gravity.CENTER);
-        t.setBackground(Ui.circle(Ui.inputBg(this)));
-        int s = Ui.dp(this, 38);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(s, s);
+    /** Round gray chip with an outline icon (like Facebook Lite's top-right buttons). */
+    private View topIcon(int iconRes, View.OnClickListener l) {
+        LinearLayout chip = com.example.frienbook.core.Icons.chipIcon(
+                this, iconRes, com.example.frienbook.core.Icons.GRAY);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(Ui.dp(this, 38), Ui.dp(this, 38));
         p.leftMargin = Ui.dp(this, 8);
-        t.setLayoutParams(p);
-        t.setOnClickListener(l);
-        return t;
+        chip.setLayoutParams(p);
+        chip.setOnClickListener(l);
+        return chip;
     }
 
     private View messengerIcon() {
         FrameLayout wrap = new FrameLayout(this);
-        TextView t = Ui.tv(this, "💬", 20, Ui.sub(this));
-        t.setGravity(Gravity.CENTER);
-        t.setBackground(Ui.circle(Ui.inputBg(this)));
-        int s = Ui.dp(this, 38);
-        FrameLayout.LayoutParams inner = new FrameLayout.LayoutParams(s, s);
-        wrap.addView(t, inner);
+        LinearLayout chip = com.example.frienbook.core.Icons.chipIcon(
+                this, com.example.frienbook.core.Icons.MESSAGES,
+                com.example.frienbook.core.Icons.GRAY);
+        wrap.addView(chip, new FrameLayout.LayoutParams(Ui.dp(this, 38), Ui.dp(this, 38)));
         msgBadge = Ui.badge(this);
         FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         wrap.addView(msgBadge, fp);
@@ -166,8 +193,28 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 5; i++) {
             boolean on = i == tab;
             navIndicators[i].setVisibility(on ? View.VISIBLE : View.GONE);
-            navIcons[i].setAlpha(on ? 1f : 0.55f);
+            // Facebook Lite: active = blue outline, idle = gray outline
+            com.example.frienbook.core.Icons.setTint(navIcons[i],
+                    on ? com.example.frienbook.core.Icons.BLUE : com.example.frienbook.core.Icons.GRAY);
         }
+    }
+
+    /**
+     * 💙 FREE BLUE TICK: whenever my completed referrals reach 5, grant isVerified
+     * automatically (self-write — allowed by rules) and celebrate once.
+     */
+    private ListenerRegistration referralReg;
+
+    private void watchReferralsForFreeTick() {
+        String me = Fb.uid();
+        if (me == null) return;
+        referralReg = Fb.db().collection("referrals")
+                .whereEqualTo("refBy", me)
+                .addSnapshotListener((snap, err) -> {
+                    if (snap == null) return;
+                    // 5 invites → blue ✓ · 20 → gold ✓ · 50 → diamond 💎 (auto, upgrades only)
+                    com.example.frienbook.core.Admin.autoGrantByReferrals(this, snap.size());
+                });
     }
 
     private void startBadgeListeners() {
@@ -255,6 +302,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (referralReg != null) referralReg.remove();
         if (notifReg != null) notifReg.remove();
         if (chatReg != null) chatReg.remove();
         if (reqReg != null) reqReg.remove();

@@ -17,6 +17,7 @@ import com.example.frienbook.App;
 import com.example.frienbook.LockActivity;
 import com.example.frienbook.auth.LoginActivity;
 import com.example.frienbook.core.Fb;
+import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Presence;
 import com.example.frienbook.core.Ui;
@@ -40,57 +41,100 @@ public class SettingsActivity extends Activity {
         // ============ ACCOUNT ============
         body.addView(header("Account"));
         body.addView(card());
-        body.addView(row("🔑", "Change password", "Update your login password", this::changePassword));
+        body.addView(rowI(Icons.KEY, "Change password", "Update your login password", this::changePassword));
         body.addView(div());
-        body.addView(row("📧", "Email", Fb.auth().getCurrentUser() != null
+        body.addView(rowI(Icons.MAIL, "Email", Fb.auth().getCurrentUser() != null
                 ? Fb.auth().getCurrentUser().getEmail() : "", null));
         body.addView(div());
-        body.addView(row("🗑", "Delete account", "Permanently remove your account and data", this::deleteAccount));
+        body.addView(rowI(Icons.TRASH, "Delete account", "Permanently remove your account and data", this::deleteAccount));
         body.addView(cardEnd());
 
         // ============ PREFERENCES ============
         body.addView(header("Preferences"));
         body.addView(card());
-        body.addView(switchRow("🌙", "Dark mode", Prefs.dark(this), (btn, on) -> {
+        body.addView(switchRowI(Icons.MOON, "Dark mode", Prefs.dark(this), (btn, on) -> {
             Prefs.setDark(this, on);
             recreate();
         }));
         body.addView(div());
-        body.addView(row("🔤", "Font size", fontLabel(), this::fontPicker));
+        body.addView(rowI(Icons.FONT, "Font size", fontLabel(), this::fontPicker));
         body.addView(div());
-        body.addView(switchRow("📶", "Data Saver", Prefs.dataSaver(this),
+        body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver", Prefs.dataSaver(this),
                 (btn, on) -> Prefs.setDataSaver(this, on)));
         body.addView(div());
-        body.addView(switchRow("🤫", "Quiet mode", Prefs.quiet(this),
+        body.addView(switchRowI(Icons.QUIET, "Quiet mode", Prefs.quiet(this),
                 (btn, on) -> Prefs.setQuiet(this, on)));
         body.addView(cardEnd());
 
         // ============ PRIVACY ============
         body.addView(header("Privacy"));
         body.addView(card());
-        body.addView(row("🌐", "Default audience", Prefs.defaultPrivacy(this), this::audiencePicker));
+        body.addView(rowI(Icons.GLOBE, "Default audience", Prefs.defaultPrivacy(this), this::audiencePicker));
         body.addView(div());
-        body.addView(row("👥", "Who can send friend requests", Prefs.friendRequestPrivacy(this), this::requestPicker));
+        body.addView(rowI(Icons.USER_PLUS, "Who can send friend requests", Prefs.friendRequestPrivacy(this), this::requestPicker));
         body.addView(div());
-        body.addView(switchRow("🟢", "Active status", Prefs.activeStatus(this), (btn, on) -> {
+        body.addView(switchRowI(Icons.ACTIVE, "Active status", Prefs.activeStatus(this), (btn, on) -> {
             Prefs.setActiveStatus(this, on);
             if (on) Presence.init(); else Presence.goOffline();
         }));
         body.addView(div());
-        body.addView(switchRow("✓✓", "Read receipts", Prefs.readReceipts(this),
+        body.addView(switchRowI(Icons.READ_RECEIPTS, "Read receipts", Prefs.readReceipts(this),
                 (btn, on) -> Prefs.setReadReceipts(this, on)));
         body.addView(div());
-        body.addView(row("🚫", "Blocked users", "Manage your block list",
+        body.addView(rowI(Icons.BAN, "Blocked users", "Manage your block list",
                 () -> startActivity(new Intent(this, BlockedUsersActivity.class))));
         body.addView(cardEnd());
+
+        // ============ YOUR ACTIVITY ============
+        body.addView(header("Your activity"));
+        body.addView(card());
+        body.addView(rowI(Icons.LIST, "Activity log", "Your posts & comments timeline",
+                () -> startActivity(new Intent(this, ActivityLogActivity.class))));
+        body.addView(div());
+        body.addView(rowI(Icons.EYE_OFF, "Posts you've hidden", "Restore hidden feed posts", () -> {
+            int n = Prefs.hiddenPosts(this).size();
+            if (n == 0) { Ui.toast(this, "No hidden posts"); return; }
+            Ui.confirm(this, "Unhide " + n + " post(s)?",
+                    "Hidden posts will appear in your feed again.", "Unhide all", () -> {
+                        Prefs.unhideAllPosts(this);
+                        Ui.toast(this, "All posts restored ✓");
+                    });
+        }));
+        body.addView(div());
+        body.addView(rowI(Icons.SNOOZE, "Snoozed people", "Who you're hiding for 30 days", this::snoozedDialog));
+        body.addView(div());
+        body.addView(rowI(Icons.EXPORT, "Export your data", "Your profile data as text (share/save)", this::exportData));
+        body.addView(div());
+        body.addView(rowI(Icons.CHART, "Monetization", "In-stream ads, Stars, fan subscriptions",
+                () -> startActivity(new Intent(this,
+                        com.example.frienbook.bluetick.MonetizationActivity.class))));
+        body.addView(div());
+        body.addView(rowI(Icons.BANKNOTE, "✓ Tick levels", "Blue / Gold / Diamond — invites se FREE ya paid",
+                () -> startActivity(new Intent(this,
+                        com.example.frienbook.bluetick.BlueTickActivity.class))));
+        body.addView(cardEnd());
+
+        // ============ ADMIN (owner only) ============
+        if (com.example.frienbook.core.Admin.isAdmin()) {
+            body.addView(header("Admin"));
+            body.addView(card());
+            body.addView(rowI(Icons.SHIELD, "Admin Panel", "Dashboard, users, content, reports, broadcast",
+                    () -> startActivity(new Intent(this,
+                            com.example.frienbook.admin.AdminPanelActivity.class))));
+            body.addView(div());
+            body.addView(rowI(Icons.CHART, "AdMob Settings", "Banner ad unit ID, on/off — live for everyone",
+                    () -> startActivity(new Intent(this,
+                            com.example.frienbook.admin.AdMobSettingsActivity.class))));
+            body.addView(cardEnd());
+        }
 
         // ============ SECURITY ============
         body.addView(header("Security"));
         body.addView(card());
-        body.addView(row("🔒", "App lock", Prefs.pin(this).isEmpty() ? "Off — set a PIN to lock FriendBook"
+        body.addView(rowI(Icons.LOCK, "App lock", Prefs.pin(this).isEmpty() ? "Off — set a PIN to lock friendbook"
                 : "On — PIN required to open", this::pinDialog));
         body.addView(div());
-        body.addView(row("📳", "Shake to report", "Enabled — shake phone to report a problem",
+        body.addView(rowI(Icons.SHAKE, "Shake to report", "Enabled — shake phone to report a problem",
                 () -> Ui.info(this, "Shake to report",
                         "Any time something looks wrong, shake your phone and a feedback form will open.")));
         body.addView(cardEnd());
@@ -98,28 +142,28 @@ public class SettingsActivity extends Activity {
         // ============ NOTIFICATIONS ============
         body.addView(header("Notifications"));
         body.addView(card());
-        body.addView(switchRow("👍", "Reactions on my posts", Prefs.notifLikes(this),
+        body.addView(switchRowI(Icons.LIKE, "Reactions on my posts", Prefs.notifLikes(this),
                 (btn, on) -> Prefs.setNotifLikes(this, on)));
         body.addView(div());
-        body.addView(switchRow("💬", "Comments & replies", Prefs.notifComments(this),
+        body.addView(switchRowI(Icons.MESSAGES, "Comments & replies", Prefs.notifComments(this),
                 (btn, on) -> Prefs.setNotifComments(this, on)));
         body.addView(div());
-        body.addView(switchRow("👥", "Friend requests", Prefs.notifRequests(this),
+        body.addView(switchRowI(Icons.USER_PLUS, "Friend requests", Prefs.notifRequests(this),
                 (btn, on) -> Prefs.setNotifRequests(this, on)));
         body.addView(div());
-        body.addView(switchRow("✉️", "Messages", Prefs.notifMessages(this),
+        body.addView(switchRowI(Icons.MAIL, "Messages", Prefs.notifMessages(this),
                 (btn, on) -> Prefs.setNotifMessages(this, on)));
         body.addView(cardEnd());
 
         // ============ ABOUT ============
         body.addView(header("About"));
         body.addView(card());
-        body.addView(row("📄", "Terms & policies", "Community standards", () -> Ui.info(this,
+        body.addView(rowI(Icons.TERMS, "Terms & policies", "Community standards", () -> Ui.info(this,
                 "Terms & policies",
-                "1. Be kind and respectful.\n2. No spam, hate speech or harassment.\n3. Respect others' privacy.\n4. Content you post is yours; you grant FriendBook a license to display it.\n5. Violating accounts may be removed.")));
+                "1. Be kind and respectful.\n2. No spam, hate speech or harassment.\n3. Respect others' privacy.\n4. Content you post is yours; you grant friendbook a license to display it.\n5. Violating accounts may be removed.")));
         body.addView(div());
-        body.addView(row("ℹ️", "About", "FriendBook Lite 2.0", () -> Ui.info(this, "About",
-                "FriendBook Lite 2.0\n\nA fast, light social app.\nRealtime feed, stories, reels, messenger and more — powered by Firebase.\n\nPackage: com.example.frienbook")));
+        body.addView(rowI(Icons.INFO, "About", "friendbook lite 3.0", () -> Ui.info(this, "About",
+                "friendbook lite 3.0\n\nA fast, light social app.\nRealtime feed, stories, reels, messenger and more — powered by Firebase.\n\nPackage: com.example.frienbook")));
         body.addView(cardEnd());
 
         // ============ LOG OUT ============
@@ -151,25 +195,12 @@ public class SettingsActivity extends Activity {
         return h;
     }
 
-    private View card() {
-        View v = new View(this);
-        return v; // opening marker (no-op, kept for clarity)
-    }
-
-    private View cardEnd() {
-        View v = new View(this);
-        v.setLayoutParams(new LinearLayout.LayoutParams(1, Ui.dp(this, 6)));
-        return v;
-    }
-
-    private View div() { return Ui.divider(this); }
-
-    private View row(String emoji, String title, String sub, Runnable action) {
+    /** Settings row with Facebook-Lite outline icon (2px stroke, gray 65676B). */
+    private View rowI(int iconRes, String title, String sub, Runnable action) {
         LinearLayout rowV = Ui.row(this);
         rowV.setBackgroundColor(Ui.card(this));
         Ui.pad(rowV, 14, 12, 14, 12);
-        TextView e = Ui.tv(this, emoji, 18, Ui.txt(this));
-        rowV.addView(e);
+        rowV.addView(Icons.icon(this, iconRes, 21, Icons.GRAY));
         LinearLayout mid = Ui.col(this);
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
         mp.leftMargin = Ui.dp(this, 14);
@@ -186,18 +217,16 @@ public class SettingsActivity extends Activity {
             rowV.setOnClickListener(v -> action.run());
         }
         LinearLayout wrap = Ui.col(this);
-        wrap.setBackground(Ui.round(this, Ui.card(this), 0));
         wrap.addView(rowV);
         return wrap;
     }
 
-    private View switchRow(String emoji, String title, boolean on,
-                           CompoundButton.OnCheckedChangeListener l) {
+    private View switchRowI(int iconRes, String title, boolean on,
+                            CompoundButton.OnCheckedChangeListener l) {
         LinearLayout rowV = Ui.row(this);
         rowV.setBackgroundColor(Ui.card(this));
         Ui.pad(rowV, 14, 6, 14, 6);
-        TextView e = Ui.tv(this, emoji, 18, Ui.txt(this));
-        rowV.addView(e);
+        rowV.addView(Icons.icon(this, iconRes, 21, Icons.GRAY));
         TextView t = Ui.tvBold(this, title, 15, Ui.txt(this));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, -2, 1);
         tp.leftMargin = Ui.dp(this, 14);
@@ -210,6 +239,21 @@ public class SettingsActivity extends Activity {
         wrap.addView(rowV);
         return wrap;
     }
+
+    private View card() {
+        View v = new View(this);
+        return v; // opening marker (no-op, kept for clarity)
+    }
+
+    private View cardEnd() {
+        View v = new View(this);
+        v.setLayoutParams(new LinearLayout.LayoutParams(1, Ui.dp(this, 6)));
+        return v;
+    }
+
+    private View div() { return Ui.divider(this); }
+
+
 
     // ---------- actions ----------
     private String fontLabel() {
@@ -239,6 +283,49 @@ public class SettingsActivity extends Activity {
             Prefs.setFriendRequestPrivacy(this, w == 1 ? "Friends of friends" : "Everyone");
             recreate();
         });
+    }
+
+    private void snoozedDialog() {
+        StringBuilder sb = new StringBuilder();
+        java.util.List<String> uids = new java.util.ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (String e : getSharedPreferences("fb_prefs", MODE_PRIVATE)
+                .getStringSet("snoozed", new java.util.HashSet<>())) {
+            int i = e.indexOf(':');
+            if (i <= 0) continue;
+            String uid = e.substring(0, i);
+            long until;
+            try { until = Long.parseLong(e.substring(i + 1)); } catch (Exception ex) { continue; }
+            if (until <= now) continue;
+            uids.add(uid);
+            long days = (until - now) / 86400_000L + 1;
+            sb.append(uid.substring(0, Math.min(8, uid.length()))).append("…  ·  ")
+                    .append(days).append(" day(s) left\n");
+        }
+        if (uids.isEmpty()) { Ui.toast(this, "Nobody snoozed 😊"); return; }
+        Ui.confirm(this, "Snoozed people", sb.toString().trim(), "Unsnooze everyone", () -> {
+            for (String uid : uids) Prefs.unsnooze(this, uid);
+            Ui.toast(this, "All unsnoozed ✓");
+        });
+    }
+
+    private void exportData() {
+        Ui.toast(this, "Collecting your data…");
+        String me = Fb.uid();
+        if (me == null) return;
+        Fb.db().collection("users").document(me).get().addOnSuccessListener(d -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append("friendbook data export — ").append(java.text.DateFormat.getDateTimeInstance()
+                    .format(new java.util.Date())).append("\n\n");
+            java.util.Map<String, Object> m = d.getData();
+            if (m != null) for (java.util.Map.Entry<String, Object> en : m.entrySet()) {
+                sb.append(en.getKey()).append(": ").append(String.valueOf(en.getValue())).append("\n");
+            }
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("text/plain");
+            share.putExtra(Intent.EXTRA_TEXT, sb.toString());
+            startActivity(Intent.createChooser(share, "Export your data"));
+        }).addOnFailureListener(e -> Ui.toast(this, "Export failed"));
     }
 
     private void changePassword() {
@@ -279,7 +366,7 @@ public class SettingsActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("App lock")
                 .setMessage(has ? "App lock is ON. Enter a new PIN to change it, or leave empty to turn it off."
-                        : "Lock FriendBook behind a PIN every time it opens.")
+                        : "Lock friendbook behind a PIN every time it opens.")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     String p = pin.getText().toString().trim();

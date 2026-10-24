@@ -54,6 +54,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean typingSent;
     private long lastTypingPush;
     private boolean busy;
+    private ImageView mic;
+    private android.media.MediaRecorder recorder;
+    private String voicePath;
+    private long voiceStartMs;
+    private boolean recording;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -64,6 +69,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (peerId == null || Fb.uid() == null) { finish(); return; }
         if (peerName == null) peerName = "Chat";
         chatId = Fb.chatId(Fb.uid(), peerId);
+        String prefill = getIntent().getStringExtra("prefill");
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
@@ -103,11 +109,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             PopupMenu pm = new PopupMenu(this, v);
             pm.getMenu().add("👤 View profile");
             pm.getMenu().add("✔ Mark all as read");
+            pm.getMenu().add("🎨 Chat theme");
             pm.getMenu().add("🚫 Block user");
             pm.setOnMenuItemClickListener(item -> {
                 String t = item.getTitle().toString();
                 if (t.contains("profile")) prof.onClick(v);
                 else if (t.contains("read")) resetUnread();
+                else if (t.contains("theme")) themePicker();
                 else blockPeer();
                 return true;
             });
@@ -122,6 +130,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(buildComposer());
+        if (prefill != null && !prefill.isEmpty()) input.setText(prefill);
         setContentView(root);
     }
 
@@ -132,8 +141,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 8, 8, 10, 8);
 
-        TextView photo = Ui.tv(this, "🖼️", 22, Ui.sub(this));
-        photo.setPadding(Ui.dp(this, 6), 0, Ui.dp(this, 6), 0);
+        // Facebook-Lite outline icon buttons (2px stroke)
+        ImageView photo = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.IMAGE, 23,
+                com.example.frienbook.core.Icons.GRAY);
+        photo.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
         photo.setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
             i.setType("image/*");
@@ -141,18 +153,29 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
         row.addView(photo);
 
+        mic = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.MIC, 23,
+                com.example.frienbook.core.Icons.GRAY);
+        mic.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6));
+        mic.setOnClickListener(v -> toggleVoiceRecording());
+        row.addView(mic);
+
         input = Ui.input(this, "Message…");
         input.setBackground(Ui.round(this, Ui.inputBg(this), 22));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         row.addView(input, ip);
 
-        TextView send = Ui.tv(this, "➤", 24, Ui.BLUE);
-        send.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 2), 0);
+        ImageView send = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.SEND, 24,
+                com.example.frienbook.core.Icons.BLUE);
+        send.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 2), Ui.dp(this, 4));
         row.addView(send);
         wrap.addView(row);
 
-        TextView quick = Ui.tvBold(this, "👍", 22, Ui.sub(this));
-        quick.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 4), 0);
+        ImageView quick = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.LIKE, 24,
+                com.example.frienbook.core.Icons.BLUE);
+        quick.setPadding(Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
         quick.setOnClickListener(v -> send(null, null, "👍"));
         row.addView(quick, new LinearLayout.LayoutParams(-2, -2));
 
@@ -254,11 +277,104 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (presence != null) presence.close();
         if (typingH != null) typingH.close();
         if (typingSent) Presence.setTyping(chatId, false);
+        MessagesAdapter.stopVoice();
+        if (recording) { stopRecording(false); }
     }
 
     private Set<String> hiddenMsgs() {
-        return getSharedPreferences("fb_prefs", MODE_PRIVATE)
-                .getStringSet("hiddenMsgs_" + chatId, new HashSet<>());
+        return Prefs.hiddenMsgs(this, chatId);
+    }
+
+    // ---------- voice notes ----------
+    private void toggleVoiceRecording() {
+        if (recording) { stopRecording(true); return; }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            androidx.core.app.ActivityCompat.requestPermissions(this,
+                    new String[]{android.Manifest.permission.RECORD_AUDIO}, 99);
+            Ui.toast(this, "Allow microphone, then tap 🎤 again");
+            return;
+        }
+        try {
+            voicePath = new java.io.File(getCacheDir(),
+                    "voice_" + System.currentTimeMillis() + ".m4a").getAbsolutePath();
+            recorder = new android.media.MediaRecorder();
+            recorder.setAudioSource(android.media.MediaRecorder.AudioSource.MIC);
+            recorder.setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4);
+            recorder.setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC);
+            recorder.setAudioEncodingBitRate(64000);
+            recorder.setAudioSamplingRate(44100);
+            recorder.setOutputFile(voicePath);
+            recorder.prepare();
+            recorder.start();
+            voiceStartMs = System.currentTimeMillis();
+            recording = true;
+            com.example.frienbook.core.Icons.setTint(mic, 0xFFE41E3F); // red while recording
+            mic.animate().scaleX(1.25f).scaleY(1.25f).setDuration(150).start();
+            Ui.toast(this, "🎤 Recording… tap again to send");
+        } catch (Exception e) {
+            Ui.toast(this, "Couldn't start recording");
+            recording = false;
+        }
+    }
+
+    private void stopRecording(boolean send) {
+        if (!recording) return;
+        recording = false;
+        com.example.frienbook.core.Icons.setTint(mic, com.example.frienbook.core.Icons.GRAY);
+        mic.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+        int durSec = (int) Math.max(1, (System.currentTimeMillis() - voiceStartMs) / 1000);
+        try { recorder.stop(); } catch (Throwable ignored) { }
+        try { recorder.release(); } catch (Throwable ignored) { }
+        recorder = null;
+        if (!send || voicePath == null) return;
+        Ui.toast(this, "Uploading voice note…");
+        Uri uri = Uri.fromFile(new java.io.File(voicePath));
+        String path = "chat/" + chatId + "/voice_" + System.currentTimeMillis() + ".m4a";
+        Fb.upload(path, uri)
+                .addOnSuccessListener(url -> sendVoice(url.toString(), durSec))
+                .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
+    }
+
+    private void sendVoice(String url, int durSec) {
+        String me = Fb.uid();
+        Map<String, Object> msg = Fb.map(
+                "senderId", me,
+                "receiverId", peerId,
+                "text", "",
+                "type", "voice",
+                "voiceUrl", url,
+                "voiceDurationSec", durSec,
+                "isSeen", false,
+                "isDelivered", false,
+                "isDeleted", false,
+                "createdAt", FieldValue.serverTimestamp());
+        Map<String, Object> unread = new HashMap<>();
+        unread.put(peerId, FieldValue.increment(1));
+        Map<String, Object> chatDoc = Fb.map(
+                "participants", java.util.Arrays.asList(me, peerId),
+                "lastMessage", "🎤 Voice note · " + Format.duration(durSec),
+                "lastMessageTime", FieldValue.serverTimestamp(),
+                "unreadCount", unread);
+        WriteBatch batch = Fb.db().batch();
+        batch.set(Fb.db().collection("chats").document(chatId)
+                .collection("messages").document(), msg);
+        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        batch.commit().addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+    }
+
+    // ---------- chat theme ----------
+    private void themePicker() {
+        String[] names = {"Facebook Blue", "Lover Red", "Kiwi Green", "Royal Purple",
+                "Sunset Orange", "Bubblegum Pink", "Ocean Teal", "Midnight"};
+        int[] colors = {0xFF1877F2, 0xFFE41E3F, 0xFF31A24C, 0xFF9360F7,
+                0xFFF5650D, 0xFFFF66C4, 0xFF2ABBA7, 0xFF1B2440};
+        Ui.choose(this, "🎨 Chat theme (applies on this device)", names, w -> {
+            Prefs.chatTheme(this, colors[w], -1);
+            adapter.notifyDataSetChanged();
+            Ui.toast(this, "Theme: " + names[w]);
+        });
     }
 
     private void resetUnread() {
@@ -334,6 +450,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     public void longPress(Models.Message m) {
         boolean mine = m.senderId.equals(Fb.uid());
         List<String> opts = new ArrayList<>();
+        opts.add("😍 React to message");
         opts.add("📋 Copy text");
         if (mine) {
             opts.add("🗑 Delete for everyone");
@@ -345,6 +462,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(this, "Message", arr, w -> {
             String sel = arr[w];
+            if (sel.contains("React")) { reactPicker(m); return; }
             if (sel.contains("Copy")) {
                 android.content.ClipboardManager cm =
                         (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -371,6 +489,28 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         "createdAt", FieldValue.serverTimestamp()));
                 Ui.toast(this, "Reported");
             }
+        });
+    }
+
+    private void reactPicker(Models.Message m) {
+        String[] emoj = {"👍 Like", "❤️ Love", "😂 Haha", "😮 Wow", "😢 Sad", "🙏 Thanks", "🚫 Remove reaction"};
+        Ui.choose(this, "React to this message", emoj, w -> {
+            String me = Fb.uid();
+            if (me == null) return;
+            java.util.Map<String, Object> upd = new HashMap<>();
+            if (w == 6) {
+                upd.put("reactions." + me, FieldValue.delete());
+                if (m.reactions != null) m.reactions.remove(me);
+            } else {
+                String e = emoj[w].split(" ")[0];
+                upd.put("reactions." + me, e);
+                if (m.reactions == null) m.reactions = new HashMap<>();
+                m.reactions.put(me, e);
+            }
+            Fb.db().collection("chats").document(chatId)
+                    .collection("messages").document(m.id)
+                    .update(upd)
+                    .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
         });
     }
 

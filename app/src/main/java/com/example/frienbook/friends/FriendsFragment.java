@@ -216,7 +216,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 if (requestedByThem) continue;
                 UsersAdapter.Row row = new UsersAdapter.Row();
                 row.user = u;
-                row.subtitle = u.bio != null && !u.bio.isEmpty() ? u.bio : "New on FriendBook";
+                row.subtitle = u.bio != null && !u.bio.isEmpty() ? u.bio : "New on friendbook";
                 row.primaryLabel = "＋ Add friend";
                 rows.add(row);
             }

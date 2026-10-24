@@ -1,11 +1,48 @@
-# FriendBook — Facebook-Lite style Android app (real Firebase)
+# FriendBook — Facebook-Lite 2026 style Android app (real Firebase)
 
 A complete Facebook-Lite clone built with **native Android (Java)** and **real Firebase**:
 Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Database
 (presence + typing) and Cloud Storage. **Zero dummy data.**
 
+### 🆕 What's new in v3 (Facebook Lite 2026 pack)
+- **Polls in feed** — create polls (2–4 options), tap to vote, live % + counts, tap again to undo
+- **Multi-photo posts** — attach up to 10 photos, swipeable in-feed album (ViewPager2) with counter
+- **Colored text backgrounds** — 10 Facebook-style gradient backgrounds for text posts
+- **Check-in** — 📍 location line on posts
+- **Hide post / Snooze 30 days / per-post privacy change / copy link** in the post ⋮ menu
+- **📺 Watch tab** — all public videos in one feed
+- **👨‍👩‍👧‍👦 Groups** — create, join/leave, dedicated group feeds
+- **🎂 Birthdays** — set your birthday in Edit Profile; friends' upcoming birthdays list with 1-tap wish
+- **🎤 Voice messages** in chat (record/send/play, like Messenger)
+- **Message reactions** (long-press any message) + **🎨 chat themes** (8 bubble colors)
+- **Followers / Following lists** on profiles, **Activity log**, **Export your data**
+- **✓ Tick LEVELS** — Blue ✓ (5 invites or Rs 100), Gold ✓ #FFD700 (20 invites or Rs 500),
+  Diamond 💎 animated (50 invites or Rs 1000). Auto-granted on referral milestone; badges show
+  next to names everywhere. `users.tickLevel` = none/blue/gold/diamond
+- **⭐ Paid Subscriptions** — creators set $2/$5/$10 monthly (70% creator · 30% friendbook);
+  ⭐ Subscribe button on profiles; `subscriptions {creatorId, subscriberId, price, status, expiry}`
+- **🚀 Boosts** — "Boost Profile 24h – Rs 50" on your profile, "Boost Post – Rs 30" in post menu;
+  boosted creators pinned on TOP of Home; `boosts {userId, postId, type, expiry, status}`
+- **🔴 LIVE + Gifts** — Go Live on Home; viewers join, live chat, send Stars (1⭐ = Rs 10),
+  👑 top-gifter badge live. `lives`, `lives/*/chat`, `gifts` collections
+- **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
+  + 5 reels), Stars balance with Rs value, fan Subscriptions toggle + price, live subscriber count
+- **📢 Google AdMob banners** — real App ID `ca-app-pub-3387480177023669~5696528190`, live banner unit
+  `ca-app-pub-3387480177023669/2691090902` shown every 3 posts in Home (fresh load per bind);
+  admin-editable banner ID + on/off via Firestore `config/ads` (Settings → AdMob Settings, owner only),
+  plus Firebase Remote Config `ads_enabled` kill switch
+- **🔐 Facebook-Lite recovery** — forgot password → Gmail me 6-digit OTP code → verify →
+  secure password-set link (Firebase Auth) — `passwordOtps` (SHA-256 hashed, 10-min TTL) + `mail` queue
+- **🛡 Admin SUPER Dashboard** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com`), **6 tabs**:
+  (1) Users — search any user, give/remove ANY tick level, ban/promote; (2) Referrals;
+  (3) Payments — unified list (ticks/boosts/subscriptions) with screenshot + **Approve/Reject**
+  (approve activates instantly); (4) Boosts — approve/stop; (5) Live rooms — viewers/stars/end;
+  (6) **Earnings** — income by type, 70/30 subscription split, **6-month bar chart**, tools
+  (payment-number editor, broadcast, reports, moderation)
+- **Ban enforcement** — banned accounts are signed out instantly and blocked at login
+
 - **Package:** `com.example.frienbook`
-- **App name:** FriendBook
+- **App name:** friendbook
 - **Firebase project:** `friendbook-17551` (config in `app/google-services.json`)
 - **CI:** GitHub Actions builds the APK automatically (see `.github/workflows/build-apk.yml`)
 

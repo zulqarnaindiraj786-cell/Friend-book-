@@ -78,6 +78,24 @@ public class Ui {
         return g;
     }
 
+    /** Vertical gradient with corner radius (radius in PXELS — pass Ui.dp(c, r)). */
+    public static GradientDrawable gradient(int from, int to, float radiusPx) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{from, to});
+        g.setCornerRadius(radiusPx);
+        return g;
+    }
+
+    /** Color lerp: t=0 → b, t=1 → a. */
+    public static int blend(int a, int b, float t) {
+        int ra = (a >> 16) & 0xFF, ga = (a >> 8) & 0xFF, ba = a & 0xFF;
+        int rb = (b >> 16) & 0xFF, gb = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int r = (int) (rb + (ra - rb) * t);
+        int g = (int) (gb + (ga - gb) * t);
+        int bl = (int) (bb + (ba - bb) * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | bl;
+    }
+
     // ---- text ----
     public static TextView tv(Context c, String text, float sp, int color) {
         TextView t = new TextView(c);
@@ -307,5 +325,33 @@ public class Ui {
         for (int i = 0; i < in.size(); i += size)
             out.add(in.subList(i, Math.min(in.size(), i + size)));
         return out;
+    }
+
+    /** Soft infinite pulse (used by the animated 💎 diamond tick). */
+    public static void pulse(View v) {
+        android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(v, View.ALPHA, 1f, 0.55f);
+        a.setDuration(700);
+        a.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        a.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        a.start();
+        v.setTag(a);
+    }
+
+    /** Small rounded chip label (e.g. 🚀 BOOSTED). */
+    public static TextView roundChip(Context c, String text, int bg, int fg, float sp) {
+        TextView t = tvBold(c, text, sp, fg);
+        t.setBackground(round(c, bg, 10));
+        t.setPadding(dp(c, 8), dp(c, 2), dp(c, 8), dp(c, 2));
+        return t;
+    }
+
+    /** Open a geo URI in the user's map app (or silently do nothing). */
+    public static void openMap(Context c, String location) {
+        try {
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode(location)));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+        } catch (Exception e) { Ui.toast(c, "No map app installed"); }
     }
 }

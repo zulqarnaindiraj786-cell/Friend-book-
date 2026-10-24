@@ -42,6 +42,12 @@ public class SplashActivity extends Activity {
     }
 
     private void route() {
+        // 🔵 Capture referral invite links: https://friendbook.app/invite?ref=USER_ID
+        android.net.Uri data = getIntent() != null ? getIntent().getData() : null;
+        if (data != null && "friendbook.app".equals(data.getHost())) {
+            String ref = data.getQueryParameter("ref");
+            if (ref != null && !ref.isEmpty()) Prefs.setPendingReferral(this, ref);
+        }
         if (!Fb.signedIn()) {
             startActivity(new Intent(this, LoginActivity.class));
         } else if (!Prefs.pin(this).isEmpty() && !Prefs.unlockedSession(this)) {

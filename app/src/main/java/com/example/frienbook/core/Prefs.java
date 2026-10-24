@@ -71,7 +71,85 @@ public class Prefs {
         p(c).edit().putStringSet("pinnedChats", new HashSet<>(v)).apply();
     }
 
+    // ---- hidden posts (Hide post feature) ----
+    public static Set<String> hiddenPosts(Context c) {
+        return new HashSet<>(p(c).getStringSet("hiddenPosts", new HashSet<>()));
+    }
+    public static void hidePost(Context c, String postId) {
+        Set<String> s = hiddenPosts(c);
+        s.add(postId);
+        p(c).edit().putStringSet("hiddenPosts", s).apply();
+    }
+    public static void unhideAllPosts(Context c) {
+        p(c).edit().putStringSet("hiddenPosts", new HashSet<>()).apply();
+    }
+    public static boolean isPostHidden(Context c, String postId) {
+        return hiddenPosts(c).contains(postId);
+    }
+
+    // ---- chat theme (per-device): bubble colors for outgoing messages ----
+    public static int chatBg(Context c) { return p(c).getInt("chatBg", 0xFF1877F2); }
+    public static int chatTxt(Context c) { return p(c).getInt("chatTxt", 0xFFFFFFFF); }
+    public static void chatTheme(Context c, int bg, int txt) {
+        p(c).edit()
+                .putInt("chatBg", bg)
+                .putInt("chatTxt", txt)
+                .apply();
+    }
+
+    // ---- snoozed people: set of "uid:untilMillis" (Snooze 30 days) ---- -- ----
+    public static boolean isSnoozed(Context c, String uid) {
+        long until = snoozeUntil(c, uid);
+        return until > 0 && until > System.currentTimeMillis();
+    }
+    public static long snoozeUntil(Context c, String uid) {
+        for (String s : p(c).getStringSet("snoozed", new HashSet<>())) {
+            int i = s.indexOf(':');
+            if (i > 0 && s.substring(0, i).equals(uid)) {
+                try { return Long.parseLong(s.substring(i + 1)); } catch (Exception e) { return 0; }
+            }
+        }
+        return 0;
+    }
+    public static void snooze(Context c, String uid, long days) {
+        Set<String> s = new HashSet<>(p(c).getStringSet("snoozed", new HashSet<>()));
+        s.removeIf(x -> x.startsWith(uid + ":"));
+        s.add(uid + ":" + (System.currentTimeMillis() + days * 86400_000L));
+        p(c).edit().putStringSet("snoozed", s).apply();
+    }
+    public static void unsnooze(Context c, String uid) {
+        Set<String> s = new HashSet<>(p(c).getStringSet("snoozed", new HashSet<>()));
+        s.removeIf(x -> x.startsWith(uid + ":"));
+        p(c).edit().putStringSet("snoozed", s).apply();
+    }
+
+    // ---- hidden conversations ----
+    public static Set<String> hiddenChats(Context c) {
+        return new HashSet<>(p(c).getStringSet("hiddenChats", new HashSet<>()));
+    }
+    public static void hideChat(Context c, String chatId) {
+        Set<String> s = hiddenChats(c);
+        s.add(chatId);
+        p(c).edit().putStringSet("hiddenChats", s).apply();
+    }
+
+    // ---- hidden messages in a chat ----
+    public static Set<String> hiddenMsgs(Context c, String chatId) {
+        return new HashSet<>(p(c).getStringSet("hiddenMsgs_" + chatId, new HashSet<>()));
+    }
+    public static void hideMsg(Context c, String chatId, String msgId) {
+        Set<String> s = hiddenMsgs(c, chatId);
+        s.add(msgId);
+        p(c).edit().putStringSet("hiddenMsgs_" + chatId, s).apply();
+    }
+
     // ---- seen-intro flags ----
     public static boolean seen(Context c, String key) { return p(c).getBoolean("seen_" + key, false); }
     public static void markSeen(Context c, String key) { p(c).edit().putBoolean("seen_" + key, true).apply(); }
+
+    // ---- pending referral code (from the friendbook.app/invite deep link) ----
+    public static String pendingReferral(Context c) { return p(c).getString("pendingRef", ""); }
+    public static void setPendingReferral(Context c, String code) {
+        p(c).edit().putString("pendingRef", code == null ? "" : code).apply();
+    }
 }

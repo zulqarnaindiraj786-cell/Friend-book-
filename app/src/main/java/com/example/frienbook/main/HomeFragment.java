@@ -43,7 +43,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private SwipeRefreshLayout swipe;
-    private ListenerRegistration postsReg, storiesReg, friendsReg;
+    private ListenerRegistration postsReg, storiesReg, friendsReg, boostsReg, livesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private final Set<String> friendIds = new HashSet<>();
@@ -73,6 +73,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startFriendsListener();
         restartPostsListener();
         startStoriesListener();
+        startBoostsListener();
+        startLivesListener();
+        // 📢 live banner config (admin edits apply instantly)
+        com.example.frienbook.core.AdsConfig.setChangeListener((id, en) -> {
+            if (adapter != null) adapter.setAdsConfig(id, en);
+        });
+        adapter.setAdsConfig(com.example.frienbook.core.AdsConfig.bannerId(),
+                com.example.frienbook.core.AdsConfig.bannersEnabled());
     }
 
     @Override
@@ -81,6 +89,68 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (postsReg != null) postsReg.remove();
         if (storiesReg != null) storiesReg.remove();
         if (friendsReg != null) friendsReg.remove();
+        if (boostsReg != null) boostsReg.remove();
+        if (livesReg != null) livesReg.remove();
+        com.example.frienbook.core.AdsConfig.setChangeListener(null);
+    }
+
+    // ---------- 🚀 boosted profiles/posts (paid → pinned on top of Home) ----------
+    private void startBoostsListener() {
+        long now = System.currentTimeMillis();
+        boostsReg = Fb.db().collection("boosts")
+                .whereEqualTo("status", "active")
+                .limit(30)
+                .addSnapshotListener((snap, err) -> {
+                    java.util.List<String> uids = new ArrayList<>();
+                    java.util.Set<String> postIds = new HashSet<>();
+                    long t = System.currentTimeMillis();
+                    if (snap != null) {
+                        for (DocumentSnapshot d : snap) {
+                            long exp = d.getTimestamp("expiry") == null ? 0
+                                    : d.getTimestamp("expiry").toDate().getTime();
+                            if (exp != 0 && exp < t) continue; // expired live in-place
+                            String type = d.getString("type");
+                            if ("post".equals(type)) {
+                                String pid = d.getString("postId");
+                                if (pid != null && !pid.isEmpty()) postIds.add(pid);
+                            } else {
+                                String uid = d.getString("userId");
+                                if (uid != null) uids.add(uid);
+                            }
+                        }
+                    }
+                    final java.util.Set<String> finalPostIds = postIds;
+                    java.util.List<Models.User> users = new ArrayList<>();
+                    if (uids.isEmpty()) { adapter.setBoosted(users, finalPostIds); return; }
+                    final java.util.List<String> fuids = uids;
+                    final int[] left = {fuids.size()};
+                    for (String uid : fuids) {
+                        Fb.db().collection("users").document(uid).get()
+                                .addOnSuccessListener(d -> {
+                                    if (d.exists()) users.add(Models.User.fromDoc(d));
+                                    if (--left[0] == 0) adapter.setBoosted(users, finalPostIds);
+                                })
+                                .addOnFailureListener(e -> { if (--left[0] == 0) adapter.setBoosted(users, finalPostIds); });
+                    }
+                });
+    }
+
+    // ---------- 🔴 active lives strip ----------
+    private void startLivesListener() {
+        livesReg = Fb.db().collection("lives")
+                .whereEqualTo("status", "live")
+                .limit(10)
+                .addSnapshotListener((snap, err) -> {
+                    List<Map<String, Object>> lives = new ArrayList<>();
+                    if (snap != null) {
+                        for (DocumentSnapshot d : snap) {
+                            Map<String, Object> m = new HashMap<>(d.getData());
+                            m.put("_id", d.getId());
+                            lives.add(m);
+                        }
+                    }
+                    adapter.setLives(lives);
+                });
     }
 
     // ---------- friends (for privacy filtering) ----------
@@ -126,6 +196,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String me = Fb.uid();
         if (p.authorId == null) return false;
         if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) return false;
+        android.app.Activity ctx = getActivity();
+        if (ctx != null) {
+            if (com.example.frienbook.core.Prefs.isPostHidden(ctx, p.id)) return false;
+            if (com.example.frienbook.core.Prefs.isSnoozed(ctx, p.authorId)) return false;
+        }
         if (p.authorId.equals(me)) return true;
         if ("Only me".equalsIgnoreCase(p.privacy)) return false;
         if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(p.authorId);

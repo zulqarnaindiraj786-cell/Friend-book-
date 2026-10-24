@@ -52,12 +52,24 @@ jobs:
       - name: Surface compiler errors as annotations
         if: steps.dbg.outputs.exit != '0'
         run: |
-          echo "===== error blocks ====="
-          grep -A4 -E "^.*\.java:[0-9]+: error:" build-debug.log | head -220 | while IFS= read -r line; do
+          echo "===== javac error blocks (with symbol details) ====="
+          grep -A8 -E "\.java:[0-9]+: error:" build-debug.log | head -120 | while IFS= read -r line; do
+            echo "::error::${line:0:250}"
+          done
+          echo "===== failing source lines ====="
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-debug.log | sort -u | while IFS= read -r hit; do
+            f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
+            content=$(sed -n "${ln}p" "$f")
+            echo "::error file=$f,line=$ln,title=source::${content:0:250}"
+          done
+          echo "===== aapt/resource errors ====="
+          grep -Ei "aapt|resource|merge|duplicate" build-debug.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
             echo "::error::$line"
           done
-          echo "===== gradle tail ====="
-          tail -12 build-debug.log
+          echo "===== gradle tail (as warnings so we can read them) ====="
+          grep -vE "^$" build-debug.log | tail -60 | while IFS= read -r line; do
+            echo "::warning::${line:0:300}"
+          done
 
       - name: Fail if debug build failed
         if: steps.dbg.outputs.exit != '0'

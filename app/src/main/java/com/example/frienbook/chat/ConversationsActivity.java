@@ -53,9 +53,10 @@ public class ConversationsActivity extends Activity {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        LinearLayout bar = Ui.pageBar(this, "💬 Chats");
-        TextView newChat = Ui.tv(this, "✎", 22, 0xFFFFFFFF);
-        newChat.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 6), 0);
+        LinearLayout bar = Ui.pageBar(this, "Chats");
+        android.widget.ImageView newChat = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.MESSAGES, 23, 0xFFFFFFFF);
+        newChat.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 4));
         newChat.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
         bar.addView(newChat);
         root.addView(bar);
