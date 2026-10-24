@@ -235,6 +235,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                         if (!matchesFilter(p, filter)) continue;
                         list.add(p);
                     }
+                    // ⭐ Favorites first (FB Lite "Feed preferences") on the ALL view
+                    if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
+                        list.sort((x, y) -> {
+                            boolean xf = Fb.me.favoriteUids.contains(x.authorId);
+                            boolean yf = Fb.me.favoriteUids.contains(y.authorId);
+                            if (xf != yf) return xf ? -1 : 1;
+                            return Long.compare(y.createdAt, x.createdAt);
+                        });
+                    }
                     adapter.setPosts(list);
                 });
     }

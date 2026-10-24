@@ -618,6 +618,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (isAdmin && !mine) menu.getMenu().add("🛡 🗑 Delete post (admin)");
         menu.getMenu().add("📋 Copy text");
         menu.getMenu().add("🔗 Copy link");
+        menu.getMenu().add("📤 Share to other apps");
+        if (!mine) menu.getMenu().add("❓ Why am I seeing this?");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
@@ -648,6 +650,24 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Delete")) deletePost(p);
             else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
             else if (t.contains("Copy text")) copyText(p.content);
+            else if (t.contains("Share to other")) {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                String body = (p.content == null ? "" : p.content)
+                        + (p.mediaUrl != null && !p.mediaUrl.isEmpty() ? "\n" + p.mediaUrl : "")
+                        + "\n— via friendbook";
+                send.putExtra(Intent.EXTRA_TEXT, body.isEmpty() ? "friendbook://post/" + p.id : body);
+                activity.startActivity(Intent.createChooser(send, "Share post"));
+            }
+            else if (t.contains("Why am I seeing"))
+                Ui.info(activity, "Why this post?",
+                        (p.sharedFromId != null && !p.sharedFromId.isEmpty()
+                                ? "You follow " + p.authorName + " and they shared this post.\n"
+                                : "You follow " + p.authorName + ".\n")
+                                + ("Friends".equalsIgnoreCase(p.privacy) ? "Audience: friends only.\n"
+                                : "Only me".equalsIgnoreCase(p.privacy) ? "Audience: only the author.\n"
+                                : "Audience: public.\n")
+                                + "Posted " + Format.ago(p.createdAt) + ". Hide, snooze or block from this same menu.");
             else if (t.contains("Follow")) followUser(p.authorId);
             else if (t.contains("Block")) blockUser(p.authorId);
             else if (t.contains("Report")) reportPost(p);

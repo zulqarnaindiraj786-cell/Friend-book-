@@ -59,6 +59,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab;
     private LinearLayout postsBox, aboutBox, friendsBox;
+    private LinearLayout lockBanner;
+    private View tabsRow;
     private FeedAdapter postsAdapter;
     private UsersAdapter friendsAdapter;
     private ListenerRegistration userReg, friendsReg, outReg, inReg, postsReg;
@@ -159,10 +161,27 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         body.addView(infoCol);
         body.addView(gap());
 
+        // 🔒 lock banner (visible when this profile is locked for the viewer)
+        lockBanner = Ui.col(this);
+        lockBanner.setBackground(Ui.round(this, Ui.card(this), 14));
+        lockBanner.setGravity(Gravity.CENTER);
+        Ui.pad(lockBanner, 20, 26, 20, 26);
+        lockBanner.setVisibility(View.GONE);
+        lockBanner.addView(Ui.tv(this, "🔒", 36, Ui.txt(this)));
+        TextView lockTitle = Ui.tvBold(this, "This profile is locked", 16, Ui.txt(this));
+        lockTitle.setPadding(0, Ui.dp(this, 8), 0, 0);
+        lockBanner.addView(lockTitle);
+        TextView lockSub = Ui.tv(this,
+                "Sirf friends is profile ki posts aur details dekh sakte hain — jaisi Facebook 'Profile lock' setting.", 12, Ui.sub(this));
+        lockSub.setGravity(Gravity.CENTER);
+        lockBanner.addView(lockSub);
+        body.addView(lockBanner);
+
         // tabs
         LinearLayout tabs = Ui.row(this);
         tabs.setBackgroundColor(Ui.card(this));
         Ui.pad(tabs, 12, 10, 12, 10);
+        tabsRow = tabs;
         postsTab = tabChip("Posts", tabs, 0);
         aboutTab = tabChip("About", tabs, 1);
         friendsTab = tabChip("Friends", tabs, 2);
@@ -366,6 +385,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.coverUrl != null && !user.coverUrl.isEmpty()) Ui.img(this, cover, user.coverUrl);
         else cover.setBackground(Ui.round(this, Ui.div(this), 0));
 
+        // 🔒 Profile lock (FB Lite): friends/owner see everything — strangers get the lock card
+        boolean stranger = !mine && !friendIds.contains(uid);
+        boolean locked = user.profileLocked && stranger;
+        lockBanner.setVisibility(locked ? View.VISIBLE : View.GONE);
+        if (tabsRow != null) tabsRow.setVisibility(locked ? View.GONE : View.VISIBLE);
+        postsBox.setVisibility(locked ? View.GONE : postsBox.getVisibility());
+        aboutBox.setVisibility(locked ? View.GONE : aboutBox.getVisibility());
+        friendsBox.setVisibility(locked ? View.GONE : friendsBox.getVisibility());
+
         if (mine) {
             primaryBtn.setText("✏️ Edit profile");
             secondaryBtn.setText("＋ Add to story");
@@ -445,6 +473,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         else if (hasIn) friendState = "incoming";
         else friendState = "none";
         refreshButtons();
+        if (user != null) bindUser(); // re-apply profile-lock gate once friendships resolved
     }
 
     private void refreshButtons() {

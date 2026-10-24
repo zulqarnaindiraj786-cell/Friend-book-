@@ -20,6 +20,8 @@ public class Models {
         public String tickLevel = "none"; // none | blue | gold | diamond
         public boolean subscriptionsEnabled;
         public int subscriptionPrice;     // USD per month (2 / 5 / 10)
+        public boolean profileLocked;     // 🔒 FB-style locked profile
+        public List<String> favoriteUids = new ArrayList<>(); // feed "Favorites" first
 
         /** 0 none, 1 blue, 2 gold, 3 diamond — used for "only upgrade" checks. */
         public int tickRank() {
@@ -56,6 +58,8 @@ public class Models {
             u.tickLevel = Format.strOr(m, "tickLevel", u.isVerified ? "blue" : "none");
             u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
             u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
+            u.profileLocked = Format.boolOf(m, "profileLocked");
+            u.favoriteUids = Format.listOf(m, "favoriteUids");
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
             u.blocked = Format.listOf(m, "blockedUsers");

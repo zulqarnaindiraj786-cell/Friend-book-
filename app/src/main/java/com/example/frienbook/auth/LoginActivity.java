@@ -105,6 +105,7 @@ public class LoginActivity extends Activity {
                             return;
                         }
                         Prefs.setUnlockedSession(this, true);
+                        com.example.frienbook.settings.SessionsActivity.record(); // "Where you're logged in"
                         openMain();
                     });
                 })
