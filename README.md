@@ -39,6 +39,13 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
   (approve activates instantly); (4) Boosts — approve/stop; (5) Live rooms — viewers/stars/end;
   (6) **Earnings** — income by type, 70/30 subscription split, **6-month bar chart**, tools
   (payment-number editor, broadcast, reports, moderation)
+- **🏠 Feed filter chips** — All / Photos / Videos / Text-only (persisted, realtime)
+- **📅 Memories (On this day)** — your posts from this date in past years, Menu > On this day
+- **🔔 Notification filters** — All/Unread chips + Settings toggles (reactions, comments,
+  friend requests, messages) honored in the list
+- **▶️ Autoplay videos toggle** (Settings → Preferences) + #hashtag/@mention blue styling
+- **🛡 Admin 1-tap Blue Tick** — search any user in the Users tab, one tap gives/removes
+  blue ✓; ⋯ menu for Gold/Diamond, make admin, ban, delete
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`
