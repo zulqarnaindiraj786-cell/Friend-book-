@@ -646,8 +646,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, -2, 1);
             hp.leftMargin = Ui.dp(c, 10);
             row.addView(composeHint, hp);
-            TextView photo = Ui.tv(c, "🖼️", 22, Ui.GREEN);
-            photo.setPadding(Ui.dp(c, 10), 0, 0, 0);
+            ImageView photo = com.example.frienbook.core.Icons.icon(
+                    c, com.example.frienbook.core.Icons.IMAGE, 24, Ui.GREEN);
+            photo.setPadding(Ui.dp(c, 10), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
             row.addView(photo);
             View.OnClickListener go = v -> c.startActivity(new Intent(c, CreatePostActivity.class));
             composeHint.setOnClickListener(go);

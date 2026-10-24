@@ -61,6 +61,7 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity android:name=".settings.SettingsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".settings.MarketplaceActivity" android:screenOrientation="portrait" />
         <activity android:name=".settings.BlockedUsersActivity" android:screenOrientation="portrait" />
         <activity android:name=".settings.ActivityLogActivity" android:screenOrientation="portrait" />
 

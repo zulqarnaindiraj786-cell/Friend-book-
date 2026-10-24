@@ -54,7 +54,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean typingSent;
     private long lastTypingPush;
     private boolean busy;
-    private TextView mic;
+    private ImageView mic;
     private android.media.MediaRecorder recorder;
     private String voicePath;
     private long voiceStartMs;
@@ -141,8 +141,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 8, 8, 10, 8);
 
-        TextView photo = Ui.tv(this, "🖼️", 22, Ui.sub(this));
-        photo.setPadding(Ui.dp(this, 6), 0, Ui.dp(this, 6), 0);
+        // Facebook-Lite outline icon buttons (2px stroke)
+        ImageView photo = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.IMAGE, 23,
+                com.example.frienbook.core.Icons.GRAY);
+        photo.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
         photo.setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
             i.setType("image/*");
@@ -150,8 +153,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
         row.addView(photo);
 
-        mic = Ui.tv(this, "🎤", 22, Ui.sub(this));
-        mic.setPadding(Ui.dp(this, 6), 0, Ui.dp(this, 2), 0);
+        mic = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.MIC, 23,
+                com.example.frienbook.core.Icons.GRAY);
+        mic.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6));
         mic.setOnClickListener(v -> toggleVoiceRecording());
         row.addView(mic);
 
@@ -160,13 +165,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         row.addView(input, ip);
 
-        TextView send = Ui.tv(this, "➤", 24, Ui.BLUE);
-        send.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 2), 0);
+        ImageView send = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.SEND, 24,
+                com.example.frienbook.core.Icons.BLUE);
+        send.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 2), Ui.dp(this, 4));
         row.addView(send);
         wrap.addView(row);
 
-        TextView quick = Ui.tvBold(this, "👍", 22, Ui.sub(this));
-        quick.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 4), 0);
+        ImageView quick = com.example.frienbook.core.Icons.icon(
+                this, com.example.frienbook.core.Icons.LIKE, 24,
+                com.example.frienbook.core.Icons.BLUE);
+        quick.setPadding(Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
         quick.setOnClickListener(v -> send(null, null, "👍"));
         row.addView(quick, new LinearLayout.LayoutParams(-2, -2));
 
@@ -301,9 +310,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             recorder.start();
             voiceStartMs = System.currentTimeMillis();
             recording = true;
-            mic.setText("⏹");
-            mic.setTextSize(20);
-            Ui.toast(this, "🎤 Recording… tap ⏹ to send");
+            com.example.frienbook.core.Icons.setTint(mic, 0xFFE41E3F); // red while recording
+            mic.animate().scaleX(1.25f).scaleY(1.25f).setDuration(150).start();
+            Ui.toast(this, "🎤 Recording… tap again to send");
         } catch (Exception e) {
             Ui.toast(this, "Couldn't start recording");
             recording = false;
@@ -313,8 +322,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void stopRecording(boolean send) {
         if (!recording) return;
         recording = false;
-        mic.setText("🎤");
-        mic.setTextSize(22);
+        com.example.frienbook.core.Icons.setTint(mic, com.example.frienbook.core.Icons.GRAY);
+        mic.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
         int durSec = (int) Math.max(1, (System.currentTimeMillis() - voiceStartMs) / 1000);
         try { recorder.stop(); } catch (Throwable ignored) { }
         try { recorder.release(); } catch (Throwable ignored) { }

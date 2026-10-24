@@ -81,22 +81,24 @@ public class MenuFragment extends Fragment {
         body.addView(card);
         body.addView(spacer(a, 12));
 
-        // shortcuts
-        body.addView(item(a, "💾", "Saved posts", "Everything you bookmarked",
+        // shortcuts (Facebook-Lite outline icons, gray chips)
+        body.addView(item(a, com.example.frienbook.core.Icons.BOOKMARK, "Saved posts", "Everything you bookmarked",
                 () -> startActivity(new Intent(a, SavedPostsActivity.class))));
-        body.addView(item(a, "📺", "Watch", "All public videos in one feed",
+        body.addView(item(a, com.example.frienbook.core.Icons.VIDEO, "Watch", "All public videos in one feed",
                 () -> startActivity(new Intent(a, com.example.frienbook.post.WatchActivity.class))));
-        body.addView(item(a, "👨‍👩‍👧‍👦", "Groups", "Communities with their own feeds",
+        body.addView(item(a, com.example.frienbook.core.Icons.MARKETPLACE, "Marketplace", "Buy & sell with people near you",
+                () -> startActivity(new Intent(a, com.example.frienbook.settings.MarketplaceActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.GROUPS, "Groups", "Communities with their own feeds",
                 () -> startActivity(new Intent(a, com.example.frienbook.groups.GroupsActivity.class))));
-        body.addView(item(a, "🎂", "Birthdays", "See whose birthday is coming",
+        body.addView(item(a, com.example.frienbook.core.Icons.CAKE, "Birthdays", "See whose birthday is coming",
                 () -> startActivity(new Intent(a, com.example.frienbook.friends.BirthdaysActivity.class))));
-        body.addView(item(a, "📋", "Activity log", "Your posts & comments in one place",
+        body.addView(item(a, com.example.frienbook.core.Icons.LIST, "Activity log", "Your posts & comments in one place",
                 () -> startActivity(new Intent(a, com.example.frienbook.settings.ActivityLogActivity.class))));
-        body.addView(item(a, "👥", "Friends", "Requests, suggestions, all friends",
+        body.addView(item(a, com.example.frienbook.core.Icons.FRIENDS, "Friends", "Requests, suggestions, all friends",
                 () -> ((MainActivity) a).select(MainActivity.TAB_FRIENDS)));
-        body.addView(item(a, "🎞️", "Reels", "Watch short videos",
+        body.addView(item(a, com.example.frienbook.core.Icons.VIDEO, "Reels", "Watch short videos",
                 () -> ((MainActivity) a).select(MainActivity.TAB_REELS)));
-        body.addView(item(a, "🔔", "Notifications", "Your latest activity",
+        body.addView(item(a, com.example.frienbook.core.Icons.NOTIFICATIONS, "Notifications", "Your latest activity",
                 () -> ((MainActivity) a).select(MainActivity.TAB_NOTIFS)));
 
         // ===== ADMIN ONLY (zulqarnaindiraj786@gmail.com / flagged admins) =====
@@ -121,28 +123,28 @@ public class MenuFragment extends Fragment {
         body.addView(spacer(a, 10));
 
         // quick preferences
-        body.addView(switchItem(a, "🌙", "Dark mode", Prefs.dark(a), (btn, on) -> {
+        body.addView(switchItem(a, com.example.frienbook.core.Icons.MOON, "Dark mode", Prefs.dark(a), (btn, on) -> {
             Prefs.setDark(a, on);
             a.recreate();
         }));
-        body.addView(switchItem(a, "📶", "Data Saver", Prefs.dataSaver(a), (btn, on) -> {
+        body.addView(switchItem(a, com.example.frienbook.core.Icons.DATA_SAVER, "Data Saver", Prefs.dataSaver(a), (btn, on) -> {
             Prefs.setDataSaver(a, on);
             Ui.toast(a, on ? "Data Saver on — lighter images, tap-to-load video" : "Data Saver off");
         }));
-        body.addView(switchItem(a, "🤫", "Quiet mode", Prefs.quiet(a), (btn, on) -> {
+        body.addView(switchItem(a, com.example.frienbook.core.Icons.QUIET, "Quiet mode", Prefs.quiet(a), (btn, on) -> {
             Prefs.setQuiet(a, on);
             Ui.toast(a, on ? "Quiet mode on — badges hidden" : "Quiet mode off");
         }));
         body.addView(spacer(a, 10));
 
         // settings & more
-        body.addView(item(a, "⚙️", "Settings & privacy", "Account, privacy, notifications, security",
+        body.addView(item(a, com.example.frienbook.core.Icons.SETTINGS, "Settings & privacy", "Account, privacy, notifications, security",
                 () -> startActivity(new Intent(a, SettingsActivity.class))));
-        body.addView(item(a, "❓", "Help & feedback", "Shake your phone anytime to report a problem",
+        body.addView(item(a, com.example.frienbook.core.Icons.HELP, "Help & feedback", "Shake your phone anytime to report a problem",
                 () -> Ui.info(a, "Help & feedback",
                         "• Shake your phone to report a problem\n• Pull down the feed to refresh\n• Long-press 👍 for reactions\n• Long-press a chat for options")));
-        body.addView(item(a, "ℹ️", "About FriendBook", "Version and info",
-                () -> Ui.info(a, "FriendBook Lite", "Version 2.0\nA fast, light Facebook-Lite style community app powered by Firebase.")));
+        body.addView(item(a, com.example.frienbook.core.Icons.INFO, "About FriendBook", "Version and info",
+                () -> Ui.info(a, "FriendBook Lite", "Version 3.0\nA fast, light Facebook-Lite style community app powered by Firebase.")));
         body.addView(spacer(a, 12));
 
         TextView logout = Ui.btn(a, "🚪 Log out");
@@ -184,15 +186,12 @@ public class MenuFragment extends Fragment {
         return w;
     }
 
-    private View item(android.app.Activity a, String emoji, String title, String sub, Runnable action) {
+    /** Menu row with Facebook-Lite outline icon in a gray circle chip. */
+    private View item(android.app.Activity a, int iconRes, String title, String sub, Runnable action) {
         LinearLayout row = Ui.row(a);
         row.setBackgroundColor(Ui.card(a));
         Ui.pad(row, 12, 12, 12, 12);
-        TextView e = Ui.tv(a, emoji, 20, Ui.txt(a));
-        e.setGravity(Gravity.CENTER);
-        e.setBackground(Ui.circle(Ui.inputBg(a)));
-        int s = Ui.dp(a, 38);
-        row.addView(e, new LinearLayout.LayoutParams(s, s));
+        row.addView(com.example.frienbook.core.Icons.chipIcon(a, iconRes, com.example.frienbook.core.Icons.GRAY));
         LinearLayout mid = Ui.col(a);
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
         mp.leftMargin = Ui.dp(a, 12);
@@ -201,8 +200,9 @@ public class MenuFragment extends Fragment {
         mid.addView(t);
         mid.addView(st);
         row.addView(mid, mp);
-        TextView arrow = Ui.tv(a, "›", 20, Ui.sub(a));
-        row.addView(arrow);
+        // chevron (decorative glyph, kept as text like Facebook Lite)
+        TextView ch = Ui.tv(a, "›", 20, Ui.sub(a));
+        row.addView(ch);
         row.setOnClickListener(v -> action.run());
         LinearLayout wrap = Ui.col(a);
         wrap.addView(row);
@@ -210,16 +210,12 @@ public class MenuFragment extends Fragment {
         return wrap;
     }
 
-    private View switchItem(android.app.Activity a, String emoji, String title, boolean on,
+    private View switchItem(android.app.Activity a, int iconRes, String title, boolean on,
                             CompoundButton.OnCheckedChangeListener listener) {
         LinearLayout row = Ui.row(a);
         row.setBackgroundColor(Ui.card(a));
         Ui.pad(row, 12, 8, 12, 8);
-        TextView e = Ui.tv(a, emoji, 20, Ui.txt(a));
-        e.setGravity(Gravity.CENTER);
-        e.setBackground(Ui.circle(Ui.inputBg(a)));
-        int s = Ui.dp(a, 38);
-        row.addView(e, new LinearLayout.LayoutParams(s, s));
+        row.addView(com.example.frienbook.core.Icons.chipIcon(a, iconRes, com.example.frienbook.core.Icons.GRAY));
         TextView t = Ui.tvBold(a, title, 15, Ui.txt(a));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, -2, 1);
         tp.leftMargin = Ui.dp(a, 12);
