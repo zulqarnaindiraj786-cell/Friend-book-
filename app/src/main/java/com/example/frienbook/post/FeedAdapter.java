@@ -297,7 +297,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = activity;
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
-        vh.name.setText(p.authorName + (hasFeeling ? " is feeling " + p.feeling : ""));
+        String nameLine = p.authorName + (hasFeeling ? " is feeling " + p.feeling : "");
+        if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
+            nameLine += " — with " + p.taggedNames.get(0)
+                    + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
+                    : p.taggedNames.size() == 2 ? " and " + p.taggedNames.get(1) : "");
+        }
+        vh.name.setText(nameLine);
         vh.tick.setImageDrawable(null);
         if (!"none".equals(p.authorTickLevel) && p.authorTickLevel != null) {
             vh.tick.setVisibility(View.VISIBLE);
@@ -595,6 +601,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         else { vh.video.start(); vh.playBadge.setVisibility(View.GONE); }
     }
 
+    /** 📖 Share a post to my story (image posts reuse the photo; text → caption story). */
+    private void shareToStory(Models.Post p) {
+        java.util.Map<String, Object> s = new HashMap<>();
+        s.put("authorId", Fb.uid());
+        s.put("authorName", Fb.myName());
+        s.put("authorPhotoUrl", Fb.myPhoto());
+        boolean hasImg = "image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty();
+        s.put("mediaUrl", hasImg ? p.mediaUrl : "");
+        s.put("mediaType", hasImg ? "image" : "text");
+        String cap = p.content == null ? "" : (p.content.length() > 140 ? p.content.substring(0, 140) + "…" : p.content);
+        s.put("caption", "📌 " + p.authorName + (cap.isEmpty() ? "" : ": " + cap));
+        s.put("sharedPostId", p.id);
+        s.put("viewedBy", new ArrayList<String>());
+        s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        s.put("expiresAt", new com.google.firebase.Timestamp(
+                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
+        Fb.db().collection("stories").add(s)
+                .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖"))
+                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage()));
+    }
+
     // ---------- post overflow menu ----------
     private void postMenu(View anchor, Models.Post p) {
         Context c = activity;
@@ -619,6 +646,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         menu.getMenu().add("📋 Copy text");
         menu.getMenu().add("🔗 Copy link");
         menu.getMenu().add("📤 Share to other apps");
+        menu.getMenu().add("📖 Add to your story");
         if (!mine) menu.getMenu().add("❓ Why am I seeing this?");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
@@ -659,6 +687,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 send.putExtra(Intent.EXTRA_TEXT, body.isEmpty() ? "friendbook://post/" + p.id : body);
                 activity.startActivity(Intent.createChooser(send, "Share post"));
             }
+            else if (t.contains("Add to your story")) shareToStory(p);
             else if (t.contains("Why am I seeing"))
                 Ui.info(activity, "Why this post?",
                         (p.sharedFromId != null && !p.sharedFromId.isEmpty()

@@ -164,13 +164,24 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
 
         if (m.isDeleted) {
+            h.text.setTextSize(14);
             h.text.setText("🚫 This message was removed");
             h.text.setTextColor(h.mine ? 0xCCFFFFFF : Ui.sub(c));
             h.text.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
             h.text.setVisibility(View.VISIBLE);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
+        } else if ("sticker".equals(m.type)) {
+            // Big emoji sticker — transparent bubble, huge text
+            h.text.setVisibility(View.VISIBLE);
+            h.img.setVisibility(View.GONE);
+            h.voiceRow.setVisibility(View.GONE);
+            h.bubble.setBackground(Ui.round(c, Color.TRANSPARENT, 16));
+            h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+            h.text.setText(m.text);
+            h.text.setTextSize(52);
         } else if (isVoice) {
+            h.text.setTextSize(14);
             h.text.setVisibility(View.GONE);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.VISIBLE);
@@ -182,6 +193,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         } else {
             h.voiceRow.setVisibility(View.GONE);
             h.text.setVisibility(View.VISIBLE);
+            h.text.setTextSize(14);
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
             if (hasImage) {
                 h.img.setVisibility(View.VISIBLE);

@@ -57,6 +57,12 @@ public class SettingsActivity extends Activity {
             recreate();
         }));
         body.addView(div());
+        body.addView(switchRowI(Icons.MOON, "AMOLED black theme", Prefs.amoled(this), (btn, on) -> {
+            Prefs.setAmoled(this, on);
+            Ui.toast(this, on ? "Pure black on 🔳 (with dark mode)" : "AMOLED off");
+            recreate();
+        }));
+        body.addView(div());
         body.addView(rowI(Icons.FONT, "Font size", fontLabel(), this::fontPicker));
         body.addView(div());
         body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver", Prefs.dataSaver(this),

@@ -78,6 +78,7 @@ public class Icons {
     public static final int VERIFIED_DIAMOND = R.drawable.ic_verified_diamond;
     public static final int BOOST = R.drawable.ic_rocket_outline;
     public static final int LIVE = R.drawable.ic_live_outline;
+    public static final int SMILE = R.drawable.ic_sticker_outline;
     public static final int GIFT = R.drawable.ic_gift_outline;
 
     /** Native badge drawable for a tick level (untinted). */

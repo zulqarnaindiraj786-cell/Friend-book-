@@ -76,6 +76,8 @@ public class Models {
         public long createdAt;
         public List<String> savedBy = new ArrayList<>();
         public List<String> mediaUrls = new ArrayList<>(); // multi-photo posts
+        public List<String> taggedUids = new ArrayList<>();  // 👥 friends tagged in this post
+        public List<String> taggedNames = new ArrayList<>(); // denormalized for fast render
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
 
@@ -115,6 +117,8 @@ public class Models {
             p.sharedFromMediaType = Format.str(m, "sharedFromMediaType");
             p.savedBy = Format.listOf(m, "savedBy");
             p.mediaUrls = Format.listOf(m, "mediaUrls");
+            p.taggedUids = Format.listOf(m, "taggedUids");
+            p.taggedNames = Format.listOf(m, "taggedNames");
             p.pollOptions = Format.listOf(m, "pollOptions");
             p.pollVotes = new HashMap<>();
             Object pv = m == null ? null : m.get("pollVotes");

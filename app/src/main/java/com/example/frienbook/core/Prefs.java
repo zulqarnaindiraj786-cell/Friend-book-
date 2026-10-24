@@ -30,6 +30,10 @@ public class Prefs {
     public static boolean dataSaver(Context c) { return p(c).getBoolean("dataSaver", false); }
     public static void setDataSaver(Context c, boolean v) { p(c).edit().putBoolean("dataSaver", v).apply(); }
 
+    // ---- AMOLED pure-black theme (needs dark mode on) ----
+    public static boolean amoled(Context c) { return p(c).getBoolean("amoled", false); }
+    public static void setAmoled(Context c, boolean v) { p(c).edit().putBoolean("amoled", v).apply(); }
+
     // ---- quiet mode: hides badges & mutes vibration ----
     public static boolean quiet(Context c) { return p(c).getBoolean("quiet", false); }
     public static void setQuiet(Context c, boolean v) { p(c).edit().putBoolean("quiet", v).apply(); }
