@@ -18,11 +18,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Ensure Android SDK 35
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          if [ -d "$ANDROID_HOME/platforms/android-35" ]; then
+            echo "android-35 platform already installed"
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            sdkmanager "platforms;android-35" "build-tools;35.0.0" || \
+              echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
+          else
+            echo "::warning::sdkmanager not found; using preinstalled SDK"
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
