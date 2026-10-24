@@ -16,13 +16,22 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **🎤 Voice messages** in chat (record/send/play, like Messenger)
 - **Message reactions** (long-press any message) + **🎨 chat themes** (8 bubble colors)
 - **Followers / Following lists** on profiles, **Activity log**, **Export your data**
-- **🛡 Admin Panel** (only for `zulqarnaindiraj786@gmail.com` + promoted admins):
-  live stats dashboard, user search (ban/unban/promote/delete), content moderation
-  (posts/reels/stories/comments), reports queue, feedback inbox, and **broadcast to all users**
+- **✓ Blue Tick system** — Option A **FREE**: invite 5 friends via
+  `friendbook.app/invite?ref=YOUR_ID` (referral signup auto-tracks; at 5/5 the tick
+  grants itself + congratulates you). Option B **Rs 100**: pay on JazzCash/Easypaisa
+  (numbers live from Firestore `config/payments`, admin-editable) + screenshot upload →
+  admin approves. Blue ✓ badge shows on your profile + next to your name everywhere.
+- **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
+  + 5 reels), Stars balance, fan Subscriptions with your own monthly price
+- **🛡 Admin Panel** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com` + promoted admins),
+  **5 tabs**: (1) Users + **Give Blue Tick button**, (2) Referral stats (who invited how many),
+  (3) Blue-tick payments — screenshot + **Approve/Reject**, (4) live Stats (users/referrals/
+  pending payments/verified), (5) **Direct tick control** — search any user, give/remove instantly.
+  Plus: content moderation, reports queue, feedback inbox, broadcast to all
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
 - **Package:** `com.example.frienbook`
-- **App name:** FriendBook
+- **App name:** friendbook
 - **Firebase project:** `friendbook-17551` (config in `app/google-services.json`)
 - **CI:** GitHub Actions builds the APK automatically (see `.github/workflows/build-apk.yml`)
 
