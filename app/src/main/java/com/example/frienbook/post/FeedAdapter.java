@@ -152,11 +152,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return new PostVH(c);
     }
 
-    @Override
-    public void onViewRecycled(@NonNull RecyclerView.ViewHolder holder) {
-        super.onViewRecycled(holder);
-        if (holder instanceof AdVH) ((AdVH) holder).destroyAd();
-    }
+
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
@@ -265,6 +261,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @Override
     public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
         super.onViewRecycled(h);
+        if (h instanceof AdVH) ((AdVH) h).destroyAd();
         if (h instanceof PostVH) {
             PostVH vh = (PostVH) h;
             if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
@@ -876,7 +873,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         com.google.android.gms.ads.AdView adView;
 
         AdVH(Context c) {
-            super(cardRoot(c));
+            super(PostVH.cardRoot(c));
             LinearLayout card = (LinearLayout) itemView;
             TextView label = Ui.tv(c, "Sponsored", 11, Ui.sub(c));
             label.setGravity(Gravity.CENTER);
