@@ -139,7 +139,7 @@ public class AdMobSettingsActivity extends Activity {
                     if (d != null && d.exists()) {
                         String id = d.getString("nativeId");
                         String iId = d.getString("interstitialId");
-                        Boolean en = d.getBoolean("enabled");
+                        Boolean en = d.getBoolean("nativeEnabled");
                         String activeNative = AdsConfig.isRealProductionUnit(id) ? id : AdsConfig.DEFAULT_NATIVE_ID;
                         nativeEdit.setText(activeNative);
                         if (iId != null && AdsConfig.isRealProductionUnit(iId)) interstitialEdit.setText(iId);

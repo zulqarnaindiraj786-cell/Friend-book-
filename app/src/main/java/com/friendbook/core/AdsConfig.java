@@ -15,17 +15,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 📢 Google AdMob Production Native Ads Configuration:
+ * 📢 Google AdMob Production Native Advanced Configuration:
+ * - App ID:              ca-app-pub-3387480177023669~5696528190
+ * - Native Advanced ID:  ca-app-pub-3387480177023669/1131199868
  * - Zero Banner Ads anywhere in the app.
- * - Serves real AdMob Native Ads in-feed after every 5 posts.
- * - Strictly blocks Google sample/test ad unit prefixes.
+ * - Loaded via AdLoader for Native Advanced in-feed after every 5 posts.
  */
 public class AdsConfig {
 
-    private static final String GOOGLE_TEST_PREFIX = "ca-app-pub-3940256099942544";
-
-    public static final String APP_ID = "ca-app-pub-3387480177023669~4887770836";
-    public static final String DEFAULT_NATIVE_ID = "";
+    public static final String PUBLISHER_PREFIX = "ca-app-pub-3387480177023669/";
+    public static final String APP_ID = "ca-app-pub-3387480177023669~5696528190";
+    public static final String DEFAULT_NATIVE_ID = "ca-app-pub-3387480177023669/1131199868";
     public static final String DEFAULT_INTERSTITIAL_ID = "";
 
     private static String nativeId = DEFAULT_NATIVE_ID;
@@ -37,17 +37,15 @@ public class AdsConfig {
     private static boolean loadingInterstitial = false;
     private static long lastInterstitialShownAt = 0L;
 
-    /** Ensures only real production AdMob unit IDs (never Google sample/test IDs) are accepted. */
+    /** Accepts only real production AdMob unit IDs belonging to publisher ca-app-pub-3387480177023669. */
     public static boolean isRealProductionUnit(String id) {
         if (id == null) return false;
         String clean = id.trim();
-        if (clean.isEmpty() || clean.startsWith(GOOGLE_TEST_PREFIX)) return false;
-        return clean.startsWith("ca-app-pub-") && clean.contains("/") && clean.length() > 25;
+        return clean.startsWith(PUBLISHER_PREFIX) && clean.length() > PUBLISHER_PREFIX.length() + 5;
     }
 
     public static String nativeId() {
-        if (isRealProductionUnit(nativeId)) return nativeId.trim();
-        return isRealProductionUnit(DEFAULT_NATIVE_ID) ? DEFAULT_NATIVE_ID : "";
+        return isRealProductionUnit(nativeId) ? nativeId.trim() : DEFAULT_NATIVE_ID;
     }
 
     public static String interstitialId() {
@@ -74,7 +72,7 @@ public class AdsConfig {
                     if (d != null && d.exists()) {
                         String nId = d.getString("nativeId");
                         String iId = d.getString("interstitialId");
-                        Boolean en = d.getBoolean("enabled");
+                        Boolean en = d.getBoolean("nativeEnabled");
                         nativeId = isRealProductionUnit(nId) ? nId.trim() : DEFAULT_NATIVE_ID;
                         interstitialId = isRealProductionUnit(iId) ? iId.trim() : DEFAULT_INTERSTITIAL_ID;
                         if (en != null) enabled = en;
@@ -137,11 +135,11 @@ public class AdsConfig {
         Map<String, Object> m = new HashMap<>();
         m.put("nativeId", cleanNative);
         m.put("interstitialId", cleanInter);
-        m.put("enabled", on);
+        m.put("nativeEnabled", on);
         m.put("updatedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
         Fb.db().collection("config").document("ads")
                 .set(m, com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> Ui.toast(c, "Real AdMob Native Ad settings saved ✓"))
+                .addOnSuccessListener(x -> Ui.toast(c, "Real AdMob Native Advanced settings saved ✓"))
                 .addOnFailureListener(e -> Ui.toast(c, "Save failed: " + e.getMessage()));
     }
 
@@ -151,7 +149,7 @@ public class AdsConfig {
                     nativeId = DEFAULT_NATIVE_ID;
                     interstitialId = DEFAULT_INTERSTITIAL_ID;
                     enabled = true;
-                    Ui.toast(c, "Reset to built-in Native Ad config ✓");
+                    Ui.toast(c, "Reset to production Native Advanced ID ✓");
                     notifyChange();
                 });
     }

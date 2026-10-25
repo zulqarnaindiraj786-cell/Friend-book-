@@ -1614,6 +1614,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 .build();
                 com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                         new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
+                                .setAdChoicesPlacement(
+                                        com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
                                 .setVideoOptions(videoOptions)
                                 .build();
 
