@@ -248,7 +248,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if (h instanceof AdVH) {
             ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
         } else {
-            bindPost((PostVH) h, posts.get(postIndexForSlot(position - offset())));
+            // Guard: realtime list swaps between measure & bind must not crash the feed
+            int idx = postIndexForSlot(position - offset());
+            if (idx < 0 || idx >= posts.size()) { h.itemView.setVisibility(View.GONE); return; }
+            h.itemView.setVisibility(View.VISIBLE);
+            try {
+                bindPost((PostVH) h, posts.get(idx));
+            } catch (Throwable t) {
+                h.itemView.setVisibility(View.GONE);
+            }
         }
     }
 
@@ -951,12 +959,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         void loadAd(String bannerId) {
             destroyAd();
-            adView = new com.google.android.gms.ads.AdView(box.getContext());
-            adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
-            adView.setAdUnitId(bannerId);
-            box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-            adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-            Ui.pad(box, 0, 0, 0, 8);
+            // Guard: devices without Google Play Services / ads provider throw here —
+            // that used to crash the whole home feed on bind.
+            try {
+                adView = new com.google.android.gms.ads.AdView(box.getContext());
+                adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
+                adView.setAdUnitId(bannerId);
+                box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+                adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                Ui.pad(box, 0, 0, 0, 8);
+            } catch (Throwable t) {
+                adView = null;
+                box.removeAllViews();
+                itemView.setVisibility(View.GONE);
+            }
         }
 
         void destroyAd() {
