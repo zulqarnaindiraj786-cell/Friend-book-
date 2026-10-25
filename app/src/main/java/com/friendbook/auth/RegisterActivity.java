@@ -31,7 +31,14 @@ public class RegisterActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        Ui.pad(root, 24, 36, 24, 24);
+        Ui.pad(root, 24, 28, 24, 24);
+
+        android.widget.ImageView brandIcon = new android.widget.ImageView(this);
+        brandIcon.setImageResource(com.friendbook.R.drawable.ic_brand_logo);
+        LinearLayout.LayoutParams bilp = new LinearLayout.LayoutParams(Ui.dp(this, 68), Ui.dp(this, 68));
+        bilp.gravity = Gravity.CENTER_HORIZONTAL;
+        bilp.bottomMargin = Ui.dp(this, 10);
+        root.addView(brandIcon, bilp);
 
         TextView title = Ui.tvBold(this, "Create account", 26, Ui.txt(this));
         title.setGravity(Gravity.CENTER);

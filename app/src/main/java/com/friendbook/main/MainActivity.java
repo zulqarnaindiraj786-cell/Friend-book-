@@ -107,7 +107,19 @@ public class MainActivity extends Activity {
         brandBar.setGravity(Gravity.CENTER_VERTICAL);
         brandBar.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 6));
 
-        TextView logo = Ui.tvBold(this, "friendbook", 27, Ui.BLUE);
+        ImageView brandEmblem = new ImageView(this);
+        brandEmblem.setImageResource(R.drawable.ic_brand_logo);
+        LinearLayout.LayoutParams belp = new LinearLayout.LayoutParams(Ui.dp(this, 31), Ui.dp(this, 31));
+        belp.rightMargin = Ui.dp(this, 8);
+        brandEmblem.setOnClickListener(v -> {
+            if (active != TAB_HOME) select(TAB_HOME);
+            else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
+            }
+        });
+        brandBar.addView(brandEmblem, belp);
+
+        TextView logo = Ui.tvBold(this, "friendbook", 26, Ui.BLUE);
         logo.setLetterSpacing(-0.03f);
         logo.setOnClickListener(v -> {
             if (active != TAB_HOME) select(TAB_HOME);
