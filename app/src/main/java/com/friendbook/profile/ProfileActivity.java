@@ -626,7 +626,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         bindUser();
                     }
                     // Facebook Lite signature feature: Share full DP / Cover update onto News Feed!
-                    if (Prefs.shareDpToFeed(ProfileActivity.this)) {
+                    if (com.friendbook.core.Prefs.shareDpToFeed(ProfileActivity.this)) {
                         Map<String, Object> dpPost = Fb.map(
                                 "authorId", uid,
                                 "authorName", Fb.myName(),

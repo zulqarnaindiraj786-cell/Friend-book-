@@ -2,6 +2,7 @@ package com.friendbook.reels;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.Fragment;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
