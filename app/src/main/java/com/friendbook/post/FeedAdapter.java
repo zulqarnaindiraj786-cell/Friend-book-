@@ -1365,7 +1365,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             composeHint = Ui.tv(c, "What's on your mind?", 15, Ui.txt(c));
             composeHint.setSingleLine(true);
-            composeHint.setEllipsize(TextUtils.TruncateAt.END);
+            composeHint.setEllipsize(android.text.TextUtils.TruncateAt.END);
             composeHint.setBackground(Ui.round(c, Ui.inputBg(c), 22));
             composeHint.setPadding(Ui.dp(c, 16), Ui.dp(c, 11), Ui.dp(c, 16), Ui.dp(c, 11));
             LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, -2, 1);
