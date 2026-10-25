@@ -1,7 +1,6 @@
 {
   "project_info": {
     "project_number": "218848343658",
-    "firebase_url": "https://friendbook-17551-default-rtdb.firebaseio.com",
     "project_id": "friendbook-17551",
     "storage_bucket": "friendbook-17551.firebasestorage.app"
   },
@@ -10,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:218848343658:android:da00f361fca26ea7edbc13",
         "android_client_info": {
-          "package_name": "com.example.frienbook"
+          "package_name": "com.example.friendbook"
         }
       },
       "oauth_client": [],
@@ -27,9 +26,9 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:218848343658:android:da00f361fca26ea7edbc13",
+        "mobilesdk_app_id": "1:218848343658:android:91a3f75ca8a5b2a5edbc13",
         "android_client_info": {
-          "package_name": "com.example.friendbook"
+          "package_name": "com.friendbook"
         }
       },
       "oauth_client": [],

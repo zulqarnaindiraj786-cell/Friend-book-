@@ -8,8 +8,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
-        android:name=".App"
+        android:name="com.friendbook.App"
         android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:label="friendbook"
         android:icon="@drawable/ic_launcher"
         android:supportsRtl="true"
@@ -19,7 +21,7 @@
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-3387480177023669~5696528190"/>
-        <activity android:name=".SplashActivity"
+        <activity android:name="com.friendbook.SplashActivity"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
@@ -32,71 +34,78 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/invite" />
+                <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/group" />
             </intent-filter>
         </activity>
 
-        <activity android:name=".auth.LoginActivity" android:screenOrientation="portrait" />
-        <activity android:name=".auth.RegisterActivity" android:screenOrientation="portrait" />
-        <activity android:name=".LockActivity" android:screenOrientation="portrait" android:excludeFromRecents="true" />
-        <activity android:name=".main.MainActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.auth.LoginActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.auth.RegisterActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.LockActivity" android:screenOrientation="portrait" android:excludeFromRecents="true" />
+        <activity android:name="com.friendbook.main.MainActivity" android:screenOrientation="portrait" />
 
-        <activity android:name=".post.CreatePostActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.post.CreatePostActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".post.PostDetailActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.post.PostDetailActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".post.SavedPostsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".post.FullscreenMediaActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.post.SavedPostsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.post.FullscreenMediaActivity" android:screenOrientation="portrait"
             android:theme="@style/BlackTheme" />
 
-        <activity android:name=".story.AddStoryActivity" android:screenOrientation="portrait" />
-        <activity android:name=".story.StoryViewerActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.story.AddStoryActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.story.StoryViewerActivity" android:screenOrientation="portrait"
             android:theme="@style/BlackTheme" />
 
-        <activity android:name=".reels.AddReelActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.reels.AddReelActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".reels.ReelCommentsActivity" android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity android:name=".friends.SearchActivity" android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".friends.FollowListActivity" android:screenOrientation="portrait" />
-
-        <activity android:name=".chat.ConversationsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".chat.NewChatActivity" android:screenOrientation="portrait" />
-        <activity android:name=".chat.ChatActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.reels.ReelCommentsActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
 
-        <activity android:name=".profile.ProfileActivity" android:screenOrientation="portrait" />
-        <activity android:name=".profile.EditProfileActivity" android:screenOrientation="portrait"
+        <activity android:name="com.friendbook.friends.SearchActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.friendbook.friends.FollowListActivity" android:screenOrientation="portrait" />
+
+        <activity android:name="com.friendbook.chat.ConversationsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.chat.NewChatActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.chat.ChatActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
 
-        <activity android:name=".settings.SettingsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".settings.MarketplaceActivity" android:screenOrientation="portrait" />
-        <activity android:name=".settings.BlockedUsersActivity" android:screenOrientation="portrait" />
-        <activity android:name=".settings.ActivityLogActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.profile.ProfileActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.profile.EditProfileActivity" android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
 
-        <activity android:name=".post.WatchActivity" android:screenOrientation="portrait" />
-        <activity android:name=".post.MemoriesActivity" android:screenOrientation="portrait" />
-        <activity android:name=".social.EventsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".social.PagesActivity" android:screenOrientation="portrait" />
-        <activity android:name=".settings.FeedPreferencesActivity" android:screenOrientation="portrait" />
-        <activity android:name=".settings.SessionsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".friends.BirthdaysActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.SettingsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.MarketplaceActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.BlockedUsersActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.ActivityLogActivity" android:screenOrientation="portrait" />
 
-        <activity android:name=".bluetick.BlueTickActivity" android:screenOrientation="portrait" />
-        <activity android:name=".bluetick.MonetizationActivity" android:screenOrientation="portrait" />
-        <activity android:name=".pay.PayRequestActivity" android:screenOrientation="portrait" />
-        <activity android:name=".live.LiveActivity" android:configChanges="orientation|screenSize" />
-        <activity android:name=".admin.AdMobSettingsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".auth.ForgotPasswordActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.post.WatchActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.post.MemoriesActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.EventsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.PokesActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.LeaderboardActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.PagesActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.FeedPreferencesActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.SessionsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.TimeSpentActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.ArchiveTrashActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.InAppBrowserActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.PageDetailActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.friends.BirthdaysActivity" android:screenOrientation="portrait" />
 
-        <activity android:name=".groups.GroupsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".groups.GroupDetailActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.bluetick.BlueTickActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.bluetick.MonetizationActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.pay.PayRequestActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.live.LiveActivity" android:configChanges="orientation|screenSize" />
+        <activity android:name="com.friendbook.admin.AdMobSettingsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.auth.ForgotPasswordActivity" android:screenOrientation="portrait" />
 
-        <activity android:name=".admin.AdminPanelActivity" android:screenOrientation="portrait" />
-        <activity android:name=".admin.AdminContentActivity" android:screenOrientation="portrait" />
-        <activity android:name=".admin.AdminReportsActivity" android:screenOrientation="portrait" />
-        <activity android:name=".admin.AdminFeedbackActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.groups.GroupsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.groups.GroupDetailActivity" android:screenOrientation="portrait" />
+
+        <activity android:name="com.friendbook.admin.AdminPanelActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.admin.AdminContentActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.admin.AdminReportsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.admin.AdminFeedbackActivity" android:screenOrientation="portrait" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

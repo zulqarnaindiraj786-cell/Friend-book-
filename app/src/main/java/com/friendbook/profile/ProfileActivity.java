@@ -1,0 +1,1174 @@
+package com.friendbook.profile;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.ImageView;
+import android.widget.FrameLayout;
+import android.widget.PopupMenu;
+
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.friendbook.chat.ChatActivity;
+import com.friendbook.core.Admin;
+import com.friendbook.core.Fb;
+import com.friendbook.core.Format;
+import com.friendbook.core.Icons;
+import com.friendbook.core.Notify;
+import com.friendbook.core.Presence;
+import com.friendbook.core.Ui;
+import com.friendbook.friends.UsersAdapter;
+import com.friendbook.models.Models;
+import com.friendbook.post.CreatePostActivity;
+import com.friendbook.post.FeedAdapter;
+import com.friendbook.post.FullscreenMediaActivity;
+import com.friendbook.post.PostDetailActivity;
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldValue;
+import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.firestore.SetOptions;
+import com.google.firebase.firestore.WriteBatch;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+/** Profile page: cover, avatar, actions (friend/follow/message/block), tabs. */
+public class ProfileActivity extends Activity implements FeedAdapter.Host {
+
+    private String uid;
+    private boolean mine;
+    private boolean viewAsPublic = false;
+    private Models.User user;
+    private String friendState = "none"; // none|friends|outgoing|incoming
+    private String incomingRequestId = null;
+    private boolean hasOut, hasIn;
+
+    private TextView nameT, bioT, statsT, presenceT, primaryBtn, secondaryBtn;
+    private android.widget.ImageView nameTick;
+    private android.widget.LinearLayout moneyRow;
+    private android.widget.TextView boostBtn, subscribeBtn, tickBtn;
+    private com.google.firebase.firestore.ListenerRegistration subReg;
+    private boolean subscribedActive;
+    private ImageView cover, avatar;
+    private TextView postsTab, aboutTab, friendsTab, photosTab;
+    private LinearLayout postsBox, aboutBox, friendsBox, photosBox;
+    private LinearLayout introCard, highlightsWrap, highlightsRow, viewAsBanner;
+    private TextView pinnedTag;
+    private PhotosAdapter photosAdapter;
+    private LinearLayout lockBanner;
+    private View tabsRow;
+    private FeedAdapter postsAdapter;
+    private UsersAdapter friendsAdapter;
+    private ListenerRegistration userReg, friendsReg, outReg, inReg, postsReg;
+    private Presence.Handle presenceH;
+    private final List<String> friendIds = new ArrayList<>();
+    private final java.util.Map<String, Models.User> userCache = new java.util.HashMap<>();
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        Ui.statusBarBlue(this);
+        uid = getIntent().getStringExtra("uid");
+        if (uid == null) uid = Fb.uid();
+        if (uid == null) { finish(); return; }
+        mine = uid.equals(Fb.uid());
+
+        LinearLayout root = Ui.col(this);
+        root.setBackgroundColor(Ui.bg(this));
+        root.addView(Ui.pageBar(this, "Profile"));
+
+        viewAsBanner = Ui.row(this);
+        viewAsBanner.setBackgroundColor(0xFF1877F2);
+        Ui.pad(viewAsBanner, 14, 8, 14, 8);
+        viewAsBanner.setVisibility(View.GONE);
+        TextView vat = Ui.tvBold(this, "👁 Viewing profile as Public", 13, 0xFFFFFFFF);
+        viewAsBanner.addView(vat, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView exitVa = Ui.roundChip(this, "Exit View As", 0xFFFFFFFF, Ui.BLUE, 12);
+        Ui.pad(exitVa, 10, 4, 10, 4);
+        exitVa.setOnClickListener(v -> {
+            viewAsPublic = false;
+            viewAsBanner.setVisibility(View.GONE);
+            if (user != null) bindUser();
+            if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+        });
+        viewAsBanner.addView(exitVa);
+        root.addView(viewAsBanner);
+
+        ScrollView sv = new ScrollView(this);
+        LinearLayout body = Ui.col(this);
+
+        // cover + avatar
+        FrameLayout hero = new FrameLayout(this);
+        cover = new ImageView(this);
+        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        hero.addView(cover, new FrameLayout.LayoutParams(-1, Ui.dp(this, 170)));
+        FrameLayout.LayoutParams ap = new FrameLayout.LayoutParams(Ui.dp(this, 104), Ui.dp(this, 104), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        ap.bottomMargin = Ui.dp(this, -52);
+        avatar = new ImageView(this);
+        avatar.setBackground(Ui.roundStroke(this, 0xFFFFFFFF, 52, Ui.card(this), 3));
+        avatar.setClipToOutline(true);
+        hero.addView(avatar, ap);
+        body.addView(hero, new LinearLayout.LayoutParams(-1, Ui.dp(this, 170)));
+
+        LinearLayout infoCol = Ui.col(this);
+        infoCol.setBackgroundColor(Ui.card(this));
+        infoCol.setGravity(Gravity.CENTER_HORIZONTAL);
+        infoCol.setPadding(0, Ui.dp(this, 60), 0, Ui.dp(this, 12));
+        nameT = Ui.tvBold(this, "", 22, Ui.txt(this));
+        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
+        bioT = Ui.tv(this, "", 14, Ui.sub(this));
+        bioT.setGravity(Gravity.CENTER);
+        statsT = Ui.tv(this, "", 13, Ui.sub(this));
+        statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
+        LinearLayout nameRow = Ui.row(this);
+        nameRow.setGravity(Gravity.CENTER);
+        nameRow.addView(nameT);
+        nameTick = new android.widget.ImageView(this);
+        nameTick.setImageResource(com.friendbook.R.drawable.ic_verified);
+        nameTick.setVisibility(View.GONE);
+        int nts = Ui.dp(this, 19);
+        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
+        ntp.leftMargin = Ui.dp(this, 6);
+        nameRow.addView(nameTick, ntp);
+        infoCol.addView(nameRow);
+        infoCol.addView(presenceT);
+        infoCol.addView(bioT);
+        infoCol.addView(statsT);
+
+        LinearLayout actions = Ui.row(this);
+        actions.setGravity(Gravity.CENTER);
+        actions.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), 0);
+        primaryBtn = Ui.btn(this, "");
+        secondaryBtn = Ui.btnGrey(this, "");
+        TextView more = Ui.btnGrey(this, "•••");
+        LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1);
+        LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1);
+        b2.leftMargin = Ui.dp(this, 8);
+        LinearLayout.LayoutParams b3 = new LinearLayout.LayoutParams(Ui.dp(this, 52), Ui.dp(this, 40));
+        b3.leftMargin = Ui.dp(this, 8);
+        actions.addView(primaryBtn, b1);
+        actions.addView(secondaryBtn, b2);
+        actions.addView(more, b3);
+
+        // monetization row: boost (own profile) / subscribe (creator profile) / get-a-tick
+        moneyRow = Ui.row(this);
+        moneyRow.setGravity(Gravity.CENTER);
+        moneyRow.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), 0);
+        moneyRow.setVisibility(View.GONE);
+        boostBtn = Ui.btnOutline(this, "🚀 Boost Profile · 24h · Rs " + Admin.PRICE_BOOST_PROFILE, Icons.BLUE);
+        boostBtn.setOnClickListener(v -> boostProfile());
+        subscribeBtn = Ui.btn(this, "");
+        subscribeBtn.setOnClickListener(v -> subscribe());
+        tickBtn = Ui.btnGrey(this, "✓ Get a tick");
+        tickBtn.setOnClickListener(v -> startActivity(
+                new Intent(this, com.friendbook.bluetick.BlueTickActivity.class)));
+        LinearLayout.LayoutParams m1 = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1);
+        LinearLayout.LayoutParams m2 = new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1);
+        m2.leftMargin = Ui.dp(this, 8);
+        moneyRow.addView(boostBtn, m1);
+        moneyRow.addView(tickBtn, m2);
+        moneyRow.addView(subscribeBtn, new LinearLayout.LayoutParams(0, Ui.dp(this, 38), 1));
+        infoCol.addView(moneyRow);
+        infoCol.addView(actions);
+        more.setOnClickListener(this::moreMenu);
+        body.addView(infoCol);
+
+        // Intro details + Hobby pills + Story Highlights rail (Facebook-Lite 525 profile sections)
+        introCard = Ui.col(this);
+        introCard.setBackgroundColor(Ui.card(this));
+        Ui.pad(introCard, 14, 8, 14, 12);
+        introCard.setVisibility(View.GONE);
+        body.addView(introCard);
+
+        highlightsWrap = Ui.col(this);
+        highlightsWrap.setBackgroundColor(Ui.card(this));
+        Ui.pad(highlightsWrap, 12, 6, 12, 12);
+        highlightsWrap.setVisibility(View.GONE);
+        highlightsWrap.addView(Ui.tvBold(this, "✨ Story Highlights", 14, Ui.txt(this)));
+        android.widget.HorizontalScrollView hsv = new android.widget.HorizontalScrollView(this);
+        hsv.setHorizontalScrollBarEnabled(false);
+        highlightsRow = Ui.row(this);
+        highlightsRow.setPadding(0, Ui.dp(this, 8), 0, 0);
+        hsv.addView(highlightsRow);
+        highlightsWrap.addView(hsv);
+        body.addView(highlightsWrap);
+
+        body.addView(gap());
+
+        // 🔒 lock banner (visible when this profile is locked for the viewer)
+        lockBanner = Ui.col(this);
+        lockBanner.setBackground(Ui.round(this, Ui.card(this), 14));
+        lockBanner.setGravity(Gravity.CENTER);
+        Ui.pad(lockBanner, 20, 26, 20, 26);
+        lockBanner.setVisibility(View.GONE);
+        lockBanner.addView(Ui.tv(this, "🔒", 36, Ui.txt(this)));
+        TextView lockTitle = Ui.tvBold(this, "This profile is locked", 16, Ui.txt(this));
+        lockTitle.setPadding(0, Ui.dp(this, 8), 0, 0);
+        lockBanner.addView(lockTitle);
+        TextView lockSub = Ui.tv(this,
+                "Sirf friends is profile ki posts aur details dekh sakte hain — jaisi Facebook 'Profile lock' setting.", 12, Ui.sub(this));
+        lockSub.setGravity(Gravity.CENTER);
+        lockBanner.addView(lockSub);
+        body.addView(lockBanner);
+
+        // tabs
+        LinearLayout tabs = Ui.row(this);
+        tabs.setBackgroundColor(Ui.card(this));
+        Ui.pad(tabs, 12, 10, 12, 10);
+        tabsRow = tabs;
+        postsTab = tabChip("Posts", tabs, 0);
+        aboutTab = tabChip("About", tabs, 1);
+        friendsTab = tabChip("Friends", tabs, 2);
+        photosTab = tabChip("Photos", tabs, 3);
+        body.addView(tabs);
+        body.addView(gap());
+
+        // content boxes
+        postsBox = Ui.col(this);
+        pinnedTag = Ui.tvBold(this, "📌 Pinned post", 12, Ui.sub(this));
+        pinnedTag.setVisibility(View.GONE);
+        Ui.pad(pinnedTag, 14, 8, 14, 0);
+        postsBox.addView(pinnedTag);
+        RecyclerView postsRv = new RecyclerView(this);
+        postsRv.setLayoutManager(new LinearLayoutManager(this));
+        postsRv.setNestedScrollingEnabled(false);
+        postsAdapter = new FeedAdapter(this, this);
+        postsAdapter.showHeader = false;
+        postsAdapter.showFooter = false;
+        postsRv.setAdapter(postsAdapter);
+        postsBox.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(postsBox);
+
+        aboutBox = Ui.col(this);
+        body.addView(aboutBox);
+
+        friendsBox = Ui.col(this);
+        RecyclerView frv = new RecyclerView(this);
+        frv.setLayoutManager(new LinearLayoutManager(this));
+        frv.setNestedScrollingEnabled(false);
+        friendsAdapter = new UsersAdapter(this, null);
+        frv.setAdapter(friendsAdapter);
+        friendsBox.addView(frv, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(friendsBox);
+
+        // 📷 Photos grid (all media posts of this user — FB Lite profile Photos tab)
+        photosBox = Ui.col(this);
+        androidx.recyclerview.widget.RecyclerView prv = new androidx.recyclerview.widget.RecyclerView(this);
+        prv.setLayoutManager(new androidx.recyclerview.widget.GridLayoutManager(this, 3));
+        prv.setNestedScrollingEnabled(false);
+        photosAdapter = new PhotosAdapter();
+        prv.setAdapter(photosAdapter);
+        photosBox.addView(prv, new LinearLayout.LayoutParams(-1, -2));
+        body.addView(photosBox);
+
+        sv.addView(body);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(root);
+
+        cover.setOnClickListener(v -> {
+            if (user != null && user.coverUrl != null && !user.coverUrl.isEmpty()) {
+                Intent i = new Intent(this, FullscreenMediaActivity.class);
+                i.putExtra("type", "image");
+                i.putExtra("url", user.coverUrl);
+                startActivity(i);
+            }
+        });
+        avatar.setOnClickListener(v -> {
+            if (user != null && user.photoUrl != null && !user.photoUrl.isEmpty()) {
+                Intent i = new Intent(this, FullscreenMediaActivity.class);
+                i.putExtra("type", "image");
+                i.putExtra("url", user.photoUrl);
+                startActivity(i);
+            }
+        });
+        primaryBtn.setOnClickListener(v -> primary());
+        secondaryBtn.setOnClickListener(v -> secondary());
+        showTab(0);
+
+        // ⚡ 0.0ms Instant Profile & Posts Hydration from FastCache!
+        Models.User cachedUser = mine ? Fb.me : com.friendbook.core.FastCache.getUser(uid);
+        if (cachedUser != null) {
+            user = cachedUser;
+            bindUser();
+        }
+        List<Models.Post> cachedPosts = new ArrayList<>();
+        for (Models.Post p : com.friendbook.core.FastCache.getFeed()) {
+            if (p != null && uid.equals(p.authorId)) cachedPosts.add(p);
+        }
+        if (!cachedPosts.isEmpty() && postsAdapter != null) {
+            postsAdapter.setPosts(cachedPosts);
+        }
+    }
+
+    private View gap() {
+        View v = new View(this);
+        v.setBackgroundColor(Ui.bg(this));
+        v.setLayoutParams(new LinearLayout.LayoutParams(-1, Ui.dp(this, 8)));
+        return v;
+    }
+
+    private TextView tabChip(String label, LinearLayout parent, int idx) {
+        TextView t = Ui.tvBold(this, label, 14, Ui.sub(this));
+        t.setGravity(Gravity.CENTER);
+        Ui.pad(t, 8, 8, 8, 8);
+        parent.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        t.setOnClickListener(v -> showTab(idx));
+        return t;
+    }
+
+    private void showTab(int idx) {
+        postsBox.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+        aboutBox.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+        friendsBox.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
+        photosBox.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
+        TextView[] all = {postsTab, aboutTab, friendsTab, photosTab};
+        for (int i = 0; i < 4; i++) {
+            all[i].setTextColor(i == idx ? Ui.BLUE : Ui.sub(this));
+            all[i].setBackground(Ui.round(this, i == idx ? Ui.unread(this) : 0x00000000, 8));
+        }
+        if (idx == 1) renderAbout();
+        if (idx == 2) renderFriendsTab();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        userReg = Fb.db().collection("users").document(uid)
+                .addSnapshotListener((d, err) -> {
+                    if (d == null || !d.exists()) {
+                        nameT.setText("User not found");
+                        return;
+                    }
+                    user = Models.User.fromDoc(d);
+                    com.friendbook.core.FastCache.putUser(user);
+                    bindUser();
+                });
+        watchSubscription();
+        String me = Fb.uid();
+        if (me != null && !mine) {
+            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
+                    .addSnapshotListener((snap, err) -> {
+                        friendIds.clear();
+                        if (snap != null) {
+                            for (DocumentSnapshot d : snap) {
+                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
+                                if (!parts.contains(me)) continue;
+                                for (String p : parts) if (!p.equals(me)) friendIds.add(p);
+                            }
+                        }
+                        computeFriendState();
+                        renderFriendsTab();
+                        for (String f : friendIds) ensureUser(f);
+                    });
+            outReg = Fb.db().collection("friend_requests")
+                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending")
+                    .addSnapshotListener((snap, err) -> {
+                        hasOut = snap != null && !snap.isEmpty();
+                        computeFriendState();
+                    });
+            inReg = Fb.db().collection("friend_requests")
+                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending")
+                    .addSnapshotListener((snap, err) -> {
+                        hasIn = snap != null && !snap.isEmpty();
+                        incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
+                        computeFriendState();
+                    });
+            presenceH = Presence.watch(uid, (online, lastSeen) -> {
+                if (online) presenceT.setText("🟢 Active now");
+                else if (lastSeen > 0) presenceT.setText("Active " + Format.ago(lastSeen) + " ago");
+                else presenceT.setText("");
+            });
+        } else if (mine) {
+            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
+                    .addSnapshotListener((snap, err) -> {
+                        friendIds.clear();
+                        if (snap != null) {
+                            for (DocumentSnapshot d : snap)
+                                for (String p : Models.ChatRoom.fromDoc(d).participants)
+                                    if (!p.equals(me)) friendIds.add(p);
+                        }
+                        renderFriendsTab();
+                        for (String f : friendIds) ensureUser(f);
+                    });
+        }
+        startPostsWatcher();
+    }
+
+    private void startPostsWatcher() {
+        postsReg = Fb.db().collection("posts").whereEqualTo("authorId", uid)
+                .addSnapshotListener((snap, err) -> {
+                    List<Models.Post> list = new ArrayList<>();
+                    if (snap != null) {
+                        for (DocumentSnapshot d : snap) {
+                            Models.Post p = Models.Post.fromDoc(d);
+                            if (!canSee(p)) continue;
+                            list.add(p);
+                        }
+                    }
+                    Collections.sort(list, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
+                    // 📌 pinned post floats to the very top of the Posts tab
+                    String pin = user != null ? user.pinnedPostId : null;
+                    if (pin != null && !pin.isEmpty()) {
+                        for (int i = 0; i < list.size(); i++) {
+                            if (pin.equals(list.get(i).id)) {
+                                Models.Post pp = list.remove(i);
+                                list.add(0, pp);
+                                break;
+                            }
+                        }
+                    }
+                    boolean hasPin = pin != null && !pin.isEmpty() && !list.isEmpty()
+                            && pin.equals(list.get(0).id);
+                    if (pinnedTag != null) pinnedTag.setVisibility(hasPin ? View.VISIBLE : View.GONE);
+                    postsAdapter.setPosts(list);
+                    // photos grid: every image/video from this user's posts
+                    List<String> media = new ArrayList<>();
+                    for (Models.Post p : list) {
+                        if (p.mediaUrls != null) media.addAll(p.mediaUrls);
+                        if (p.mediaUrl != null && !p.mediaUrl.isEmpty()
+                                && !media.contains(p.mediaUrl)) media.add(p.mediaUrl);
+                    }
+                    photosAdapter.media.clear();
+                    photosAdapter.media.addAll(media);
+                    photosAdapter.notifyDataSetChanged();
+                });
+    }
+
+    /** 3-column media grid for the Photos tab. */
+    private class PhotosAdapter extends RecyclerView.Adapter<PhotosAdapter.VH> {
+        final List<String> media = new ArrayList<>();
+
+        class VH extends RecyclerView.ViewHolder {
+            ImageView iv;
+            VH(View v) {
+                super(v);
+                iv = (ImageView) v;
+            }
+        }
+
+        @androidx.annotation.NonNull
+        @Override public VH onCreateViewHolder(@androidx.annotation.NonNull android.view.ViewGroup p, int t) {
+            ImageView iv = new ImageView(p.getContext());
+            int s = (getResources().getDisplayMetrics().widthPixels - Ui.dp(ProfileActivity.this, 8)) / 3;
+            iv.setLayoutParams(new RecyclerView.LayoutParams(s, s));
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            int gap = Ui.dp(ProfileActivity.this, 1);
+            iv.setPadding(gap, gap, gap, gap);
+            return new VH(iv);
+        }
+
+        @Override public void onBindViewHolder(@androidx.annotation.NonNull VH h, int i) {
+            String url = media.get(i);
+            Ui.img(ProfileActivity.this, h.iv, url);
+            h.iv.setOnClickListener(v -> {
+                Intent in = new Intent(ProfileActivity.this, FullscreenMediaActivity.class);
+                in.putExtra("url", url);
+                startActivity(in);
+            });
+        }
+
+        @Override public int getItemCount() { return media.size(); }
+    }
+
+    private boolean canSee(Models.Post p) {
+        if (p.archived || p.trashedAt > 0) return false;
+        String me = Fb.uid();
+        if (mine && !viewAsPublic) return true;
+        if (viewAsPublic) return "Public".equalsIgnoreCase(p.privacy) || p.privacy == null || p.privacy.isEmpty();
+        if (p.authorId.equals(me)) return true;
+        if (user != null && user.restrictedUids != null && me != null && user.restrictedUids.contains(me)) {
+            return "Public".equalsIgnoreCase(p.privacy) || p.privacy == null || p.privacy.isEmpty();
+        }
+        if ("Only me".equalsIgnoreCase(p.privacy)) return false;
+        if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(me) || "friends".equals(friendState);
+        return true;
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (userReg != null) userReg.remove();
+        if (friendsReg != null) friendsReg.remove();
+        if (outReg != null) outReg.remove();
+        if (inReg != null) inReg.remove();
+        if (postsReg != null) postsReg.remove();
+        if (subReg != null) subReg.remove();
+        if (presenceH != null) presenceH.close();
+    }
+
+    private void bindUser() {
+        nameT.setText(user.displayName);
+        Icons.setTickBadge(nameTick, user.tickLevel, true);
+        bioT.setText(user.bio);
+        bioT.setVisibility(user.bio == null || user.bio.isEmpty() ? View.GONE : View.VISIBLE);
+        statsT.setText(Format.count(user.friendsCount) + " friends · "
+                + Format.count(user.followers.size()) + " followers · "
+                + Format.count(user.following.size()) + " following");
+        statsT.setOnClickListener(v -> {
+            if (user.followers.isEmpty() && user.following.isEmpty()) {
+                Ui.toast(this, "No followers yet");
+                return;
+            }
+            Ui.choose(this, "Open list", new String[]{"Followers", "Following"}, w -> {
+                Intent i = new Intent(this, com.friendbook.friends.FollowListActivity.class);
+                i.putExtra("uid", uid);
+                i.putExtra("mode", w == 0 ? "followers" : "following");
+                startActivity(i);
+            });
+        });
+        Ui.avatar(this, avatar, user.photoUrl);
+        if (user.coverUrl != null && !user.coverUrl.isEmpty()) Ui.img(this, cover, user.coverUrl);
+        else cover.setBackground(Ui.round(this, Ui.div(this), 0));
+
+        // 🔒 Profile lock (FB Lite): friends/owner see everything — strangers (or View As Public) get the lock card
+        boolean stranger = (!mine || viewAsPublic) && !friendIds.contains(uid);
+        boolean locked = user.profileLocked && stranger;
+        lockBanner.setVisibility(locked ? View.VISIBLE : View.GONE);
+        if (tabsRow != null) tabsRow.setVisibility(locked ? View.GONE : View.VISIBLE);
+        renderIntroAndHighlights(locked);
+        if (locked) {
+            postsBox.setVisibility(View.GONE);
+            aboutBox.setVisibility(View.GONE);
+            friendsBox.setVisibility(View.GONE);
+            photosBox.setVisibility(View.GONE);
+        } else {
+            showTab(0);
+        }
+
+        if (mine) {
+            primaryBtn.setText("✏️ Edit profile");
+            secondaryBtn.setText("＋ Add to story");
+            presenceT.setText("");
+            moneyRow.setVisibility(View.VISIBLE);
+            boostBtn.setVisibility(View.VISIBLE);
+            subscribeBtn.setVisibility(View.GONE);
+            tickBtn.setVisibility(user.tickRank() >= 3 ? View.GONE : View.VISIBLE);
+        } else {
+            boostBtn.setVisibility(View.GONE);
+            tickBtn.setVisibility(View.GONE);
+            moneyRow.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
+            subscribeBtn.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
+            updateSubscribeButton();
+        }
+        refreshButtons();
+    }
+
+    private void updateSubscribeButton() {
+        subscribeBtn.setText(subscribedActive ? "✓ Subscribed"
+                : "⭐ Subscribe $" + (user.subscriptionPrice > 0 ? user.subscriptionPrice : 5) + "/mo");
+    }
+
+    private void subscribe() {
+        if (subscribedActive) {
+            Ui.toast(this, "You're already subscribed to " + user.displayName);
+            return;
+        }
+        int price = user.subscriptionPrice > 0 ? user.subscriptionPrice : 5;
+        Intent i = new Intent(this, com.friendbook.pay.PayRequestActivity.class);
+        i.putExtra("type", "subscription");
+        i.putExtra("target_id", uid);
+        i.putExtra("amount", price);
+        i.putExtra("currency", "USD");
+        i.putExtra("title", "Subscribe to " + user.displayName);
+        startActivity(i);
+    }
+
+    private void boostProfile() {
+        Ui.confirm(this, "🚀 Boost Profile",
+                "Your profile will be pinned on TOP of the Home feed for 24 hours.\nCost: Rs "
+                        + Admin.PRICE_BOOST_PROFILE + " (JazzCash / Easypaisa).",
+                "Continue", () -> {
+                    Intent i = new Intent(this, com.friendbook.pay.PayRequestActivity.class);
+                    i.putExtra("type", "boost_profile");
+                    i.putExtra("amount", Admin.PRICE_BOOST_PROFILE);
+                    i.putExtra("title", "Boost Profile — 24h");
+                    startActivity(i);
+                });
+    }
+
+    /** live subscription state for viewers of this profile */
+    private void watchSubscription() {
+        if (subReg != null) subReg.remove();
+        if (mine || Fb.uid() == null) return;
+        subReg = Fb.db().collection("subscriptions")
+                .whereEqualTo("creatorId", uid)
+                .whereEqualTo("subscriberId", Fb.uid())
+                .limit(1)
+                .addSnapshotListener((snap, err) -> {
+                    subscribedActive = false;
+                    if (snap != null && !snap.isEmpty()) {
+                        com.google.firebase.firestore.DocumentSnapshot d = snap.getDocuments().get(0);
+                        java.util.Map<String, Object> m = d.getData();
+                        boolean active = "active".equals(Format.str(m, "status"));
+                        long exp = Format.ts(m == null ? null : m.get("expiry"));
+                        subscribedActive = active && (exp == 0 || exp > System.currentTimeMillis());
+                    }
+                    if (user != null && user.subscriptionsEnabled) updateSubscribeButton();
+                });
+    }
+
+    private void computeFriendState() {
+        if (mine) return;
+        if (friendIds.contains(uid)) friendState = "friends";
+        else if (hasOut) friendState = "outgoing";
+        else if (hasIn) friendState = "incoming";
+        else friendState = "none";
+        refreshButtons();
+        if (user != null) bindUser(); // re-apply profile-lock gate once friendships resolved
+    }
+
+    private void refreshButtons() {
+        if (mine || user == null) return;
+        switch (friendState) {
+            case "friends": primaryBtn.setText("✓ Friends"); break;
+            case "outgoing": primaryBtn.setText("✓ Requested"); break;
+            case "incoming": primaryBtn.setText("✔ Respond"); break;
+            default: primaryBtn.setText("＋ Add friend"); break;
+        }
+        boolean following = user.followers.contains(Fb.uid());
+        secondaryBtn.setText(following ? "Following ✓" : "＋ Follow");
+    }
+
+    private void primary() {
+        if (user == null) return;
+        if (mine) {
+            startActivity(new Intent(this, EditProfileActivity.class));
+            return;
+        }
+        String me = Fb.uid();
+        switch (friendState) {
+            case "friends":
+                Ui.choose(this, user.displayName, new String[]{"💬 Message", "Unfriend"}, w -> {
+                    if (w == 0) message();
+                    else unfriend();
+                });
+                break;
+            case "outgoing":
+                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () -> {
+                    Fb.db().collection("friend_requests")
+                            .whereEqualTo("fromUid", Fb.uid()).whereEqualTo("toUid", uid)
+                            .get().addOnSuccessListener(snap -> {
+                                for (DocumentSnapshot d : snap) d.getReference().delete();
+                            });
+                });
+                break;
+            case "incoming":
+                Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
+                    if (incomingRequestId == null) return;
+                    if (w == 0) {
+                        WriteBatch batch = Fb.db().batch();
+                        batch.update(Fb.db().collection("friend_requests").document(incomingRequestId), "status", "accepted");
+                        batch.set(Fb.db().collection("friends").document(), Fb.map(
+                                "participants", java.util.Arrays.asList(Fb.uid(), uid),
+                                "createdAt", FieldValue.serverTimestamp()));
+                        batch.update(Fb.db().collection("users").document(Fb.uid()), "friendsCount", FieldValue.increment(1));
+                        batch.update(Fb.db().collection("users").document(uid), "friendsCount", FieldValue.increment(1));
+                        batch.commit().addOnSuccessListener(x -> {
+                            Notify.send(uid, "friend_accept", "accepted your friend request");
+                            Ui.toast(this, "You're now friends 🎉");
+                        });
+                    } else {
+                        Fb.db().collection("friend_requests").document(incomingRequestId).delete();
+                    }
+                });
+                break;
+            default:
+                Map<String, Object> m = Fb.map(
+                        "fromUid", Fb.uid(), "toUid", uid,
+                        "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
+                        "status", "pending", "createdAt", FieldValue.serverTimestamp());
+                Fb.db().collection("friend_requests").add(m).addOnSuccessListener(x -> {
+                    Notify.send(uid, "friend_request", "sent you a friend request");
+                    Ui.toast(this, "Friend request sent ✓");
+                });
+                break;
+        }
+    }
+
+    private void secondary() {
+        if (user == null) return;
+        if (mine) {
+            startActivity(new Intent(this, com.friendbook.story.AddStoryActivity.class));
+            return;
+        }
+        boolean following = user.followers.contains(Fb.uid());
+        String me = Fb.uid();
+        Fb.db().collection("users").document(uid)
+                .set(Fb.map("followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)), SetOptions.merge());
+        Fb.db().collection("users").document(me)
+                .set(Fb.map("following", following ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid)), SetOptions.merge());
+        if (!following) Notify.send(uid, "follow", "started following you");
+    }
+
+    private void message() {
+        Intent i = new Intent(this, ChatActivity.class);
+        i.putExtra("uid", uid);
+        i.putExtra("name", user != null ? user.displayName : "");
+        startActivity(i);
+    }
+
+    private void unfriend() {
+        Ui.confirm(this, "Unfriend " + user.displayName + "?", "", "Unfriend", () -> {
+            String me = Fb.uid();
+            Fb.db().collection("friends").whereArrayContains("participants", me)
+                    .get().addOnSuccessListener(snap -> {
+                        for (DocumentSnapshot d : snap) {
+                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
+                            if (parts.contains(uid)) {
+                                d.getReference().delete();
+                                Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
+                                Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1));
+                            }
+                        }
+                    });
+        });
+    }
+
+    private static String firstOnly(String n) {
+        if (n == null) return "them";
+        int i = n.indexOf(' ');
+        return i > 0 ? n.substring(0, i) : n;
+    }
+
+    private void moreMenu(View v) {
+        PopupMenu pm = new PopupMenu(this, v);
+        if (!mine) {
+            boolean blocked = Fb.me != null && Fb.me.blocked.contains(uid);
+            pm.getMenu().add("💬 Message");
+            pm.getMenu().add("🖐 Poke " + (user != null ? firstOnly(user.displayName) : "them"));
+            pm.getMenu().add(blocked ? "🔓 Unblock user" : "🚫 Block user");
+            pm.getMenu().add("💙 See friendship");
+            pm.getMenu().add("🔗 Copy profile link");
+            pm.getMenu().add("🚩 Report profile");
+            boolean isFav = Fb.me != null && Fb.me.favoriteUids != null
+                    && Fb.me.favoriteUids.contains(uid);
+            pm.getMenu().add(isFav ? "✖ Remove from Favorites" : "⭐ Add to Favorites");
+            boolean isRestr = Fb.me != null && Fb.me.restrictedUids != null
+                    && Fb.me.restrictedUids.contains(uid);
+            pm.getMenu().add(isRestr ? "🔓 Remove from Restricted list" : "🙈 Add to Restricted list");
+            pm.getMenu().add("📱 Show QR code");
+            // 🛡 ADMIN: open ANY profile → grant/remove ticks, ban/unban right here
+            if (com.friendbook.core.Admin.isAdmin()) {
+                pm.getMenu().add("🛡 ✓ Tick level (admin)…");
+                pm.getMenu().add(user != null && user.banned
+                        ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
+                pm.getMenu().add("🛡 ⭐ Adjust stars (admin)…");
+                pm.getMenu().add("🛡 📢 Send official message (admin)…");
+                pm.getMenu().add("🛡 📊 User stats (admin)…");
+            }
+        } else {
+            pm.getMenu().add("✏️ Edit profile & Intro details");
+            pm.getMenu().add("👁 View as Public");
+            pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
+            pm.getMenu().add("📦 Archive & Recycle Bin");
+            pm.getMenu().add("📱 My Profile QR code");
+            pm.getMenu().add("📷 Change profile photo");
+            pm.getMenu().add("🖼 Change cover photo");
+        }
+        pm.setOnMenuItemClickListener(item -> {
+            String t = item.getTitle().toString();
+            if (t.contains("Message")) message();
+            else if (t.contains("Poke")) com.friendbook.social.PokesActivity.sendPoke(
+                    this, uid, user != null ? user.displayName : "them");
+            else if (t.contains("Unblock")) Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayRemove(uid)));
+            else if (t.contains("Block") && !t.contains("Unblock")) {
+                Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->
+                        Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
+            } else if (t.contains("See friendship")) {
+                showFriendship();
+            } else if (t.contains("Copy profile link")) {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("profile",
+                        "https://friendbook.app/user/" + uid));
+                Ui.toast(this, "Profile link copied 🔗");
+            } else if (t.contains("Tick level (admin)")) {
+                Ui.choose(this, "🛡 Set tick for " + (user != null ? user.displayName : "user"),
+                        new String[]{"✓ Blue tick", "✨ Gold tick", "💎 Diamond tick", "✕ Remove tick"},
+                        w -> com.friendbook.core.Admin.setTickLevel(this, uid,
+                                user != null ? user.displayName : "user",
+                                w == 0 ? "blue" : w == 1 ? "gold" : w == 2 ? "diamond" : "none"));
+            } else if (t.contains("Ban user") || t.contains("Unban user")) {
+                boolean unban = t.contains("Unban");
+                String name = user != null ? user.displayName : "this user";
+                Ui.confirm(this, unban ? "✓ Unban " + name + "?" : "🚫 Ban " + name + "?",
+                        unban ? "They can use friendbook again."
+                                : "They will be signed out and blocked from using friendbook.",
+                        unban ? "Unban" : "Ban", () -> {
+                            Fb.db().collection("users").document(uid)
+                                    .set(Fb.map("banned", !unban),
+                                            com.google.firebase.firestore.SetOptions.merge())
+                                    .addOnSuccessListener(x -> {
+                                        Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");
+                                        if (!unban) com.friendbook.core.Notify.send(
+                                                uid, "ban", "Your account was suspended by an admin.", null);
+                                    })
+                                    .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+                        });
+            } else if (t.contains("Adjust stars")) {
+                adminAdjustStars();
+            } else if (t.contains("official message")) {
+                adminMessageDialog();
+            } else if (t.contains("User stats (admin)")) {
+                adminStats();
+            } else if (t.contains("Favorites")) {
+                toggleFavorite();
+            } else if (t.contains("Restricted list")) {
+                boolean rem = Fb.me != null && Fb.me.restrictedUids != null && Fb.me.restrictedUids.contains(uid);
+                Fb.db().collection("users").document(Fb.uid())
+                        .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
+                Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list (sees Public posts only)");
+            } else if (t.contains("QR code")) {
+                Ui.showQrDialog(this, user != null ? user.displayName : "friendbook",
+                        "https://friendbook.app/user/" + uid);
+            } else if (t.contains("View as Public")) {
+                viewAsPublic = true;
+                viewAsBanner.setVisibility(View.VISIBLE);
+                if (user != null) bindUser();
+                if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+            } else if (t.contains("Lock profile") || t.contains("Unlock profile")) {
+                boolean next = !(user != null && user.profileLocked);
+                Fb.patchMe(Fb.map("profileLocked", next));
+                Ui.toast(this, next ? "Profile locked 🔒" : "Profile unlocked 🔓");
+            } else if (t.contains("Archive & Recycle Bin")) {
+                startActivity(new Intent(this, com.friendbook.settings.ArchiveTrashActivity.class));
+            } else if (t.contains("Report")) {
+                Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
+                        "type", "profile", "createdAt", FieldValue.serverTimestamp()));
+                Ui.toast(this, "Reported");
+            } else if (t.contains("profile photo") || t.contains("cover") || t.contains("Edit profile") || t.contains("details")) {
+                startActivity(new Intent(this, EditProfileActivity.class));
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    /** 💙 See friendship — FB Lite style: since when + mutual friends count. */
+    /** ⭐ Favorites toggle: their posts float to the top of your feed. */
+    private void toggleFavorite() {
+        if (Fb.me == null) return;
+        boolean removing = Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(uid);
+        Fb.db().collection("users").document(Fb.uid())
+                .update("favoriteUids", removing
+                        ? com.google.firebase.firestore.FieldValue.arrayRemove(uid)
+                        : com.google.firebase.firestore.FieldValue.arrayUnion(uid))
+                .addOnSuccessListener(x -> {
+                    if (removing) Fb.me.favoriteUids.remove(uid);
+                    else Fb.me.favoriteUids.add(uid);
+                    Ui.toast(this, removing ? "Removed from Favorites"
+                            : "⭐ Favorites — " + firstOnly(user != null ? user.displayName : "")
+                            + "'s posts show first");
+                })
+                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+    }
+
+    /** 🛡 ADMIN: adjust a user's stars balance (±). */
+    private void adminAdjustStars() {
+        int cur = user != null ? user.stars : 0;
+        android.widget.EditText e = Ui.input(this, "e.g. 50 or -20 (current: " + cur + " ⭐)");
+        e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
+                | android.text.InputType.TYPE_NUMBER_FLAG_SIGNED);
+        android.widget.LinearLayout box = Ui.col(this);
+        Ui.pad(box, 20, 10, 20, 0);
+        box.addView(e, new android.widget.LinearLayout.LayoutParams(-1, -2));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("🛡 ⭐ Adjust stars")
+                .setMessage("For " + (user != null ? user.displayName : "user")
+                        + " · current balance " + cur + " ⭐")
+                .setView(box)
+                .setPositiveButton("Apply", (d, w) -> {
+                    String s = e.getText().toString().trim();
+                    int delta;
+                    try { delta = Integer.parseInt(s); } catch (Exception ex) {
+                        Ui.toast(this, "Enter a number like 50 or -20"); return;
+                    }
+                    if (delta == 0) return;
+                    Fb.db().collection("users").document(uid)
+                            .update("stars", com.google.firebase.firestore.FieldValue.increment(delta))
+                            .addOnSuccessListener(x -> {
+                                if (user != null) user.stars += delta;
+                                com.friendbook.core.Notify.send(uid, "stars",
+                                        "⭐ " + delta + " Stars adjusted on your account.", null);
+                                Ui.toast(this, "Stars updated ✓ (" + (cur + delta) + ")");
+                            })
+                            .addOnFailureListener(err -> Ui.toast(this, err.getMessage()));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** 🛡 ADMIN: one-tap official message → user's notifications. */
+    private void adminMessageDialog() {
+        android.widget.EditText e = Ui.multi(this, "Message from friendbook Team…", 3);
+        android.widget.LinearLayout box = Ui.col(this);
+        Ui.pad(box, 20, 10, 20, 0);
+        box.addView(e, new android.widget.LinearLayout.LayoutParams(-1, -2));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("🛡 📢 Message user")
+                .setMessage("Delivered to " + (user != null ? user.displayName : "user")
+                        + "'s notifications as from friendbook Team.")
+                .setView(box)
+                .setPositiveButton("Send", (d, w) -> {
+                    String text = e.getText().toString().trim();
+                    if (text.isEmpty()) return;
+                    com.friendbook.core.Notify.send(uid, "team",
+                            "🛡 " + text, null);
+                    Ui.toast(this, "Sent ✓");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** 🛡 ADMIN: quick stats — posts, friends, stars, joined. */
+    private void adminStats() {
+        Ui.toast(this, "Counting posts…");
+        Fb.db().collection("posts").whereEqualTo("authorId", uid).limit(100).get()
+                .addOnSuccessListener(snap -> {
+                    int pcount = snap.size();
+                    Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
+                            "• Posts: " + pcount + (pcount >= 100 ? "+" : "") + "\n"
+                            + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
+                            + "• Followers: " + (user != null && user.followers != null
+                                    ? user.followers.size() : 0) + "\n"
+                            + "• Stars: " + (user != null ? user.stars : 0) + " ⭐\n"
+                            + "• Tick: " + (user != null
+                                    ? com.friendbook.core.Admin.tickLabel(user.tickLevel)
+                                    : "none") + "\n"
+                            + "• ID: " + uid);
+                })
+                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+    }
+
+    private void showFriendship() {        if (user == null) return;
+        String me = Fb.uid();
+        StringBuilder sb = new StringBuilder();
+        sb.append(user.displayName).append(" & ").append(Fb.myName()).append("\n\n");
+        int mutual = 0;
+        if (Fb.me != null)
+            for (String f : user.followers) if (Fb.me.following.contains(f) || Fb.me.followers.contains(f)) mutual++;
+        sb.append("👥 ").append(mutual).append(" mutual connections\n");
+        sb.append(friendState.equals("friends") ? "✓ You are friends\n" : "Not friends yet\n");
+        if (user.createdAt > 0) sb.append("🗓 They joined ").append(Format.dateTime(user.createdAt));
+        Ui.info(this, "💙 Friendship", sb.toString());
+    }
+
+    private void renderIntroAndHighlights(boolean locked) {
+        introCard.removeAllViews();
+        highlightsRow.removeAllViews();
+        if (locked || user == null) {
+            introCard.setVisibility(View.GONE);
+            highlightsWrap.setVisibility(View.GONE);
+            return;
+        }
+        int lines = 0;
+        if (user.professionalMode) {
+            introCard.addView(Ui.tvBold(this, "📊 Digital Creator · Professional Mode", 13, Ui.BLUE));
+            lines++;
+        }
+        if (user.pronouns != null && !user.pronouns.isEmpty()) {
+            addAboutRow(introCard, "💬", user.pronouns); lines++;
+        }
+        if (user.work != null && !user.work.isEmpty()) {
+            addAboutRow(introCard, "💼", "Works at " + user.work); lines++;
+        }
+        if (user.education != null && !user.education.isEmpty()) {
+            addAboutRow(introCard, "🎓", "Studied at " + user.education); lines++;
+        }
+        if (user.currentCity != null && !user.currentCity.isEmpty()) {
+            addAboutRow(introCard, "📍", "Lives in " + user.currentCity); lines++;
+        }
+        if (user.hometown != null && !user.hometown.isEmpty()) {
+            addAboutRow(introCard, "🏠", "From " + user.hometown); lines++;
+        }
+        if (user.relationship != null && !user.relationship.isEmpty()) {
+            addAboutRow(introCard, "❤️", user.relationship); lines++;
+        }
+        if (user.website != null && !user.website.isEmpty()) {
+            TextView web = Ui.tvBold(this, "🌐 " + user.website, 13, Ui.BLUE);
+            web.setPadding(0, Ui.dp(this, 6), 0, 0);
+            web.setOnClickListener(v -> Ui.openUrl(this,
+                    user.website.startsWith("http") ? user.website : "https://" + user.website));
+            introCard.addView(web);
+            lines++;
+        }
+        if (user.hobbies != null && !user.hobbies.isEmpty()) {
+            android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+            hs.setHorizontalScrollBarEnabled(false);
+            LinearLayout hrow = Ui.row(this);
+            hrow.setPadding(0, Ui.dp(this, 8), 0, 0);
+            for (String hb : user.hobbies) {
+                TextView pill = Ui.roundChip(this, "🎯 " + hb, Ui.inputBg(this), Ui.txt(this), 12);
+                Ui.pad(pill, 10, 5, 10, 5);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                lp.rightMargin = Ui.dp(this, 6);
+                hrow.addView(pill, lp);
+            }
+            hs.addView(hrow);
+            introCard.addView(hs);
+            lines++;
+        }
+        if (mine && !viewAsPublic) {
+            TextView editIntro = Ui.btnGrey(this, "Edit public details");
+            editIntro.setMinHeight(Ui.dp(this, 36));
+            LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-1, -2);
+            elp.topMargin = Ui.dp(this, 8);
+            editIntro.setOnClickListener(v -> startActivity(new Intent(this, EditProfileActivity.class)));
+            introCard.addView(editIntro, elp);
+            lines++;
+        }
+        introCard.setVisibility(lines > 0 ? View.VISIBLE : View.GONE);
+
+        // Story Highlights rail
+        List<String> hiIds = user.highlightStoryIds != null ? user.highlightStoryIds : new ArrayList<>();
+        if (hiIds.isEmpty() && (!mine || viewAsPublic)) {
+            highlightsWrap.setVisibility(View.GONE);
+            return;
+        }
+        highlightsWrap.setVisibility(View.VISIBLE);
+        if (mine && !viewAsPublic) {
+            LinearLayout addBubble = Ui.col(this);
+            addBubble.setGravity(Gravity.CENTER);
+            TextView plus = Ui.tvBold(this, "＋", 22, Ui.txt(this));
+            plus.setGravity(Gravity.CENTER);
+            plus.setBackground(Ui.roundStroke(this, Ui.inputBg(this), 31, Ui.div(this), 1));
+            addBubble.addView(plus, new LinearLayout.LayoutParams(Ui.dp(this, 62), Ui.dp(this, 62)));
+            addBubble.addView(Ui.tv(this, "New", 11, Ui.sub(this)));
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-2, -2);
+            alp.rightMargin = Ui.dp(this, 10);
+            addBubble.setOnClickListener(v -> startActivity(
+                    new Intent(this, com.friendbook.settings.ArchiveTrashActivity.class)));
+            highlightsRow.addView(addBubble, alp);
+        }
+        for (final String sid : hiIds) {
+            Fb.db().collection("stories").document(sid).get().addOnSuccessListener(sd -> {
+                if (!sd.exists()) return;
+                Models.Story s = Models.Story.fromDoc(sd);
+                LinearLayout b = Ui.col(this);
+                b.setGravity(Gravity.CENTER);
+                ImageView iv = new ImageView(this);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                if (s.mediaUrl != null && !s.mediaUrl.isEmpty()) Ui.avatar(this, iv, s.mediaUrl);
+                else iv.setBackground(Ui.circle(s.bgColor != 0 ? s.bgColor : Ui.BLUE));
+                b.addView(iv, new LinearLayout.LayoutParams(Ui.dp(this, 62), Ui.dp(this, 62)));
+                TextView cap = Ui.tv(this, s.caption == null || s.caption.isEmpty() ? "Story" : s.caption, 11, Ui.txt(this));
+                cap.setSingleLine(true);
+                cap.setMaxWidth(Ui.dp(this, 68));
+                b.addView(cap);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-2, -2);
+                blp.rightMargin = Ui.dp(this, 10);
+                b.setOnClickListener(v -> {
+                    Intent in = new Intent(this, com.friendbook.story.StoryViewerActivity.class);
+                    in.putExtra("author", uid);
+                    in.putExtra("story_id", sid);
+                    startActivity(in);
+                });
+                highlightsRow.addView(b, blp);
+            });
+        }
+    }
+
+    private void renderAbout() {
+        aboutBox.removeAllViews();
+        if (user == null) return;
+        LinearLayout card = Ui.col(this);
+        card.setBackgroundColor(Ui.card(this));
+        Ui.pad(card, 14, 12, 14, 14);
+        card.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        TextView title = Ui.tvBold(this, "About " + firstOnly(user.displayName), 17, Ui.txt(this));
+        card.addView(title);
+        addAboutRow(card, "📝", user.bio == null || user.bio.isEmpty() ? "No bio yet" : user.bio);
+        if (user.work != null && !user.work.isEmpty()) addAboutRow(card, "💼", "Works at " + user.work);
+        if (user.education != null && !user.education.isEmpty()) addAboutRow(card, "🎓", "Studied at " + user.education);
+        if (user.currentCity != null && !user.currentCity.isEmpty()) addAboutRow(card, "📍", "Lives in " + user.currentCity);
+        if (user.hometown != null && !user.hometown.isEmpty()) addAboutRow(card, "🏠", "From " + user.hometown);
+        if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "❤️", user.relationship);
+        if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
+        addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
+        addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
+
+        boolean canSeeContact = (mine && !viewAsPublic)
+                || "Public".equalsIgnoreCase(user.contactInfoPrivacy)
+                || ("Friends".equalsIgnoreCase(user.contactInfoPrivacy) && "friends".equals(friendState) && !viewAsPublic);
+        if (canSeeContact && user.birthday != null && !user.birthday.isEmpty())
+            addAboutRow(card, "🎂", "Birthday: " + user.birthday);
+        if (user.isAdmin) addAboutRow(card, "🛡", "friendbook Team");
+        if (canSeeContact && user.email != null && !user.email.isEmpty())
+            addAboutRow(card, "📧", user.email);
+        if (user.createdAt > 0) addAboutRow(card, "🗓", "Joined " + Format.dateTime(user.createdAt));
+        aboutBox.addView(card);
+    }
+
+    private void addAboutRow(LinearLayout card, String icon, String text) {
+        LinearLayout row = Ui.row(this);
+        row.setPadding(0, Ui.dp(this, 8), 0, 0);
+        TextView e = Ui.tv(this, icon, 16, Ui.sub(this));
+        e.setPadding(0, 0, Ui.dp(this, 12), 0);
+        row.addView(e);
+        TextView t = Ui.tv(this, text, 14, Ui.txt(this));
+        row.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(row);
+    }
+
+    private void renderFriendsTab() {
+        if (friendsBox == null || getApplicationContext() == null) return;
+        List<UsersAdapter.Row> rows = new ArrayList<>();
+        boolean canSeeFriends = (mine && !viewAsPublic)
+                || user == null
+                || "Public".equalsIgnoreCase(user.friendsListPrivacy)
+                || ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && "friends".equals(friendState) && !viewAsPublic);
+        if (!canSeeFriends) {
+            friendsAdapter.setData(rows);
+            return;
+        }
+        for (String fid : friendIds) {
+            Models.User u = userCache.get(fid);
+            if (u == null) continue;
+            UsersAdapter.Row r = new UsersAdapter.Row();
+            r.user = u;
+            r.subtitle = u.isOnline ? "🟢 Active now" : "Friend";
+            rows.add(r);
+        }
+        friendsAdapter.setData(rows);
+    }
+
+    private void ensureUser(String fuid) {
+        if (userCache.containsKey(fuid)) return;
+        Fb.getUser(fuid).addOnSuccessListener(u -> {
+            if (u != null) { userCache.put(fuid, u); renderFriendsTab(); }
+        });
+    }
+
+    // ---------- FeedAdapter.Host ----------
+    @Override public void openComments(Models.Post post) {
+        Intent i = new Intent(this, PostDetailActivity.class);
+        i.putExtra("post_id", post.id);
+        startActivity(i);
+    }
+
+    @Override public void openProfile(String uid2) {
+        if (uid2 == null || uid2.equals(uid)) return;
+        Intent i = new Intent(this, ProfileActivity.class);
+        i.putExtra("uid", uid2);
+        startActivity(i);
+    }
+
+    @Override public void editPost(Models.Post post) {
+        Intent i = new Intent(this, CreatePostActivity.class);
+        i.putExtra("edit_id", post.id);
+        startActivity(i);
+    }
+
+    @Override public void createStory() { }
+    @Override public void openStoryGroup(com.friendbook.story.StoriesAdapter.Group g) { }
+    @Override public void loadMore() { }
+    @Override public boolean hasMore() { return false; }
+}
