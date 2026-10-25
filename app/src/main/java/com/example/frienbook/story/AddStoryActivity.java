@@ -149,7 +149,7 @@ public class AddStoryActivity extends Activity {
         share.setText("Sharing…");
         String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
         String path = "stories/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
-        Fb.upload(path, mediaUri)
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, mediaUri)
                 .addOnSuccessListener(url -> {
                     Map<String, Object> m = Fb.map(
                             "authorId", Fb.uid(),

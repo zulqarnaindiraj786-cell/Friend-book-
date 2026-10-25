@@ -232,7 +232,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         sendBtn.setEnabled(false);
         if (commentImage != null) {
             String path = "comments/" + Fb.uid() + "/" + System.currentTimeMillis() + ".jpg";
-            Fb.upload(path, commentImage)
+            com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, commentImage)
                     .addOnSuccessListener(url -> write(text, url.toString()))
                     .addOnFailureListener(e -> { busy = false; sendBtn.setEnabled(true); Ui.toast(this, "Upload failed"); });
         } else {

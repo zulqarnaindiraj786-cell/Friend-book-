@@ -201,7 +201,7 @@ public class PayRequestActivity extends Activity {
         busy = true;
         statusT.setText("Uploading screenshot…");
         String path = "payments/" + Fb.uid() + "/" + System.currentTimeMillis() + ".jpg";
-        Fb.upload(path, picked).addOnSuccessListener(uri -> writeDocs(uri.toString()))
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, picked).addOnSuccessListener(uri -> writeDocs(uri.toString()))
                 .addOnFailureListener(e -> {
                     busy = false;
                     statusT.setText("Upload failed: " + e.getMessage());

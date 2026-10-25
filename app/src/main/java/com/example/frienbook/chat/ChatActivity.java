@@ -339,7 +339,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Ui.toast(this, "Uploading voice note…");
         Uri uri = Uri.fromFile(new java.io.File(voicePath));
         String path = "chat/" + chatId + "/voice_" + System.currentTimeMillis() + ".m4a";
-        Fb.upload(path, uri)
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> sendVoice(url.toString(), durSec))
                 .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
     }
@@ -513,7 +513,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             Uri uri = data.getData();
             Ui.toast(this, "Uploading photo…");
             String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
-            Fb.upload(path, uri)
+            com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
                     .addOnSuccessListener(url -> send(null, url.toString(), null))
                     .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
         }
