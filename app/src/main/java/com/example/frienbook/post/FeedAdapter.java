@@ -244,20 +244,57 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             boolean more = host != null && host.hasMore();
             fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
             fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
+            // Never leave a blank white feed unexplained — say WHY it's empty
+            fh.end.setText(posts.isEmpty()
+                    ? "😴 No posts to show yet.\nPull down to refresh.\nIf posts exist but stay missing, check the internet & try re-login."
+                    : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
             ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
         } else {
-            // Guard: realtime list swaps between measure & bind must not crash the feed
+            // Guard: realtime list swaps between measure & bind must not crash the feed.
+            // A broken post gets a small placeholder card — NEVER an invisible one
+            // (invisible cards made the home feed look like a blank white screen).
             int idx = postIndexForSlot(position - offset());
-            if (idx < 0 || idx >= posts.size()) { h.itemView.setVisibility(View.GONE); return; }
-            h.itemView.setVisibility(View.VISIBLE);
+            if (idx < 0 || idx >= posts.size()) {
+                showBrokenCard((PostVH) null, null);
+                return;
+            }
             try {
                 bindPost((PostVH) h, posts.get(idx));
             } catch (Throwable t) {
-                h.itemView.setVisibility(View.GONE);
+                android.util.Log.e("HomeFeed", "bindPost failed for "
+                        + (idx < posts.size() ? String.valueOf(posts.get(idx).id) : idx) + ": " + t);
+                showBrokenCard((PostVH) h, posts.get(idx));
             }
         }
+    }
+
+    /** Renders a minimal "something went wrong with this post" card instead of hiding it. */
+    private void showBrokenCard(PostVH vh, Models.Post p) {
+        if (vh == null) return;
+        try {
+            vh.video.stopPlayback();
+            vh.video.setVisibility(View.GONE);
+            vh.image.setVisibility(View.GONE);
+            vh.pager.setVisibility(View.GONE);
+            vh.playBadge.setVisibility(View.GONE);
+            vh.pageBadge.setVisibility(View.GONE);
+            vh.mediaBox.setVisibility(View.GONE);
+            vh.pollBox.setVisibility(View.GONE);
+            vh.sharedBox.setVisibility(View.GONE);
+            vh.tick.setVisibility(View.GONE);
+            vh.name.setText(p != null && p.authorName != null ? p.authorName : "friendbook");
+            vh.meta.setText(p != null ? Format.ago(p.createdAt) : "");
+            vh.content.setVisibility(View.VISIBLE);
+            vh.content.setText("⚠ This post couldn't be displayed.\nReport it via shake-to-feedback.");
+            vh.content.setTextColor(Ui.sub(activity));
+            vh.content.setTextSize(14);
+            vh.rEmojis.setText("");
+            vh.rCount.setText("");
+            vh.rRight.setText("");
+            vh.like.setText("👍 Like");
+        } catch (Throwable ignored) { }
     }
 
     /** #hashtags aur @mentions ko Facebook jaisa blue+bold style karo. */
