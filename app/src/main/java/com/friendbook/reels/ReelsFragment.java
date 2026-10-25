@@ -357,8 +357,15 @@ public class ReelsFragment extends Fragment {
             com.google.android.gms.ads.AdView adView;
             int boundKey = -1;
 
+            private static FrameLayout makeAdPageRoot(Activity a) {
+                FrameLayout r = new FrameLayout(a);
+                r.setLayoutParams(new RecyclerView.LayoutParams(-1, -1));
+                r.setBackgroundColor(0xFF0E0F12);
+                return r;
+            }
+
             ReelAdVH(Activity a) {
-                super(buildRoot(a));
+                super(makeAdPageRoot(a));
                 FrameLayout root = (FrameLayout) itemView;
                 LinearLayout col = Ui.col(a);
                 col.setGravity(Gravity.CENTER);
