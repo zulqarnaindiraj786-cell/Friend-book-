@@ -191,7 +191,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 }
             };
             Ui.avatar(activity, hh.composeAvatar, Fb.myPhoto());
-            hh.composeHint.setText("What's on your mind?");
+            String myFull = Fb.myName();
+            String first = (myFull != null && !myFull.trim().isEmpty())
+                    ? myFull.trim().split("\\s+")[0] : "";
+            hh.composeHint.setText(first.isEmpty() || "FriendBook".equalsIgnoreCase(first)
+                    ? "What's on your mind?"
+                    : "What's on your mind, " + first + "?");
             // 🚀 boosted profiles cards
             hh.boostBox.setVisibility(boostedUsers.isEmpty() ? View.GONE : View.VISIBLE);
             hh.boostCards.removeAllViews();
@@ -1359,23 +1364,29 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             row.addView(avWrap, new LinearLayout.LayoutParams(s + Ui.dp(c, 2), s + Ui.dp(c, 2)));
 
             composeHint = Ui.tv(c, "What's on your mind?", 15, Ui.txt(c));
+            composeHint.setSingleLine(true);
+            composeHint.setEllipsize(TextUtils.TruncateAt.END);
             composeHint.setBackground(Ui.round(c, Ui.inputBg(c), 22));
-            composeHint.setPadding(Ui.dp(c, 16), Ui.dp(c, 10), Ui.dp(c, 16), Ui.dp(c, 10));
+            composeHint.setPadding(Ui.dp(c, 16), Ui.dp(c, 11), Ui.dp(c, 16), Ui.dp(c, 11));
             LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, -2, 1);
             hp.leftMargin = Ui.dp(c, 10);
-            hp.rightMargin = Ui.dp(c, 10);
+            hp.rightMargin = Ui.dp(c, 8);
             row.addView(composeHint, hp);
 
+            // Big, bold Facebook-style Stacked Photo/Video gallery button -> opens Photos + Videos!
             LinearLayout photoCol = Ui.col(c);
             photoCol.setGravity(Gravity.CENTER);
-            ImageView photo = com.friendbook.core.Icons.icon(
-                    c, com.friendbook.core.Icons.IMAGE, 24, Ui.GREEN);
-            photoCol.addView(photo);
-            TextView photoLbl = Ui.tv(c, "Photo", 11, Ui.txt(c));
+            photoCol.setMinimumWidth(Ui.dp(c, 50));
+            Ui.pad(photoCol, 6, 4, 4, 4);
+            ImageView photo = new ImageView(c);
+            photo.setImageResource(com.friendbook.R.drawable.ic_fb_photo_video);
+            int pvSize = Ui.dp(c, 34);
+            photoCol.addView(photo, new LinearLayout.LayoutParams(pvSize, pvSize));
+            TextView photoLbl = Ui.tvBold(c, "Photo", 11, Ui.txt(c));
             photoCol.addView(photoLbl);
             photoCol.setOnClickListener(v -> {
                 Intent i = new Intent(c, CreatePostActivity.class);
-                i.putExtra("quick_mode", "photo");
+                i.putExtra("quick_mode", "photo_video");
                 c.startActivity(i);
             });
             row.addView(photoCol);

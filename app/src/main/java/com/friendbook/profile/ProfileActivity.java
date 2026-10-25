@@ -435,6 +435,52 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         allTabBox.addView(gap());
 
+        if (mine) {
+            LinearLayout profComposeCard = Ui.col(this);
+            profComposeCard.setBackgroundColor(Ui.card(this));
+            Ui.pad(profComposeCard, 14, 12, 14, 12);
+            profComposeCard.addView(Ui.tvBold(this, "Posts", 16, Ui.txt(this)));
+
+            LinearLayout cRow = Ui.row(this);
+            cRow.setGravity(Gravity.CENTER_VERTICAL);
+            cRow.setPadding(0, Ui.dp(this, 10), 0, 0);
+
+            ImageView myAv = new ImageView(this);
+            Ui.avatar(this, myAv, Fb.myPhoto());
+            int cs = Ui.dp(this, 40);
+            cRow.addView(myAv, new LinearLayout.LayoutParams(cs, cs));
+
+            TextView cHint = Ui.tv(this, "What's on your mind?", 15, Ui.txt(this));
+            cHint.setSingleLine(true);
+            cHint.setBackground(Ui.round(this, Ui.inputBg(this), 22));
+            cHint.setPadding(Ui.dp(this, 16), Ui.dp(this, 10), Ui.dp(this, 16), Ui.dp(this, 10));
+            cHint.setOnClickListener(v -> startActivity(new Intent(this, CreatePostActivity.class)));
+            LinearLayout.LayoutParams chp = new LinearLayout.LayoutParams(0, -2, 1);
+            chp.leftMargin = Ui.dp(this, 10);
+            chp.rightMargin = Ui.dp(this, 8);
+            cRow.addView(cHint, chp);
+
+            LinearLayout pCol = Ui.col(this);
+            pCol.setGravity(Gravity.CENTER);
+            pCol.setMinimumWidth(Ui.dp(this, 50));
+            Ui.pad(pCol, 6, 4, 4, 4);
+            ImageView pvIcon = new ImageView(this);
+            pvIcon.setImageResource(com.friendbook.R.drawable.ic_fb_photo_video);
+            int pvs = Ui.dp(this, 34);
+            pCol.addView(pvIcon, new LinearLayout.LayoutParams(pvs, pvs));
+            pCol.addView(Ui.tvBold(this, "Photo", 11, Ui.txt(this)));
+            pCol.setOnClickListener(v -> {
+                Intent i = new Intent(this, CreatePostActivity.class);
+                i.putExtra("quick_mode", "photo_video");
+                startActivity(i);
+            });
+            cRow.addView(pCol);
+
+            profComposeCard.addView(cRow);
+            allTabBox.addView(profComposeCard);
+            allTabBox.addView(gap());
+        }
+
         searchFilterBanner = Ui.tvBold(this, "", 13, Ui.BLUE);
         searchFilterBanner.setBackgroundColor(Ui.card(this));
         Ui.pad(searchFilterBanner, 14, 8, 14, 8);

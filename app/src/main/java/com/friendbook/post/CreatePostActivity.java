@@ -35,7 +35,8 @@ import java.util.Map;
 /** Create / edit post: text, photos (multi), video, feeling, background, poll, check-in, audience. */
 public class CreatePostActivity extends Activity {
 
-    private static final int PICK_IMAGE = 11, PICK_VIDEO = 12, CAPTURE_IMAGE = 13;
+    private static final int PICK_IMAGE = 11, PICK_VIDEO = 12, CAPTURE_IMAGE = 13, PICK_PHOTO_OR_VIDEO = 14;
+    private boolean openedInQuickMediaMode = false;
 
     /** Facebook-style background colors for text posts. */
     private static final int[] BG_COLORS = {
@@ -195,7 +196,7 @@ public class CreatePostActivity extends Activity {
         LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, -2);
         ap.topMargin = Ui.dp(this, 14);
         attach.setLayoutParams(ap);
-        attach.addView(attachBtn("🖼️ Photos", v -> pickMultiImages()));
+        attach.addView(attachBtn("🖼️ Photo/Video", v -> pickPhotosOrVideo()));
         attach.addView(attachBtn("🎥 Video", v -> pick(PICK_VIDEO, "video/*")));
         attach.addView(attachBtn("📷 Camera", v -> camera()));
         body.addView(attach);
@@ -227,8 +228,10 @@ public class CreatePostActivity extends Activity {
             loadForEdit();
         } else {
             String quickMode = getIntent().getStringExtra("quick_mode");
-            if ("photo".equals(quickMode)) pickMultiImages();
-            else if ("feeling".equals(quickMode)) pickFeeling();
+            if ("photo_video".equals(quickMode) || "photo".equals(quickMode)) {
+                openedInQuickMediaMode = true;
+                pickPhotosOrVideo();
+            } else if ("feeling".equals(quickMode)) pickFeeling();
             else if ("checkin".equals(quickMode)) checkInDialog();
             else if ("life_event".equals(quickMode)) lifeEventDialog();
             String draft = Prefs.postDraft(this);
@@ -565,6 +568,37 @@ public class CreatePostActivity extends Activity {
     }
 
     // ---------- media ----------
+    /** Opens unified Android gallery picker allowing BOTH Photos (up to 10) AND Videos in one tap! */
+    private void pickPhotosOrVideo() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(i, PICK_PHOTO_OR_VIDEO);
+        } catch (Throwable t) {
+            Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+            fallback.addCategory(Intent.CATEGORY_OPENABLE);
+            fallback.setType("*/*");
+            fallback.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            fallback.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            startActivityForResult(Intent.createChooser(fallback, "Select photo or video"), PICK_PHOTO_OR_VIDEO);
+        }
+    }
+
+    private boolean isVideoUri(Uri u) {
+        if (u == null) return false;
+        try {
+            String mime = getContentResolver().getType(u);
+            if (mime != null && mime.toLowerCase().startsWith("video/")) return true;
+        } catch (Throwable ignored) {}
+        String s = u.toString().toLowerCase();
+        return s.endsWith(".mp4") || s.endsWith(".mov") || s.endsWith(".mkv")
+                || s.endsWith(".webm") || s.endsWith(".3gp") || s.contains("/video/");
+    }
+
     private void pickMultiImages() {
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
         i.setType("image/*");
@@ -596,12 +630,40 @@ public class CreatePostActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (res != RESULT_OK) return;
+        if (res != RESULT_OK) {
+            if (openedInQuickMediaMode && mediaUris.isEmpty()
+                    && (text == null || text.getText().toString().trim().isEmpty())) {
+                openedInQuickMediaMode = false;
+                finish();
+            }
+            return;
+        }
+        openedInQuickMediaMode = false;
         applyBackground(0); // media and text-background don't mix
         if (req == CAPTURE_IMAGE && cameraFile != null) {
             mediaUris.clear();
             mediaUris.add(cameraFile);
             showMedia("image");
+        } else if (req == PICK_PHOTO_OR_VIDEO && data != null) {
+            mediaUris.clear();
+            ClipData clip = data.getClipData();
+            if (clip != null && clip.getItemCount() > 0) {
+                Uri first = clip.getItemAt(0).getUri();
+                if (isVideoUri(first)) {
+                    mediaUris.add(first);
+                    showMedia("video");
+                } else {
+                    for (int i = 0; i < clip.getItemCount() && mediaUris.size() < 10; i++) {
+                        Uri item = clip.getItemAt(i).getUri();
+                        if (!isVideoUri(item)) mediaUris.add(item);
+                    }
+                    if (!mediaUris.isEmpty()) showMedia("image");
+                }
+            } else if (data.getData() != null) {
+                Uri picked = data.getData();
+                mediaUris.add(picked);
+                showMedia(isVideoUri(picked) ? "video" : "image");
+            }
         } else if (req == PICK_IMAGE && data != null) {
             mediaUris.clear();
             ClipData clip = data.getClipData();
