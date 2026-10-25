@@ -131,7 +131,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         if (reg != null) reg.remove();
     }
 
-    @Override public void replyTo(Models.Comment c) {
+    @Override public void onReply(Models.Comment c) {
         replyingTo = c;
         replyChip.setVisibility(android.view.View.VISIBLE);
         replyChip.setText("Replying to " + c.authorName);
@@ -139,7 +139,12 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         input.requestFocus();
     }
 
-    @Override public void changed() { }
+    @Override public void openProfile(String uid) {
+        if (uid == null || uid.isEmpty()) return;
+        android.content.Intent i = new android.content.Intent(this, com.friendbook.profile.ProfileActivity.class);
+        i.putExtra("uid", uid);
+        startActivity(i);
+    }
 
     private void send() {
         if (busy) return;

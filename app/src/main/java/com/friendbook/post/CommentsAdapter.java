@@ -51,7 +51,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     public interface Host {
         void onReply(Models.Comment parent);
-        void openProfile(String uid);
+        default void openProfile(String uid) { }
     }
 
     public static class Row {
@@ -294,7 +294,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
         Ui.avatar(activity, h.av, c.authorPhoto);
         h.author.setText(c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
-        TickCache.bind(c.authorId, h.tick, false);
+        TickCache.attach(h.tick, c.authorId);
 
         boolean hasText = c.content != null && !c.content.isEmpty();
         h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
