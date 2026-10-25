@@ -307,16 +307,12 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
     private void send() {
         if (busy) return;
-        if (post != null && post.commentsDisabled) {
-            Ui.toast(this, "Comments are turned off for this post");
-            return;
-        }
         String text = input.getText().toString().trim();
         if (text.isEmpty() && pendingPhotoUri == null) return;
         String me = Fb.uid();
         if (me == null) return;
         busy = true;
-        Ui.hideKeyboard(input);
+        Ui.hideKeyboard(this);
 
         if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
@@ -393,7 +389,6 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                         Notify.send(replyTarget.authorId, "reply",
                                 Fb.myName() + " replied to your comment", postId);
                     }
-                    Notify.notifyMentions(text, postId, "a comment");
                 })
                 .addOnFailureListener(e -> {
                     busy = false;
