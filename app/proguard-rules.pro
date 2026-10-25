@@ -5,4 +5,4 @@
 -keep class com.bumptech.glide.** { *; }
 -dontwarn com.bumptech.glide.**
 # Firestore model reflection (we map manually, but keep names safe)
--keep class com.example.frienbook.models.** { *; }
+-keep class com.friendbook.models.** { *; }

@@ -16,7 +16,7 @@ already included). Follow these steps **once** in the
   (so it matches `https://friendbook-17551-default-rtdb.firebaseio.com`) → **Locked mode** is fine.
 - **Rules tab:** paste [`firebase/database.rules.json`](firebase/database.rules.json) → **Publish**.
 - If your RTDB URL is different (e.g. `.europe-west1.firebasedatabase.app`), copy it into
-  `Fb.RTDB_URL` in `app/src/main/java/com/example/frienbook/core/Fb.java`.
+  `Fb.RTDB_URL` in `app/src/main/java/com/friendbook/core/Fb.java`.
 - *Note:* if RTDB doesn't exist, the app still works — presence/typing gracefully fall
   back to Firestore-only.
 
@@ -25,18 +25,8 @@ already included). Follow these steps **once** in the
 - **Rules tab:** paste [`firebase/storage.rules`](firebase/storage.rules) → **Publish**.
 
 ## 5. Android app registration (package name)
-Firebase already knows `com.example.friendbook` (the Flutter app).
-This native app uses **`com.example.frienbook`**. You have two options:
-
-**Option A — recommended:** In *Project settings → Your apps* add an Android app with
-package `com.example.frienbook`, download the new `google-services.json` and replace
-`app/google-services.json` with it.
-
-**Option B — keep the included config:** The included `google-services.json` already
-contains a client entry for `com.example.frienbook` and will build & run fine.
-If Firebase rejects requests for the new package (rare — only when API-key restrictions
-are enabled), do Option A, or in Google Cloud console add `com.example.frienbook` +
-your signing-certificate SHA-1 to the API key's Android app restrictions.
+This native app uses **`com.friendbook`** (registered in `app/google-services.json` under
+Firebase project `friendbook-17551`).
 
 ## 6. (Optional) Security hardening
 The included Firestore rules are permissive-but-authenticated (any signed-in user can

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.frienbook'
+    namespace 'com.friendbook'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.example.frienbook'
+        applicationId 'com.friendbook'
         minSdk 24
         targetSdk 35
         versionCode 6
