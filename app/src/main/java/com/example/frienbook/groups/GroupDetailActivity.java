@@ -61,6 +61,17 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         jp.topMargin = Ui.dp(this, 8);
         head.addView(joinBtn, jp);
         joinBtn.setOnClickListener(v -> toggleJoin());
+        // 🔗 invite friends with a link (friendbook.app/group?id=…)
+        TextView invite = Ui.tvBold(this, "🔗 Copy invite link", 13, Ui.BLUE);
+        invite.setPadding(0, Ui.dp(this, 10), 0, 0);
+        invite.setOnClickListener(v -> {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("group",
+                    "https://friendbook.app/group?id=" + groupId));
+            Ui.toast(this, "Group invite link copied 🔗");
+        });
+        head.addView(invite);
         root.addView(head);
 
         // member-only composer

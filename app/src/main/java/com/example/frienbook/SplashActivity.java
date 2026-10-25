@@ -47,6 +47,15 @@ public class SplashActivity extends Activity {
         if (data != null && "friendbook.app".equals(data.getHost())) {
             String ref = data.getQueryParameter("ref");
             if (ref != null && !ref.isEmpty()) Prefs.setPendingReferral(this, ref);
+            // 🔗 group invite links: https://friendbook.app/group?id=GROUP_ID
+            String gid = data.getQueryParameter("id");
+            if (gid != null && !gid.isEmpty() && Fb.signedIn()) {
+                Intent g = new Intent(this, com.example.frienbook.groups.GroupDetailActivity.class);
+                g.putExtra("group_id", gid);
+                startActivity(g);
+                finish();
+                return;
+            }
         }
         if (!Fb.signedIn()) {
             startActivity(new Intent(this, LoginActivity.class));

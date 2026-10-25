@@ -32,6 +32,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/invite" />
+            <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/group" />
             </intent-filter>
         </activity>
 

@@ -195,8 +195,13 @@ public class SettingsActivity extends Activity {
                 "Terms & policies",
                 "1. Be kind and respectful.\n2. No spam, hate speech or harassment.\n3. Respect others' privacy.\n4. Content you post is yours; you grant friendbook a license to display it.\n5. Violating accounts may be removed.")));
         body.addView(div());
-        body.addView(rowI(Icons.INFO, "About", "friendbook lite 3.0", () -> Ui.info(this, "About",
-                "friendbook lite 3.0\n\nA fast, light social app.\nRealtime feed, stories, reels, messenger and more — powered by Firebase.\n\nPackage: com.example.frienbook")));
+        body.addView(rowI(Icons.HELP, "Help & support", "FAQs · contact us", this::helpDialog));
+        body.addView(div());
+        body.addView(rowI(Icons.INFO, "About", "friendbook lite 525.0.0.102", () -> Ui.info(this, "About",
+                "friendbook lite 525.0.0.102\n\nA fast, light social app — Facebook-Lite style.\n" +
+                "Feed • Stories • Reels • Watch • Groups • Events • Pages • Marketplace\n" +
+                "Messenger (voice + stickers) • Pokes • Leaderboard • Daily bonus\n" +
+                "Media on Cloudinary • Realtime on Firebase.\n\nPackage: com.example.frienbook")));
         body.addView(cardEnd());
 
         // ============ LOG OUT ============
@@ -223,7 +228,45 @@ public class SettingsActivity extends Activity {
 
     // ---------- rows ----------
     /** 🛡 FB-style guided privacy checkup — 3 quick steps. */
+    /** ❓ Help & support — offline FAQs + email support (FB Lite help center style). */
+    private void helpDialog() {
+        String[] opts = {
+                "🔐 Login / account problems",
+                "📮 Post not showing on feed?",
+                "⭐ Stars, ticks & payments",
+                "📤 How uploads work (Cloudinary)",
+                "📧 Email support"};
+        Ui.choose(this, "Help & support", opts, w -> {
+            if (w == 0) Ui.info(this, "🔐 Login & account",
+                    "• Sign in with the SAME email you registered with.\n"
+                            + "• Forgot password? Use 'Forgot password' — a 6-digit code goes to your email.\n"
+                            + "• Banned or suspended accounts get signed out automatically.\n"
+                            + "• Sessions: Settings → Where you're logged in.");
+            else if (w == 1) Ui.info(this, "📮 Posts & feed",
+                    "• Pull down on home to refresh.\n"
+                            + "• Check your post's audience: ⋮ → Who can see this?\n"
+                            + "• 'Only me' posts are private, 'Friends' need a friendship.\n"
+                            + "• If a post shows ⚠, shake your phone to send a report.");
+            else if (w == 2) Ui.info(this, "⭐ Stars & ticks",
+                    "• Earn ⭐ from live gifts, referrals and the daily bonus.\n"
+                            + "• 5 invites → free ✓ blue tick. 20 → gold. 50 → diamond.\n"
+                            + "• Paid options upload a payment screenshot — admin approves.\n"
+                            + "• Track everything in Settings → Monetization.");
+            else if (w == 3) Ui.info(this, "📤 Media uploads",
+                    "• Photos, videos, reels, stories and voice notes upload to Cloudinary.\n"
+                            + "• If Cloudinary is unreachable, uploads retry via Firebase automatically.\n"
+                            + "• Large videos may take a while on slow networks — stay on the screen.");
+            else {
+                Intent i = new Intent(Intent.ACTION_SENDTO);
+                i.setData(android.net.Uri.parse("mailto:zulqarnaindiraj786@gmail.com"));
+                i.putExtra(Intent.EXTRA_SUBJECT, "friendbook lite — support request");
+                try { startActivity(i); } catch (Exception e) { Ui.toast(this, "No email app installed"); }
+            }
+        });
+    }
+
     private void privacyCheckup() {
+
         boolean locked = Fb.me != null && Fb.me.profileLocked;
         Ui.choose(this, "Privacy checkup ✓\n\n"
                         + "1. Default audience: " + Prefs.defaultPrivacy(this) + "\n"

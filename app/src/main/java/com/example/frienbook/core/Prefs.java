@@ -75,6 +75,47 @@ public class Prefs {
     public static boolean autoplay(Context c) { return p(c).getBoolean("autoplay", true); }
     public static void setAutoplay(Context c, boolean v) { p(c).edit().putBoolean("autoplay", v).apply(); }
 
+    // 🎬 v525-style autoplay modes: 0=Never, 1=On Wi-Fi only, 2=Always (migrates old bool pref)
+    public static int autoplayMode(Context c) {
+        int v = p(c).getInt("autoplayMode", -1);
+        if (v < 0) { v = autoplay(c) ? 2 : 0; setAutoplayMode(c, v); }
+        return v;
+    }
+    public static void setAutoplayMode(Context c, int v) { p(c).edit().putInt("autoplayMode", v).apply(); }
+
+    /** 📶 true when the active network is Wi-Fi (or ethernet) — used by autoplay mode 1. */
+    public static boolean onWifi(Context c) {
+        try {
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network n = cm.getActiveNetwork();
+            if (n == null) return false;
+            android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+            return caps != null && (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET));
+        } catch (Throwable t) { return true; } // be permissive rather than block playback
+    }
+
+    // 🔍 recent searches (max 8, newest first) — FB Lite search screen
+    public static java.util.List<String> searchHistory(Context c) {
+        String s = p(c).getString("searchHistory", "");
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (s != null && !s.isEmpty())
+            for (String q : s.split("\\n")) if (!q.trim().isEmpty()) out.add(q);
+        return out;
+    }
+    public static void addSearch(Context c, String q) {
+        if (q == null) return;
+        q = q.trim();
+        if (q.isEmpty()) return;
+        java.util.List<String> h = searchHistory(c);
+        h.remove(q);
+        h.add(0, q);
+        while (h.size() > 8) h.remove(h.size() - 1);
+        p(c).edit().putString("searchHistory", android.text.TextUtils.join("\n", h)).apply();
+    }
+    public static void clearSearch(Context c) { p(c).edit().remove("searchHistory").apply(); }
+
     // ---- pinned chats ----
     public static Set<String> pinnedChats(Context c) {
         return new HashSet<>(p(c).getStringSet("pinnedChats", new HashSet<>()));

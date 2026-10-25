@@ -39,6 +39,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     private UsersAdapter usersAdapter;
     private FeedAdapter postsAdapter;
     private TextView peopleTitle, postsTitle, noResults;
+    private LinearLayout historyBox;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable pending;
 
@@ -72,6 +73,11 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         noResults.setGravity(android.view.Gravity.CENTER);
         Ui.pad(noResults, 24, 50, 24, 0);
         body.addView(noResults);
+
+        // 🔍 recent searches (FB Lite: chips when the box is empty)
+        historyBox = Ui.col(this);
+        body.addView(historyBox, 0);
+        renderHistory();
 
         peopleTitle = section("People");
         body.addView(peopleTitle);
@@ -116,6 +122,31 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         return v;
     }
 
+    /** Recent searches list — visible only when the input is empty. */
+    private void renderHistory() {
+        if (historyBox == null) return;
+        historyBox.removeAllViews();
+        java.util.List<String> hist = com.example.frienbook.core.Prefs.searchHistory(this);
+        if (hist.isEmpty()) { historyBox.setVisibility(View.GONE); return; }
+        historyBox.setVisibility(View.VISIBLE);
+        TextView head = Ui.tvBold(this, "Recent", 15, Ui.txt(this));
+        Ui.pad(head, 14, 10, 14, 2);
+        historyBox.addView(head);
+        for (final String q : hist) {
+            TextView row = Ui.tv(this, "🕘  " + q, 14, Ui.sub(this));
+            Ui.pad(row, 16, 10, 16, 10);
+            row.setOnClickListener(v -> { input.setText(q); input.setSelection(q.length()); });
+            historyBox.addView(row);
+        }
+        TextView clear = Ui.tvBold(this, "🧹 Clear recent searches", 13, Ui.BLUE);
+        Ui.pad(clear, 16, 8, 16, 12);
+        clear.setOnClickListener(v -> {
+            com.example.frienbook.core.Prefs.clearSearch(this);
+            renderHistory();
+        });
+        historyBox.addView(clear);
+    }
+
     private void search(String q) {
         if (q.isEmpty()) {
             peopleTitle.setVisibility(View.GONE);
@@ -123,8 +154,11 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             usersAdapter.setData(new ArrayList<>());
             postsAdapter.setPosts(new ArrayList<>());
             noResults.setText("Type to search for people and posts");
+            renderHistory();
             return;
         }
+        if (historyBox != null) historyBox.setVisibility(View.GONE);
+        com.example.frienbook.core.Prefs.addSearch(this, q);
 
         // ---- people: displayName prefix search in both cases ----
         Map<String, Models.User> people = new LinkedHashMap<>();
