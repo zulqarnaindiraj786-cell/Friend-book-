@@ -59,6 +59,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab, photosTab;
     private LinearLayout postsBox, aboutBox, friendsBox, photosBox;
+    private TextView pinnedTag;
     private PhotosAdapter photosAdapter;
     private LinearLayout lockBanner;
     private View tabsRow;
@@ -192,6 +193,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         // content boxes
         postsBox = Ui.col(this);
+        pinnedTag = Ui.tvBold(this, "📌 Pinned post", 12, Ui.sub(this));
+        pinnedTag.setVisibility(View.GONE);
+        Ui.pad(pinnedTag, 14, 8, 14, 0);
+        postsBox.addView(pinnedTag);
         RecyclerView postsRv = new RecyclerView(this);
         postsRv.setLayoutManager(new LinearLayoutManager(this));
         postsRv.setNestedScrollingEnabled(false);
@@ -350,6 +355,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         }
                     }
                     Collections.sort(list, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
+                    // 📌 pinned post floats to the very top of the Posts tab
+                    String pin = user != null ? user.pinnedPostId : null;
+                    if (pin != null && !pin.isEmpty()) {
+                        for (int i = 0; i < list.size(); i++) {
+                            if (pin.equals(list.get(i).id)) {
+                                Models.Post pp = list.remove(i);
+                                list.add(0, pp);
+                                break;
+                            }
+                        }
+                    }
+                    boolean hasPin = pin != null && !pin.isEmpty() && !list.isEmpty()
+                            && pin.equals(list.get(0).id);
+                    if (pinnedTag != null) pinnedTag.setVisibility(hasPin ? View.VISIBLE : View.GONE);
                     postsAdapter.setPosts(list);
                     // photos grid: every image/video from this user's posts
                     List<String> media = new ArrayList<>();
@@ -647,11 +666,18 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         });
     }
 
+    private static String firstOnly(String n) {
+        if (n == null) return "them";
+        int i = n.indexOf(' ');
+        return i > 0 ? n.substring(0, i) : n;
+    }
+
     private void moreMenu(View v) {
         PopupMenu pm = new PopupMenu(this, v);
         if (!mine) {
             boolean blocked = Fb.me != null && Fb.me.blocked.contains(uid);
             pm.getMenu().add("💬 Message");
+            pm.getMenu().add("🖐 Poke " + (user != null ? firstOnly(user.displayName) : "them"));
             pm.getMenu().add(blocked ? "🔓 Unblock user" : "🚫 Block user");
             pm.getMenu().add("💙 See friendship");
             pm.getMenu().add("🔗 Copy profile link");
@@ -664,6 +690,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         pm.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
             if (t.contains("Message")) message();
+            else if (t.contains("Poke")) com.example.frienbook.social.PokesActivity.sendPoke(
+                    this, uid, user != null ? user.displayName : "them");
             else if (t.contains("Unblock")) Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayRemove(uid)));
             else if (t.contains("Block") && !t.contains("Unblock")) {
                 Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->

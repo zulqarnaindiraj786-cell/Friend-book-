@@ -22,6 +22,9 @@ public class Models {
         public int subscriptionPrice;     // USD per month (2 / 5 / 10)
         public boolean profileLocked;     // 🔒 FB-style locked profile
         public List<String> favoriteUids = new ArrayList<>(); // feed "Favorites" first
+        public String pinnedPostId;       // 📌 post pinned on own profile
+        public int dailyStreak;           // 🎁 consecutive daily-bonus days
+        public long lastBonusAt;          // 🎁 last daily-bonus claim (epoch ms)
 
         /** 0 none, 1 blue, 2 gold, 3 diamond — used for "only upgrade" checks. */
         public int tickRank() {
@@ -60,6 +63,10 @@ public class Models {
             u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
             u.profileLocked = Format.boolOf(m, "profileLocked");
             u.favoriteUids = Format.listOf(m, "favoriteUids");
+            u.pinnedPostId = Format.str(m, "pinnedPostId");
+            u.dailyStreak = Format.intOf(m, "dailyStreak");
+            Object lb = m == null ? null : m.get("lastBonusAt");
+            u.lastBonusAt = lb instanceof Number ? ((Number) lb).longValue() : Format.ts(lb);
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
             u.blocked = Format.listOf(m, "blockedUsers");

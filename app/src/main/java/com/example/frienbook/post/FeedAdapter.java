@@ -665,6 +665,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (!boostedPostIds.contains(p.id))
             menu.getMenu().add("🚀 Boost Post — Rs " + com.example.frienbook.core.Admin.PRICE_BOOST_POST + " · more reach");
         if (mine) {
+            boolean pinned = Fb.me != null && p.id != null && p.id.equals(Fb.me.pinnedPostId);
+            menu.getMenu().add(pinned ? "📌 Unpin from profile" : "📌 Pin to profile");
             menu.getMenu().add("✏️ Edit post");
             menu.getMenu().add("🌐 Who can see this? (" + p.privacy + ")");
             menu.getMenu().add("🗑 Delete post");
@@ -684,6 +686,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
             if (t.contains("Unsave")) toggleSave(p, true);
+            else if (t.contains("Pin to profile") || t.contains("Unpin from profile")) {
+                boolean unpin = t.contains("Unpin");
+                java.util.Map<String, Object> upd = new HashMap<>();
+                upd.put("pinnedPostId", unpin
+                        ? com.google.firebase.firestore.FieldValue.delete() : p.id);
+                Fb.db().collection("users").document(Fb.uid()).update(upd)
+                        .addOnSuccessListener(x -> Ui.toast(activity,
+                                unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
+                        .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
+            }
             else if (t.contains("Save post")) toggleSave(p, false);
             else if (t.contains("Boost Post")) {
                 Intent bi = new Intent(activity, com.example.frienbook.pay.PayRequestActivity.class);

@@ -78,6 +78,8 @@
         <activity android:name=".post.WatchActivity" android:screenOrientation="portrait" />
         <activity android:name=".post.MemoriesActivity" android:screenOrientation="portrait" />
         <activity android:name=".social.EventsActivity" android:screenOrientation="portrait" />
+        <activity android:name=".social.PokesActivity" android:screenOrientation="portrait" />
+        <activity android:name=".social.LeaderboardActivity" android:screenOrientation="portrait" />
         <activity android:name=".social.PagesActivity" android:screenOrientation="portrait" />
         <activity android:name=".settings.FeedPreferencesActivity" android:screenOrientation="portrait" />
         <activity android:name=".settings.SessionsActivity" android:screenOrientation="portrait" />

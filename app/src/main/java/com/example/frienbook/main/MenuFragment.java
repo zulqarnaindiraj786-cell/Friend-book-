@@ -100,6 +100,12 @@ public class MenuFragment extends Fragment {
                 () -> startActivity(new Intent(a, com.example.frienbook.social.PagesActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.SNOOZE, "On this day", "Your memories from past years",
                 () -> startActivity(new Intent(a, com.example.frienbook.post.MemoriesActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.GIFT, "🎁 Daily bonus", "Claim 5 ⭐ every day — keep your streak 🔥",
+                () -> claimDailyBonus(a)));
+        body.addView(item(a, com.example.frienbook.core.Icons.USER_PLUS, "🖐 Pokes", "Who poked you — poke them back!",
+                () -> startActivity(new Intent(a, com.example.frienbook.social.PokesActivity.class))));
+        body.addView(item(a, com.example.frienbook.core.Icons.CHART, "🏆 Leaderboard", "Top friends by ⭐ stars",
+                () -> startActivity(new Intent(a, com.example.frienbook.social.LeaderboardActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.LIST, "Activity log", "Your posts & comments in one place",
                 () -> startActivity(new Intent(a, com.example.frienbook.settings.ActivityLogActivity.class))));
         body.addView(item(a, com.example.frienbook.core.Icons.FRIENDS, "Friends", "Requests, suggestions, all friends",
@@ -272,5 +278,52 @@ public class MenuFragment extends Fragment {
     public void onStop() {
         super.onStop();
         if (meReg != null) meReg.remove();
+    }
+
+    /**
+     * 🎁 Daily bonus — claim +5 ⭐ once per day; streak grows on consecutive days.
+     * Writes users/{me}: stars += 5, dailyStreak, lastBonusAt (own-doc update).
+     */
+    private void claimDailyBonus(final android.app.Activity a) {
+        final String me = com.example.frienbook.core.Fb.uid();
+        if (me == null) return;
+        com.example.frienbook.core.Fb.db().collection("users").document(me).get()
+                .addOnSuccessListener(d -> {
+                    long now = System.currentTimeMillis();
+                    java.util.Calendar cal = java.util.Calendar.getInstance();
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+                    cal.set(java.util.Calendar.MINUTE, 0);
+                    cal.set(java.util.Calendar.SECOND, 0);
+                    cal.set(java.util.Calendar.MILLISECOND, 0);
+                    long todayStart = cal.getTimeInMillis();
+
+                    Object lb = d.get("lastBonusAt");
+                    long last = lb instanceof Number ? ((Number) lb).longValue()
+                            : lb instanceof com.google.firebase.Timestamp
+                            ? ((com.google.firebase.Timestamp) lb).toDate().getTime() : 0;
+                    Object st = d.get("dailyStreak");
+                    int streak = st instanceof Number ? ((Number) st).intValue() : 0;
+
+                    if (last >= todayStart) {
+                        Ui.info(a, "🎁 Daily bonus",
+                                "Already claimed today!\n\n🔥 Streak: " + streak + " day(s)\n"
+                                        + "Come back tomorrow for +5 ⭐");
+                        return;
+                    }
+                    int newStreak = (last >= todayStart - 24L * 3600_000L) ? streak + 1 : 1;
+                    int bonus = 5 + Math.min(newStreak - 1, 5); // streak day 6+ → 10 ⭐
+                    java.util.Map<String, Object> upd = new java.util.HashMap<>();
+                    upd.put("stars", com.google.firebase.firestore.FieldValue.increment(bonus));
+                    upd.put("dailyStreak", newStreak);
+                    upd.put("lastBonusAt", now);
+                    com.example.frienbook.core.Fb.db().collection("users").document(me).update(upd)
+                            .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
+                                    "+" + bonus + " ⭐ added to your balance!\n\n"
+                                            + "🔥 Streak: " + newStreak + " day(s)\n"
+                                            + (newStreak >= 5 ? "Max bonus unlocked — keep it going! 👑"
+                                            : "Come back tomorrow — streak rewards grow!")))
+                            .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
+                })
+                .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
     }
 }
