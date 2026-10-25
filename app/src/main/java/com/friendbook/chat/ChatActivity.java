@@ -61,6 +61,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private String voicePath;
     private long voiceStartMs;
     private boolean recording;
+    private Models.Message replyingMsg;
+    private LinearLayout replyBar;
+    private TextView replyLabel;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -118,14 +121,26 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         menu.setOnClickListener(v -> {
             PopupMenu pm = new PopupMenu(this, v);
             pm.getMenu().add("👤 View profile");
-            pm.getMenu().add("✔ Mark all as read");
+            pm.getMenu().add("✏️ Set nickname");
             pm.getMenu().add("🎨 Chat theme");
+            boolean muted = Prefs.isChatMuted(this, chatId);
+            pm.getMenu().add(muted ? "🔔 Unmute notifications" : "🔕 Mute notifications");
+            boolean archived = Prefs.isChatArchived(this, chatId);
+            pm.getMenu().add(archived ? "📥 Unarchive chat" : "📦 Archive chat");
+            pm.getMenu().add("✔ Mark all as read");
             pm.getMenu().add("🚫 Block user");
             pm.setOnMenuItemClickListener(item -> {
                 String t = item.getTitle().toString();
                 if (t.contains("profile")) prof.onClick(v);
-                else if (t.contains("read")) resetUnread();
+                else if (t.contains("nickname")) nicknameDialog();
                 else if (t.contains("theme")) themePicker();
+                else if (t.contains("Mute") || t.contains("Unmute")) {
+                    Prefs.muteChat(this, chatId, !muted);
+                    Ui.toast(this, !muted ? "Chat muted 🔕" : "Chat unmuted 🔔");
+                } else if (t.contains("Archive") || t.contains("Unarchive")) {
+                    Prefs.archiveChat(this, chatId, !archived);
+                    Ui.toast(this, !archived ? "Chat archived 📦" : "Moved to Inbox");
+                } else if (t.contains("read")) resetUnread();
                 else blockPeer();
                 return true;
             });
@@ -148,6 +163,23 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout wrap = Ui.col(this);
         wrap.setBackgroundColor(Ui.card(this));
         wrap.addView(Ui.divider(this));
+
+        replyBar = Ui.row(this);
+        replyBar.setBackgroundColor(Ui.inputBg(this));
+        Ui.pad(replyBar, 12, 6, 12, 6);
+        replyBar.setVisibility(View.GONE);
+        replyLabel = Ui.tv(this, "", 12, Ui.txt(this));
+        replyLabel.setSingleLine(true);
+        replyBar.addView(replyLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView closeReply = Ui.tvBold(this, "✕", 14, Ui.sub(this));
+        closeReply.setPadding(Ui.dp(this, 8), 0, 0, 0);
+        closeReply.setOnClickListener(v -> {
+            replyingMsg = null;
+            replyBar.setVisibility(View.GONE);
+        });
+        replyBar.addView(closeReply);
+        wrap.addView(replyBar);
+
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 8, 8, 10, 8);
 
@@ -226,7 +258,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     if (d == null || !d.exists()) return;
                     Models.User u = Models.User.fromDoc(d);
                     peerName = u.displayName;
-                    nameTv.setText(peerName);
+                    String nick = Prefs.chatNickname(this, chatId);
+                    nameTv.setText(!nick.isEmpty() ? nick : peerName);
                     com.friendbook.core.Icons.setTickBadge(barTick, u.tickLevel, false);
                     Ui.avatar(this, barAvatar, u.photoUrl);
                     adapter.setPeerPhoto(u.photoUrl);
@@ -489,6 +522,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isDelivered", false,
                 "isDeleted", false,
                 "createdAt", FieldValue.serverTimestamp());
+        if (replyingMsg != null) {
+            msg.put("replyToId", replyingMsg.id);
+            msg.put("replyToText", replyingMsg.text != null && !replyingMsg.text.isEmpty()
+                    ? replyingMsg.text : ("voice".equals(replyingMsg.type) ? "🎤 Voice note" : "📷 Photo"));
+            msg.put("replyToSender", replyingMsg.senderId.equals(me) ? Fb.myName() : peerName);
+            replyingMsg = null;
+            if (replyBar != null) replyBar.setVisibility(View.GONE);
+        }
 
         Map<String, Object> unread = new HashMap<>();
         unread.put(peerId, FieldValue.increment(1));
@@ -535,7 +576,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     public void longPress(Models.Message m) {
         boolean mine = m.senderId.equals(Fb.uid());
         List<String> opts = new ArrayList<>();
+        opts.add("↩ Reply to message");
         opts.add("😍 React to message");
+        opts.add("↪ Forward message");
         opts.add("📋 Copy text");
         if (mine) {
             opts.add("🗑 Delete for everyone");
@@ -547,6 +590,21 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(this, "Message", arr, w -> {
             String sel = arr[w];
+            if (sel.contains("Reply")) {
+                replyingMsg = m;
+                String snippet = m.text != null && !m.text.isEmpty() ? m.text
+                        : ("voice".equals(m.type) ? "🎤 Voice note" : "📷 Photo");
+                replyLabel.setText("↩ Replying to " + (mine ? "yourself" : peerName) + ": " + snippet);
+                replyBar.setVisibility(View.VISIBLE);
+                input.requestFocus();
+                return;
+            }
+            if (sel.contains("Forward")) {
+                Intent fw = new Intent(this, NewChatActivity.class);
+                fw.putExtra("forward_text", m.text == null ? "" : m.text);
+                startActivity(fw);
+                return;
+            }
             if (sel.contains("React")) { reactPicker(m); return; }
             if (sel.contains("Copy")) {
                 android.content.ClipboardManager cm =
@@ -597,6 +655,25 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     .update(upd)
                     .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
         });
+    }
+
+    private void nicknameDialog() {
+        EditText in = Ui.input(this, "Nickname for " + peerName + " (leave empty to reset)");
+        in.setText(Prefs.chatNickname(this, chatId));
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 10, 18, 0);
+        box.addView(in, new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("✏️ Set nickname")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    String n = in.getText().toString().trim();
+                    Prefs.setChatNickname(this, chatId, n);
+                    nameTv.setText(n.isEmpty() ? peerName : n);
+                    Ui.toast(this, n.isEmpty() ? "Nickname cleared" : "Nickname saved ✓");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void blockPeer() {

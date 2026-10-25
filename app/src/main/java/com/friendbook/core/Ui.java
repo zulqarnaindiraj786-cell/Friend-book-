@@ -2,11 +2,17 @@ package com.friendbook.core;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -25,8 +31,9 @@ import com.bumptech.glide.load.engine.DiskCacheStrategy;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/** Programmatic UI toolkit with Facebook-Lite look, dark mode and font scaling. */
+/** Programmatic UI toolkit with Facebook-Lite 525 look, dark mode, data-saver quality & QR/browser helpers. */
 public class Ui {
 
     public static final int BLUE = 0xFF1877F2;
@@ -44,7 +51,9 @@ public class Ui {
     }
 
     public static void haptic(View v) {
-        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        if (!Prefs.quiet(v.getContext()) && Prefs.inAppSounds(v.getContext())) {
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        }
     }
 
     // ---- dynamic colors ----
@@ -178,9 +187,13 @@ public class Ui {
     public static void img(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        if (Prefs.dataSaver(c)) {
-            // Data Saver mode (classic Lite feature): load a low-res progressive thumbnail.
-            Glide.with(c).load(url).thumbnail(0.08f).centerCrop()
+        Prefs.trackMediaLoad(c, 140_000L);
+        int q = Prefs.dataSaver(c) ? 0 : Prefs.photoQuality(c);
+        if (q == 0) {
+            Glide.with(c).load(url).thumbnail(0.08f).override(360, 360).centerCrop()
+                    .placeholder(ph).error(ph).into(iv);
+        } else if (q == 1) {
+            Glide.with(c).load(url).thumbnail(0.25f).override(720, 720).centerCrop()
                     .placeholder(ph).error(ph).into(iv);
         } else {
             Glide.with(c).load(url).centerCrop().placeholder(ph).error(ph).into(iv);
@@ -190,7 +203,14 @@ public class Ui {
     public static void imgFit(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
+        Prefs.trackMediaLoad(c, 180_000L);
         Glide.with(c).load(url).fitCenter().placeholder(ph).error(ph).into(iv);
+    }
+
+    public static String formatBytes(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format(Locale.US, "%.1f KB", bytes / 1024f);
+        return String.format(Locale.US, "%.2f MB", bytes / (1024f * 1024f));
     }
 
     // ---- layout helpers ----
@@ -345,13 +365,105 @@ public class Ui {
         return t;
     }
 
+    /** Open URL in FB-Lite built-in browser (or external browser if toggled in Settings). */
+    public static void openUrl(Context c, String url) {
+        if (url == null || url.trim().isEmpty()) return;
+        String u = url.trim();
+        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://" + u;
+        try {
+            if (Prefs.externalBrowser(c)) {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(i);
+            } else {
+                Intent i = new Intent(c, com.friendbook.settings.InAppBrowserActivity.class);
+                i.putExtra("url", u);
+                if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(i);
+            }
+        } catch (Exception e) {
+            toast(c, "Couldn't open link");
+        }
+    }
+
+    /** Visual QR share card dialog (deterministic matrix + copy/share link). */
+    public static void showQrDialog(Context c, String title, String subtitle, String link) {
+        LinearLayout box = col(c);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        pad(box, 20, 16, 20, 8);
+
+        View qr = new View(c) {
+            final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override
+            protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                int w = getWidth(), h = getHeight();
+                int n = 21;
+                float cell = Math.min(w, h) / (float) (n + 4);
+                float ox = (w - cell * n) / 2f, oy = (h - cell * n) / 2f;
+                p.setColor(Color.WHITE);
+                canvas.drawRoundRect(0, 0, w, h, dp(c, 14), dp(c, 14), p);
+                p.setColor(BLUE);
+                long seed = link == null ? 42 : link.hashCode() * 2654435761L;
+                for (int r = 0; r < n; r++) {
+                    for (int col = 0; col < n; col++) {
+                        boolean finder = (r < 7 && col < 7) || (r < 7 && col >= n - 7) || (r >= n - 7 && col < 7);
+                        boolean on;
+                        if (finder) {
+                            int fr = r < 7 ? r : r - (n - 7);
+                            int fc = col < 7 ? col : col - (n - 7);
+                            on = fr == 0 || fr == 6 || fc == 0 || fc == 6
+                                    || (fr >= 2 && fr <= 4 && fc >= 2 && fc <= 4);
+                        } else {
+                            long mix = seed ^ (r * 131L + col * 977L + (r * col * 31L));
+                            on = ((mix >>> ((r + col) & 15)) & 1L) == 1L;
+                        }
+                        if (on) {
+                            canvas.drawRect(ox + col * cell, oy + r * cell,
+                                    ox + (col + 1) * cell - 1, oy + (r + 1) * cell - 1, p);
+                        }
+                    }
+                }
+            }
+        };
+        int qs = dp(c, 190);
+        box.addView(qr, new LinearLayout.LayoutParams(qs, qs));
+
+        TextView t = tvBold(c, title, 17, txt(c));
+        t.setPadding(0, dp(c, 12), 0, dp(c, 2));
+        box.addView(t);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView s = tv(c, subtitle, 12, sub(c));
+            box.addView(s);
+        }
+        TextView urlTv = tv(c, link, 12, BLUE);
+        urlTv.setPadding(0, dp(c, 6), 0, 0);
+        box.addView(urlTv);
+
+        new AlertDialog.Builder(c)
+                .setView(box)
+                .setPositiveButton("📤 Share", (d, w) -> {
+                    Intent s = new Intent(Intent.ACTION_SEND);
+                    s.setType("text/plain");
+                    s.putExtra(Intent.EXTRA_TEXT, title + "\n" + link);
+                    c.startActivity(Intent.createChooser(s, "Share QR link"));
+                })
+                .setNeutralButton("📋 Copy link", (d, w) -> {
+                    ClipboardManager cm = (ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("link", link));
+                    toast(c, "Link copied 🔗");
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     /** Open a geo URI in the user's map app (or silently do nothing). */
     public static void openMap(Context c, String location) {
         try {
-            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW,
-                    android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode(location)));
-            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent i = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("geo:0,0?q=" + Uri.encode(location)));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             c.startActivity(i);
-        } catch (Exception e) { Ui.toast(c, "No map app installed"); }
+        } catch (Exception e) { toast(c, "No map app installed"); }
     }
 }

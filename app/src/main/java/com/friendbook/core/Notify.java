@@ -15,10 +15,11 @@ public class Notify {
         send(toUid, type, text, null);
     }
 
-    /** Creates a notification doc. Silently skips self-notifications. */
+    /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
         String me = Fb.uid();
-        if (me == null || toUid == null || toUid.isEmpty() || toUid.equals(me)) return;
+        if (me == null || toUid == null || toUid.isEmpty()) return;
+        if (toUid.equals(me) && !"security".equals(type)) return;
         Map<String, Object> n = new HashMap<>();
         n.put("toUserId", toUid);
         n.put("fromUserId", me);

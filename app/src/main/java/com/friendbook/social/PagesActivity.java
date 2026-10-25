@@ -2,37 +2,57 @@ package com.friendbook.social;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
-import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.core.Fb;
 import com.friendbook.core.Format;
+import com.friendbook.core.Icons;
 import com.friendbook.core.Ui;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 📄 Pages — Facebook Lite style: create your page (name/category/about), discover pages,
- * 👍 follow / unfollow with live follower count.
- * Firestore: pages {name, category, about, photoUrl?, ownerId, ownerName, followers[], createdAt}.
+ * 🚩 PagesActivity — Full Facebook-Lite Pages Directory:
+ * Tabs (Discover · Following · My Pages), Search, Create Page, Follow/Unfollow &
+ * tap any Page to open PageDetailActivity (cover, Post-as-Page & Page Feed).
  */
 public class PagesActivity extends Activity {
 
-    private LinearLayout list;
-    private TextView countT;
+    static class Page {
+        String id, name, category, bio, photoUrl, ownerId;
+        List<String> followers = new ArrayList<>();
+        String tick = "none";
+    }
+
+    private final List<Page> allPages = new ArrayList<>();
+    private final List<Page> pages = new ArrayList<>();
+    private String tab = "discover", query = "";
+    private final TextView[] tabs = new TextView[3];
+    private Adapter adapter;
     private ListenerRegistration reg;
+    private TextView empty;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -41,43 +61,149 @@ public class PagesActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📄 Pages"));
 
-        ScrollView sv = new ScrollView(this);
-        list = Ui.col(this);
-        Ui.pad(list, 14, 10, 14, 24);
-        list.setBackgroundColor(Ui.bg(this));
-        sv.addView(list);
-
-        TextView create = Ui.btn(this, "＋ Create a Page");
+        LinearLayout bar = Ui.pageBar(this, "Pages");
+        TextView create = Ui.tvBold(this, "＋ Create", 13, Color.WHITE);
+        create.setBackground(Ui.round(this, 0x33FFFFFF, 16));
+        Ui.pad(create, 12, 6, 12, 6);
         create.setOnClickListener(v -> createDialog());
-        list.addView(create, new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
+        bar.addView(create);
+        root.addView(bar);
 
-        countT = Ui.tv(this, "Loading pages…", 12, Ui.sub(this));
-        Ui.pad(countT, 2, 12, 2, 6);
-        list.addView(countT);
+        // Tabs + search
+        LinearLayout top = Ui.col(this);
+        top.setBackgroundColor(Ui.card(this));
+        Ui.pad(top, 10, 8, 10, 8);
+        String[] labels = {"Discover", "Following", "My Pages"};
+        String[] keys = {"discover", "following", "mine"};
+        LinearLayout trow = Ui.row(this);
+        for (int i = 0; i < 3; i++) {
+            final String k = keys[i];
+            TextView t = Ui.tvBold(this, labels[i], 13, Ui.sub(this));
+            t.setGravity(Gravity.CENTER);
+            Ui.pad(t, 10, 6, 10, 6);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+            if (i > 0) lp.leftMargin = Ui.dp(this, 6);
+            trow.addView(t, lp);
+            tabs[i] = t;
+            t.setOnClickListener(v -> { tab = k; updateTabs(); applyFilter(); });
+        }
+        top.addView(trow);
 
-        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        EditText search = Ui.input(this, "🔎 Search Pages by name or category…");
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 40));
+        sp.topMargin = Ui.dp(this, 8);
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b2, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b2, int c) {
+                query = s.toString().trim().toLowerCase();
+                applyFilter();
+            }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+        top.addView(search, sp);
+        root.addView(top);
+        root.addView(Ui.divider(this));
+        updateTabs();
+
+        empty = Ui.tv(this, "No Pages match.\nTap ＋ Create to launch your brand, creator or shop Page!", 14, Ui.sub(this));
+        empty.setGravity(Gravity.CENTER);
+        Ui.pad(empty, 24, 60, 24, 0);
+        root.addView(empty);
+
+        RecyclerView rv = new RecyclerView(this);
+        rv.setLayoutManager(new LinearLayoutManager(this));
+        adapter = new Adapter();
+        rv.setAdapter(adapter);
+        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
+    }
+
+    private void updateTabs() {
+        String[] keys = {"discover", "following", "mine"};
+        for (int i = 0; i < 3; i++) {
+            boolean on = keys[i].equals(tab);
+            tabs[i].setBackground(Ui.round(this, on ? Ui.BLUE : Ui.inputBg(this), 16));
+            tabs[i].setTextColor(on ? Color.WHITE : Ui.sub(this));
+        }
+    }
+
+    private void createDialog() {
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 12, 18, 4);
+        EditText name = Ui.input(this, "Page name (e.g. Ali's Photography)");
+        EditText cat = Ui.input(this, "Category (Creator · Brand · News · Shop)");
+        EditText bio = Ui.input(this, "Short description");
+        bio.setMinLines(2);
+        for (View v : new View[]{name, cat, bio}) {
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+            p.bottomMargin = Ui.dp(this, 8);
+            box.addView(v, p);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Create a Page")
+                .setView(box)
+                .setPositiveButton("Create", (dlg, w) -> {
+                    String n = name.getText().toString().trim();
+                    if (n.isEmpty()) { Ui.toast(this, "Enter a Page name"); return; }
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("name", n);
+                    m.put("category", cat.getText().toString().trim().isEmpty() ? "Page" : cat.getText().toString().trim());
+                    m.put("bio", bio.getText().toString().trim());
+                    m.put("photoUrl", Fb.myPhoto());
+                    m.put("ownerId", Fb.uid());
+                    m.put("followers", Collections.singletonList(Fb.uid()));
+                    m.put("tickLevel", "none");
+                    m.put("createdAt", FieldValue.serverTimestamp());
+                    Fb.db().collection("pages").add(m).addOnSuccessListener(ref -> {
+                        Ui.toast(this, "Page created 🚩");
+                        Intent i = new Intent(this, PageDetailActivity.class);
+                        i.putExtra("page_id", ref.getId());
+                        startActivity(i);
+                    });
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("pages")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
+        reg = Fb.db().collection("pages").limit(100)
                 .addSnapshotListener((snap, err) -> {
-                    while (list.getChildCount() > 2) list.removeViewAt(2);
-                    int n = snap == null ? 0 : snap.size();
-                    countT.setText(n + " page(s) — follow the ones you like");
-                    if (n == 0) {
-                        TextView e = Ui.tv(this, "Abhi koi page nahi — pehla page aap banayein! ✨", 13, Ui.sub(this));
-                        Ui.pad(e, 4, 10, 4, 0);
-                        list.addView(e);
-                        return;
+                    allPages.clear();
+                    if (snap != null) for (DocumentSnapshot d : snap) {
+                        Page p = new Page();
+                        p.id = d.getId();
+                        p.name = d.getString("name");
+                        p.category = d.getString("category");
+                        p.bio = d.getString("bio");
+                        p.photoUrl = d.getString("photoUrl");
+                        p.ownerId = d.getString("ownerId");
+                        p.followers = Format.listOf(d.getData(), "followers");
+                        p.tick = d.getString("tickLevel") == null ? "none" : d.getString("tickLevel");
+                        allPages.add(p);
                     }
-                    for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(d));
+                    Collections.sort(allPages, (a, b2) -> Integer.compare(b2.followers.size(), a.followers.size()));
+                    applyFilter();
                 });
+    }
+
+    private void applyFilter() {
+        pages.clear();
+        String me = Fb.uid();
+        for (Page p : allPages) {
+            if ("following".equals(tab) && (me == null || !p.followers.contains(me))) continue;
+            if ("mine".equals(tab) && (me == null || !me.equals(p.ownerId))) continue;
+            if (!query.isEmpty()) {
+                String hay = ((p.name == null ? "" : p.name) + " "
+                        + (p.category == null ? "" : p.category)).toLowerCase();
+                if (!hay.contains(query)) continue;
+            }
+            pages.add(p);
+        }
+        adapter.notifyDataSetChanged();
+        empty.setVisibility(pages.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     @Override
@@ -86,84 +212,79 @@ public class PagesActivity extends Activity {
         if (reg != null) reg.remove();
     }
 
-    private View row(DocumentSnapshot d) {
-        Map<String, Object> m = d.getData();
-        String name = Format.strOr(m, "name", "Page");
-        String cat = Format.str(m, "category");
-        String about = Format.str(m, "about");
-        String photo = Format.str(m, "photoUrl");
-        List<String> followers = Format.listOf(m, "followers");
-        boolean meFollow = followers.contains(Fb.uid());
-        boolean mine = Fb.uid() != null && Fb.uid().equals(Format.str(m, "ownerId"));
+    class Adapter extends RecyclerView.Adapter<Adapter.VH> {
+        @Override public int getItemCount() { return pages.size(); }
 
-        LinearLayout card = Ui.row(this);
-        card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setBackground(Ui.round(this, Ui.card(this), 14));
-        Ui.pad(card, 12, 12, 12, 12);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
-        cp.setMargins(0, 0, 0, Ui.dp(this, 10));
-        card.setLayoutParams(cp);
+        @NonNull @Override
+        public VH onCreateViewHolder(@NonNull ViewGroup parent, int vt) {
+            LinearLayout card = Ui.row(PagesActivity.this);
+            RecyclerView.LayoutParams p = new RecyclerView.LayoutParams(-1, -2);
+            p.bottomMargin = Ui.dp(PagesActivity.this, 6);
+            card.setLayoutParams(p);
+            card.setBackgroundColor(Ui.card(PagesActivity.this));
+            Ui.pad(card, 14, 12, 14, 12);
 
-        ImageView av = new ImageView(this);
-        Ui.avatar(this, av, photo);
-        int avs = Ui.dp(this, 52);
-        card.addView(av, new LinearLayout.LayoutParams(avs, avs));
+            ImageView av = new ImageView(PagesActivity.this);
+            card.addView(av, new LinearLayout.LayoutParams(Ui.dp(PagesActivity.this, 50), Ui.dp(PagesActivity.this, 50)));
 
-        LinearLayout info = Ui.col(this);
-        info.setPadding(Ui.dp(this, 12), 0, 0, 0);
-        info.addView(Ui.tvBold(this, name, 15, Ui.txt(this)));
-        if (!cat.isEmpty()) info.addView(Ui.tv(this, cat, 12, Ui.sub(this)));
-        if (!about.isEmpty()) info.addView(Ui.tv(this, about, 11, Ui.sub(this)));
-        info.addView(Ui.tv(this, Format.count(followers.size()) + " followers"
-                + (mine ? " · 👑 your page" : ""), 11, Ui.sub(this)));
-        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+            LinearLayout mid = Ui.col(PagesActivity.this);
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
+            mp.leftMargin = Ui.dp(PagesActivity.this, 12);
+            LinearLayout nrow = Ui.row(PagesActivity.this);
+            TextView name = Ui.tvBold(PagesActivity.this, "", 15, Ui.txt(PagesActivity.this));
+            ImageView tick = new ImageView(PagesActivity.this);
+            tick.setVisibility(View.GONE);
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(Ui.dp(PagesActivity.this, 15), Ui.dp(PagesActivity.this, 15));
+            tp.leftMargin = Ui.dp(PagesActivity.this, 4);
+            nrow.addView(name);
+            nrow.addView(tick, tp);
+            TextView cat = Ui.tv(PagesActivity.this, "", 12, Ui.sub(PagesActivity.this));
+            TextView bio = Ui.tv(PagesActivity.this, "", 12, Ui.txt(PagesActivity.this));
+            bio.setMaxLines(2);
+            mid.addView(nrow);
+            mid.addView(cat);
+            mid.addView(bio);
+            card.addView(mid, mp);
 
-        if (mine) {
-            TextView del = Ui.tvBold(this, "🗑", 18, Ui.sub(this));
-            del.setPadding(Ui.dp(this, 10), 0, 0, 0);
-            del.setOnClickListener(v -> Ui.confirm(this, "Delete page?", "\"" + name + "\" hat jayegi.",
-                    "Delete", () -> d.getReference().delete()));
-            card.addView(del);
-        } else {
-            TextView follow = Ui.btn(this, meFollow ? "Following ✓" : "＋ Follow");
-            follow.setTextSize(12);
-            follow.setPadding(Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6));
-            follow.setOnClickListener(v -> d.getReference().update("followers",
-                    meFollow ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid())));
-            card.addView(follow);
+            TextView btn = Ui.tvBold(PagesActivity.this, "", 13, Color.WHITE);
+            Ui.pad(btn, 14, 7, 14, 7);
+            card.addView(btn);
+            return new VH(card, av, name, tick, cat, bio, btn);
         }
-        return card;
-    }
 
-    private void createDialog() {
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 20, 10, 20, 0);
-        EditText name = Ui.input(this, "Page name (e.g. Chai Point ☕)");
-        EditText cat = Ui.input(this, "Category (e.g. Food, Sports, Creator)");
-        EditText about = Ui.multi(this, "About this page…", 2);
-        box.addView(name, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
-        box.addView(cat, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
-        box.addView(about, new LinearLayout.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this)
-                .setTitle("Create a Page")
-                .setView(box)
-                .setPositiveButton("Publish", (d, w) -> {
-                    String n = name.getText().toString().trim();
-                    if (n.isEmpty()) { Ui.toast(this, "Page name daalo"); return; }
-                    java.util.Map<String, Object> pg = Fb.map(
-                            "name", n,
-                            "category", cat.getText().toString().trim(),
-                            "about", about.getText().toString().trim(),
-                            "photoUrl", Fb.me != null && Fb.me.photoUrl != null ? Fb.me.photoUrl : "",
-                            "ownerId", Fb.uid(),
-                            "ownerName", Fb.myName(),
-                            "followers", new java.util.ArrayList<String>(),
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("pages").add(pg)
-                            .addOnSuccessListener(x -> Ui.toast(this, "📄 Page published!"))
-                            .addOnFailureListener(err -> Ui.toast(this, "Failed: " + err.getMessage()));
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        @Override
+        public void onBindViewHolder(@NonNull VH h, int i) {
+            Page p = pages.get(i);
+            Ui.avatar(PagesActivity.this, h.av, p.photoUrl);
+            h.name.setText(p.name);
+            Icons.setTickBadge(h.tick, p.tick, false);
+            h.cat.setText(p.category + " · " + Format.count(p.followers.size()) + " followers");
+            h.bio.setText(p.bio == null ? "" : p.bio);
+            h.bio.setVisibility(p.bio == null || p.bio.isEmpty() ? View.GONE : View.VISIBLE);
+
+            boolean following = Fb.uid() != null && p.followers.contains(Fb.uid());
+            h.btn.setText(following ? "Following" : "Follow");
+            h.btn.setTextColor(following ? Ui.txt(PagesActivity.this) : Color.WHITE);
+            h.btn.setBackground(Ui.round(PagesActivity.this, following ? Ui.inputBg(PagesActivity.this) : Ui.BLUE, 8));
+            h.btn.setOnClickListener(v -> {
+                String me = Fb.uid();
+                if (me == null) return;
+                Fb.db().collection("pages").document(p.id).update("followers",
+                        following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+            });
+            h.itemView.setOnClickListener(v -> {
+                Intent open = new Intent(PagesActivity.this, PageDetailActivity.class);
+                open.putExtra("page_id", p.id);
+                startActivity(open);
+            });
+        }
+
+        class VH extends RecyclerView.ViewHolder {
+            ImageView av, tick;
+            TextView name, cat, bio, btn;
+            VH(View v, ImageView a, TextView n, ImageView t, TextView c, TextView b, TextView bt) {
+                super(v); av = a; name = n; tick = t; cat = c; bio = b; btn = bt;
+            }
+        }
     }
 }

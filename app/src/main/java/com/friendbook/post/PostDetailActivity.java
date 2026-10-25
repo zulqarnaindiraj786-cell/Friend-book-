@@ -43,6 +43,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private Uri commentImage;
     private ImageView imgPreview;
     private String postAuthorId;
+    private List<String> postSubscribers = new ArrayList<>();
     private boolean busy;
 
     @Override
@@ -169,6 +170,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     if (d == null || !d.exists()) { Ui.toast(this, "Post was deleted"); finish(); return; }
                     Models.Post p = Models.Post.fromDoc(d);
                     postAuthorId = p.authorId;
+                    postSubscribers = p.subscribedBy != null ? p.subscribedBy : new ArrayList<>();
                     List<Models.Post> one = new ArrayList<>();
                     one.add(p);
                     postAdapter.setPosts(one);
@@ -258,6 +260,11 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     if (postAuthorId != null) Notify.comment(this, postAuthorId, postId);
                     if (replyingTo != null && !replyingTo.authorId.equals(Fb.uid()))
                         Notify.send(replyingTo.authorId, "comment_reply", "replied to your comment", postId);
+                    for (String subUid : postSubscribers) {
+                        if (subUid != null && !subUid.equals(Fb.uid()) && !subUid.equals(postAuthorId)) {
+                            Notify.send(subUid, "comment", "commented on a post you turned notifications on for", postId);
+                        }
+                    }
                     replyingTo = null;
                     replyChip.setVisibility(View.GONE);
                     input.setText("");

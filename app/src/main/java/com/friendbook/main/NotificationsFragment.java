@@ -144,12 +144,21 @@ public class NotificationsFragment extends Fragment {
         if (type == null) return true;
         switch (type) {
             case "like":
-            case "reaction": return com.friendbook.core.Prefs.notifLikes(a);
-            case "comment": return com.friendbook.core.Prefs.notifComments(a);
+            case "reaction":
+            case "reel_like":
+            case "story_reaction": return com.friendbook.core.Prefs.notifLikes(a);
+            case "comment":
+            case "comment_reply": return com.friendbook.core.Prefs.notifComments(a);
             case "friend_request":
             case "friend_accept": return com.friendbook.core.Prefs.notifRequests(a);
             case "message": return com.friendbook.core.Prefs.notifMessages(a);
-            default: return true; // ticks/payments/referrals/boosts always show
+            case "mention":
+            case "tag": return com.friendbook.core.Prefs.notifMentions(a);
+            case "birthday": return com.friendbook.core.Prefs.notifBirthdays(a);
+            case "group": return com.friendbook.core.Prefs.notifGroups(a);
+            case "marketplace": return com.friendbook.core.Prefs.notifMarketplace(a);
+            case "security": return com.friendbook.core.Prefs.notifSecurity(a);
+            default: return true;
         }
     }
 

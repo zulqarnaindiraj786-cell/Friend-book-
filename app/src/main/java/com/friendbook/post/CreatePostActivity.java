@@ -68,6 +68,11 @@ public class CreatePostActivity extends Activity {
     private final List<String> pollOptions = new ArrayList<>();
     private String editId = null;
     private String groupId = null;
+    private String pageId = null, pageName = null, pagePhoto = null;
+    private String postType = "regular"; // regular | life_event | qna | marketplace
+    private String lifeEventIcon = "", lifeEventTitle = "";
+    private String marketTitle = "", marketPrice = "", marketCategory = "Electronics";
+    private TextView specialBadge;
     private Uri cameraFile;
     private boolean busy;
 
@@ -81,6 +86,9 @@ public class CreatePostActivity extends Activity {
         Ui.statusBarBlue(this);
         editId = getIntent().getStringExtra("edit_id");
         groupId = getIntent().getStringExtra("group_id");
+        pageId = getIntent().getStringExtra("page_id");
+        pageName = getIntent().getStringExtra("page_name");
+        pagePhoto = getIntent().getStringExtra("page_photo");
         privacy = Prefs.defaultPrivacy(this);
 
         LinearLayout root = Ui.col(this);
@@ -88,7 +96,12 @@ public class CreatePostActivity extends Activity {
 
         // bar
         LinearLayout bar = Ui.pageBar(this,
-                editId != null ? "Edit post" : groupId != null ? "New group post" : "Create post");
+                editId != null ? "Edit post"
+                        : pageId != null ? ("Post as " + pageName)
+                        : groupId != null ? "New group post" : "Create post");
+        if (bar.getChildCount() > 0) {
+            bar.getChildAt(0).setOnClickListener(v -> onBackPressed());
+        }
         postBtn = Ui.btn(this, "POST");
         postBtn.setMinHeight(Ui.dp(this, 34));
         bar.addView(postBtn);
@@ -103,11 +116,13 @@ public class CreatePostActivity extends Activity {
         ImageView av = new ImageView(this);
         int s = Ui.dp(this, 44);
         meRow.addView(av, new LinearLayout.LayoutParams(s, s));
-        Ui.avatar(this, av, Fb.myPhoto());
+        Ui.avatar(this, av, pagePhoto != null && !pagePhoto.isEmpty() ? pagePhoto : Fb.myPhoto());
         LinearLayout nameCol = Ui.col(this);
         LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
         ncp.leftMargin = Ui.dp(this, 10);
-        TextView name = Ui.tvBold(this, Fb.myName(), 15, Ui.txt(this));
+        TextView name = Ui.tvBold(this,
+                pageName != null && !pageName.isEmpty() ? ("🚩 " + pageName) : Fb.myName(),
+                15, Ui.txt(this));
         nameCol.addView(name);
         LinearLayout chips = Ui.row(this);
         chips.setPadding(0, Ui.dp(this, 4), 0, 0);
@@ -127,6 +142,21 @@ public class CreatePostActivity extends Activity {
         nameCol.addView(chips);
         meRow.addView(nameCol, ncp);
         body.addView(meRow);
+
+        specialBadge = Ui.tvBold(this, "", 13, Ui.BLUE);
+        specialBadge.setBackground(Ui.round(this, Ui.inputBg(this), 10));
+        Ui.pad(specialBadge, 12, 8, 12, 8);
+        specialBadge.setVisibility(View.GONE);
+        LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(-1, -2);
+        sbp.topMargin = Ui.dp(this, 8);
+        specialBadge.setOnClickListener(v -> {
+            postType = "regular";
+            lifeEventIcon = ""; lifeEventTitle = "";
+            marketTitle = ""; marketPrice = "";
+            specialBadge.setVisibility(View.GONE);
+            Ui.toast(this, "Special card removed");
+        });
+        body.addView(specialBadge, sbp);
 
         text = Ui.multi(this, "What's on your mind?", 5);
         text.setBackgroundColor(Color.TRANSPARENT);
@@ -180,12 +210,129 @@ public class CreatePostActivity extends Activity {
         attach2.addView(attachBtn("📍 Check in", v -> checkInDialog()));
         body.addView(attach2);
 
+        LinearLayout attach3 = Ui.row(this);
+        attach3.setBackgroundColor(Ui.card(this));
+        Ui.pad(attach3, 8, 10, 8, 10);
+        attach3.addView(attachBtn("🎉 Life event", v -> lifeEventDialog()));
+        attach3.addView(attachBtn("❓ Host Q&A", v -> qnaDialog()));
+        attach3.addView(attachBtn("🛒 Sell item", v -> marketplaceDialog()));
+        attach3.addView(attachBtn("😊 Feeling", v -> pickFeeling()));
+        body.addView(attach3);
+
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
 
-        if (editId != null) loadForEdit();
+        if (editId != null) {
+            loadForEdit();
+        } else {
+            String quickMode = getIntent().getStringExtra("quick_mode");
+            if ("photo".equals(quickMode)) pickMultiImages();
+            else if ("feeling".equals(quickMode)) pickFeeling();
+            else if ("checkin".equals(quickMode)) checkInDialog();
+            else if ("life_event".equals(quickMode)) lifeEventDialog();
+            String draft = Prefs.postDraft(this);
+            if (!draft.isEmpty() && groupId == null && pageId == null) {
+                text.setText(draft);
+                text.setSelection(draft.length());
+                Ui.toast(this, "📝 Restored saved draft");
+            }
+        }
         postBtn.setOnClickListener(v -> submit());
+    }
+
+    @Override
+    public void onBackPressed() {
+        String cur = text != null ? text.getText().toString().trim() : "";
+        if (!busy && editId == null && !cur.isEmpty() && groupId == null && pageId == null) {
+            Ui.choose(this, "Unfinished post", new String[]{
+                    "💾 Save as draft",
+                    "🗑 Discard post",
+                    "✏️ Keep editing"
+            }, w -> {
+                if (w == 0) {
+                    Prefs.setPostDraft(this, cur);
+                    Ui.toast(this, "Saved to drafts 📝");
+                    finish();
+                } else if (w == 1) {
+                    Prefs.setPostDraft(this, "");
+                    finish();
+                }
+            });
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    private void lifeEventDialog() {
+        String[] presets = {
+                "💼 Started a New Job",
+                "🎓 Graduated",
+                "💍 Got Engaged / Married",
+                "🏠 Moved to a New City",
+                "🎂 Celebrated a Milestone",
+                "🏆 Achieved a Goal"
+        };
+        String[] icons = {"💼", "🎓", "💍", "🏠", "🎂", "🏆"};
+        Ui.choose(this, "🎉 Choose a Life Event", presets, w -> {
+            EditText detail = Ui.input(this, "Headline (e.g. " + presets[w].substring(3) + " at TechCorp)");
+            detail.setText(presets[w].substring(3));
+            LinearLayout box = Ui.col(this);
+            Ui.pad(box, 18, 10, 18, 0);
+            box.addView(detail, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
+            new AlertDialog.Builder(this)
+                    .setTitle(presets[w])
+                    .setView(box)
+                    .setPositiveButton("Attach", (d, x) -> {
+                        postType = "life_event";
+                        lifeEventIcon = icons[w];
+                        lifeEventTitle = detail.getText().toString().trim();
+                        specialBadge.setVisibility(View.VISIBLE);
+                        specialBadge.setText(lifeEventIcon + " Life Event: " + lifeEventTitle + "  (tap to remove)");
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
+    }
+
+    private void qnaDialog() {
+        postType = "qna";
+        if (text.getText().toString().trim().isEmpty()) {
+            text.setText("Ask me anything! Drop your questions in the comments 👇");
+        }
+        applyBackground(0xFF9360F7);
+        specialBadge.setVisibility(View.VISIBLE);
+        specialBadge.setText("❓ Hosting Q&A card attached  (tap to remove)");
+    }
+
+    private void marketplaceDialog() {
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 10, 18, 0);
+        EditText tIn = Ui.input(this, "Item title (e.g. MacBook Air M2)");
+        EditText pIn = Ui.input(this, "Price (e.g. Rs 195,000 or $650)");
+        EditText cIn = Ui.input(this, "Category (Electronics / Vehicles / Fashion / Home)");
+        cIn.setText(marketCategory);
+        for (EditText e : new EditText[]{tIn, pIn, cIn}) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 44));
+            lp.topMargin = Ui.dp(this, 6);
+            box.addView(e, lp);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("🛒 Sell on Marketplace")
+                .setView(box)
+                .setPositiveButton("Attach listing", (d, w) -> {
+                    String tt = tIn.getText().toString().trim();
+                    String pr = pIn.getText().toString().trim();
+                    if (tt.isEmpty() || pr.isEmpty()) { Ui.toast(this, "Enter item title & price"); return; }
+                    postType = "marketplace";
+                    marketTitle = tt;
+                    marketPrice = pr;
+                    marketCategory = cIn.getText().toString().trim().isEmpty() ? "Electronics" : cIn.getText().toString().trim();
+                    specialBadge.setVisibility(View.VISIBLE);
+                    specialBadge.setText("🛒 Selling: " + marketTitle + " · " + marketPrice + "  (tap to remove)");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private TextView chip(String label) {
@@ -548,7 +695,8 @@ public class CreatePostActivity extends Activity {
         if (busy) return;
         String content = text.getText().toString().trim();
         boolean hasPoll = !pollOptions.isEmpty();
-        if (content.isEmpty() && mediaUris.isEmpty() && !hasPoll && bgColor == 0 && editId == null) {
+        boolean hasSpecial = !"regular".equals(postType);
+        if (content.isEmpty() && mediaUris.isEmpty() && !hasPoll && !hasSpecial && bgColor == 0 && editId == null) {
             Ui.toast(this, "Say something first");
             return;
         }
@@ -587,6 +735,21 @@ public class CreatePostActivity extends Activity {
         m.put("feeling", feeling);
         m.put("privacy", privacy);
         m.put("location", location == null ? "" : location);
+        m.put("postType", postType);
+        if ("life_event".equals(postType)) {
+            m.put("lifeEventIcon", lifeEventIcon);
+            m.put("lifeEventTitle", lifeEventTitle);
+        } else if ("marketplace".equals(postType)) {
+            m.put("marketTitle", marketTitle);
+            m.put("marketPrice", marketPrice);
+            m.put("marketCategory", marketCategory);
+            m.put("marketSold", false);
+        }
+        if (pageId != null && !pageId.isEmpty()) {
+            m.put("pageId", pageId);
+            m.put("pageName", pageName == null ? "" : pageName);
+            m.put("pagePhoto", pagePhoto == null ? "" : pagePhoto);
+        }
         if (uploadedUrl != null) {
             m.put("mediaUrl", uploadedUrl);
             m.put("mediaType", mediaType);
@@ -627,7 +790,11 @@ public class CreatePostActivity extends Activity {
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("posts").add(m)
-                .addOnSuccessListener(x -> { Ui.toast(this, "Posted ✓"); finish(); })
+                .addOnSuccessListener(x -> {
+                    Prefs.setPostDraft(this, "");
+                    Ui.toast(this, "Posted ✓");
+                    finish();
+                })
                 .addOnFailureListener(e -> fail(e.getMessage()));
     }
 

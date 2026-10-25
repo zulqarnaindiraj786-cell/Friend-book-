@@ -4,44 +4,61 @@ import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.VideoView;
 
 import com.friendbook.core.Fb;
 import com.friendbook.core.Format;
+import com.friendbook.core.Notify;
+import com.friendbook.core.Prefs;
 import com.friendbook.core.Ui;
 import com.friendbook.models.Models;
 import com.friendbook.profile.ProfileActivity;
+import com.friendbook.settings.ArchiveTrashActivity;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.firestore.SetOptions;
+import com.google.firebase.firestore.WriteBatch;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
-/** Full-screen story viewer: segments, auto-advance, tap zones, reply, viewed marking. */
+/**
+ * 📖 StoryViewerActivity — Full Facebook-Lite Story Viewer:
+ * Supports Photo, Video & Aa Text Stories, Music/Mood badge, Quick Emoji Reactions
+ * (❤️ 😂 😮 😢 🔥 👏), Highlight pinning, Story Archive mode & Mute author.
+ */
 public class StoryViewerActivity extends Activity {
+
+    private static final String[] QUICK_EMOJIS = {"❤️", "😂", "😮", "😢", "🔥", "👏"};
 
     private final List<Models.Story> stories = new ArrayList<>();
     private int index = 0;
     private ListenerRegistration reg;
-    private String authorId;
-    private ImageView img;
+    private String authorId, specificStoryId;
+    private FrameLayout root;
+    private ImageView img, headerAvatar;
     private VideoView video;
-    private TextView nameT, timeT, captionT, viewersT;
-    private LinearLayout segments;
-    private LinearLayout replyRow, ownerRow;
+    private TextView textCanvas, moodBadge, nameT, timeT, captionT, viewersT;
+    private LinearLayout segments, replyArea, ownerRow;
     private EditText replyInput;
     private static final Handler H = new Handler(Looper.getMainLooper());
     private Runnable timer;
@@ -50,110 +67,152 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        getWindow().setStatusBarColor(Color.BLACK);
         authorId = getIntent().getStringExtra("author");
+        specificStoryId = getIntent().getStringExtra("story_id");
         if (authorId == null) { finish(); return; }
 
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
 
         img = new ImageView(this);
         img.setScaleType(ImageView.ScaleType.FIT_CENTER);
         root.addView(img, new FrameLayout.LayoutParams(-1, -1));
+
         video = new VideoView(this);
         video.setVisibility(View.GONE);
         root.addView(video, new FrameLayout.LayoutParams(-1, -1));
 
-        // tap zones (prev / next)
+        textCanvas = new TextView(this);
+        textCanvas.setGravity(Gravity.CENTER);
+        textCanvas.setTextColor(Color.WHITE);
+        textCanvas.setTextSize(26);
+        textCanvas.setTypeface(Typeface.DEFAULT_BOLD);
+        Ui.pad(textCanvas, 28, 80, 28, 120);
+        textCanvas.setVisibility(View.GONE);
+        root.addView(textCanvas, new FrameLayout.LayoutParams(-1, -1));
+
+        // Tap zones (left 30% prev, right 30% next)
         View left = new View(this);
         View right = new View(this);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(0, -1);
-        lp.width = getResources().getDisplayMetrics().widthPixels * 30 / 100;
-        left.setLayoutParams(new FrameLayout.LayoutParams(lp));
-        FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(lp);
-        rp.gravity = Gravity.END;
-        right.setLayoutParams(rp);
+        int zoneW = getResources().getDisplayMetrics().widthPixels * 30 / 100;
+        left.setLayoutParams(new FrameLayout.LayoutParams(zoneW, -1, Gravity.START));
+        right.setLayoutParams(new FrameLayout.LayoutParams(zoneW, -1, Gravity.END));
         root.addView(left);
         root.addView(right);
         left.setOnClickListener(v -> step(-1));
         right.setOnClickListener(v -> step(1));
 
-        // top overlay
+        // Top overlay: segments + author + mood + ••• + close
         LinearLayout top = Ui.col(this);
-        Ui.pad(top, 12, 30, 12, 0);
+        Ui.pad(top, 12, 28, 12, 0);
         segments = Ui.row(this);
         top.addView(segments, new LinearLayout.LayoutParams(-1, Ui.dp(this, 3)));
+
         LinearLayout head = Ui.row(this);
         head.setPadding(0, Ui.dp(this, 10), 0, 0);
-        TextView close = Ui.tvBold(this, "✕", 18, Color.WHITE);
-        close.setPadding(0, 0, Ui.dp(this, 10), 0);
-        close.setOnClickListener(v -> finish());
-        head.addView(close);
-        ImageView av = new ImageView(this);
-        int s = Ui.dp(this, 34);
-        head.addView(av, new LinearLayout.LayoutParams(s, s));
+        headerAvatar = new ImageView(this);
+        int s = Ui.dp(this, 36);
+        head.addView(headerAvatar, new LinearLayout.LayoutParams(s, s));
+        Ui.avatar(this, headerAvatar, getIntent().getStringExtra("authorPhoto"));
+
         LinearLayout nc = Ui.col(this);
         LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
         ncp.leftMargin = Ui.dp(this, 8);
         nameT = Ui.tvBold(this, "", 14, Color.WHITE);
-        timeT = Ui.tv(this, "", 12, 0xB3FFFFFF);
+        timeT = Ui.tv(this, "", 11, 0xCCFFFFFF);
         nc.addView(nameT);
         nc.addView(timeT);
         head.addView(nc, ncp);
-        TextView viewProf = Ui.tvBold(this, "View profile", 12, Color.WHITE);
-        viewProf.setBackground(Ui.round(this, 0x44FFFFFF, 12));
-        viewProf.setPadding(Ui.dp(this, 10), Ui.dp(this, 5), Ui.dp(this, 10), Ui.dp(this, 5));
-        head.addView(viewProf);
+
+        moodBadge = Ui.tvBold(this, "", 11, Color.WHITE);
+        moodBadge.setBackground(Ui.round(this, 0x55000000, 12));
+        Ui.pad(moodBadge, 8, 4, 8, 4);
+        moodBadge.setVisibility(View.GONE);
+        head.addView(moodBadge);
+
+        TextView menuBtn = Ui.tvBold(this, "⋮", 20, Color.WHITE);
+        menuBtn.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 8), Ui.dp(this, 4));
+        menuBtn.setOnClickListener(this::storyMenu);
+        head.addView(menuBtn);
+
+        TextView close = Ui.tvBold(this, "✕", 19, Color.WHITE);
+        close.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+        close.setOnClickListener(v -> finish());
+        head.addView(close);
+
         top.addView(head);
         root.addView(top);
 
-        av.setOnClickListener(v -> openProfile());
+        headerAvatar.setOnClickListener(v -> openProfile());
         nameT.setOnClickListener(v -> openProfile());
-        viewProf.setOnClickListener(v -> openProfile());
-        Ui.avatar(this, av, getIntent().getStringExtra("authorPhoto"));
 
-        // caption (center-bottom)
+        // Caption (for photo/video stories)
         captionT = Ui.tvBold(this, "", 15, Color.WHITE);
         captionT.setGravity(Gravity.CENTER);
-        captionT.setBackgroundColor(0x55000000);
+        captionT.setBackgroundColor(0x66000000);
         Ui.pad(captionT, 14, 8, 14, 8);
         FrameLayout.LayoutParams capp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        capp.setMargins(0, 0, 0, Ui.dp(this, 120));
+        capp.setMargins(0, 0, 0, Ui.dp(this, 128));
         root.addView(captionT, capp);
 
-        // owner tools
+        // Owner bottom bar
         ownerRow = Ui.row(this);
         ownerRow.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams op = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        op.setMargins(0, 0, 0, Ui.dp(this, 60));
+        ownerRow.setBackground(Ui.round(this, 0x66000000, 20));
+        Ui.pad(ownerRow, 12, 6, 12, 6);
+        FrameLayout.LayoutParams op = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        op.setMargins(0, 0, 0, Ui.dp(this, 26));
         ownerRow.setLayoutParams(op);
+
         viewersT = Ui.tvBold(this, "", 13, Color.WHITE);
-        viewersT.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 8));
-        TextView del = Ui.tvBold(this, "🗑 Delete", 13, Color.WHITE);
-        del.setPadding(Ui.dp(this, 20), Ui.dp(this, 8), 0, Ui.dp(this, 8));
-        ownerRow.addView(viewersT, new LinearLayout.LayoutParams(0, -2, 1));
-        ownerRow.addView(del);
-        ownerRow.setVisibility(View.GONE);
-        root.addView(ownerRow);
-        del.setOnClickListener(v -> deleteCurrent());
+        viewersT.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
         viewersT.setOnClickListener(v -> showViewers());
+        ownerRow.addView(viewersT);
 
-        // reply row (for other people's stories)
-        replyRow = Ui.row(this);
-        FrameLayout.LayoutParams rr = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        rr.setMargins(Ui.dp(this, 12), 0, Ui.dp(this, 12), Ui.dp(this, 18));
-        replyRow.setLayoutParams(rr);
-        replyInput = Ui.input(this, "Reply to this story…");
+        TextView hiBtn = Ui.tvBold(this, "✨ Highlight", 13, Color.WHITE);
+        hiBtn.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
+        hiBtn.setOnClickListener(v -> addCurrentToHighlights());
+        ownerRow.addView(hiBtn);
+
+        TextView del = Ui.tvBold(this, "🗑 Delete", 13, 0xFFFF8A80);
+        del.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
+        del.setOnClickListener(v -> deleteCurrent());
+        ownerRow.addView(del);
+        root.addView(ownerRow);
+
+        // Viewer bottom bar: Quick Emoji Reactions + Reply composer
+        replyArea = Ui.col(this);
+        Ui.pad(replyArea, 10, 6, 10, 14);
+        FrameLayout.LayoutParams rap = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        replyArea.setLayoutParams(rap);
+
+        LinearLayout emojiRow = Ui.row(this);
+        emojiRow.setGravity(Gravity.CENTER);
+        emojiRow.setPadding(0, 0, 0, Ui.dp(this, 8));
+        for (String em : QUICK_EMOJIS) {
+            TextView ev = Ui.tv(this, em, 24, Color.WHITE);
+            ev.setGravity(Gravity.CENTER);
+            ev.setPadding(Ui.dp(this, 8), Ui.dp(this, 2), Ui.dp(this, 8), Ui.dp(this, 2));
+            ev.setOnClickListener(v -> sendQuickReaction(em));
+            emojiRow.addView(ev);
+        }
+        replyArea.addView(emojiRow);
+
+        LinearLayout inputRow = Ui.row(this);
+        replyInput = Ui.input(this, "Send message…");
         replyInput.setTextColor(Color.WHITE);
-        replyInput.setHintTextColor(0x88FFFFFF);
-        replyInput.setBackground(Ui.roundStroke(this, Color.TRANSPARENT, 22, 0x66FFFFFF, 1));
-        replyRow.addView(replyInput, new LinearLayout.LayoutParams(0, Ui.dp(this, 44), 1));
-        TextView sendReply = Ui.tv(this, "➤", 22, Color.WHITE);
-        sendReply.setPadding(Ui.dp(this, 10), 0, 0, 0);
-        replyRow.addView(sendReply);
-        replyRow.setVisibility(View.GONE);
-        root.addView(replyRow);
+        replyInput.setHintTextColor(0xAAFFFFFF);
+        replyInput.setBackground(Ui.roundStroke(this, 0x44000000, 22, 0x66FFFFFF, 1));
+        inputRow.addView(replyInput, new LinearLayout.LayoutParams(0, Ui.dp(this, 42), 1));
+        TextView sendReply = Ui.btn(this, "Send");
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, Ui.dp(this, 42));
+        sp.leftMargin = Ui.dp(this, 8);
         sendReply.setOnClickListener(v -> sendReply());
+        inputRow.addView(sendReply, sp);
+        replyArea.addView(inputRow);
 
+        root.addView(replyArea);
         setContentView(root);
     }
 
@@ -172,7 +231,11 @@ public class StoryViewerActivity extends Activity {
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.Story s = Models.Story.fromDoc(d);
-                            if (!s.expired()) stories.add(s);
+                            if (specificStoryId != null) {
+                                if (specificStoryId.equals(s.id)) stories.add(s);
+                            } else if (!s.expired()) {
+                                stories.add(s);
+                            }
                         }
                     }
                     Collections.sort(stories, (a, b2) -> Long.compare(a.createdAt, b2.createdAt));
@@ -193,45 +256,121 @@ public class StoryViewerActivity extends Activity {
         stopTimer();
         Models.Story s = stories.get(index);
         nameT.setText(s.authorName);
-        timeT.setText(Format.ago(s.createdAt));
-        captionT.setText(s.caption == null ? "" : s.caption);
-        captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
+        timeT.setText(Format.ago(s.createdAt) + ("Friends".equalsIgnoreCase(s.privacy) ? " · 👥" : " · 🌐"));
+        Ui.avatar(this, headerAvatar, s.authorPhoto);
+
+        if (s.musicMood != null && !s.musicMood.isEmpty()) {
+            moodBadge.setVisibility(View.VISIBLE);
+            moodBadge.setText(s.musicMood);
+        } else moodBadge.setVisibility(View.GONE);
 
         boolean mine = s.authorId.equals(Fb.uid());
         ownerRow.setVisibility(mine ? View.VISIBLE : View.GONE);
-        replyRow.setVisibility(mine ? View.GONE : View.VISIBLE);
-        viewersT.setText("👁 " + s.viewedBy.size() + " views");
+        replyArea.setVisibility(mine ? View.GONE : View.VISIBLE);
+        viewersT.setText("👁 " + s.viewedBy.size()
+                + (s.reactions.isEmpty() ? "" : "  ❤️ " + s.reactions.size()));
 
         buildSegments();
 
-        if ("video".equals(s.mediaType)) {
+        if ("text".equals(s.mediaType) || s.mediaUrl == null || s.mediaUrl.isEmpty()) {
+            video.stopPlayback();
+            video.setVisibility(View.GONE);
+            img.setVisibility(View.GONE);
+            captionT.setVisibility(View.GONE);
+            textCanvas.setVisibility(View.VISIBLE);
+            int bg = s.bgColor != 0 ? s.bgColor : Ui.BLUE;
+            textCanvas.setBackground(Ui.gradient(bg, Ui.blend(Color.BLACK, bg, 0.45f), 0));
+            Typeface tf = s.fontStyle == 1 ? Typeface.SERIF
+                    : s.fontStyle == 2 ? Typeface.MONOSPACE : Typeface.DEFAULT_BOLD;
+            textCanvas.setTypeface(tf, Typeface.BOLD);
+            textCanvas.setText(s.caption == null ? "" : s.caption);
+        } else if ("video".equals(s.mediaType)) {
+            textCanvas.setVisibility(View.GONE);
             img.setVisibility(View.GONE);
             video.setVisibility(View.VISIBLE);
-            video.setVideoURI(android.net.Uri.parse(s.mediaUrl));
+            captionT.setText(s.caption == null ? "" : s.caption);
+            captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
+            video.setVideoURI(Uri.parse(s.mediaUrl));
             video.setOnPreparedListener(mp -> video.start());
             video.setOnCompletionListener(mp -> step(1));
         } else {
             video.stopPlayback();
             video.setVisibility(View.GONE);
+            textCanvas.setVisibility(View.GONE);
             img.setVisibility(View.VISIBLE);
+            captionT.setText(s.caption == null ? "" : s.caption);
+            captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
             Ui.imgFit(this, img, s.mediaUrl);
         }
 
-        // mark viewed
         String me = Fb.uid();
         if (me != null && !mine && !s.viewedBy.contains(me)) {
             Fb.db().collection("stories").document(s.id)
                     .update("viewedBy", FieldValue.arrayUnion(me));
         }
 
-        // image auto-advance after 5s
         if (!"video".equals(s.mediaType)) {
-            animateSegment(5000);
+            animateSegment(5500);
             timer = () -> step(1);
-            H.postDelayed(timer, 5000);
+            H.postDelayed(timer, 5500);
         } else {
             animateSegment(15000);
         }
+    }
+
+    private void storyMenu(View anchor) {
+        if (stories.isEmpty()) return;
+        Models.Story s = stories.get(index);
+        boolean mine = s.authorId.equals(Fb.uid());
+        PopupMenu pm = new PopupMenu(this, anchor);
+        if (mine) {
+            pm.getMenu().add("✨ Add to Profile Highlights");
+            pm.getMenu().add("📦 Open Story Archive");
+            pm.getMenu().add("🗑 Delete story");
+        } else {
+            pm.getMenu().add("👤 View " + s.authorName + "'s profile");
+            pm.getMenu().add("🔇 Mute " + s.authorName + "'s stories");
+            pm.getMenu().add("🚩 Report story");
+        }
+        pm.setOnMenuItemClickListener(it -> {
+            String t = it.getTitle().toString();
+            if (t.contains("Highlights")) addCurrentToHighlights();
+            else if (t.contains("Archive")) startActivity(new Intent(this, ArchiveTrashActivity.class));
+            else if (t.contains("Delete")) deleteCurrent();
+            else if (t.contains("profile")) openProfile();
+            else if (t.contains("Mute")) {
+                Prefs.muteStoryAuthor(this, s.authorId, true);
+                Ui.toast(this, "Muted " + s.authorName + "'s stories");
+                finish();
+            } else if (t.contains("Report")) {
+                Map<String, Object> rep = new HashMap<>();
+                rep.put("targetId", s.id);
+                rep.put("type", "story");
+                rep.put("reporterId", Fb.uid());
+                rep.put("createdAt", FieldValue.serverTimestamp());
+                Fb.db().collection("reports").add(rep);
+                Ui.toast(this, "Story reported to admins ✓");
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    private void addCurrentToHighlights() {
+        if (stories.isEmpty() || Fb.uid() == null) return;
+        Models.Story s = stories.get(index);
+        Fb.db().collection("users").document(Fb.uid())
+                .update("highlightStoryIds", FieldValue.arrayUnion(s.id))
+                .addOnSuccessListener(x -> Ui.toast(this, "Pinned to Profile Highlights ✨"));
+    }
+
+    private void sendQuickReaction(String emoji) {
+        if (stories.isEmpty() || Fb.uid() == null) return;
+        Models.Story s = stories.get(index);
+        Fb.db().collection("stories").document(s.id)
+                .update("reactions." + Fb.uid(), emoji);
+        Notify.send(s.authorId, "story_reaction", "reacted " + emoji + " to your story", "");
+        Ui.toast(this, "Sent " + emoji + " to " + s.authorName);
     }
 
     private void buildSegments() {
@@ -258,7 +397,8 @@ public class StoryViewerActivity extends Activity {
         View fill = seg.findViewWithTag("fill");
         if (fill == null) return;
         FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) fill.getLayoutParams();
-        int full = seg.getWidth() > 0 ? seg.getWidth() : getResources().getDisplayMetrics().widthPixels / Math.max(1, stories.size());
+        int full = seg.getWidth() > 0 ? seg.getWidth()
+                : getResources().getDisplayMetrics().widthPixels / Math.max(1, stories.size());
         anim = ValueAnimator.ofInt(0, full);
         anim.setDuration(durMs);
         anim.addUpdateListener(a -> {
@@ -292,14 +432,16 @@ public class StoryViewerActivity extends Activity {
 
     private void showViewers() {
         if (stories.isEmpty()) return;
-        List<String> viewers = stories.get(index).viewedBy;
+        Models.Story s = stories.get(index);
+        List<String> viewers = s.viewedBy;
         if (viewers.isEmpty()) { Ui.toast(this, "No views yet"); return; }
-        List<String> names = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
         for (String uid : viewers) {
             Fb.getUser(uid).addOnSuccessListener(u -> {
-                names.add(u != null ? u.displayName : "User");
-                if (names.size() == viewers.size()) {
-                    Ui.info(this, "Viewed by", android.text.TextUtils.join("\n", names));
+                String r = s.reactions.get(uid);
+                lines.add((u != null ? u.displayName : "User") + (r != null ? "  " + r : ""));
+                if (lines.size() == viewers.size()) {
+                    Ui.info(this, "👁 Story viewers (" + viewers.size() + ")", TextUtils.join("\n", lines));
                 }
             });
         }
@@ -307,12 +449,12 @@ public class StoryViewerActivity extends Activity {
 
     private void sendReply() {
         String text = replyInput.getText().toString().trim();
-        if (text.isEmpty()) return;
+        if (text.isEmpty() || stories.isEmpty()) return;
         String me = Fb.uid();
         if (me == null) return;
         Models.Story s = stories.get(index);
         String chatId = Fb.chatId(me, s.authorId);
-        java.util.Map<String, Object> msg = Fb.map(
+        Map<String, Object> msg = Fb.map(
                 "senderId", me,
                 "receiverId", s.authorId,
                 "text", "📖 Story reply: " + text,
@@ -321,12 +463,12 @@ public class StoryViewerActivity extends Activity {
                 "isSeen", false,
                 "isDelivered", false,
                 "createdAt", FieldValue.serverTimestamp());
-        com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+        WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
-                "participants", java.util.Arrays.asList(me, s.authorId),
+                "participants", Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,
-                "lastMessageTime", FieldValue.serverTimestamp()), com.google.firebase.firestore.SetOptions.merge());
+                "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
         batch.commit().addOnSuccessListener(x -> {
             replyInput.setText("");
             Ui.hideKeyboard(this);

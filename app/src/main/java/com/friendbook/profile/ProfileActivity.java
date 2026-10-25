@@ -45,6 +45,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private String uid;
     private boolean mine;
+    private boolean viewAsPublic = false;
     private Models.User user;
     private String friendState = "none"; // none|friends|outgoing|incoming
     private String incomingRequestId = null;
@@ -59,6 +60,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab, photosTab;
     private LinearLayout postsBox, aboutBox, friendsBox, photosBox;
+    private LinearLayout introCard, highlightsWrap, highlightsRow, viewAsBanner;
     private TextView pinnedTag;
     private PhotosAdapter photosAdapter;
     private LinearLayout lockBanner;
@@ -82,6 +84,23 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "Profile"));
+
+        viewAsBanner = Ui.row(this);
+        viewAsBanner.setBackgroundColor(0xFF1877F2);
+        Ui.pad(viewAsBanner, 14, 8, 14, 8);
+        viewAsBanner.setVisibility(View.GONE);
+        TextView vat = Ui.tvBold(this, "👁 Viewing profile as Public", 13, 0xFFFFFFFF);
+        viewAsBanner.addView(vat, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView exitVa = Ui.roundChip(this, "Exit View As", 0xFFFFFFFF, Ui.BLUE, 12);
+        Ui.pad(exitVa, 10, 4, 10, 4);
+        exitVa.setOnClickListener(v -> {
+            viewAsPublic = false;
+            viewAsBanner.setVisibility(View.GONE);
+            if (user != null) bindUser();
+            if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+        });
+        viewAsBanner.addView(exitVa);
+        root.addView(viewAsBanner);
 
         ScrollView sv = new ScrollView(this);
         LinearLayout body = Ui.col(this);
@@ -161,6 +180,27 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         infoCol.addView(actions);
         more.setOnClickListener(this::moreMenu);
         body.addView(infoCol);
+
+        // Intro details + Hobby pills + Story Highlights rail (Facebook-Lite 525 profile sections)
+        introCard = Ui.col(this);
+        introCard.setBackgroundColor(Ui.card(this));
+        Ui.pad(introCard, 14, 8, 14, 12);
+        introCard.setVisibility(View.GONE);
+        body.addView(introCard);
+
+        highlightsWrap = Ui.col(this);
+        highlightsWrap.setBackgroundColor(Ui.card(this));
+        Ui.pad(highlightsWrap, 12, 6, 12, 12);
+        highlightsWrap.setVisibility(View.GONE);
+        highlightsWrap.addView(Ui.tvBold(this, "✨ Story Highlights", 14, Ui.txt(this)));
+        android.widget.HorizontalScrollView hsv = new android.widget.HorizontalScrollView(this);
+        hsv.setHorizontalScrollBarEnabled(false);
+        highlightsRow = Ui.row(this);
+        highlightsRow.setPadding(0, Ui.dp(this, 8), 0, 0);
+        hsv.addView(highlightsRow);
+        highlightsWrap.addView(hsv);
+        body.addView(highlightsWrap);
+
         body.addView(gap());
 
         // 🔒 lock banner (visible when this profile is locked for the viewer)
@@ -344,6 +384,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         for (String f : friendIds) ensureUser(f);
                     });
         }
+        startPostsWatcher();
+    }
+
+    private void startPostsWatcher() {
         postsReg = Fb.db().collection("posts").whereEqualTo("authorId", uid)
                 .addSnapshotListener((snap, err) -> {
                     List<Models.Post> list = new ArrayList<>();
@@ -420,8 +464,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private boolean canSee(Models.Post p) {
+        if (p.archived || p.trashedAt > 0) return false;
         String me = Fb.uid();
-        if (mine || p.authorId.equals(me)) return true;
+        if (mine && !viewAsPublic) return true;
+        if (viewAsPublic) return "Public".equalsIgnoreCase(p.privacy) || p.privacy == null || p.privacy.isEmpty();
+        if (p.authorId.equals(me)) return true;
+        if (user != null && user.restrictedUids != null && me != null && user.restrictedUids.contains(me)) {
+            return "Public".equalsIgnoreCase(p.privacy) || p.privacy == null || p.privacy.isEmpty();
+        }
         if ("Only me".equalsIgnoreCase(p.privacy)) return false;
         if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(me) || "friends".equals(friendState);
         return true;
@@ -463,11 +513,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.coverUrl != null && !user.coverUrl.isEmpty()) Ui.img(this, cover, user.coverUrl);
         else cover.setBackground(Ui.round(this, Ui.div(this), 0));
 
-        // 🔒 Profile lock (FB Lite): friends/owner see everything — strangers get the lock card
-        boolean stranger = !mine && !friendIds.contains(uid);
+        // 🔒 Profile lock (FB Lite): friends/owner see everything — strangers (or View As Public) get the lock card
+        boolean stranger = (!mine || viewAsPublic) && !friendIds.contains(uid);
         boolean locked = user.profileLocked && stranger;
         lockBanner.setVisibility(locked ? View.VISIBLE : View.GONE);
         if (tabsRow != null) tabsRow.setVisibility(locked ? View.GONE : View.VISIBLE);
+        renderIntroAndHighlights(locked);
         if (locked) {
             postsBox.setVisibility(View.GONE);
             aboutBox.setVisibility(View.GONE);
@@ -685,6 +736,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             boolean isFav = Fb.me != null && Fb.me.favoriteUids != null
                     && Fb.me.favoriteUids.contains(uid);
             pm.getMenu().add(isFav ? "✖ Remove from Favorites" : "⭐ Add to Favorites");
+            boolean isRestr = Fb.me != null && Fb.me.restrictedUids != null
+                    && Fb.me.restrictedUids.contains(uid);
+            pm.getMenu().add(isRestr ? "🔓 Remove from Restricted list" : "🙈 Add to Restricted list");
+            pm.getMenu().add("📱 Show QR code");
             // 🛡 ADMIN: open ANY profile → grant/remove ticks, ban/unban right here
             if (com.friendbook.core.Admin.isAdmin()) {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
@@ -695,9 +750,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 pm.getMenu().add("🛡 📊 User stats (admin)…");
             }
         } else {
+            pm.getMenu().add("✏️ Edit profile & Intro details");
+            pm.getMenu().add("👁 View as Public");
+            pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
+            pm.getMenu().add("📦 Archive & Recycle Bin");
+            pm.getMenu().add("📱 My Profile QR code");
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
-            pm.getMenu().add("✏️ Edit details");
         }
         pm.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
@@ -747,11 +806,30 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 adminStats();
             } else if (t.contains("Favorites")) {
                 toggleFavorite();
+            } else if (t.contains("Restricted list")) {
+                boolean rem = Fb.me != null && Fb.me.restrictedUids != null && Fb.me.restrictedUids.contains(uid);
+                Fb.db().collection("users").document(Fb.uid())
+                        .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
+                Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list (sees Public posts only)");
+            } else if (t.contains("QR code")) {
+                Ui.showQrDialog(this, user != null ? user.displayName : "friendbook",
+                        "https://friendbook.app/user/" + uid);
+            } else if (t.contains("View as Public")) {
+                viewAsPublic = true;
+                viewAsBanner.setVisibility(View.VISIBLE);
+                if (user != null) bindUser();
+                if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+            } else if (t.contains("Lock profile") || t.contains("Unlock profile")) {
+                boolean next = !(user != null && user.profileLocked);
+                Fb.patchMe(Fb.map("profileLocked", next));
+                Ui.toast(this, next ? "Profile locked 🔒" : "Profile unlocked 🔓");
+            } else if (t.contains("Archive & Recycle Bin")) {
+                startActivity(new Intent(this, com.friendbook.settings.ArchiveTrashActivity.class));
             } else if (t.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
                         "type", "profile", "createdAt", FieldValue.serverTimestamp()));
                 Ui.toast(this, "Reported");
-            } else if (t.contains("profile photo") || t.contains("cover") || t.contains("details")) {
+            } else if (t.contains("profile photo") || t.contains("cover") || t.contains("Edit profile") || t.contains("details")) {
                 startActivity(new Intent(this, EditProfileActivity.class));
             }
             return true;
@@ -868,6 +946,121 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         Ui.info(this, "💙 Friendship", sb.toString());
     }
 
+    private void renderIntroAndHighlights(boolean locked) {
+        introCard.removeAllViews();
+        highlightsRow.removeAllViews();
+        if (locked || user == null) {
+            introCard.setVisibility(View.GONE);
+            highlightsWrap.setVisibility(View.GONE);
+            return;
+        }
+        int lines = 0;
+        if (user.professionalMode) {
+            introCard.addView(Ui.tvBold(this, "📊 Digital Creator · Professional Mode", 13, Ui.BLUE));
+            lines++;
+        }
+        if (user.pronouns != null && !user.pronouns.isEmpty()) {
+            addAboutRow(introCard, "💬", user.pronouns); lines++;
+        }
+        if (user.work != null && !user.work.isEmpty()) {
+            addAboutRow(introCard, "💼", "Works at " + user.work); lines++;
+        }
+        if (user.education != null && !user.education.isEmpty()) {
+            addAboutRow(introCard, "🎓", "Studied at " + user.education); lines++;
+        }
+        if (user.currentCity != null && !user.currentCity.isEmpty()) {
+            addAboutRow(introCard, "📍", "Lives in " + user.currentCity); lines++;
+        }
+        if (user.hometown != null && !user.hometown.isEmpty()) {
+            addAboutRow(introCard, "🏠", "From " + user.hometown); lines++;
+        }
+        if (user.relationship != null && !user.relationship.isEmpty()) {
+            addAboutRow(introCard, "❤️", user.relationship); lines++;
+        }
+        if (user.website != null && !user.website.isEmpty()) {
+            TextView web = Ui.tvBold(this, "🌐 " + user.website, 13, Ui.BLUE);
+            web.setPadding(0, Ui.dp(this, 6), 0, 0);
+            web.setOnClickListener(v -> Ui.openUrl(this,
+                    user.website.startsWith("http") ? user.website : "https://" + user.website));
+            introCard.addView(web);
+            lines++;
+        }
+        if (user.hobbies != null && !user.hobbies.isEmpty()) {
+            android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+            hs.setHorizontalScrollBarEnabled(false);
+            LinearLayout hrow = Ui.row(this);
+            hrow.setPadding(0, Ui.dp(this, 8), 0, 0);
+            for (String hb : user.hobbies) {
+                TextView pill = Ui.roundChip(this, "🎯 " + hb, Ui.inputBg(this), Ui.txt(this), 12);
+                Ui.pad(pill, 10, 5, 10, 5);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                lp.rightMargin = Ui.dp(this, 6);
+                hrow.addView(pill, lp);
+            }
+            hs.addView(hrow);
+            introCard.addView(hs);
+            lines++;
+        }
+        if (mine && !viewAsPublic) {
+            TextView editIntro = Ui.btnGrey(this, "Edit public details");
+            editIntro.setMinHeight(Ui.dp(this, 36));
+            LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-1, -2);
+            elp.topMargin = Ui.dp(this, 8);
+            editIntro.setOnClickListener(v -> startActivity(new Intent(this, EditProfileActivity.class)));
+            introCard.addView(editIntro, elp);
+            lines++;
+        }
+        introCard.setVisibility(lines > 0 ? View.VISIBLE : View.GONE);
+
+        // Story Highlights rail
+        List<String> hiIds = user.highlightStoryIds != null ? user.highlightStoryIds : new ArrayList<>();
+        if (hiIds.isEmpty() && (!mine || viewAsPublic)) {
+            highlightsWrap.setVisibility(View.GONE);
+            return;
+        }
+        highlightsWrap.setVisibility(View.VISIBLE);
+        if (mine && !viewAsPublic) {
+            LinearLayout addBubble = Ui.col(this);
+            addBubble.setGravity(Gravity.CENTER);
+            TextView plus = Ui.tvBold(this, "＋", 22, Ui.txt(this));
+            plus.setGravity(Gravity.CENTER);
+            plus.setBackground(Ui.roundStroke(this, Ui.inputBg(this), 31, Ui.div(this), 1));
+            addBubble.addView(plus, new LinearLayout.LayoutParams(Ui.dp(this, 62), Ui.dp(this, 62)));
+            addBubble.addView(Ui.tv(this, "New", 11, Ui.sub(this)));
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-2, -2);
+            alp.rightMargin = Ui.dp(this, 10);
+            addBubble.setOnClickListener(v -> startActivity(
+                    new Intent(this, com.friendbook.settings.ArchiveTrashActivity.class)));
+            highlightsRow.addView(addBubble, alp);
+        }
+        for (final String sid : hiIds) {
+            Fb.db().collection("stories").document(sid).get().addOnSuccessListener(sd -> {
+                if (!sd.exists()) return;
+                Models.Story s = Models.Story.fromDoc(sd);
+                LinearLayout b = Ui.col(this);
+                b.setGravity(Gravity.CENTER);
+                ImageView iv = new ImageView(this);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                if (s.mediaUrl != null && !s.mediaUrl.isEmpty()) Ui.avatar(this, iv, s.mediaUrl);
+                else iv.setBackground(Ui.circle(s.bgColor != 0 ? s.bgColor : Ui.BLUE));
+                b.addView(iv, new LinearLayout.LayoutParams(Ui.dp(this, 62), Ui.dp(this, 62)));
+                TextView cap = Ui.tv(this, s.caption == null || s.caption.isEmpty() ? "Story" : s.caption, 11, Ui.txt(this));
+                cap.setSingleLine(true);
+                cap.setMaxWidth(Ui.dp(this, 68));
+                b.addView(cap);
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-2, -2);
+                blp.rightMargin = Ui.dp(this, 10);
+                b.setOnClickListener(v -> {
+                    Intent in = new Intent(this, com.friendbook.story.StoryViewerActivity.class);
+                    in.putExtra("author", uid);
+                    in.putExtra("story_id", sid);
+                    startActivity(in);
+                });
+                highlightsRow.addView(b, blp);
+            });
+        }
+    }
+
     private void renderAbout() {
         aboutBox.removeAllViews();
         if (user == null) return;
@@ -875,15 +1068,26 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         card.setBackgroundColor(Ui.card(this));
         Ui.pad(card, 14, 12, 14, 14);
         card.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
-        TextView title = Ui.tvBold(this, "About", 17, Ui.txt(this));
+        TextView title = Ui.tvBold(this, "About " + firstOnly(user.displayName), 17, Ui.txt(this));
         card.addView(title);
         addAboutRow(card, "📝", user.bio == null || user.bio.isEmpty() ? "No bio yet" : user.bio);
+        if (user.work != null && !user.work.isEmpty()) addAboutRow(card, "💼", "Works at " + user.work);
+        if (user.education != null && !user.education.isEmpty()) addAboutRow(card, "🎓", "Studied at " + user.education);
+        if (user.currentCity != null && !user.currentCity.isEmpty()) addAboutRow(card, "📍", "Lives in " + user.currentCity);
+        if (user.hometown != null && !user.hometown.isEmpty()) addAboutRow(card, "🏠", "From " + user.hometown);
+        if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "❤️", user.relationship);
+        if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
         addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
         addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
-        if (user.birthday != null && !user.birthday.isEmpty())
+
+        boolean canSeeContact = (mine && !viewAsPublic)
+                || "Public".equalsIgnoreCase(user.contactInfoPrivacy)
+                || ("Friends".equalsIgnoreCase(user.contactInfoPrivacy) && "friends".equals(friendState) && !viewAsPublic);
+        if (canSeeContact && user.birthday != null && !user.birthday.isEmpty())
             addAboutRow(card, "🎂", "Birthday: " + user.birthday);
         if (user.isAdmin) addAboutRow(card, "🛡", "friendbook Team");
-        if (mine) addAboutRow(card, "📧", user.email);
+        if (canSeeContact && user.email != null && !user.email.isEmpty())
+            addAboutRow(card, "📧", user.email);
         if (user.createdAt > 0) addAboutRow(card, "🗓", "Joined " + Format.dateTime(user.createdAt));
         aboutBox.addView(card);
     }
@@ -902,6 +1106,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void renderFriendsTab() {
         if (friendsBox == null || getApplicationContext() == null) return;
         List<UsersAdapter.Row> rows = new ArrayList<>();
+        boolean canSeeFriends = (mine && !viewAsPublic)
+                || user == null
+                || "Public".equalsIgnoreCase(user.friendsListPrivacy)
+                || ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && "friends".equals(friendState) && !viewAsPublic);
+        if (!canSeeFriends) {
+            friendsAdapter.setData(rows);
+            return;
+        }
         for (String fid : friendIds) {
             Models.User u = userCache.get(fid);
             if (u == null) continue;

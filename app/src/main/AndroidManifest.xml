@@ -84,6 +84,10 @@
         <activity android:name="com.friendbook.social.PagesActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.settings.FeedPreferencesActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.settings.SessionsActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.TimeSpentActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.ArchiveTrashActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.settings.InAppBrowserActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.PageDetailActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.friends.BirthdaysActivity" android:screenOrientation="portrait" />
 
         <activity android:name="com.friendbook.bluetick.BlueTickActivity" android:screenOrientation="portrait" />

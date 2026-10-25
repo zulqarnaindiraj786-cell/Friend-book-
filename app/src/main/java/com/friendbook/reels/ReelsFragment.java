@@ -165,8 +165,10 @@ public class ReelsFragment extends Fragment {
 
         class VH extends RecyclerView.ViewHolder {
             final VideoView video;
-            final TextView likeT, likeCount, commentT, commentCount, shareT, nameT, captionT, followT;
+            final TextView likeT, likeCount, commentT, commentCount, shareT, soundT, moreT, nameT, captionT, followT;
             final ImageView avatar;
+            android.media.MediaPlayer activeMp;
+            boolean muted = false;
             Models.Reel reel;
 
             VH(Activity a) {
@@ -190,13 +192,19 @@ public class ReelsFragment extends Fragment {
                 commentCount = Ui.tvBold(a, "0", 12, Color.WHITE);
                 commentCount.setGravity(Gravity.CENTER);
                 shareT = Ui.tv(a, "↗", 30, Color.WHITE);
+                soundT = Ui.tv(a, "🔊", 24, Color.WHITE);
+                moreT = Ui.tvBold(a, "⋮", 24, Color.WHITE);
                 rail.addView(likeT);
                 rail.addView(likeCount);
-                rail.addView(spacer(a, 18));
+                rail.addView(spacer(a, 16));
                 rail.addView(commentT);
                 rail.addView(commentCount);
-                rail.addView(spacer(a, 18));
+                rail.addView(spacer(a, 16));
                 rail.addView(shareT);
+                rail.addView(spacer(a, 16));
+                rail.addView(soundT);
+                rail.addView(spacer(a, 14));
+                rail.addView(moreT);
                 root.addView(rail);
 
                 // bottom info
@@ -247,6 +255,29 @@ public class ReelsFragment extends Fragment {
                     v.getContext().startActivity(i);
                 });
                 shareT.setOnClickListener(v -> share());
+                soundT.setOnClickListener(v -> {
+                    muted = !muted;
+                    soundT.setText(muted ? "🔇" : "🔊");
+                    if (activeMp != null) {
+                        try { activeMp.setVolume(muted ? 0f : 1f, muted ? 0f : 1f); } catch (Throwable ignored) {}
+                    }
+                });
+                moreT.setOnClickListener(v -> {
+                    if (reel == null) return;
+                    Ui.choose(a, "Reel options", new String[]{"🔗 Copy video link", "🚩 Report Reel"}, w -> {
+                        if (w == 0) {
+                            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                                    a.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                            if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("reel", reel.videoUrl));
+                            Ui.toast(a, "Link copied 🔗");
+                        } else {
+                            Fb.db().collection("reports").add(Fb.map("reelId", reel.id,
+                                    "reportedBy", Fb.uid(), "type", "reel",
+                                    "createdAt", FieldValue.serverTimestamp()));
+                            Ui.toast(a, "Reel reported ✓");
+                        }
+                    });
+                });
                 followT.setOnClickListener(v -> follow());
                 View.OnClickListener prof = v -> {
                     if (reel == null) return;
@@ -278,14 +309,27 @@ public class ReelsFragment extends Fragment {
                 Ui.avatar(itemView.getContext(), avatar, r.authorPhoto);
                 boolean liked = r.likedBy.contains(Fb.uid());
                 likeT.setText(liked ? "❤️" : "🤍");
-                likeCount.setText(Format.count(r.likes));
+                boolean hideCounts = com.friendbook.core.Prefs.hideReactionCounts(itemView.getContext())
+                        || (Fb.me != null && Fb.me.hideReactionCounts);
+                likeCount.setText(hideCounts ? "" : Format.count(r.likes));
                 commentCount.setText(Format.count(r.comments));
                 video.setVideoURI(android.net.Uri.parse(r.videoUrl));
-                video.setOnPreparedListener(mp -> { mp.setLooping(true); });
+                video.setOnPreparedListener(mp -> {
+                    activeMp = mp;
+                    mp.setLooping(true);
+                    try { mp.setVolume(muted ? 0f : 1f, muted ? 0f : 1f); } catch (Throwable ignored) {}
+                });
             }
 
             void play() {
                 if (reel == null) return;
+                android.content.Context ctx = itemView.getContext();
+                if (com.friendbook.core.Prefs.dataSaver(ctx)
+                        || "never".equals(com.friendbook.core.Prefs.autoplay(ctx))) {
+                    Ui.toast(ctx, "Data Saver / Manual play: tap video to play ▶");
+                    return;
+                }
+                com.friendbook.core.Prefs.trackMediaLoad(ctx, 420_000, 0);
                 if (!video.isPlaying()) {
                     video.seekTo(0);
                     video.start();

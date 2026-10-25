@@ -165,10 +165,12 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         Runnable finishPeople = () -> {
             List<UsersAdapter.Row> rows = new ArrayList<>();
             for (Models.User u : people.values()) {
-                if (u.uid.equals(Fb.uid())) continue;
+                if (u.uid.equals(Fb.uid()) || u.deactivated) continue;
+                if ("Only me".equalsIgnoreCase(u.lookupPrivacy)) continue;
                 UsersAdapter.Row r = new UsersAdapter.Row();
                 r.user = u;
-                r.subtitle = u.bio != null && !u.bio.isEmpty() ? u.bio : u.email;
+                r.subtitle = u.currentCity != null && !u.currentCity.isEmpty() ? ("📍 " + u.currentCity)
+                        : (u.bio != null && !u.bio.isEmpty() ? u.bio : "friendbook member");
                 rows.add(r);
             }
             usersAdapter.setData(rows);
@@ -202,6 +204,8 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.Post p = Models.Post.fromDoc(d);
+                            if (p.archived || p.trashedAt > 0) continue;
+                            if ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) continue;
                             if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
                             String hay = (p.content == null ? "" : p.content).toLowerCase(Locale.ROOT)
                                     + " " + (p.authorName == null ? "" : p.authorName).toLowerCase(Locale.ROOT);

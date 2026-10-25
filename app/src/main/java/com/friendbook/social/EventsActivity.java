@@ -3,42 +3,57 @@ package com.friendbook.social;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
-import android.app.TimePickerDialog;
+import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
-import android.text.InputType;
+import android.provider.CalendarContract;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.core.Fb;
 import com.friendbook.core.Format;
-import com.friendbook.core.Icons;
 import com.friendbook.core.Ui;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * 📅 Events — Facebook Lite style: create event (name/date/place/about), upcoming list,
- * "⭐ Interested" RSVP (realtime count). Firestore: events {name, dateMs, location,
- * about, hostId, hostName, interested[], createdAt}.
+ * 📅 EventsActivity — Full Facebook-Lite Events Hub:
+ * Tabs (Upcoming · Going/Interested · Hosted by Me), RSVP, Add to Phone Calendar & Share.
  */
 public class EventsActivity extends Activity {
 
-    private LinearLayout list;
-    private TextView countT;
+    static class Event {
+        String id, title, where, details, hostId, hostName;
+        long startAt;
+        List<String> interested = new ArrayList<>();
+    }
+
+    private final List<Event> allEvents = new ArrayList<>();
+    private final List<Event> events = new ArrayList<>();
+    private String tab = "upcoming";
+    private final TextView[] tabs = new TextView[3];
+    private Adapter adapter;
     private ListenerRegistration reg;
-    private long pickedDateMs;
+    private TextView empty;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -47,49 +62,137 @@ public class EventsActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📅 Events"));
 
-        ScrollView sv = new ScrollView(this);
-        list = Ui.col(this);
-        Ui.pad(list, 14, 10, 14, 24);
-        list.setBackgroundColor(Ui.bg(this));
-        sv.addView(list);
+        LinearLayout bar = Ui.pageBar(this, "Events");
+        TextView add = Ui.tvBold(this, "＋ Create", 13, Color.WHITE);
+        add.setBackground(Ui.round(this, 0x33FFFFFF, 16));
+        Ui.pad(add, 12, 6, 12, 6);
+        add.setOnClickListener(v -> createDialog());
+        bar.addView(add);
+        root.addView(bar);
 
-        TextView create = Ui.btn(this, "＋ Create an event");
-        create.setOnClickListener(v -> createDialog());
-        list.addView(create, new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
+        String[] labels = {"Upcoming", "⭐ Going / Interested", "Hosted"};
+        String[] keys = {"upcoming", "mine_rsvp", "hosted"};
+        LinearLayout trow = Ui.row(this);
+        trow.setBackgroundColor(Ui.card(this));
+        Ui.pad(trow, 10, 8, 10, 8);
+        for (int i = 0; i < 3; i++) {
+            final String k = keys[i];
+            TextView t = Ui.tvBold(this, labels[i], 12, Ui.sub(this));
+            t.setGravity(Gravity.CENTER);
+            Ui.pad(t, 8, 6, 8, 6);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+            if (i > 0) lp.leftMargin = Ui.dp(this, 6);
+            trow.addView(t, lp);
+            tabs[i] = t;
+            t.setOnClickListener(v -> { tab = k; updateTabs(); applyFilter(); });
+        }
+        root.addView(trow);
+        root.addView(Ui.divider(this));
+        updateTabs();
 
-        countT = Ui.tv(this, "Loading upcoming events…", 12, Ui.sub(this));
-        Ui.pad(countT, 2, 12, 2, 6);
-        list.addView(countT);
+        empty = Ui.tv(this, "No events here yet.\nTap ＋ Create to host a meetup, livestream or party!", 14, Ui.sub(this));
+        empty.setGravity(Gravity.CENTER);
+        Ui.pad(empty, 24, 60, 24, 0);
+        root.addView(empty);
 
-        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        RecyclerView rv = new RecyclerView(this);
+        rv.setLayoutManager(new LinearLayoutManager(this));
+        adapter = new Adapter();
+        rv.setAdapter(adapter);
+        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
+    }
+
+    private void updateTabs() {
+        String[] keys = {"upcoming", "mine_rsvp", "hosted"};
+        for (int i = 0; i < 3; i++) {
+            boolean on = keys[i].equals(tab);
+            tabs[i].setBackground(Ui.round(this, on ? Ui.BLUE : Ui.inputBg(this), 16));
+            tabs[i].setTextColor(on ? Color.WHITE : Ui.sub(this));
+        }
+    }
+
+    private void createDialog() {
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 12, 18, 4);
+        EditText title = Ui.input(this, "Event name");
+        EditText where = Ui.input(this, "Location or Online link");
+        EditText details = Ui.input(this, "Details");
+        details.setMinLines(2);
+        final Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_YEAR, 1);
+        final TextView dateBtn = Ui.btnOutline(this, fmt(cal.getTimeInMillis()), Ui.BLUE);
+        dateBtn.setOnClickListener(v -> new DatePickerDialog(this, (dp, y, m, d) -> {
+            cal.set(y, m, d, 19, 0);
+            dateBtn.setText(fmt(cal.getTimeInMillis()));
+        }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show());
+
+        for (View v : new View[]{title, where, details, dateBtn}) {
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+            p.bottomMargin = Ui.dp(this, 8);
+            box.addView(v, p);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Create Event")
+                .setView(box)
+                .setPositiveButton("Create", (dlg, w) -> {
+                    String t = title.getText().toString().trim();
+                    if (t.isEmpty()) { Ui.toast(this, "Enter an event name"); return; }
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("title", t);
+                    m.put("where", where.getText().toString().trim());
+                    m.put("details", details.getText().toString().trim());
+                    m.put("startAt", cal.getTimeInMillis());
+                    m.put("hostId", Fb.uid());
+                    m.put("hostName", Fb.myName());
+                    m.put("interested", Collections.singletonList(Fb.uid()));
+                    Fb.db().collection("events").add(m)
+                            .addOnSuccessListener(x -> Ui.toast(this, "Event created 📅"));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String fmt(long ms) {
+        return new SimpleDateFormat("EEE, dd MMM yyyy · 7:00 PM", Locale.getDefault()).format(new Date(ms));
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("events")
-                .orderBy("dateMs", Query.Direction.ASCENDING).limit(100)
+        reg = Fb.db().collection("events").limit(100)
                 .addSnapshotListener((snap, err) -> {
-                    while (list.getChildCount() > 2) list.removeViewAt(2);
-                    List<DocumentSnapshot> upcoming = new ArrayList<>();
-                    if (snap != null) {
-                        long now = System.currentTimeMillis() - 6L * 3600 * 1000; // 6h grace
-                        for (DocumentSnapshot d : snap) {
-                            long when = Format.ts(d.getData() == null ? null : d.getData().get("dateMs"));
-                            if (when >= now) upcoming.add(d);
-                        }
+                    allEvents.clear();
+                    long cutoff = System.currentTimeMillis() - 86400_000L;
+                    if (snap != null) for (DocumentSnapshot d : snap) {
+                        Event e = new Event();
+                        e.id = d.getId();
+                        e.title = d.getString("title");
+                        e.where = d.getString("where");
+                        e.details = d.getString("details");
+                        e.hostId = d.getString("hostId");
+                        e.hostName = d.getString("hostName");
+                        Object s = d.get("startAt");
+                        e.startAt = s instanceof Number ? ((Number) s).longValue() : 0;
+                        e.interested = Format.listOf(d.getData(), "interested");
+                        if (e.startAt >= cutoff) allEvents.add(e);
                     }
-                    countT.setText(upcoming.size() + " upcoming event(s)");
-                    if (upcoming.isEmpty()) {
-                        TextView e = Ui.tv(this, "Koi upcoming event nahi — pehla event aap banayein! 🎉", 13, Ui.sub(this));
-                        Ui.pad(e, 4, 10, 4, 0);
-                        list.addView(e);
-                    }
-                    for (DocumentSnapshot d : upcoming) list.addView(eventRow(d));
+                    Collections.sort(allEvents, (a, b2) -> Long.compare(a.startAt, b2.startAt));
+                    applyFilter();
                 });
+    }
+
+    private void applyFilter() {
+        events.clear();
+        String me = Fb.uid();
+        for (Event e : allEvents) {
+            if ("mine_rsvp".equals(tab) && (me == null || !e.interested.contains(me))) continue;
+            if ("hosted".equals(tab) && (me == null || !me.equals(e.hostId))) continue;
+            events.add(e);
+        }
+        adapter.notifyDataSetChanged();
+        empty.setVisibility(events.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     @Override
@@ -98,115 +201,106 @@ public class EventsActivity extends Activity {
         if (reg != null) reg.remove();
     }
 
-    private View eventRow(DocumentSnapshot d) {
-        Map<String, Object> m = d.getData();
-        String name = Format.strOr(m, "name", "Event");
-        String location = Format.str(m, "location");
-        String about = Format.str(m, "about");
-        String host = Format.strOr(m, "hostName", "friendbook user");
-        long when = Format.ts(m == null ? null : m.get("dateMs"));
-        List<String> interested = Format.listOf(m, "interested");
-        boolean meIn = interested.contains(Fb.uid());
+    class Adapter extends RecyclerView.Adapter<Adapter.VH> {
+        @Override public int getItemCount() { return events.size(); }
 
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(when);
+        @NonNull @Override
+        public VH onCreateViewHolder(@NonNull ViewGroup parent, int vt) {
+            LinearLayout card = Ui.col(EventsActivity.this);
+            RecyclerView.LayoutParams p = new RecyclerView.LayoutParams(-1, -2);
+            p.bottomMargin = Ui.dp(EventsActivity.this, 8);
+            card.setLayoutParams(p);
+            card.setBackgroundColor(Ui.card(EventsActivity.this));
+            Ui.pad(card, 14, 12, 14, 12);
 
-        LinearLayout card = Ui.row(this);
-        card.setGravity(Gravity.TOP);
-        card.setBackground(Ui.round(this, Ui.card(this), 14));
-        Ui.pad(card, 12, 12, 12, 12);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
-        cp.setMargins(0, 0, 0, Ui.dp(this, 10));
-        card.setLayoutParams(cp);
+            TextView when = Ui.tvBold(EventsActivity.this, "", 12, Ui.RED);
+            TextView title = Ui.tvBold(EventsActivity.this, "", 17, Ui.txt(EventsActivity.this));
+            TextView where = Ui.tv(EventsActivity.this, "", 13, Ui.sub(EventsActivity.this));
+            TextView det = Ui.tv(EventsActivity.this, "", 13, Ui.txt(EventsActivity.this));
+            det.setPadding(0, Ui.dp(EventsActivity.this, 4), 0, Ui.dp(EventsActivity.this, 8));
 
-        // date box (FB style)
-        LinearLayout dateBox = Ui.col(this);
-        dateBox.setGravity(Gravity.CENTER);
-        dateBox.setBackground(Ui.round(this, 0xFF1877F2, 10));
-        int ds = Ui.dp(this, 56);
-        dateBox.setLayoutParams(new LinearLayout.LayoutParams(ds, ds));
-        TextView day = Ui.tvBold(this, String.valueOf(c.get(Calendar.DAY_OF_MONTH)), 20, 0xFFFFFFFF);
-        TextView mon = Ui.tvBold(this, new java.text.SimpleDateFormat("MMM", Locale.US).format(c.getTime()).toUpperCase(Locale.US), 11, 0xCCFFFFFF);
-        dateBox.addView(day);
-        dateBox.addView(mon);
-        card.addView(dateBox);
+            LinearLayout bar = Ui.row(EventsActivity.this);
+            TextView count = Ui.tv(EventsActivity.this, "", 12, Ui.sub(EventsActivity.this));
+            bar.addView(count, new LinearLayout.LayoutParams(0, -2, 1));
+            TextView calBtn = Ui.tvBold(EventsActivity.this, "📅 Calendar", 12, Ui.BLUE);
+            Ui.pad(calBtn, 10, 7, 10, 7);
+            calBtn.setBackground(Ui.round(EventsActivity.this, Ui.inputBg(EventsActivity.this), 8));
+            bar.addView(calBtn);
 
-        LinearLayout info = Ui.col(this);
-        info.setPadding(Ui.dp(this, 12), 0, 0, 0);
-        TextView title = Ui.tvBold(this, name, 16, Ui.txt(this));
-        info.addView(title);
-        TextView whenT = Ui.tv(this, new java.text.SimpleDateFormat("EEE, d MMM 'at' hh:mm a", Locale.US).format(c.getTime()), 12, Ui.sub(this));
-        info.addView(whenT);
-        if (!location.isEmpty()) {
-            TextView loc = Ui.tv(this, "📍 " + location, 12, Ui.sub(this));
-            info.addView(loc);
+            TextView shareBtn = Ui.tvBold(EventsActivity.this, "↗", 13, Ui.txt(EventsActivity.this));
+            Ui.pad(shareBtn, 10, 7, 10, 7);
+            shareBtn.setBackground(Ui.round(EventsActivity.this, Ui.inputBg(EventsActivity.this), 8));
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
+            sp.leftMargin = Ui.dp(EventsActivity.this, 6);
+            bar.addView(shareBtn, sp);
+
+            TextView btn = Ui.tvBold(EventsActivity.this, "", 13, Color.WHITE);
+            Ui.pad(btn, 12, 7, 12, 7);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
+            bp.leftMargin = Ui.dp(EventsActivity.this, 6);
+            bar.addView(btn, bp);
+
+            card.addView(when);
+            card.addView(title);
+            card.addView(where);
+            card.addView(det);
+            card.addView(bar);
+            return new VH(card, when, title, where, det, count, calBtn, shareBtn, btn);
         }
-        if (!about.isEmpty()) {
-            TextView ab = Ui.tv(this, about, 12, Ui.txt(this));
-            ab.setPadding(0, Ui.dp(this, 4), 0, 0);
-            info.addView(ab);
+
+        @Override
+        public void onBindViewHolder(@NonNull VH h, int i) {
+            Event e = events.get(i);
+            h.when.setText("📅 " + fmt(e.startAt));
+            h.title.setText(e.title);
+            h.where.setText((e.where == null || e.where.isEmpty() ? "Online" : "📍 " + e.where)
+                    + " · Hosted by " + e.hostName);
+            h.det.setText(e.details == null ? "" : e.details);
+            h.det.setVisibility(e.details == null || e.details.isEmpty() ? View.GONE : View.VISIBLE);
+            h.count.setText(e.interested.size() + " going / interested");
+
+            boolean going = Fb.uid() != null && e.interested.contains(Fb.uid());
+            h.btn.setText(going ? "✓ Going" : "⭐ Interested");
+            h.btn.setTextColor(going ? Ui.BLUE : Color.WHITE);
+            h.btn.setBackground(Ui.round(EventsActivity.this, going ? Ui.inputBg(EventsActivity.this) : Ui.BLUE, 8));
+            h.btn.setOnClickListener(v -> {
+                String me = Fb.uid();
+                if (me == null) return;
+                Fb.db().collection("events").document(e.id).update("interested",
+                        going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+            });
+
+            h.calBtn.setOnClickListener(v -> {
+                try {
+                    Intent cal = new Intent(Intent.ACTION_INSERT)
+                            .setData(CalendarContract.Events.CONTENT_URI)
+                            .putExtra(CalendarContract.Events.TITLE, e.title)
+                            .putExtra(CalendarContract.Events.EVENT_LOCATION, e.where)
+                            .putExtra(CalendarContract.Events.DESCRIPTION, e.details)
+                            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, e.startAt);
+                    startActivity(cal);
+                } catch (Exception ex) {
+                    Ui.toast(EventsActivity.this, "No Calendar app found");
+                }
+            });
+
+            h.shareBtn.setOnClickListener(v -> {
+                Intent s = new Intent(Intent.ACTION_SEND);
+                s.setType("text/plain");
+                s.putExtra(Intent.EXTRA_TEXT, "📅 " + e.title + "\n" + fmt(e.startAt)
+                        + (e.where == null || e.where.isEmpty() ? "" : "\n📍 " + e.where));
+                startActivity(Intent.createChooser(s, "Share Event"));
+            });
         }
-        TextView by = Ui.tv(this, "by " + host + " · ⭐ " + interested.size() + " interested", 11, Ui.sub(this));
-        by.setPadding(0, Ui.dp(this, 4), 0, 0);
-        info.addView(by);
 
-        TextView rsvp = Ui.btnOutline(this, meIn ? "✓ Interested" : "⭐ Interested", meIn ? Ui.GREEN : Icons.BLUE);
-        rsvp.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
-        rsvp.setOnClickListener(v -> d.getReference().update("interested",
-                meIn ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid())));
-        info.addView(rsvp, new LinearLayout.LayoutParams(-2, -2));
-
-        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-        return card;
-    }
-
-    private void createDialog() {
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 20, 10, 20, 0);
-        EditText name = Ui.input(this, "Event name (e.g. Cricket match 🏏)");
-        EditText loc = Ui.input(this, "Location");
-        EditText about = Ui.multi(this, "About this event…", 2);
-        box.addView(name, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
-        box.addView(loc, new LinearLayout.LayoutParams(-1, Ui.dp(this, 46)));
-        box.addView(about, new LinearLayout.LayoutParams(-1, -2));
-
-        TextView dateBtn = Ui.btnGrey(this, "📆 Pick date & time");
-        dateBtn.setGravity(Gravity.CENTER);
-        box.addView(dateBtn, new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
-        pickedDateMs = 0;
-        dateBtn.setOnClickListener(v -> {
-            Calendar c = Calendar.getInstance();
-            new DatePickerDialog(this, (dp, y, mth, dy) -> {
-                new TimePickerDialog(this, (tp, hh, mm) -> {
-                    Calendar x = Calendar.getInstance();
-                    x.set(y, mth, dy, hh, mm);
-                    pickedDateMs = x.getTimeInMillis();
-                    dateBtn.setText("📆 " + new java.text.SimpleDateFormat("d MMM yyyy, hh:mm a", Locale.US).format(x.getTime()));
-                }, 12, 0, false).show();
-            }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show();
-        });
-
-        new AlertDialog.Builder(this)
-                .setTitle("Create event")
-                .setView(box)
-                .setPositiveButton("Publish", (d, w) -> {
-                    String n = name.getText().toString().trim();
-                    if (n.isEmpty()) { Ui.toast(this, "Name daalo"); return; }
-                    long when = pickedDateMs == 0 ? System.currentTimeMillis() + 86400000 : pickedDateMs;
-                    java.util.Map<String, Object> ev = Fb.map(
-                            "name", n,
-                            "location", loc.getText().toString().trim(),
-                            "about", about.getText().toString().trim(),
-                            "dateMs", when,
-                            "hostId", Fb.uid(),
-                            "hostName", Fb.myName(),
-                            "interested", new ArrayList<String>(),
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("events").add(ev)
-                            .addOnSuccessListener(x -> Ui.toast(this, "🎉 Event published!"))
-                            .addOnFailureListener(err -> Ui.toast(this, "Failed: " + err.getMessage()));
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        class VH extends RecyclerView.ViewHolder {
+            TextView when, title, where, det, count, calBtn, shareBtn, btn;
+            VH(View v, TextView w, TextView t, TextView wh, TextView d, TextView c,
+               TextView cal, TextView sh, TextView b) {
+                super(v);
+                when = w; title = t; where = wh; det = d; count = c;
+                calBtn = cal; shareBtn = sh; btn = b;
+            }
+        }
     }
 }

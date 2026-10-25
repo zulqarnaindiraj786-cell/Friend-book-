@@ -2,7 +2,10 @@ package com.friendbook.post;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -20,12 +23,15 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Saved items — realtime list of everything you bookmarked. */
+/** 🔖 Saved items — Facebook-Lite filterable Saved hub (All · Posts · Videos · Marketplace). */
 public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
+    private String filter = "all";
+    private final TextView[] chips = new TextView[4];
+    private final List<Models.Post> allSaved = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle b) {
@@ -33,10 +39,30 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         Ui.statusBarBlue(this);
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "💾 Saved posts"));
+        root.addView(Ui.pageBar(this, "Saved"));
 
-        empty = Ui.tv(this, "Nothing saved yet.\nTap ••• on a post → Save post.", 14, Ui.sub(this));
-        empty.setGravity(android.view.Gravity.CENTER);
+        String[] labels = {"All", "📝 Posts", "🎬 Videos", "🛒 Marketplace"};
+        String[] keys = {"all", "posts", "videos", "market"};
+        LinearLayout row = Ui.row(this);
+        row.setBackgroundColor(Ui.card(this));
+        Ui.pad(row, 10, 8, 10, 8);
+        for (int i = 0; i < 4; i++) {
+            final String k = keys[i];
+            TextView c = Ui.tvBold(this, labels[i], 12, Ui.sub(this));
+            c.setGravity(Gravity.CENTER);
+            Ui.pad(c, 8, 6, 8, 6);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+            if (i > 0) lp.leftMargin = Ui.dp(this, 6);
+            row.addView(c, lp);
+            chips[i] = c;
+            c.setOnClickListener(v -> { filter = k; refreshChips(); applyFilter(); });
+        }
+        root.addView(row);
+        root.addView(Ui.divider(this));
+        refreshChips();
+
+        empty = Ui.tv(this, "Nothing saved here yet.\nTap ••• on any post → Save post.", 14, Ui.sub(this));
+        empty.setGravity(Gravity.CENTER);
         Ui.pad(empty, 24, 60, 24, 0);
         root.addView(empty);
 
@@ -50,6 +76,15 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         setContentView(root);
     }
 
+    private void refreshChips() {
+        String[] keys = {"all", "posts", "videos", "market"};
+        for (int i = 0; i < 4; i++) {
+            boolean on = keys[i].equals(filter);
+            chips[i].setBackground(Ui.round(this, on ? Ui.BLUE : Ui.inputBg(this), 16));
+            chips[i].setTextColor(on ? Color.WHITE : Ui.sub(this));
+        }
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
@@ -57,18 +92,30 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         if (me == null) return;
         reg = Fb.db().collection("posts").whereArrayContains("savedBy", me)
                 .addSnapshotListener((snap, err) -> {
-                    List<Models.Post> list = new ArrayList<>();
+                    allSaved.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.Post p = Models.Post.fromDoc(d);
+                            if (p.trashedAt > 0) continue;
                             if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
-                            list.add(p);
+                            allSaved.add(p);
                         }
                     }
-                    Collections.sort(list, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    adapter.setPosts(list);
-                    empty.setVisibility(list.isEmpty() ? android.view.View.VISIBLE : android.view.View.GONE);
+                    Collections.sort(allSaved, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
+                    applyFilter();
                 });
+    }
+
+    private void applyFilter() {
+        List<Models.Post> list = new ArrayList<>();
+        for (Models.Post p : allSaved) {
+            if ("videos".equals(filter) && !"video".equals(p.mediaType)) continue;
+            if ("market".equals(filter) && !p.isMarketplace()) continue;
+            if ("posts".equals(filter) && ("video".equals(p.mediaType) || p.isMarketplace())) continue;
+            list.add(p);
+        }
+        adapter.setPosts(list);
+        empty.setVisibility(list.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     @Override

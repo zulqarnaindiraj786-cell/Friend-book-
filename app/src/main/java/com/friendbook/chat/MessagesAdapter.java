@@ -78,6 +78,13 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         LinearLayout bubble = Ui.col(c);
         Ui.pad(bubble, 10, 8, 10, 8);
 
+        TextView quote = Ui.tv(c, "", 11, 0);
+        Ui.pad(quote, 8, 4, 8, 4);
+        quote.setMaxLines(2);
+        quote.setVisibility(View.GONE);
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(-2, -2);
+        qlp.bottomMargin = Ui.dp(c, 4);
+
         TextView text = Ui.tv(c, "", 15, 0);
         Linkify.addLinks(text, Linkify.WEB_URLS);
         ImageView img = new ImageView(c);
@@ -91,6 +98,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         dur.setPadding(Ui.dp(c, 8), 0, Ui.dp(c, 4), 0);
         voiceRow.addView(play);
         voiceRow.addView(dur);
+        bubble.addView(quote, qlp);
         bubble.addView(text);
         bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 170), -2));
         bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 160)));
@@ -118,7 +126,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         } else {
             row.setGravity(Gravity.START);
         }
-        VH vh = new VH(row, av, bubble, text, img, ticks, voiceRow, play, dur, react);
+        VH vh = new VH(row, av, bubble, quote, text, img, ticks, voiceRow, play, dur, react);
         vh.mine = viewType == 1;
         return vh;
     }
@@ -158,6 +166,16 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.react.setText(rs);
             h.react.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
             h.react.setTextColor(Ui.txt(c));
+        }
+
+        if (m.replyToText != null && !m.replyToText.isEmpty() && !m.isDeleted) {
+            h.quote.setVisibility(View.VISIBLE);
+            h.quote.setText("↩ " + (m.replyToSender == null || m.replyToSender.isEmpty() ? "" : m.replyToSender + ": ")
+                    + m.replyToText);
+            h.quote.setTextColor(h.mine ? 0xEEFFFFFF : Ui.sub(c));
+            h.quote.setBackground(Ui.round(c, h.mine ? 0x33000000 : Ui.card(c), 8));
+        } else {
+            h.quote.setVisibility(View.GONE);
         }
 
         boolean isVoice = "voice".equals(m.type) && m.voiceUrl != null && !m.voiceUrl.isEmpty();
@@ -261,12 +279,12 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     static class VH extends RecyclerView.ViewHolder {
         ImageView av, img;
         LinearLayout bubble, voiceRow;
-        TextView text, ticks, play, dur, react;
+        TextView quote, text, ticks, play, dur, react;
         boolean mine;
-        VH(View v, ImageView a, LinearLayout b, TextView t, ImageView i, TextView tk,
+        VH(View v, ImageView a, LinearLayout b, TextView q, TextView t, ImageView i, TextView tk,
            LinearLayout vr, TextView pl, TextView du, TextView re) {
             super(v);
-            av = a; bubble = b; text = t; img = i; ticks = tk;
+            av = a; bubble = b; quote = q; text = t; img = i; ticks = tk;
             voiceRow = vr; play = pl; dur = du; react = re;
         }
     }

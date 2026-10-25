@@ -8,12 +8,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Firestore document models — matches the schema shared with the Flutter app. */
+/** Firestore document models — matches the schema shared with the Flutter app + FB Lite 525 fields. */
 public class Models {
 
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
+        public String work, education, currentCity, hometown, relationshipStatus, website, pronouns, phone;
         public boolean isOnline, isAdmin, banned, isVerified;
+        public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public long lastSeen, createdAt;
         public int friendsCount;
         public int stars;     // Stars balance (monetization)
@@ -21,7 +23,17 @@ public class Models {
         public boolean subscriptionsEnabled;
         public int subscriptionPrice;     // USD per month (2 / 5 / 10)
         public boolean profileLocked;     // 🔒 FB-style locked profile
+        public String friendsListPrivacy = "Public"; // Public | Friends | Only me
+        public String contactPrivacy = "Friends";    // Public | Friends | Only me
+        public String followersPrivacy = "Public";   // Public | Friends
+        public String tagPrivacy = "Everyone";       // Everyone | Friends | Only me
+        public String twoFactorPin = "";
         public List<String> favoriteUids = new ArrayList<>(); // feed "Favorites" first
+        public List<String> restrictedUids = new ArrayList<>(); // friends who only see Public posts
+        public List<String> closeFriendsUids = new ArrayList<>();
+        public List<String> highlightStoryIds = new ArrayList<>(); // ✨ Story Highlights on profile
+        public List<String> savedReelIds = new ArrayList<>();
+        public List<String> hobbies = new ArrayList<>();
         public String pinnedPostId;       // 📌 post pinned on own profile
         public int dailyStreak;           // 🎁 consecutive daily-bonus days
         public long lastBonusAt;          // 🎁 last daily-bonus claim (epoch ms)
@@ -50,10 +62,22 @@ public class Models {
             u.bio = Format.str(m, "bio");
             u.coverUrl = Format.str(m, "coverUrl");
             u.birthday = Format.str(m, "birthday");
+            u.work = Format.str(m, "work");
+            u.education = Format.str(m, "education");
+            u.currentCity = Format.str(m, "currentCity");
+            u.hometown = Format.str(m, "hometown");
+            u.relationshipStatus = Format.str(m, "relationshipStatus");
+            u.website = Format.str(m, "website");
+            u.pronouns = Format.str(m, "pronouns");
+            u.phone = Format.str(m, "phone");
             u.isOnline = Format.boolOf(m, "isOnline");
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.banned = Format.boolOf(m, "banned");
             u.isVerified = Format.boolOf(m, "isVerified");
+            u.deactivated = Format.boolOf(m, "deactivated");
+            u.loginAlerts = Format.boolOf(m, "loginAlerts");
+            u.tagReviewEnabled = Format.boolOf(m, "tagReviewEnabled");
+            u.professionalMode = Format.boolOf(m, "professionalMode");
             u.lastSeen = Format.ts(m == null ? null : m.get("lastSeen"));
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
@@ -62,7 +86,17 @@ public class Models {
             u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
             u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
             u.profileLocked = Format.boolOf(m, "profileLocked");
+            u.friendsListPrivacy = Format.strOr(m, "friendsListPrivacy", "Public");
+            u.contactPrivacy = Format.strOr(m, "contactPrivacy", "Friends");
+            u.followersPrivacy = Format.strOr(m, "followersPrivacy", "Public");
+            u.tagPrivacy = Format.strOr(m, "tagPrivacy", "Everyone");
+            u.twoFactorPin = Format.str(m, "twoFactorPin");
             u.favoriteUids = Format.listOf(m, "favoriteUids");
+            u.restrictedUids = Format.listOf(m, "restrictedUids");
+            u.closeFriendsUids = Format.listOf(m, "closeFriendsUids");
+            u.highlightStoryIds = Format.listOf(m, "highlightStoryIds");
+            u.savedReelIds = Format.listOf(m, "savedReelIds");
+            u.hobbies = Format.listOf(m, "hobbies");
             u.pinnedPostId = Format.str(m, "pinnedPostId");
             u.dailyStreak = Format.intOf(m, "dailyStreak");
             Object lb = m == null ? null : m.get("lastBonusAt");
@@ -78,10 +112,17 @@ public class Models {
         public String id, authorId, authorName, authorPhoto, content, mediaUrl, mediaType,
                 feeling, privacy, sharedFromId, sharedFromAuthor, sharedFromContent,
                 sharedFromMediaUrl, sharedFromMediaType, location, groupId;
+        public String lifeEvent, qaPrompt;
+        public String marketTitle, marketPrice, marketCategory, marketCondition;
+        public boolean marketSold;
+        public String pageId, pageName, pagePhoto;
+        public boolean archived;
+        public long trashedAt;
         public int likes, comments, shares;
-        public int bgColor; // 0 = none, 1..N = Backgrounds.GRADIENTS index
+        public int bgColor; // 0 = none, or ARGB / Backgrounds index
         public long createdAt;
         public List<String> savedBy = new ArrayList<>();
+        public List<String> subscribedUids = new ArrayList<>();
         public List<String> mediaUrls = new ArrayList<>(); // multi-photo posts
         public List<String> taggedUids = new ArrayList<>();  // 👥 friends tagged in this post
         public List<String> taggedNames = new ArrayList<>(); // denormalized for fast render
@@ -94,6 +135,12 @@ public class Models {
         public boolean isPoll() { return pollOptions != null && pollOptions.size() >= 2; }
         public boolean isMultiPhoto() { return mediaUrls != null && mediaUrls.size() > 1; }
         public boolean isBgPost() { return bgColor != 0; }
+        public boolean isMarketplace() {
+            return (marketTitle != null && !marketTitle.isEmpty())
+                    || (marketPrice != null && !marketPrice.isEmpty());
+        }
+        public boolean isLifeEvent() { return lifeEvent != null && !lifeEvent.isEmpty(); }
+        public boolean isQa() { return qaPrompt != null && !qaPrompt.isEmpty(); }
 
         @SuppressWarnings("unchecked")
         public static Post fromDoc(DocumentSnapshot d) {
@@ -110,6 +157,19 @@ public class Models {
             p.privacy = Format.strOr(m, "privacy", "Public");
             p.location = Format.str(m, "location");
             p.groupId = Format.str(m, "groupId");
+            p.lifeEvent = Format.str(m, "lifeEvent");
+            p.qaPrompt = Format.str(m, "qaPrompt");
+            p.marketTitle = Format.str(m, "marketTitle");
+            p.marketPrice = Format.str(m, "marketPrice");
+            p.marketCategory = Format.str(m, "marketCategory");
+            p.marketCondition = Format.str(m, "marketCondition");
+            p.marketSold = Format.boolOf(m, "marketSold");
+            p.pageId = Format.str(m, "pageId");
+            p.pageName = Format.str(m, "pageName");
+            p.pagePhoto = Format.str(m, "pagePhoto");
+            p.archived = Format.boolOf(m, "archived");
+            Object tr = m == null ? null : m.get("trashedAt");
+            p.trashedAt = tr instanceof Number ? ((Number) tr).longValue() : Format.ts(tr);
             p.bgColor = Format.intOf(m, "bgColor");
             p.likes = Format.intOf(m, "likes");
             p.comments = Format.intOf(m, "comments");
@@ -123,6 +183,7 @@ public class Models {
             p.sharedFromMediaUrl = Format.str(m, "sharedFromMediaUrl");
             p.sharedFromMediaType = Format.str(m, "sharedFromMediaType");
             p.savedBy = Format.listOf(m, "savedBy");
+            p.subscribedUids = Format.listOf(m, "subscribedUids");
             p.mediaUrls = Format.listOf(m, "mediaUrls");
             p.taggedUids = Format.listOf(m, "taggedUids");
             p.taggedNames = Format.listOf(m, "taggedNames");
@@ -165,8 +226,11 @@ public class Models {
 
     public static class Story {
         public String id, authorId, authorName, authorPhoto, mediaUrl, mediaType, caption;
+        public String musicMood, privacy;
+        public int bgColor, fontStyle;
         public long createdAt, expiresAt;
         public List<String> viewedBy = new ArrayList<>();
+        public Map<String, String> reactions = new HashMap<>();
 
         public boolean expired() { return System.currentTimeMillis() > expiresAt; }
 
@@ -180,10 +244,21 @@ public class Models {
             s.mediaUrl = Format.str(m, "mediaUrl");
             s.mediaType = Format.strOr(m, "mediaType", "image");
             s.caption = Format.str(m, "caption");
+            s.musicMood = Format.str(m, "musicMood");
+            s.privacy = Format.strOr(m, "privacy", "Public");
+            s.bgColor = Format.intOf(m, "bgColor");
+            s.fontStyle = Format.intOf(m, "fontStyle");
             s.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             long exp = Format.ts(m == null ? null : m.get("expiresAt"));
             s.expiresAt = exp > 0 ? exp : System.currentTimeMillis() + 86400_000L;
             s.viewedBy = Format.listOf(m, "viewedBy");
+            Object r = m == null ? null : m.get("reactions");
+            if (r instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) r).entrySet()) {
+                    if (e.getValue() != null)
+                        s.reactions.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                }
+            }
             return s;
         }
     }
@@ -214,6 +289,8 @@ public class Models {
 
     public static class Message {
         public String id, senderId, receiverId, text, imageUrl, type, voiceUrl;
+        public String replyToText, replyToSender;
+        public boolean forwarded;
         public int voiceDurationSec;
         public boolean isSeen, isDelivered, isDeleted;
         public long createdAt;
@@ -229,6 +306,9 @@ public class Models {
             m0.text = Format.str(m, "text");
             m0.imageUrl = Format.str(m, "imageUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
+            m0.replyToText = Format.str(m, "replyToText");
+            m0.replyToSender = Format.str(m, "replyToSender");
+            m0.forwarded = Format.boolOf(m, "forwarded");
             m0.voiceDurationSec = Format.intOf(m, "voiceDurationSec");
             m0.type = Format.strOr(m, "type", "text");
             m0.isSeen = Format.boolOf(m, "isSeen");

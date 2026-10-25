@@ -34,7 +34,8 @@ public class NewChatActivity extends Activity {
         Ui.statusBarBlue(this);
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "New message"));
+        String fw = getIntent().getStringExtra("forward_text");
+        root.addView(Ui.pageBar(this, fw != null ? "Forward message to…" : "New message"));
 
         EditText search = Ui.input(this, "🔍 Search friends…");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 44));
@@ -61,6 +62,7 @@ public class NewChatActivity extends Activity {
             Intent i = new Intent(this, ChatActivity.class);
             i.putExtra("uid", u.uid);
             i.putExtra("name", u.displayName);
+            if (fw != null && !fw.isEmpty()) i.putExtra("prefill", "↪ Forwarded: " + fw);
             startActivity(i);
             finish();
         };

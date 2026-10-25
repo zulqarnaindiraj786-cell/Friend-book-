@@ -75,14 +75,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         return root;
     }
 
-    /** Facebook-Lite style feed filters: All / Photos / Videos / Text-only. */
+    /** Facebook-Lite 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
     private View filterChips(android.app.Activity a) {
         HorizontalScrollView sc = new HorizontalScrollView(a);
         sc.setHorizontalScrollBarEnabled(false);
         LinearLayout row = Ui.row(a);
         row.setPadding(Ui.dp(a, 4), Ui.dp(a, 6), Ui.dp(a, 4), Ui.dp(a, 6));
-        String[] labels = {"🏠 All", "🖼 Photos", "🎬 Videos", "📝 Text posts"};
-        String[] keys = {"all", "photos", "videos", "text"};
+        String[] labels = {"✨ Top", "🕒 Recent", "⭐ Favorites", "🖼 Photos", "🎬 Videos", "🛒 Market", "📝 Text"};
+        String[] keys = {"all", "recent", "favorites", "photos", "videos", "market", "text"};
         String cur = com.friendbook.core.Prefs.feedFilter(a);
         for (int i = 0; i < labels.length; i++) {
             final String key = keys[i];
@@ -93,8 +93,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             Ui.pad(chip, 12, 6, 12, 6);
             chip.setOnClickListener(v -> {
                 com.friendbook.core.Prefs.setFeedFilter(a, key);
+                if ("recent".equals(key)) com.friendbook.core.Prefs.setFeedSort(a, "recent");
+                else if ("all".equals(key)) com.friendbook.core.Prefs.setFeedSort(a, "top");
                 restartPostsListener();
-                // rebuild chip row to refresh selected state
                 android.view.View parent = (android.view.View) v.getParent().getParent().getParent();
                 if (parent instanceof LinearLayout) {
                     ((LinearLayout) parent).removeViewAt(0);
@@ -212,7 +213,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                             for (String p : parts) if (!p.equals(me)) friendIds.add(p);
                         }
                     }
+                    loadPymk();
                 });
+    }
+
+    private void loadPymk() {
+        String me = Fb.uid();
+        if (me == null || adapter == null) return;
+        Fb.db().collection("users").limit(25).get().addOnSuccessListener(snap -> {
+            List<Models.User> pymk = new ArrayList<>();
+            for (DocumentSnapshot d : snap) {
+                Models.User u = Models.User.fromDoc(d);
+                if (u.uid == null || u.uid.equals(me)) continue;
+                if (u.deactivated) continue;
+                if (friendIds.contains(u.uid)) continue;
+                if (Fb.me != null && Fb.me.blocked.contains(u.uid)) continue;
+                pymk.add(u);
+                if (pymk.size() >= 10) break;
+            }
+            if (adapter != null) adapter.setPymk(pymk);
+        });
     }
 
     // ---------- posts ----------
@@ -268,9 +288,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             android.util.Log.d("HomeFeed", "fetched=" + snap.size() + " visible=" + list.size()
                     + " filter=" + filter + " ordered=" + ordered);
             // fallback path: unordered snapshot needs a client-side sort
-            if (!ordered) list.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
-            // ⭐ Favorites first (FB Lite "Feed preferences") on the ALL view
-            if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
+            if (!ordered || "recent".equals(filter)
+                    || (a2 != null && "recent".equals(com.friendbook.core.Prefs.feedSort(a2)) && "all".equals(filter))) {
+                list.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
+            } else if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
+                // ⭐ Favorites first (FB Lite "Top" Feed order)
                 list.sort((x, y) -> {
                     boolean xf = Fb.me.favoriteUids.contains(x.authorId);
                     boolean yf = Fb.me.favoriteUids.contains(y.authorId);
@@ -282,11 +304,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
     }
 
-    /** Feed chip filter: photos / videos / text-only. */
+    /** Feed chip filter: Top / Recent / Favorites / Photos / Videos / Marketplace / Text. */
     private boolean matchesFilter(Models.Post p, String filter) {
-        if (filter == null || "all".equals(filter)) return true;
-        if ("photos".equals(filter)) return "image".equals(p.mediaType) || "photo".equals(p.mediaType);
+        if (filter == null || "all".equals(filter) || "recent".equals(filter)) return true;
+        if ("favorites".equals(filter))
+            return Fb.me != null && Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(p.authorId);
+        if ("photos".equals(filter))
+            return "image".equals(p.mediaType) || "images".equals(p.mediaType) || "photo".equals(p.mediaType);
         if ("videos".equals(filter)) return "video".equals(p.mediaType);
+        if ("market".equals(filter)) return p.isMarketplace();
         if ("text".equals(filter)) return p.mediaType == null || p.mediaType.isEmpty() || "none".equals(p.mediaType);
         return true;
     }
@@ -294,6 +320,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean visible(Models.Post p) {
         String me = Fb.uid();
         if (p.authorId == null) return false;
+        if (p.archived || p.trashedAt > 0) return false;
         if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) return false;
         android.app.Activity ctx = getActivity();
         if (ctx != null) {
@@ -318,6 +345,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                             Models.Story s = Models.Story.fromDoc(d);
                             if (s.authorId == null || s.authorId.isEmpty()) continue;
                             if (Fb.me != null && Fb.me.blocked.contains(s.authorId)) continue;
+                            if (getActivity() != null && !s.authorId.equals(me)
+                                    && com.friendbook.core.Prefs.isStoryAuthorMuted(getActivity(), s.authorId))
+                                continue;
+                            if ("Friends".equalsIgnoreCase(s.privacy)
+                                    && !s.authorId.equals(me) && !friendIds.contains(s.authorId))
+                                continue;
                             StoriesAdapter.Group g = storyGroups.get(s.authorId);
                             if (g == null) {
                                 g = new StoriesAdapter.Group();

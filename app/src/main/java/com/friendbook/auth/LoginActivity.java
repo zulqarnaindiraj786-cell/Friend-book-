@@ -1,24 +1,39 @@
 package com.friendbook.auth;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.friendbook.core.Admin;
 import com.friendbook.core.Fb;
+import com.friendbook.core.Notify;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Presence;
 import com.friendbook.core.Ui;
 import com.friendbook.main.MainActivity;
+import com.friendbook.settings.SessionsActivity;
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.SetOptions;
 
+import java.util.List;
+
+/**
+ * 🔐 LoginActivity — Facebook-Lite 525 style:
+ * Saved Accounts Quick Switcher cards at top + 2FA PIN check + Deactivated-account auto-restore + Login Alerts.
+ */
 public class LoginActivity extends Activity {
 
     private EditText email, pass;
+    private LinearLayout savedBox;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -27,18 +42,24 @@ public class LoginActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        Ui.pad(root, 24, 48, 24, 24);
+        Ui.pad(root, 24, 42, 24, 24);
 
         TextView logo = Ui.tvBold(this, "friendbook", 34, Ui.BLUE);
         logo.setGravity(Gravity.CENTER);
         root.addView(logo);
         TextView tag = Ui.tv(this, "Connect with friends and the world around you.", 13, Ui.sub(this));
         tag.setGravity(Gravity.CENTER);
-        tag.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 28));
+        tag.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 20));
         root.addView(tag);
+
+        // Saved accounts quick-tap cards (classic FB Lite feature)
+        savedBox = Ui.col(this);
+        root.addView(savedBox);
 
         email = Ui.input(this, "Email address");
         email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        String prefill = getIntent().getStringExtra("prefill_email");
+        if (prefill != null && !prefill.isEmpty()) email.setText(prefill);
         root.addView(email, lp());
 
         pass = Ui.input(this, "Password");
@@ -55,11 +76,11 @@ public class LoginActivity extends Activity {
         forgot.setGravity(Gravity.CENTER);
         forgot.setPadding(0, Ui.dp(this, 18), 0, 0);
         root.addView(forgot);
-        forgot.setOnClickListener(v -> forgotDialog());
+        forgot.setOnClickListener(v -> startActivity(new Intent(this, ForgotPasswordActivity.class)));
 
         TextView divider = Ui.tv(this, "──────────  or  ──────────", 13, Ui.sub(this));
         divider.setGravity(Gravity.CENTER);
-        divider.setPadding(0, Ui.dp(this, 28), 0, Ui.dp(this, 14));
+        divider.setPadding(0, Ui.dp(this, 24), 0, Ui.dp(this, 14));
         root.addView(divider);
 
         TextView create = Ui.btnGrey(this, "Create New Account");
@@ -67,14 +88,64 @@ public class LoginActivity extends Activity {
         create.setOnClickListener(v -> startActivity(new Intent(this, RegisterActivity.class)));
         root.addView(create, lp());
 
+        renderSavedAccounts();
+        if (prefill != null && !prefill.isEmpty()) pass.requestFocus();
+
         ScrollView sv = new ScrollView(this);
         sv.addView(root);
         setContentView(sv);
     }
 
+    private void renderSavedAccounts() {
+        savedBox.removeAllViews();
+        List<Prefs.SavedAccount> list = Prefs.savedAccounts(this);
+        if (list.isEmpty()) return;
+
+        TextView label = Ui.tvBold(this, "Saved accounts on this phone", 12, Ui.sub(this));
+        label.setPadding(0, 0, 0, Ui.dp(this, 6));
+        savedBox.addView(label);
+
+        for (Prefs.SavedAccount sa : list) {
+            LinearLayout row = Ui.row(this);
+            row.setBackground(Ui.round(this, Ui.card(this), 10));
+            Ui.pad(row, 10, 8, 10, 8);
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+            rp.bottomMargin = Ui.dp(this, 8);
+            row.setLayoutParams(rp);
+
+            ImageView av = new ImageView(this);
+            Ui.avatar(this, av, sa.photoUrl);
+            int s = Ui.dp(this, 38);
+            row.addView(av, new LinearLayout.LayoutParams(s, s));
+
+            LinearLayout col = Ui.col(this);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1);
+            cp.leftMargin = Ui.dp(this, 10);
+            col.addView(Ui.tvBold(this, sa.name, 14, Ui.txt(this)));
+            col.addView(Ui.tv(this, sa.email, 11, Ui.sub(this)));
+            row.addView(col, cp);
+
+            TextView rm = Ui.tvBold(this, "✕", 14, Ui.sub(this));
+            rm.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+            rm.setOnClickListener(v -> {
+                Prefs.removeSavedAccount(this, sa.email);
+                renderSavedAccounts();
+            });
+            row.addView(rm);
+
+            row.setOnClickListener(v -> {
+                email.setText(sa.email);
+                pass.requestFocus();
+                Ui.toast(this, "Enter password for " + sa.name);
+            });
+            savedBox.addView(row);
+        }
+        View spacer = new View(this);
+        savedBox.addView(spacer, new LinearLayout.LayoutParams(1, Ui.dp(this, 6)));
+    }
+
     private LinearLayout.LayoutParams lp() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, Ui.dp(this, 48));
-        return p;
+        return new LinearLayout.LayoutParams(-1, Ui.dp(this, 48));
     }
 
     private void doLogin(TextView btn) {
@@ -86,28 +157,12 @@ public class LoginActivity extends Activity {
         Ui.hideKeyboard(this);
         Fb.auth().signInWithEmailAndPassword(e, p)
                 .addOnSuccessListener(r -> {
-                    // banned-account gate: verify profile before letting them in
                     String uid = Fb.auth().getCurrentUser() != null
                             ? Fb.auth().getCurrentUser().getUid() : null;
                     if (uid == null) { openMain(); return; }
-                    Fb.db().collection("users").document(uid).get().addOnSuccessListener(d -> {
-                        boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
-                        String em = Fb.auth().getCurrentUser() != null
-                                ? Fb.auth().getCurrentUser().getEmail() : "";
-                        if (banned && !com.friendbook.core.Admin.isOwnerEmail(em)) {
-                            Fb.auth().signOut();
-                            btn.setText("Log In");
-                            btn.setEnabled(true);
-                            Ui.info(this, "Account suspended",
-                                    "This account has been suspended by the friendbook admin."
-                                            + " Contact " + com.friendbook.core.Admin.OWNER_EMAIL
-                                            + " if you think this is a mistake.");
-                            return;
-                        }
-                        Prefs.setUnlockedSession(this, true);
-                        com.friendbook.settings.SessionsActivity.record(); // "Where you're logged in"
-                        openMain();
-                    });
+                    Fb.db().collection("users").document(uid).get()
+                            .addOnSuccessListener(d -> verifyAndFinishLogin(uid, e, d, btn))
+                            .addOnFailureListener(err -> openMain());
                 })
                 .addOnFailureListener(err -> {
                     btn.setText("Log In");
@@ -116,10 +171,65 @@ public class LoginActivity extends Activity {
                 });
     }
 
-    private void forgotDialog() {
-        // Facebook-Lite 2026 recovery: Gmail OTP code screen
-        startActivity(new android.content.Intent(this,
-                com.friendbook.auth.ForgotPasswordActivity.class));
+    private void verifyAndFinishLogin(String uid, String em, DocumentSnapshot d, TextView btn) {
+        boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
+        if (banned && !Admin.isOwnerEmail(em)) {
+            Fb.auth().signOut();
+            btn.setText("Log In");
+            btn.setEnabled(true);
+            Ui.info(this, "Account suspended",
+                    "This account has been suspended by the friendbook admin."
+                            + " Contact " + Admin.OWNER_EMAIL + " if you think this is a mistake.");
+            return;
+        }
+        String twoFa = d.getString("twoFactorPin");
+        if (twoFa != null && !twoFa.isEmpty()) {
+            EditText code = Ui.input(this, "Enter Two-Step Security PIN");
+            code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+            LinearLayout box = Ui.col(this);
+            Ui.pad(box, 20, 10, 20, 0);
+            box.addView(code, new LinearLayout.LayoutParams(-1, Ui.dp(this, 48)));
+            new AlertDialog.Builder(this)
+                    .setTitle("🛡 Two-Step Verification")
+                    .setMessage("Enter the security PIN enabled on this account.")
+                    .setCancelable(false)
+                    .setView(box)
+                    .setPositiveButton("Verify", (dlg, w) -> {
+                        if (twoFa.equals(code.getText().toString().trim())) {
+                            completePostLogin(uid, em, d);
+                        } else {
+                            Fb.auth().signOut();
+                            btn.setText("Log In");
+                            btn.setEnabled(true);
+                            Ui.toast(this, "Incorrect security PIN");
+                        }
+                    })
+                    .setNegativeButton("Cancel", (dlg, w) -> {
+                        Fb.auth().signOut();
+                        btn.setText("Log In");
+                        btn.setEnabled(true);
+                    })
+                    .show();
+            return;
+        }
+        completePostLogin(uid, em, d);
+    }
+
+    private void completePostLogin(String uid, String em, DocumentSnapshot d) {
+        if (Boolean.TRUE.equals(d.getBoolean("deactivated"))) {
+            Fb.db().collection("users").document(uid)
+                    .set(Fb.map("deactivated", false), SetOptions.merge());
+            Ui.toast(this, "Welcome back! Your account has been reactivated 👋");
+        }
+        if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
+            Notify.send(uid, "security", "logged in on " + android.os.Build.MODEL, "");
+        }
+        String name = d.getString("displayName");
+        String photo = d.getString("photoUrl");
+        Prefs.saveAccount(this, uid, em, name == null ? em : name, photo == null ? "" : photo);
+        Prefs.setUnlockedSession(this, true);
+        SessionsActivity.record();
+        openMain();
     }
 
     private String human(String m) {
