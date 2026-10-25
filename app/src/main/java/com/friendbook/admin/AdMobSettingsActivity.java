@@ -60,7 +60,7 @@ public class AdMobSettingsActivity extends Activity {
         LinearLayout card2 = Ui.col(this);
         card2.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card2, 14, 12, 14, 14);
-        card2.addView(Ui.tvBold(this, "Production Native Ad Unit ID (After Every 5 Posts)", 13, Ui.sub(this)));
+        card2.addView(Ui.tvBold(this, "Production Native Ad Unit ID (After Every 4 Posts)", 13, Ui.sub(this)));
         nativeEdit = Ui.input(this, "ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY");
         nativeEdit.setText(AdsConfig.nativeId());
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
@@ -77,7 +77,7 @@ public class AdMobSettingsActivity extends Activity {
         LinearLayout switchRow = Ui.row(this);
         switchRow.setGravity(Gravity.CENTER_VERTICAL);
         switchRow.setPadding(0, Ui.dp(this, 12), 0, 0);
-        TextView onT = Ui.tvBold(this, "Enable In-Feed Native Ads (Every 5 Posts)", 13, Ui.txt(this));
+        TextView onT = Ui.tvBold(this, "Enable In-Feed Native Ads (Every 4 Posts)", 13, Ui.txt(this));
         switchRow.addView(onT, new LinearLayout.LayoutParams(0, -2, 1));
         enabledSwitch = new Switch(this);
         enabledSwitch.setChecked(AdsConfig.isMasterSwitchEnabled());

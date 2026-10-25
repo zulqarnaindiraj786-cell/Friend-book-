@@ -19,7 +19,7 @@ import java.util.Map;
  * - App ID:              ca-app-pub-3387480177023669~5696528190
  * - Native Advanced ID:  ca-app-pub-3387480177023669/1131199868
  * - Zero Banner Ads anywhere in the app.
- * - Loaded via AdLoader for Native Advanced in-feed after every 5 posts.
+ * - Loaded via AdLoader for Native Advanced in-feed after every 4 posts.
  */
 public class AdsConfig {
 

@@ -161,7 +161,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return adsActive() ? (posts.size() / NATIVE_AD_EVERY_N_POSTS) : 0;
     }
 
-    /** Does this feed slot (after the header) hold a Native Ad? Slots 5, 11, 17… (after every 5 posts!) */
+    /** Does this feed slot (after the header) hold a Native Ad? Slots 4, 9, 14… (after every 4 posts!) */
     private boolean isAdSlot(int slot) {
         return adsActive()
                 && ((slot + 1) % NATIVE_AD_STEP == 0)
