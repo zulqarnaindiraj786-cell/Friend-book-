@@ -386,6 +386,10 @@ public class Ui {
         }
     }
 
+    public static void showQrDialog(Context c, String title, String link) {
+        showQrDialog(c, title, "Scan or share on friendbook", link);
+    }
+
     /** Visual QR share card dialog (deterministic matrix + copy/share link). */
     public static void showQrDialog(Context c, String title, String subtitle, String link) {
         LinearLayout box = col(c);
