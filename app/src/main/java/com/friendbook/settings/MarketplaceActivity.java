@@ -286,7 +286,8 @@ public class MarketplaceActivity extends Activity {
         m.put("authorId", Fb.uid());
         m.put("authorName", Fb.myName());
         m.put("authorPhotoUrl", Fb.myPhoto());
-        m.put("authorTick", Fb.me != null ? Fb.me.tickLevel : "none");
+        m.put("authorVerified", Fb.me != null && Fb.me.isVerified);
+        m.put("authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
         m.put("postType", "marketplace");
         m.put("marketTitle", title);
         m.put("marketPrice", price);
@@ -297,9 +298,10 @@ public class MarketplaceActivity extends Activity {
         m.put("mediaUrl", photoUrl);
         m.put("mediaType", photoUrl.isEmpty() ? "none" : "image");
         m.put("privacy", "Public");
-        m.put("reactionsCount", 0);
-        m.put("commentsCount", 0);
-        m.put("sharesCount", 0);
+        m.put("likes", 0);
+        m.put("comments", 0);
+        m.put("shares", 0);
+        m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("posts").add(m)
                 .addOnSuccessListener(x -> Ui.toast(this, "Listed on Marketplace ✓"))

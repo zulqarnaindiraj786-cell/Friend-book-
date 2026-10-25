@@ -69,6 +69,9 @@ public class Prefs {
                 .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + saved)
                 .apply();
     }
+    public static void trackMediaLoad(Context c, long approxFullBytes, long unused) {
+        trackMediaLoad(c, approxFullBytes);
+    }
     public static void resetDataStats(Context c) {
         p(c).edit().putLong("dataBytesUsed", 0L).putLong("dataBytesSaved", 0L).apply();
     }
@@ -118,6 +121,7 @@ public class Prefs {
     public static void setHideOtherReactions(Context c, boolean v) { p(c).edit().putBoolean("hideOtherReact", v).apply(); }
     public static boolean hideMyReactions(Context c) { return p(c).getBoolean("hideMyReact", false); }
     public static void setHideMyReactions(Context c, boolean v) { p(c).edit().putBoolean("hideMyReact", v).apply(); }
+    public static boolean hideReactionCounts(Context c) { return hideOtherReactions(c) || hideMyReactions(c); }
 
     // ---- notification toggles ----
     public static boolean notifLikes(Context c) { return p(c).getBoolean("nLikes", true); }
@@ -138,6 +142,9 @@ public class Prefs {
     public static void setNotifEvents(Context c, boolean v) { p(c).edit().putBoolean("nEvents", v).apply(); }
     public static boolean notifVibrate(Context c) { return p(c).getBoolean("nVibrate", true); }
     public static void setNotifVibrate(Context c, boolean v) { p(c).edit().putBoolean("nVibrate", v).apply(); }
+    public static boolean notifMentions(Context c) { return notifTags(c); }
+    public static boolean notifMarketplace(Context c) { return p(c).getBoolean("nMarket", true); }
+    public static boolean notifSecurity(Context c) { return p(c).getBoolean("nSecurity", true); }
 
     // ---- feed filter & sort ----
     // all | recent | favorites | photos | videos | text
@@ -189,6 +196,16 @@ public class Prefs {
     // ---- language & region ----
     public static String appLanguage(Context c) { return p(c).getString("appLang", "English"); }
     public static void setAppLanguage(Context c, String v) { p(c).edit().putString("appLang", v).apply(); }
+    public static String appLang(Context c) {
+        String l = appLanguage(c).toLowerCase(Locale.ROOT);
+        if (l.contains("urdu") && !l.contains("roman")) return "ur";
+        if (l.contains("hindi")) return "hi";
+        if (l.contains("arabic") || l.contains("العربية")) return "ar";
+        if (l.contains("deutsch") || l.contains("german")) return "de";
+        if (l.contains("espa")) return "es";
+        if (l.contains("fran")) return "fr";
+        return "en";
+    }
 
     /** 📶 true when the active network is Wi-Fi (or ethernet) — used by autoplay mode 1. */
     public static boolean onWifi(Context c) {
@@ -342,6 +359,12 @@ public class Prefs {
         if (arch) s.add(chatId); else s.remove(chatId);
         p(c).edit().putStringSet("archivedChats", s).apply();
     }
+    public static boolean isChatArchived(Context c, String chatId) {
+        return archivedChats(c).contains(chatId);
+    }
+    public static void archiveChat(Context c, String chatId, boolean arch) {
+        setChatArchived(c, chatId, arch);
+    }
 
     public static Set<String> mutedChats(Context c) {
         return new HashSet<>(p(c).getStringSet("mutedChats", new HashSet<>()));
@@ -350,6 +373,12 @@ public class Prefs {
         Set<String> s = mutedChats(c);
         if (muted) s.add(chatId); else s.remove(chatId);
         p(c).edit().putStringSet("mutedChats", s).apply();
+    }
+    public static boolean isChatMuted(Context c, String chatId) {
+        return mutedChats(c).contains(chatId);
+    }
+    public static void muteChat(Context c, String chatId, boolean muted) {
+        setChatMuted(c, chatId, muted);
     }
 
     public static String chatNickname(Context c, String chatId) {
@@ -367,6 +396,9 @@ public class Prefs {
         Set<String> s = mutedStories(c);
         if (mute) s.add(uid); else s.remove(uid);
         p(c).edit().putStringSet("mutedStories", s).apply();
+    }
+    public static boolean isStoryAuthorMuted(Context c, String uid) {
+        return mutedStories(c).contains(uid);
     }
 
     // ---- hidden posts (Hide post feature) ----
@@ -390,6 +422,9 @@ public class Prefs {
     public static int chatTxt(Context c) { return p(c).getInt("chatTxt", 0xFFFFFFFF); }
     public static void setChatTheme(Context c, int bg, int txt) {
         p(c).edit().putInt("chatBg", bg).putInt("chatTxt", txt).apply();
+    }
+    public static void chatTheme(Context c, int bg, int txt) {
+        setChatTheme(c, bg, txt);
     }
 
     // ---- snoozed people: set of "uid:untilMillis" (Snooze 30 days) ----

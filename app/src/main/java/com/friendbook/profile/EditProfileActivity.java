@@ -274,6 +274,7 @@ public class EditProfileActivity extends Activity {
         m.put("currentCity", currentCity.getText().toString().trim());
         m.put("hometown", hometown.getText().toString().trim());
         m.put("relationship", relationship == null ? "" : relationship);
+        m.put("relationshipStatus", relationship == null ? "" : relationship);
         m.put("website", website.getText().toString().trim());
         m.put("hobbies", hobbyList);
         m.put("birthday", birthday == null ? "" : birthday);

@@ -13,9 +13,11 @@ public class Models {
 
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
-        public String work, education, currentCity, hometown, relationshipStatus, website, pronouns, phone;
+        public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone;
         public boolean isOnline, isAdmin, banned, isVerified;
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
+        public boolean hideReactionCounts;
+        public boolean showActiveStatus = true;
         public long lastSeen, createdAt;
         public int friendsCount;
         public int stars;     // Stars balance (monetization)
@@ -23,8 +25,10 @@ public class Models {
         public boolean subscriptionsEnabled;
         public int subscriptionPrice;     // USD per month (2 / 5 / 10)
         public boolean profileLocked;     // 🔒 FB-style locked profile
+        public String lookupPrivacy = "Everyone";    // Everyone | Friends | Only me
         public String friendsListPrivacy = "Public"; // Public | Friends | Only me
         public String contactPrivacy = "Friends";    // Public | Friends | Only me
+        public String contactInfoPrivacy = "Friends";
         public String followersPrivacy = "Public";   // Public | Friends
         public String tagPrivacy = "Everyone";       // Everyone | Friends | Only me
         public String twoFactorPin = "";
@@ -67,6 +71,9 @@ public class Models {
             u.currentCity = Format.str(m, "currentCity");
             u.hometown = Format.str(m, "hometown");
             u.relationshipStatus = Format.str(m, "relationshipStatus");
+            u.relationship = !Format.str(m, "relationship").isEmpty()
+                    ? Format.str(m, "relationship") : u.relationshipStatus;
+            if (u.relationshipStatus.isEmpty()) u.relationshipStatus = u.relationship;
             u.website = Format.str(m, "website");
             u.pronouns = Format.str(m, "pronouns");
             u.phone = Format.str(m, "phone");
@@ -78,6 +85,8 @@ public class Models {
             u.loginAlerts = Format.boolOf(m, "loginAlerts");
             u.tagReviewEnabled = Format.boolOf(m, "tagReviewEnabled");
             u.professionalMode = Format.boolOf(m, "professionalMode");
+            u.hideReactionCounts = Format.boolOf(m, "hideReactionCounts");
+            u.showActiveStatus = m == null || !m.containsKey("showActiveStatus") || Format.boolOf(m, "showActiveStatus");
             u.lastSeen = Format.ts(m == null ? null : m.get("lastSeen"));
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
@@ -86,8 +95,11 @@ public class Models {
             u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
             u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
             u.profileLocked = Format.boolOf(m, "profileLocked");
+            u.lookupPrivacy = Format.strOr(m, "lookupPrivacy", "Everyone");
             u.friendsListPrivacy = Format.strOr(m, "friendsListPrivacy", "Public");
             u.contactPrivacy = Format.strOr(m, "contactPrivacy", "Friends");
+            u.contactInfoPrivacy = !Format.str(m, "contactInfoPrivacy").isEmpty()
+                    ? Format.str(m, "contactInfoPrivacy") : u.contactPrivacy;
             u.followersPrivacy = Format.strOr(m, "followersPrivacy", "Public");
             u.tagPrivacy = Format.strOr(m, "tagPrivacy", "Everyone");
             u.twoFactorPin = Format.str(m, "twoFactorPin");
@@ -112,7 +124,8 @@ public class Models {
         public String id, authorId, authorName, authorPhoto, content, mediaUrl, mediaType,
                 feeling, privacy, sharedFromId, sharedFromAuthor, sharedFromContent,
                 sharedFromMediaUrl, sharedFromMediaType, location, groupId;
-        public String lifeEvent, qaPrompt;
+        public String postType = "regular";
+        public String lifeEvent, lifeEventIcon, lifeEventTitle, qaPrompt;
         public String marketTitle, marketPrice, marketCategory, marketCondition;
         public boolean marketSold;
         public String pageId, pageName, pagePhoto;
@@ -123,6 +136,7 @@ public class Models {
         public long createdAt;
         public List<String> savedBy = new ArrayList<>();
         public List<String> subscribedUids = new ArrayList<>();
+        public List<String> subscribedBy = new ArrayList<>();
         public List<String> mediaUrls = new ArrayList<>(); // multi-photo posts
         public List<String> taggedUids = new ArrayList<>();  // 👥 friends tagged in this post
         public List<String> taggedNames = new ArrayList<>(); // denormalized for fast render
@@ -135,12 +149,19 @@ public class Models {
         public boolean isPoll() { return pollOptions != null && pollOptions.size() >= 2; }
         public boolean isMultiPhoto() { return mediaUrls != null && mediaUrls.size() > 1; }
         public boolean isBgPost() { return bgColor != 0; }
+        public boolean isPagePost() { return pageId != null && !pageId.isEmpty(); }
         public boolean isMarketplace() {
-            return (marketTitle != null && !marketTitle.isEmpty())
+            return "marketplace".equals(postType)
+                    || (marketTitle != null && !marketTitle.isEmpty())
                     || (marketPrice != null && !marketPrice.isEmpty());
         }
-        public boolean isLifeEvent() { return lifeEvent != null && !lifeEvent.isEmpty(); }
+        public boolean isLifeEvent() {
+            return "life_event".equals(postType)
+                    || (lifeEventTitle != null && !lifeEventTitle.isEmpty())
+                    || (lifeEvent != null && !lifeEvent.isEmpty());
+        }
         public boolean isQa() { return qaPrompt != null && !qaPrompt.isEmpty(); }
+        public boolean isQna() { return "qna".equals(postType) || isQa(); }
 
         @SuppressWarnings("unchecked")
         public static Post fromDoc(DocumentSnapshot d) {
@@ -157,7 +178,11 @@ public class Models {
             p.privacy = Format.strOr(m, "privacy", "Public");
             p.location = Format.str(m, "location");
             p.groupId = Format.str(m, "groupId");
+            p.postType = Format.strOr(m, "postType", "regular");
             p.lifeEvent = Format.str(m, "lifeEvent");
+            p.lifeEventIcon = Format.str(m, "lifeEventIcon");
+            p.lifeEventTitle = !Format.str(m, "lifeEventTitle").isEmpty()
+                    ? Format.str(m, "lifeEventTitle") : p.lifeEvent;
             p.qaPrompt = Format.str(m, "qaPrompt");
             p.marketTitle = Format.str(m, "marketTitle");
             p.marketPrice = Format.str(m, "marketPrice");
@@ -184,6 +209,8 @@ public class Models {
             p.sharedFromMediaType = Format.str(m, "sharedFromMediaType");
             p.savedBy = Format.listOf(m, "savedBy");
             p.subscribedUids = Format.listOf(m, "subscribedUids");
+            p.subscribedBy = Format.listOf(m, "subscribedBy");
+            if (p.subscribedBy.isEmpty() && !p.subscribedUids.isEmpty()) p.subscribedBy = p.subscribedUids;
             p.mediaUrls = Format.listOf(m, "mediaUrls");
             p.taggedUids = Format.listOf(m, "taggedUids");
             p.taggedNames = Format.listOf(m, "taggedNames");

@@ -324,12 +324,11 @@ public class ReelsFragment extends Fragment {
             void play() {
                 if (reel == null) return;
                 android.content.Context ctx = itemView.getContext();
-                if (com.friendbook.core.Prefs.dataSaver(ctx)
-                        || "never".equals(com.friendbook.core.Prefs.autoplay(ctx))) {
+                if (!com.friendbook.core.Prefs.shouldAutoplayNow(ctx)) {
                     Ui.toast(ctx, "Data Saver / Manual play: tap video to play ▶");
                     return;
                 }
-                com.friendbook.core.Prefs.trackMediaLoad(ctx, 420_000, 0);
+                com.friendbook.core.Prefs.trackMediaLoad(ctx, 420_000L);
                 if (!video.isPlaying()) {
                     video.seekTo(0);
                     video.start();
