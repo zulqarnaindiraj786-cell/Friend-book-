@@ -291,23 +291,60 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.like.setText("👍 Like");
             vh.comment.setText("💬 Comment");
             vh.share.setText("↗ Share");
+            if (vh.tagSummary != null) {
+                vh.tagSummary.setText("");
+                vh.tagSummary.setVisibility(View.GONE);
+            }
+            // placeholder cards must still respond — comment/share/⋮ stay usable
+            if (p != null) {
+                vh.comment.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+                vh.content.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+                vh.share.setOnClickListener(v -> shareDialog(p));
+                vh.more.setOnClickListener(v -> postMenu(vh.more, p));
+                vh.like.setOnClickListener(v -> { Ui.haptic(v); Reactions.tapLike(activity, p); });
+                vh.like.setOnLongClickListener(null);
+            }
         } catch (Throwable ignored) { }
     }
 
-    /** #hashtags aur @mentions ko Facebook jaisa blue+bold style karo. */
+    /**
+     * #hashtags aur @mentions ko Facebook jaisa blue+bold style karo.
+     * CRITICAL: regex compile per-device fail ho sakta hai (older ICU regex engines
+     * reject some script properties) — pattern is precompiled ONCE in a guard and
+     * ANY failure falls back to plain text. A styling helper must never break a post.
+     */
+    private static java.util.regex.Pattern TAG_PATTERN;
+
+    private static java.util.regex.Pattern tagPattern() {
+        if (TAG_PATTERN == null) {
+            java.util.regex.Pattern tp = null;
+            // unicode letters/digits (covers Urdu/Arabic) — works on modern ICU
+            try { tp = java.util.regex.Pattern.compile("([#@])([\\p{L}\\p{N}_]+)"); }
+            catch (Throwable t) {
+                // plain-ASCII fallback for engines without \p{L}
+                try { tp = java.util.regex.Pattern.compile("([#@])([A-Za-z0-9_]+)"); }
+                catch (Throwable ignored) { tp = java.util.regex.Pattern.compile("a^"); } // never matches
+            }
+            TAG_PATTERN = tp;
+        }
+        return TAG_PATTERN;
+    }
+
     static CharSequence styleHashtags(String text) {
         if (text == null) return "";
-        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("([#@])([A-Za-z0-9_\\p{IsArabic}\\p{IsArabic_Supplement}]+)")
-                .matcher(text);
-        while (m.find()) {
-            sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
-                    m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        try {
+            android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
+            java.util.regex.Matcher m = tagPattern().matcher(text);
+            while (m.find()) {
+                sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                        m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            return sb;
+        } catch (Throwable t) {
+            return text; // plain post text — styling is optional, the post is not
         }
-        return sb;
     }
 
     private String firstName() {
@@ -365,6 +402,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 + (p.sharedFromId != null && !p.sharedFromId.isEmpty() ? " · shared" : "");
         if (p.location != null && !p.location.isEmpty()) meta += " · 📍 " + p.location;
         vh.meta.setText(meta);
+
+        // ---------- taps FIRST — even if anything below fails, buttons stay alive ----------
+        View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
+        vh.avatar.setOnClickListener(prof);
+        vh.name.setOnClickListener(prof);
+        vh.like.setOnClickListener(v -> { Ui.haptic(v); Reactions.tapLike(c, p); });
+        vh.like.setOnLongClickListener(v -> {
+            Reactions.show(vh.like, type -> Reactions.apply(c, p, type));
+            return true;
+        });
+        vh.comment.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+        vh.content.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+        vh.share.setOnClickListener(v -> shareDialog(p));
+        vh.more.setOnClickListener(v -> postMenu(vh.more, p));
 
         // ---------- content: plain 16sp black text (NO colored background box) ----------
         boolean hasText = p.content != null && !p.content.isEmpty();
@@ -476,20 +527,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
         }
 
-        // ---------- taps ----------
-        View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
-        vh.avatar.setOnClickListener(prof);
-        vh.name.setOnClickListener(prof);
-        vh.like.setOnClickListener(v -> { Ui.haptic(v); Reactions.tapLike(c, p); });
-        vh.like.setOnLongClickListener(v -> {
-            Reactions.show(vh.like, type -> Reactions.apply(c, p, type));
-            return true;
-        });
-        vh.comment.setOnClickListener(v -> { if (host != null) host.openComments(p); });
-        vh.content.setOnClickListener(v -> { if (host != null) host.openComments(p); });
-        vh.share.setOnClickListener(v -> shareDialog(p));
-        vh.more.setOnClickListener(v -> postMenu(vh.more, p));
-
         // plain gray baseline labels with counts (live reaction listener refines Like)
         vh.like.setText("👍 Like" + (p.likes > 0 ? " · " + Format.count(p.likes) : ""));
         vh.like.setTextColor(Ui.sub(c));
@@ -503,14 +540,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .addSnapshotListener((snap, err) -> {
                     int total = snap == null ? 0 : snap.size();
                     String mine = null;
+                    java.util.Set<String> kinds = new java.util.HashSet<>();
                     if (snap != null) {
                         for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            if (d.getId().equals(me)) {
-                                mine = d.getString("type");
-                                if (mine == null) mine = "like";
-                            }
+                            String t = d.getString("type");
+                            if (t == null) t = "like";
+                            kinds.add(t);
+                            if (d.getId().equals(me)) mine = t;
                         }
                     }
+                    // FB-Lite summary row: emoji stack + total · comments · shares
+                    StringBuilder em = new StringBuilder();
+                    for (String t : Reactions.TYPES) if (kinds.contains(t)) em.append(Reactions.emojiFor(t));
+                    StringBuilder sum = new StringBuilder();
+                    if (total > 0) sum.append(em).append(' ').append(Format.count(total));
+                    if (p.comments > 0)
+                        sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.comments)).append(" comments");
+                    if (p.shares > 0)
+                        sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.shares)).append(" shares");
+                    vh.tagSummary.setText(sum);
+                    vh.tagSummary.setVisibility(sum.length() > 0 ? View.VISIBLE : View.GONE);
+
                     if (mine != null && !mine.isEmpty()) {
                         vh.like.setText(Reactions.emojiFor(mine) + " " + Reactions.labelFor(mine)
                                 + (total > 0 ? " · " + Format.count(total) : ""));
@@ -961,7 +1011,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static class PostVH extends RecyclerView.ViewHolder {
         ImageView avatar, image, tick;
         TextView name, meta, more, content, like, comment, share;
-        TextView boostTag;
+        TextView boostTag, tagSummary;
         TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout sharedBox, pollBox;
         FrameLayout mediaWrap;
@@ -1048,6 +1098,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP);
             blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
             mediaWrap.addView(pageBadge, blp);
+
+            // ---- FB-Lite reactions summary: 👍❤️ 12 · 4 comments · 1 share (small gray) ----
+            tagSummary = Ui.tv(c, "", 12, Ui.sub(c));
+            Ui.pad(tagSummary, 12, 6, 12, 4);
+            tagSummary.setVisibility(View.GONE);
+            card.addView(tagSummary);
 
             // ---- divider + 3 gray action buttons (Like · Comment · Share, with counts) ----
             card.addView(Ui.divider(c));
