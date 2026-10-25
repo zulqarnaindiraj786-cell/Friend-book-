@@ -69,6 +69,20 @@ public class FeedPreferencesActivity extends Activity {
         topSortBtn.setOnClickListener(v -> { Prefs.setFeedSort(this, "top"); refreshSortButtons(); });
         recentSortBtn.setOnClickListener(v -> { Prefs.setFeedSort(this, "recent"); refreshSortButtons(); });
         sortCard.addView(sortRow);
+
+        TextView resetAlgoBtn = Ui.roundChip(this,
+                "🔄 Reset Seen History (Show fresh posts & videos now)",
+                Ui.inputBg(this), Ui.BLUE, 12);
+        Ui.pad(resetAlgoBtn, 12, 8, 12, 8);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.topMargin = Ui.dp(this, 10);
+        resetAlgoBtn.setGravity(Gravity.CENTER);
+        resetAlgoBtn.setOnClickListener(v -> {
+            com.friendbook.core.FeedAlgorithm.resetHistory(this);
+            Ui.toast(this, "✨ Feed & video discovery history refreshed!");
+        });
+        sortCard.addView(resetAlgoBtn, rlp);
+
         root.addView(sortCard);
         root.addView(Ui.divider(this));
         refreshSortButtons();

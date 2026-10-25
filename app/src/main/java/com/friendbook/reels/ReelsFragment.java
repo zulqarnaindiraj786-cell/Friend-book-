@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
 import com.friendbook.core.Fb;
+import com.friendbook.core.FeedAlgorithm;
 import com.friendbook.core.Format;
 import com.friendbook.core.Notify;
 import com.friendbook.core.Prefs;
@@ -124,6 +125,16 @@ public class ReelsFragment extends Fragment {
         title.setShadowLayer(4f, 0f, 1f, 0xCC000000);
         bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
 
+        TextView refreshPill = Ui.roundChip(a, "↻ Fresh", 0x55000000, Color.WHITE, 13);
+        Ui.pad(refreshPill, 11, 6, 11, 6);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+        rlp.rightMargin = Ui.dp(a, 8);
+        refreshPill.setOnClickListener(v -> {
+            refreshWithAlgorithm();
+            Ui.toast(a, "🎬 Fresh reels & videos loaded");
+        });
+        bar.addView(refreshPill, rlp);
+
         TextView camPill = Ui.roundChip(a, "🎥 Create", 0x55000000, Color.WHITE, 13);
         Ui.pad(camPill, 12, 6, 12, 6);
         camPill.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
@@ -134,9 +145,23 @@ public class ReelsFragment extends Fragment {
             @Override
             public void onPageSelected(int position) {
                 adapter.playOnly(pager, position);
+                Models.Reel cur = adapter.reelAtPosition(position);
+                if (cur != null && cur.id != null) {
+                    FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
+                }
             }
         });
         return root;
+    }
+
+    /** Advances the Facebook discovery epoch so new/unwatched Reels & fresh Sponsored Ads appear immediately! */
+    public void refreshWithAlgorithm() {
+        Activity a = getActivity();
+        if (a == null) return;
+        initialReelId = null; // allow full dynamic rotation after initial deep-link view
+        FeedAlgorithm.nextRefreshGeneration(a);
+        rebuildMergedFeed();
+        if (pager != null) pager.setCurrentItem(0, false);
     }
 
     private void rebuildMergedFeed() {
@@ -149,19 +174,8 @@ public class ReelsFragment extends Fragment {
                 map.put(r.id, r);
             }
         }
-        List<Models.Reel> merged = new ArrayList<>(map.values());
-        Collections.sort(merged, (a, b) -> Long.compare(b.createdAt, a.createdAt));
-
-        // If opened for a specific reel (from Profile Reels tab), jump/move it first!
-        if (initialReelId != null && !initialReelId.isEmpty()) {
-            for (int i = 0; i < merged.size(); i++) {
-                if (initialReelId.equals(merged.get(i).id)) {
-                    Models.Reel target = merged.remove(i);
-                    merged.add(0, target);
-                    break;
-                }
-            }
-        }
+        List<Models.Reel> merged = FeedAlgorithm.rankReels(
+                getActivity(), new ArrayList<>(map.values()), initialReelId);
 
         if (emptyState != null) {
             emptyState.setVisibility(merged.isEmpty() ? View.VISIBLE : View.GONE);
@@ -244,6 +258,10 @@ public class ReelsFragment extends Fragment {
             data.addAll(list);
             notifyDataSetChanged();
             playingPos = -1;
+        }
+
+        Models.Reel reelAtPosition(int pos) {
+            return (pos >= 0 && pos < data.size()) ? data.get(pos) : null;
         }
 
         void stopAll() {

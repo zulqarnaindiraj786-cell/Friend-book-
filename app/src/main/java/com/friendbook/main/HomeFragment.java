@@ -23,6 +23,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.friendbook.chat.ChatActivity;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
+import com.friendbook.core.FeedAlgorithm;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Ui;
 import com.friendbook.models.Models;
@@ -56,12 +57,13 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 30;
+    private static final int PAGE = 100;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
     private RecyclerView rv;
     private SwipeRefreshLayout swipe;
+    private TextView freshPill;
     private LinearLayout notesRow;
     private ListenerRegistration postsReg, storiesReg, friendsReg, boostsReg, livesReg;
     private DocumentSnapshot lastDoc;
@@ -100,35 +102,112 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setAdapter(adapter);
         rv.setBackgroundColor(Ui.bg(a));
 
-        // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (before Firestore even connects!)
+        // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via Facebook FeedAlgorithm!)
         List<Models.Post> cachedFeed = FastCache.getFeed();
         if (!cachedFeed.isEmpty()) {
-            adapter.setPosts(cachedFeed);
+            adapter.setPosts(rankAccordingToMode(a, cachedFeed));
         }
-        List<StoriesAdapter.Group> cachedStories = FastCache.getStories();
+        List<StoriesAdapter.Group> cachedStories = new ArrayList<>(FastCache.getStories());
         if (!cachedStories.isEmpty()) {
+            FeedAlgorithm.rankStories(a, cachedStories, Fb.uid());
             adapter.setStories(cachedStories);
         }
 
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
-            restartPostsListener();
-            loadNotesUsers();
-            swipe.postDelayed(() -> { if (swipe != null) swipe.setRefreshing(false); }, 450);
+            refreshWithFacebookAlgorithm(true);
+            swipe.postDelayed(() -> { if (swipe != null) swipe.setRefreshing(false); }, 420);
         });
-        root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        android.widget.FrameLayout feedWrap = new android.widget.FrameLayout(a);
+        feedWrap.addView(swipe, new android.widget.FrameLayout.LayoutParams(-1, -1));
+
+        // Signature Facebook floating "↑ New posts" pill on background-resume discovery
+        freshPill = Ui.roundChip(a, "↑  New posts & videos", Ui.BLUE, 0xFFFFFFFF, 13);
+        Ui.pad(freshPill, 16, 8, 16, 8);
+        freshPill.setElevation(Ui.dp(a, 6));
+        freshPill.setVisibility(View.GONE);
+        freshPill.setOnClickListener(v -> {
+            freshPill.setVisibility(View.GONE);
+            refreshWithFacebookAlgorithm(true);
+        });
+        android.widget.FrameLayout.LayoutParams pp = new android.widget.FrameLayout.LayoutParams(
+                -2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        pp.topMargin = Ui.dp(a, 10);
+        feedWrap.addView(freshPill, pp);
+
+        root.addView(feedWrap, new LinearLayout.LayoutParams(-1, 0, 1));
         return root;
     }
 
+    /**
+     * 🔄 Full Facebook Refresh:
+     * Advances FeedAlgorithm epoch -> rotates top posts, promotes unseen videos, shuffles PYMK/Stories,
+     * and requests fresh live AdMob creatives in both in-feed Sponsored slots & bottom banner!
+     */
+    public void refreshWithFacebookAlgorithm(boolean scrollTop) {
+        android.app.Activity a = getActivity();
+        if (a == null) return;
+        if (freshPill != null) freshPill.setVisibility(View.GONE);
+        FeedAlgorithm.nextRefreshGeneration(a);
+        applyFilterOnCachedFeed();
+        if (adapter != null) adapter.refreshSponsoredAds();
+        restartPostsListener();
+        loadPymk();
+        loadNotesUsers();
+        if (scrollTop && rv != null) rv.scrollToPosition(0);
+    }
+
+    /** Called by MainActivity when user returns from background (>= 15s away). */
+    public void onWarmSessionResume() {
+        if (rv == null || adapter == null) return;
+        LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
+        int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
+        if (firstPos <= 1) {
+            // User is already near top -> seamlessly apply fresh ranked feed & ads immediately!
+            applyFilterOnCachedFeed();
+            adapter.refreshSponsoredAds();
+            restartPostsListener();
+            loadPymk();
+        } else if (freshPill != null) {
+            // User was reading mid-scroll -> show Facebook's non-intrusive blue "↑ New posts & videos" pill!
+            freshPill.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private List<Models.Post> rankAccordingToMode(android.app.Activity a, List<Models.Post> list) {
+        if (list == null || list.isEmpty()) return new ArrayList<>();
+        String filter = a == null ? "all" : Prefs.feedFilter(a);
+        boolean strictRecent = "recent".equals(filter)
+                || (a != null && "recent".equals(Prefs.feedSort(a)) && "all".equals(filter));
+        if (strictRecent) {
+            List<Models.Post> copy = new ArrayList<>(list);
+            Collections.sort(copy, (x, y) -> Long.compare(y.createdAt, x.createdAt));
+            return copy;
+        }
+        List<String> favs = (Fb.me != null && Fb.me.favoriteUids != null) ? Fb.me.favoriteUids : null;
+        Set<String> boosted = (adapter != null) ? adapter.boostedPostIds : null;
+        return FeedAlgorithm.rankHomeFeed(a, list, friendIds, favs, boosted);
+    }
+
     public void scrollToTop() {
-        if (rv != null) rv.scrollToPosition(0);
+        if (rv != null) {
+            LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
+            int pos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
+            if (pos <= 1) {
+                // Just like Facebook: tapping Home while already at top triggers a fresh algorithm refresh!
+                refreshWithFacebookAlgorithm(true);
+            } else {
+                rv.scrollToPosition(0);
+            }
+        }
     }
 
     public void onLiteModeChanged() {
         android.app.Activity a = getActivity();
         if (adapter != null && a != null) {
-            boolean allowAds = com.friendbook.core.AdsConfig.bannersEnabled();
-            adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(), allowAds);
+            adapter.setAdsConfig(com.friendbook.core.AdsConfig.nativeId(),
+                    com.friendbook.core.AdsConfig.nativeAdsEnabled());
             adapter.notifyDataSetChanged();
         }
     }
@@ -334,10 +413,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         for (Models.Post p : FastCache.getFeed()) {
             if (visible(p) && matchesFilter(p, filter)) filtered.add(p);
         }
-        if ("recent".equals(filter)) {
-            filtered.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
-        }
-        adapter.setPosts(filtered);
+        adapter.setPosts(rankAccordingToMode(a, filtered));
     }
 
     @Override
@@ -353,8 +429,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         com.friendbook.core.AdsConfig.setChangeListener((id, en) -> {
             if (adapter != null) adapter.setAdsConfig(id, en);
         });
-        adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(),
-                com.friendbook.core.AdsConfig.bannersEnabled());
+        adapter.setAdsConfig(com.friendbook.core.AdsConfig.nativeId(),
+                com.friendbook.core.AdsConfig.nativeAdsEnabled());
     }
 
     @Override
@@ -451,7 +527,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void loadPymk() {
         String me = Fb.uid();
         if (me == null || adapter == null) return;
-        Fb.db().collection("users").limit(25).get().addOnSuccessListener(snap -> {
+        Fb.db().collection("users").limit(60).get().addOnSuccessListener(snap -> {
             List<Models.User> pymk = new ArrayList<>();
             for (DocumentSnapshot d : snap) {
                 Models.User u = Models.User.fromDoc(d);
@@ -461,9 +537,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 if (friendIds.contains(u.uid)) continue;
                 if (Fb.me != null && Fb.me.blocked.contains(u.uid)) continue;
                 pymk.add(u);
-                if (pymk.size() >= 10) break;
             }
-            if (adapter != null) adapter.setPymk(pymk);
+            if (adapter != null) adapter.setPymk(FeedAlgorithm.rankPymk(getActivity(), pymk, 12));
         });
     }
 
@@ -521,18 +596,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (persistCache && !allVisible.isEmpty()) {
             FastCache.saveFeed(a2, allVisible);
         }
-        if (!ordered || "recent".equals(filter)
-                || (a2 != null && "recent".equals(Prefs.feedSort(a2)) && "all".equals(filter))) {
-            filtered.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
-        } else if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
-            filtered.sort((x, y) -> {
-                boolean xf = Fb.me.favoriteUids.contains(x.authorId);
-                boolean yf = Fb.me.favoriteUids.contains(y.authorId);
-                if (xf != yf) return xf ? -1 : 1;
-                return Long.compare(y.createdAt, x.createdAt);
-            });
-        }
-        if (adapter != null) adapter.setPosts(filtered);
+        List<Models.Post> ranked = rankAccordingToMode(a2, filtered);
+        if (adapter != null) adapter.setPosts(ranked);
     }
 
     private boolean matchesFilter(Models.Post p, String filter) {
@@ -596,12 +661,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     List<StoriesAdapter.Group> groups = new ArrayList<>(storyGroups.values());
                     for (StoriesAdapter.Group g : groups)
                         Collections.sort(g.stories, (x, y) -> Long.compare(x.createdAt, y.createdAt));
-                    Collections.sort(groups, (x, y) -> {
-                        if (x.unseen != y.unseen) return x.unseen ? -1 : 1;
-                        long xt = x.stories.isEmpty() ? 0 : x.stories.get(x.stories.size() - 1).createdAt;
-                        long yt = y.stories.isEmpty() ? 0 : y.stories.get(y.stories.size() - 1).createdAt;
-                        return Long.compare(yt, xt);
-                    });
+                    FeedAlgorithm.rankStories(getActivity(), groups, Fb.uid());
                     FastCache.saveStories(groups);
                     if (adapter != null) adapter.setStories(groups);
                 });

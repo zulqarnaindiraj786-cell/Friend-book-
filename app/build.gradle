@@ -11,7 +11,7 @@ android {
         applicationId 'com.friendbook'
         minSdk 24
         targetSdk 35
-        versionCode 13
+        versionCode 16
         versionName '525.0.0.5.102'
     }
 

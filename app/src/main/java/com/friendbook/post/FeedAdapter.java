@@ -133,26 +133,44 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
-    // ---- 📢 AdMob banner slots: one banner after every 3 posts ----
-    private String bannerId = com.friendbook.core.AdsConfig.bannerId();
-    private boolean adsEnabled = com.friendbook.core.AdsConfig.bannersEnabled();
+    // ---- 📢 Google AdMob Native Ad Slots: Strictly 1 Native Ad after every 5 posts! ----
+    private static final int NATIVE_AD_EVERY_N_POSTS = 5;
+    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 5 posts + 1 Native Ad = 6
+
+    private String nativeAdUnitId = com.friendbook.core.AdsConfig.nativeId();
+    private boolean adsEnabled = com.friendbook.core.AdsConfig.nativeAdsEnabled();
+    private int adEpoch = 1;
 
     public void setAdsConfig(String id, boolean enabled) {
-        bannerId = id == null || id.isEmpty() ? com.friendbook.core.AdsConfig.DEFAULT_BANNER_ID : id;
-        adsEnabled = enabled;
+        nativeAdUnitId = id == null ? "" : id.trim();
+        adsEnabled = enabled && !nativeAdUnitId.isEmpty();
         notifyDataSetChanged();
     }
 
-    private int adCount() { return adsEnabled ? posts.size() / 3 : 0; }
+    /** Forces all in-feed Native Ad slots to request fresh live AdMob Native creatives! */
+    public void refreshSponsoredAds() {
+        adEpoch++;
+        notifyDataSetChanged();
+    }
 
-    /** Does this feed slot (after the header) hold an ad? Slots 3, 7, 11… */
+    private boolean adsActive() {
+        return adsEnabled && nativeAdUnitId != null && !nativeAdUnitId.isEmpty();
+    }
+
+    private int adCount() {
+        return adsActive() ? (posts.size() / NATIVE_AD_EVERY_N_POSTS) : 0;
+    }
+
+    /** Does this feed slot (after the header) hold a Native Ad? Slots 4, 9, 14… (after every 4 posts!) */
     private boolean isAdSlot(int slot) {
-        return adsEnabled && (slot + 1) % 4 == 0 && slot / 4 < adCount();
+        return adsActive()
+                && ((slot + 1) % NATIVE_AD_STEP == 0)
+                && ((slot / NATIVE_AD_STEP) < adCount());
     }
 
     private int postIndexForSlot(int slot) {
-        if (!adsEnabled) return slot;
-        return slot - ((slot + 1) / 4);
+        if (!adsActive()) return slot;
+        return slot - ((slot + 1) / NATIVE_AD_STEP);
     }
 
     private int slotCount() { return posts.size() + adCount(); }
@@ -172,7 +190,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = parent.getContext();
         if (viewType == VT_HEADER) return new HeaderVH(c);
         if (viewType == VT_FOOTER) return new FooterVH(c);
-        if (viewType == VT_AD) return new AdVH(c);
+        if (viewType == VT_AD) return new AdVH(parent);
         return new PostVH(c);
     }
 
@@ -311,7 +329,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
-            ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
+            ((AdVH) h).loadNativeAd(nativeAdUnitId, adEpoch + com.friendbook.core.FeedAlgorithm.epoch(), position);
         } else {
             // Guard: realtime list swaps between measure & bind must not crash the feed.
             // A broken post gets a small placeholder card — NEVER an invisible one
@@ -443,6 +461,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private void bindPost(PostVH vh, Models.Post p) {
         Context c = activity;
+        if (showHeader && p != null && p.id != null) {
+            com.friendbook.core.FeedAlgorithm.recordPostImpression(c, p.id);
+            if ("video".equals(p.mediaType)) {
+                com.friendbook.core.FeedAlgorithm.recordVideoImpression(c, p.id);
+            }
+        }
 
         // ---------- header: 40dp circular avatar · bold name · gray time below · ⋮ ----------
         boolean pagePost = p.isPagePost();
@@ -1487,45 +1511,214 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
-    /** 📢 AdMob banner slot — Google BANNER ad, loaded fresh on every bind. */
+    /** 📢 Official Google AdMob In-Feed Native Ad Card (`NativeAdView` + `MediaView`, placed after every 5 posts). */
     static class AdVH extends RecyclerView.ViewHolder {
-        final FrameLayout box;
-        com.google.android.gms.ads.AdView adView;
+        final com.google.android.gms.ads.nativead.NativeAdView nativeAdView;
+        final ImageView iconView;
+        final TextView headlineView, advertiserView, bodyView, storeView, priceView, badgeView;
+        final android.widget.RatingBar starsView;
+        final com.google.android.gms.ads.nativead.MediaView mediaView;
+        final android.widget.Button ctaButton;
+        final LinearLayout ctaBar;
+        com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+        int lastEpochKey = -1;
+        int activeRequestId = 0;
 
-        AdVH(Context c) {
-            super(PostVH.cardRoot(c));
-            LinearLayout card = (LinearLayout) itemView;
-            TextView label = Ui.tv(c, "Sponsored", 11, Ui.sub(c));
-            label.setGravity(Gravity.CENTER);
-            Ui.pad(label, 0, 8, 0, 2);
-            card.addView(label, new LinearLayout.LayoutParams(-1, -2));
-            box = new FrameLayout(c);
-            card.addView(box, new LinearLayout.LayoutParams(-1, -2));
+        AdVH(ViewGroup parent) {
+            super(android.view.LayoutInflater.from(parent.getContext())
+                    .inflate(com.friendbook.R.layout.item_native_ad, parent, false));
+            Context c = parent.getContext();
+            nativeAdView = (com.google.android.gms.ads.nativead.NativeAdView) itemView;
+            nativeAdView.setBackgroundColor(Ui.card(c));
+
+            iconView = nativeAdView.findViewById(com.friendbook.R.id.ad_app_icon);
+            headlineView = nativeAdView.findViewById(com.friendbook.R.id.ad_headline);
+            advertiserView = nativeAdView.findViewById(com.friendbook.R.id.ad_advertiser);
+            badgeView = nativeAdView.findViewById(com.friendbook.R.id.ad_badge);
+            starsView = nativeAdView.findViewById(com.friendbook.R.id.ad_stars);
+            bodyView = nativeAdView.findViewById(com.friendbook.R.id.ad_body);
+            mediaView = nativeAdView.findViewById(com.friendbook.R.id.ad_media);
+            storeView = nativeAdView.findViewById(com.friendbook.R.id.ad_store);
+            priceView = nativeAdView.findViewById(com.friendbook.R.id.ad_price);
+            ctaButton = nativeAdView.findViewById(com.friendbook.R.id.ad_call_to_action);
+            ctaBar = nativeAdView.findViewById(com.friendbook.R.id.native_ad_cta_bar);
+
+            // Apply theme colors (Light / Dark mode friendly)
+            headlineView.setTextColor(Ui.txt(c));
+            bodyView.setTextColor(Ui.txt(c));
+            advertiserView.setTextColor(Ui.sub(c));
+            storeView.setTextColor(Ui.sub(c));
+            priceView.setTextColor(Ui.sub(c));
+            badgeView.setBackground(Ui.round(c, Ui.inputBg(c), 4));
+            badgeView.setTextColor(Ui.txt(c));
+            ctaBar.setBackgroundColor(Ui.inputBg(c));
+            ctaButton.setBackground(Ui.round(c, Ui.BLUE, 8));
+            mediaView.setImageScaleType(ImageView.ScaleType.CENTER_CROP);
+
+            // Register all NativeAd asset views once
+            nativeAdView.setHeadlineView(headlineView);
+            nativeAdView.setBodyView(bodyView);
+            nativeAdView.setCallToActionView(ctaButton);
+            nativeAdView.setIconView(iconView);
+            nativeAdView.setPriceView(priceView);
+            nativeAdView.setStarRatingView(starsView);
+            nativeAdView.setStoreView(storeView);
+            nativeAdView.setAdvertiserView(advertiserView);
+            nativeAdView.setMediaView(mediaView);
         }
 
-        void loadAd(String bannerId) {
-            destroyAd();
-            // Guard: devices without Google Play Services / ads provider throw here —
-            // that used to crash the whole home feed on bind.
-            try {
-                adView = new com.google.android.gms.ads.AdView(box.getContext());
-                adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
-                adView.setAdUnitId(bannerId);
-                box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-                adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-                Ui.pad(box, 0, 0, 0, 8);
-            } catch (Throwable t) {
-                adView = null;
-                box.removeAllViews();
-                itemView.setVisibility(View.GONE);
+        private void collapse() {
+            itemView.setVisibility(View.GONE);
+            ViewGroup.LayoutParams lp = itemView.getLayoutParams();
+            if (lp != null) {
+                lp.height = 0;
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    ((ViewGroup.MarginLayoutParams) lp).bottomMargin = 0;
+                }
+                itemView.setLayoutParams(lp);
             }
         }
 
+        private void expand(Context c) {
+            itemView.setVisibility(View.VISIBLE);
+            ViewGroup.LayoutParams lp = itemView.getLayoutParams();
+            if (lp != null) {
+                lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    ((ViewGroup.MarginLayoutParams) lp).bottomMargin = Ui.dp(c, 8);
+                }
+                itemView.setLayoutParams(lp);
+            }
+        }
+
+        void loadNativeAd(final String unitId, int epochKey, int adapterPos) {
+            if (unitId == null || unitId.isEmpty()) {
+                destroyAd();
+                collapse();
+                return;
+            }
+            int key = epochKey * 31 + adapterPos;
+            if (currentNativeAd != null && lastEpochKey == key) {
+                expand(itemView.getContext());
+                return;
+            }
+            lastEpochKey = key;
+            final int reqId = ++activeRequestId;
+            collapse();
+
+            final Context ctx = itemView.getContext();
+            try {
+                com.google.android.gms.ads.VideoOptions videoOptions =
+                        new com.google.android.gms.ads.VideoOptions.Builder()
+                                .setStartMuted(true)
+                                .build();
+                com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
+                        new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
+                                .setAdChoicesPlacement(
+                                        com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                                .setVideoOptions(videoOptions)
+                                .build();
+
+                com.google.android.gms.ads.AdLoader adLoader =
+                        new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
+                                .forNativeAd(nativeAd -> {
+                                    if (reqId != activeRequestId) {
+                                        nativeAd.destroy();
+                                        return;
+                                    }
+                                    if (currentNativeAd != null) {
+                                        try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
+                                    }
+                                    currentNativeAd = nativeAd;
+                                    populateNativeAdView(nativeAd, ctx);
+                                    expand(ctx);
+                                })
+                                .withAdListener(new com.google.android.gms.ads.AdListener() {
+                                    @Override
+                                    public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError err) {
+                                        if (reqId == activeRequestId) collapse();
+                                    }
+                                })
+                                .withNativeAdOptions(adOptions)
+                                .build();
+
+                adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+            } catch (Throwable t) {
+                collapse();
+            }
+        }
+
+        private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+            headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
+
+            if (ad.getMediaContent() != null) {
+                mediaView.setMediaContent(ad.getMediaContent());
+                mediaView.setVisibility(View.VISIBLE);
+            } else {
+                mediaView.setVisibility(View.GONE);
+            }
+
+            if (ad.getBody() == null || ad.getBody().isEmpty()) {
+                bodyView.setVisibility(View.GONE);
+            } else {
+                bodyView.setVisibility(View.VISIBLE);
+                bodyView.setText(ad.getBody());
+            }
+
+            if (ad.getCallToAction() == null || ad.getCallToAction().isEmpty()) {
+                ctaButton.setVisibility(View.GONE);
+            } else {
+                ctaButton.setVisibility(View.VISIBLE);
+                ctaButton.setText(ad.getCallToAction());
+            }
+
+            if (ad.getIcon() == null) {
+                iconView.setVisibility(View.GONE);
+            } else {
+                iconView.setImageDrawable(ad.getIcon().getDrawable());
+                iconView.setClipToOutline(true);
+                iconView.setBackground(Ui.circle(Ui.inputBg(c)));
+                iconView.setVisibility(View.VISIBLE);
+            }
+
+            if (ad.getAdvertiser() == null || ad.getAdvertiser().isEmpty()) {
+                advertiserView.setText("Sponsored · 🌐");
+                advertiserView.setVisibility(View.VISIBLE);
+            } else {
+                advertiserView.setText(ad.getAdvertiser() + " · Sponsored · 🌐");
+                advertiserView.setVisibility(View.VISIBLE);
+            }
+
+            if (ad.getStarRating() == null) {
+                starsView.setVisibility(View.GONE);
+            } else {
+                starsView.setRating(ad.getStarRating().floatValue());
+                starsView.setVisibility(View.VISIBLE);
+            }
+
+            if (ad.getStore() == null || ad.getStore().isEmpty()) {
+                storeView.setVisibility(View.GONE);
+            } else {
+                storeView.setVisibility(View.VISIBLE);
+                storeView.setText(ad.getStore());
+            }
+
+            if (ad.getPrice() == null || ad.getPrice().isEmpty()) {
+                priceView.setVisibility(View.GONE);
+            } else {
+                priceView.setVisibility(View.VISIBLE);
+                priceView.setText(ad.getPrice());
+            }
+
+            nativeAdView.setNativeAd(ad);
+        }
+
         void destroyAd() {
-            if (adView != null) {
-                box.removeView(adView);
-                try { adView.destroy(); } catch (Throwable ignored) { }
-                adView = null;
+            activeRequestId++;
+            lastEpochKey = -1;
+            if (currentNativeAd != null) {
+                try { currentNativeAd.destroy(); } catch (Throwable ignored) { }
+                currentNativeAd = null;
             }
         }
     }
