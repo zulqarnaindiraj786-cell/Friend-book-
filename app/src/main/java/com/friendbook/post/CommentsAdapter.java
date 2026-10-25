@@ -1,321 +1,463 @@
 package com.friendbook.post;
 
 import android.app.Activity;
-import android.content.Intent;
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.friendbook.core.Admin;
 import com.friendbook.core.Fb;
+import com.friendbook.core.Icons;
+import com.friendbook.core.TickCache;
 import com.friendbook.core.Format;
-import com.friendbook.core.Notify;
 import com.friendbook.core.Ui;
 import com.friendbook.models.Models;
-import com.friendbook.profile.ProfileActivity;
+import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FieldValue;
+import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/** Comments with 2-level nested replies (Facebook style). */
-public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
+/**
+ * Facebook Lite Pro Threaded Comments Adapter:
+ * - Optional Header View (TYPE_HEADER) so PostDetailActivity uses ONE single native RecyclerView
+ *   with ZERO ScrollView height-clipping bugs!
+ * - Zero orphan dropping: any reply whose parentId is missing/"null" promotes cleanly to root.
+ * - Supports "all" (All comments), "newest" (Newest first), and "relevant" (Most liked/replied).
+ * - Clickable reaction summary ("👍❤️ 5") opens "People who reacted to comment"!
+ */
+public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+
+    private static final int TYPE_HEADER = 0;
+    private static final int TYPE_COMMENT = 1;
+    private static final int TYPE_EMPTY = 2;
 
     public interface Host {
-        void replyTo(Models.Comment c);
-        void changed();
+        void onReply(Models.Comment parent);
+        void openProfile(String uid);
     }
 
-    private static class Row {
-        Models.Comment c;
-        int depth;
+    public static class Row {
+        public Models.Comment c;
+        public int depth; // 0 = root, 1+ = nested reply
+        Row(Models.Comment c, int d) { this.c = c; this.depth = d; }
     }
 
     private final Activity activity;
     private final Host host;
     private final List<Row> rows = new ArrayList<>();
-    /** Override which doc holds the comments counter (default: posts/{postId}). */
-    public String counterCollection = null;
-    public String counterId = null;
-    private String sortMode = "relevant";
+    private View headerView;
+    private boolean showEmptyWhenNone = true;
+    /** Collection holding the parent counter ("posts" or "reels"), and its document id. */
+    public String counterCollection = "posts";
+    public String counterId;
+    /** Sort mode: "all" | "newest" | "relevant" */
+    public String sortMode = "all";
 
-    public CommentsAdapter(Activity a, Host h) {
-        this.activity = a;
-        this.host = h;
+    public CommentsAdapter(Activity a, Host h) { activity = a; host = h; }
+
+    public void setHeaderView(View header) {
+        this.headerView = header;
+        notifyDataSetChanged();
     }
 
-    public void setSortMode(String mode) {
-        this.sortMode = mode == null ? "relevant" : mode;
+    public void setShowEmptyWhenNone(boolean show) {
+        this.showEmptyWhenNone = show;
     }
 
-    /** Rebuild the flattened display list from raw comments. */
     public void setAll(List<Models.Comment> all) {
         rows.clear();
-        Map<String, List<Models.Comment>> byParent = new HashMap<>();
-        List<Models.Comment> roots = new ArrayList<>();
+        if (all == null || all.isEmpty()) {
+            notifyDataSetChanged();
+            return;
+        }
+
+        // Deduplicate by id while preserving order, and collect all present comment IDs
+        Map<String, Models.Comment> unique = new LinkedHashMap<>();
         for (Models.Comment c : all) {
-            if (c.parentId == null || c.parentId.isEmpty()) roots.add(c);
-            else {
-                List<Models.Comment> l = byParent.get(c.parentId);
-                if (l == null) { l = new ArrayList<>(); byParent.put(c.parentId, l); }
-                l.add(c);
+            if (c == null) continue;
+            String key = (c.id == null || c.id.isEmpty())
+                    ? ("anon_" + c.authorId + "_" + c.createdAt + "_" + unique.size()) : c.id;
+            unique.put(key, c);
+        }
+        Set<String> presentIds = new HashSet<>(unique.keySet());
+
+        List<Models.Comment> roots = new ArrayList<>();
+        Map<String, List<Models.Comment>> byParent = new HashMap<>();
+        for (Models.Comment c : unique.values()) {
+            String pid = c.parentId == null ? "" : c.parentId.trim();
+            boolean hasValidParent = !pid.isEmpty()
+                    && !"null".equalsIgnoreCase(pid)
+                    && !pid.equals(c.id)
+                    && presentIds.contains(pid);
+            if (!hasValidParent) {
+                roots.add(c);
+            } else {
+                List<Models.Comment> kids = byParent.get(pid);
+                if (kids == null) { kids = new ArrayList<>(); byParent.put(pid, kids); }
+                kids.add(c);
             }
         }
+
         if ("newest".equals(sortMode)) {
-            roots.sort((a, b) -> Long.compare(b.createdAt, a.createdAt));
-        } else if ("oldest".equals(sortMode)) {
-            roots.sort((a, b) -> Long.compare(a.createdAt, b.createdAt));
-        } else {
-            roots.sort((a, b) -> {
-                if (b.likes != a.likes) return Integer.compare(b.likes, a.likes);
+            Collections.sort(roots, (a, b) -> Long.compare(b.createdAt, a.createdAt));
+        } else if ("relevant".equals(sortMode)) {
+            Collections.sort(roots, (a, b) -> {
+                int aReplies = byParent.containsKey(a.id) ? byParent.get(a.id).size() : 0;
+                int bReplies = byParent.containsKey(b.id) ? byParent.get(b.id).size() : 0;
+                int aScore = Math.max(a.likes, a.reactions != null ? a.reactions.size() : 0) * 3 + aReplies * 2;
+                int bScore = Math.max(b.likes, b.reactions != null ? b.reactions.size() : 0) * 3 + bReplies * 2;
+                if (bScore != aScore) return Integer.compare(bScore, aScore);
                 return Long.compare(b.createdAt, a.createdAt);
             });
+        } else {
+            // "all" -> chronological order so all comments & threads read naturally
+            Collections.sort(roots, (a, b) -> Long.compare(a.createdAt, b.createdAt));
         }
-        for (Models.Comment r : roots) {
-            addRow(r, 0, byParent);
+
+        Set<String> visited = new HashSet<>();
+        for (Models.Comment root : roots) {
+            appendThread(root, 0, byParent, visited);
+        }
+        // Safety net: if any cyclical parent link existed, still display every single comment!
+        for (Models.Comment c : unique.values()) {
+            if (c.id != null && !visited.contains(c.id)) {
+                rows.add(new Row(c, 0));
+                visited.add(c.id);
+            }
         }
         notifyDataSetChanged();
     }
 
-    private void addRow(Models.Comment c, int depth, Map<String, List<Models.Comment>> byParent) {
-        Row r = new Row();
-        r.c = c;
-        r.depth = depth;
-        rows.add(r);
-        List<Models.Comment> kids = byParent.get(c.id);
-        if (kids != null) {
-            kids.sort((a, b) -> Long.compare(a.createdAt, b.createdAt));
-            for (Models.Comment k : kids) addRow(k, Math.min(depth + 1, 2), byParent);
+    private void appendThread(Models.Comment node, int depth,
+                              Map<String, List<Models.Comment>> byParent, Set<String> visited) {
+        if (node == null) return;
+        if (node.id != null && !visited.add(node.id)) return;
+        rows.add(new Row(node, Math.min(depth, 2)));
+        List<Models.Comment> kids = node.id != null ? byParent.get(node.id) : null;
+        if (kids != null && !kids.isEmpty()) {
+            Collections.sort(kids, (a, b) -> Long.compare(a.createdAt, b.createdAt));
+            for (Models.Comment kid : kids) {
+                appendThread(kid, depth + 1, byParent, visited);
+            }
         }
     }
 
-    @Override public int getItemCount() { return rows.size(); }
+    public int getCommentRowCount() { return rows.size(); }
+
+    private int headerOffset() { return headerView != null ? 1 : 0; }
+
+    @Override
+    public int getItemCount() {
+        int h = headerOffset();
+        if (rows.isEmpty()) return h + (showEmptyWhenNone ? 1 : 0);
+        return h + rows.size();
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        if (headerView != null && position == 0) return TYPE_HEADER;
+        if (rows.isEmpty()) return TYPE_EMPTY;
+        return TYPE_COMMENT;
+    }
 
     @NonNull
     @Override
-    public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        Activity c = activity;
-        LinearLayout outer = Ui.col(c);
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == TYPE_HEADER) {
+            if (headerView.getParent() instanceof ViewGroup) {
+                ((ViewGroup) headerView.getParent()).removeView(headerView);
+            }
+            headerView.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+            return new HeaderVH(headerView);
+        }
+        if (viewType == TYPE_EMPTY) {
+            LinearLayout box = Ui.col(activity);
+            box.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+            box.setBackgroundColor(Ui.card(activity));
+            box.setGravity(Gravity.CENTER);
+            Ui.pad(box, 20, 32, 20, 36);
+            TextView icon = Ui.tv(activity, "💬", 30, Ui.sub(activity));
+            TextView t1 = Ui.tvBold(activity, "No comments yet", 15, Ui.txt(activity));
+            t1.setPadding(0, Ui.dp(activity, 6), 0, Ui.dp(activity, 2));
+            TextView t2 = Ui.tv(activity, "Be the first to share your thoughts below.", 13, Ui.sub(activity));
+            box.addView(icon);
+            box.addView(t1);
+            box.addView(t2);
+            return new HeaderVH(box);
+        }
+
+        LinearLayout outer = Ui.row(activity);
         outer.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+        outer.setBackgroundColor(Ui.card(activity));
+        outer.setGravity(Gravity.TOP);
+        Ui.pad(outer, 12, 7, 12, 7);
 
-        LinearLayout row = Ui.row(c);
-        row.setGravity(Gravity.TOP);
-        ImageView av = new ImageView(c);
-        int s = Ui.dp(c, 34);
-        row.addView(av, new LinearLayout.LayoutParams(s, s));
+        ImageView av = new ImageView(activity);
+        int s = Ui.dp(activity, 36);
+        outer.addView(av, new LinearLayout.LayoutParams(s, s));
 
-        LinearLayout right = Ui.col(c);
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, -2, 1);
-        rp.leftMargin = Ui.dp(c, 8);
-        LinearLayout bubble = Ui.col(c);
-        bubble.setBackground(Ui.round(c, Ui.inputBg(c), 12));
-        Ui.pad(bubble, 10, 7, 10, 7);
-        TextView name = Ui.tvBold(c, "", 13, Ui.txt(c));
-        ImageView tick = new ImageView(c);
-        int ts = Ui.dp(c, 15);
-        LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
-        tickp.leftMargin = Ui.dp(c, 4);
-        tickp.gravity = android.view.Gravity.CENTER_VERTICAL;
-        LinearLayout nameRow = Ui.row(c);
-        nameRow.addView(name);
-        nameRow.addView(tick, tickp);
-        TextView text = Ui.tv(c, "", 14, Ui.txt(c));
-        ImageView img = new ImageView(c);
-        img.setVisibility(View.GONE);
+        LinearLayout col = Ui.col(activity);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1);
+        cp.leftMargin = Ui.dp(activity, 9);
+        outer.addView(col, cp);
+
+        LinearLayout bubble = Ui.col(activity);
+        bubble.setBackground(Ui.round(activity, Ui.inputBg(activity), 16));
+        Ui.pad(bubble, 12, 8, 12, 9);
+
+        LinearLayout nameRow = Ui.row(activity);
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView author = Ui.tvBold(activity, "", 13.5f, Ui.txt(activity));
+        nameRow.addView(author);
+        ImageView tick = new ImageView(activity);
+        tick.setImageResource(com.friendbook.R.drawable.ic_verified);
+        tick.setVisibility(View.GONE);
+        int ts = Ui.dp(activity, 13);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(ts, ts);
+        tp.leftMargin = Ui.dp(activity, 4);
+        nameRow.addView(tick, tp);
         bubble.addView(nameRow);
+
+        TextView text = Ui.tv(activity, "", 14.5f, Ui.txt(activity));
+        text.setPadding(0, Ui.dp(activity, 2), 0, 0);
         bubble.addView(text);
-        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 180), Ui.dp(c, 120)));
-        right.addView(bubble);
 
-        LinearLayout meta = Ui.row(c);
-        meta.setPadding(Ui.dp(c, 12), Ui.dp(c, 3), 0, Ui.dp(c, 4));
-        TextView time = Ui.tv(c, "", 12, Ui.sub(c));
-        TextView like = Ui.tvBold(c, "Like", 12, Ui.sub(c));
-        TextView reply = Ui.tvBold(c, "Reply", 12, Ui.sub(c));
-        TextView likesCount = Ui.tvBold(c, "", 12, Ui.BLUE);
+        ImageView media = new ImageView(activity);
+        media.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        media.setVisibility(View.GONE);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(Ui.dp(activity, 185), Ui.dp(activity, 145));
+        mp.topMargin = Ui.dp(activity, 6);
+        bubble.addView(media, mp);
+
+        col.addView(bubble, new LinearLayout.LayoutParams(-2, -2));
+
+        LinearLayout meta = Ui.row(activity);
+        meta.setGravity(Gravity.CENTER_VERTICAL);
+        Ui.pad(meta, 6, 4, 4, 0);
+        TextView time = Ui.tv(activity, "", 12, Ui.sub(activity));
+        TextView like = Ui.tvBold(activity, "Like", 12, Ui.sub(activity));
+        TextView reply = Ui.tvBold(activity, "Reply", 12, Ui.sub(activity));
+        TextView likesCount = Ui.tvBold(activity, "", 12, Ui.sub(activity));
+        likesCount.setBackground(Ui.roundStroke(activity, Ui.card(activity), 10, Ui.div(activity), 1));
+        Ui.pad(likesCount, 7, 2, 7, 2);
+        TextView more = Ui.tvBold(activity, "•••", 13, Ui.sub(activity));
+        like.setPadding(Ui.dp(activity, 14), 0, 0, 0);
+        reply.setPadding(Ui.dp(activity, 14), 0, 0, 0);
+        LinearLayout.LayoutParams lcp = new LinearLayout.LayoutParams(-2, -2);
+        lcp.leftMargin = Ui.dp(activity, 12);
+        more.setPadding(Ui.dp(activity, 12), 0, Ui.dp(activity, 4), 0);
         meta.addView(time);
-        meta.addView(spacer(c));
         meta.addView(like);
-        meta.addView(spacer(c));
         meta.addView(reply);
-        meta.addView(spacer(c));
-        meta.addView(likesCount);
-        right.addView(meta);
-
-        outer.addView(row);
-        row.addView(right, rp);
-        return new VH(outer, av, name, tick, text, img, time, like, reply, likesCount);
-    }
-
-    private View spacer(Activity c) {
-        View v = new View(c);
-        v.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(c, 14), 1));
-        return v;
+        meta.addView(likesCount, lcp);
+        meta.addView(more);
+        col.addView(meta);
+        return new VH(outer, av, author, tick, text, media, time, like, reply, likesCount, more);
     }
 
     @Override
-    public void onBindViewHolder(@NonNull VH h, int position) {
-        Row r = rows.get(position);
-        Models.Comment c = r.c;
-        RecyclerView.LayoutParams lp = (RecyclerView.LayoutParams) h.itemView.getLayoutParams();
-        lp.leftMargin = Ui.dp(activity, 10 + r.depth * 34);
-        lp.rightMargin = Ui.dp(activity, 10);
-        lp.topMargin = Ui.dp(activity, 8);
-        h.itemView.setLayoutParams(lp);
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+        if (!(holder instanceof VH)) return;
+        VH h = (VH) holder;
+        int idx = position - headerOffset();
+        if (idx < 0 || idx >= rows.size()) return;
+
+        Row r = rows.get(idx);
+        final Models.Comment c = r.c;
+        int leftIndent = r.depth == 0 ? 12 : (r.depth == 1 ? 46 : 68);
+        h.itemView.setPadding(Ui.dp(activity, leftIndent),
+                Ui.dp(activity, 7), Ui.dp(activity, 12), Ui.dp(activity, 7));
+
+        int avDp = r.depth == 0 ? 36 : 28;
+        ViewGroup.LayoutParams avLp = h.av.getLayoutParams();
+        avLp.width = Ui.dp(activity, avDp);
+        avLp.height = Ui.dp(activity, avDp);
+        h.av.setLayoutParams(avLp);
 
         Ui.avatar(activity, h.av, c.authorPhoto);
-        h.name.setText(c.authorName + (c.authorId.equals(Fb.uid()) ? " (you)" : ""));
-        com.friendbook.core.TickCache.attach(h.tick, c.authorId);
-        h.text.setText(c.content);
-        if (c.imageUrl != null && !c.imageUrl.isEmpty()) {
-            h.img.setVisibility(View.VISIBLE);
-            Ui.img(activity, h.img, c.imageUrl);
-            h.img.setOnClickListener(v -> {
-                Intent i = new Intent(activity, FullscreenMediaActivity.class);
-                i.putExtra("type", "image");
-                i.putExtra("url", c.imageUrl);
-                activity.startActivity(i);
-            });
-        } else h.img.setVisibility(View.GONE);
+        h.author.setText(c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
+        TickCache.bind(c.authorId, h.tick, false);
 
-        h.time.setText(Format.ago(c.createdAt));
+        boolean hasText = c.text != null && !c.text.isEmpty();
+        h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
+        h.text.setText(hasText ? c.text : "");
+
+        boolean hasMedia = c.mediaUrl != null && !c.mediaUrl.isEmpty();
+        h.media.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
+        if (hasMedia) {
+            Ui.img(activity, h.media, c.mediaUrl);
+            h.media.setOnClickListener(v -> {
+                android.content.Intent in = new android.content.Intent(activity, FullscreenMediaActivity.class);
+                in.putExtra("type", "image");
+                in.putExtra("url", c.mediaUrl);
+                activity.startActivity(in);
+            });
+        }
+
+        h.time.setText(Format.ago(c.createdAt) + (c.edited ? " · edited" : ""));
+
         String me = Fb.uid();
-        String myEmojiType = (me != null && c.reactions != null) ? c.reactions.get(me) : null;
-        boolean liked = (myEmojiType != null && !myEmojiType.isEmpty()) || (me != null && c.likedBy.contains(me));
-        if (myEmojiType != null && !myEmojiType.isEmpty()) {
-            h.like.setText(Reactions.emojiFor(myEmojiType) + " " + Reactions.labelFor(myEmojiType));
-            h.like.setTextColor(Reactions.colorFor(myEmojiType));
+        String myReact = (me != null && c.reactions != null) ? c.reactions.get(me) : null;
+        if (myReact != null && !myReact.isEmpty()) {
+            h.like.setText(Reactions.emojiFor(myReact) + " " + Reactions.labelFor(myReact));
+            h.like.setTextColor(Reactions.colorFor(myReact));
         } else {
             h.like.setText("Like");
-            h.like.setTextColor(liked ? Ui.BLUE : Ui.sub(activity));
+            h.like.setTextColor(Ui.sub(activity));
         }
-        String topEm = (myEmojiType != null && !myEmojiType.isEmpty()) ? Reactions.emojiFor(myEmojiType) : "👍";
-        h.likesCount.setText(c.likes > 0 ? topEm + " " + Format.count(c.likes) : "");
 
-        h.like.setOnClickListener(v -> { Ui.haptic(v); toggleLike(c, null); });
+        int totalLikes = Math.max(c.likes, c.reactions != null ? c.reactions.size() : 0);
+        if (totalLikes > 0) {
+            h.likesCount.setVisibility(View.VISIBLE);
+            StringBuilder emojiSet = new StringBuilder();
+            if (c.reactions != null && !c.reactions.isEmpty()) {
+                for (String t : Reactions.TYPES) {
+                    if (c.reactions.containsValue(t)) {
+                        emojiSet.append(Reactions.emojiFor(t));
+                        if (emojiSet.length() >= 4) break;
+                    }
+                }
+            }
+            if (emojiSet.length() == 0) emojiSet.append("👍");
+            h.likesCount.setText(emojiSet + " " + Format.count(totalLikes));
+            h.likesCount.setOnClickListener(v -> Reactions.showCommentReactors(activity, c));
+        } else {
+            h.likesCount.setVisibility(View.GONE);
+            h.likesCount.setOnClickListener(null);
+        }
+
+        View.OnClickListener prof = v -> host.openProfile(c.authorId);
+        h.av.setOnClickListener(prof);
+        h.author.setOnClickListener(prof);
+
+        h.like.setOnClickListener(v -> {
+            Ui.haptic(v);
+            toggleCommentReaction(c, myReact != null ? null : "like");
+        });
         h.like.setOnLongClickListener(v -> {
-            Reactions.show(h.like, type -> toggleLike(c, type));
+            Reactions.show(v, picked -> toggleCommentReaction(c, picked));
             return true;
         });
-        h.reply.setOnClickListener(v -> host.replyTo(c));
-        View.OnClickListener prof = v -> {
-            Intent i = new Intent(activity, ProfileActivity.class);
-            i.putExtra("uid", c.authorId);
-            activity.startActivity(i);
-        };
-        h.av.setOnClickListener(prof);
-        h.name.setOnClickListener(prof);
 
-        h.itemView.setOnLongClickListener(v -> {
-            boolean mine = c.authorId.equals(Fb.uid());
-            String[] opts = mine
-                    ? new String[]{"↩ Reply", "📋 Copy comment", "✏️ Edit comment", "🗑 Delete comment"}
-                    : new String[]{"↩ Reply", "📋 Copy comment", "🚩 Report comment"};
-            Ui.choose(activity, "Comment", opts, w -> {
-                if (w == 0) host.replyTo(c);
-                else if (w == 1) {
-                    Ui.copy(activity, c.content);
-                } else if (mine) {
-                    if (w == 2) editComment(c);
-                    else deleteComment(c);
-                } else {
-                    Fb.db().collection("reports").add(Fb.map(
-                            "commentId", c.id, "reportedBy", Fb.uid(),
-                            "createdAt", FieldValue.serverTimestamp()));
-                    Ui.toast(activity, "Reported");
-                }
+        h.reply.setOnClickListener(v -> host.onReply(c));
+
+        boolean mineOrAdmin = (me != null && me.equals(c.authorId)) || Admin.isAdmin();
+        h.more.setVisibility(View.VISIBLE);
+        h.more.setOnClickListener(v -> {
+            PopupMenu m = new PopupMenu(activity, v);
+            if (hasText) m.getMenu().add(0, 3, 0, "📋 Copy comment");
+            if (totalLikes > 0) m.getMenu().add(0, 5, 0, "👍 See who reacted");
+            if (me != null && me.equals(c.authorId)) m.getMenu().add(0, 1, 0, "✏️ Edit");
+            if (mineOrAdmin) {
+                m.getMenu().add(0, 2, 0, (Admin.isAdmin() && (me == null || !me.equals(c.authorId)))
+                        ? "🛡 Admin delete" : "🗑 Delete");
+            }
+            if (!mineOrAdmin) m.getMenu().add(0, 4, 0, "🚩 Report comment");
+            m.setOnMenuItemClickListener(it -> {
+                if (it.getItemId() == 3) Ui.copy(activity, c.text);
+                else if (it.getItemId() == 5) Reactions.showCommentReactors(activity, c);
+                else if (it.getItemId() == 1) editDialog(c);
+                else if (it.getItemId() == 2) delete(c);
+                else if (it.getItemId() == 4) Ui.toast(activity, "Comment reported to moderators ✓");
+                return true;
             });
-            return true;
+            m.show();
         });
     }
 
-    /** ✏️ Edit your own comment (FB Lite: Edit option on long-press). */
-    private void editComment(Models.Comment c) {
-        if (c.postId == null || c.id == null) return;
-        android.widget.EditText in = new android.widget.EditText(activity);
-        in.setText(c.content);
-        in.setSelection(in.getText().length());
-        android.widget.LinearLayout box = Ui.col(activity);
-        Ui.pad(box, 18, 8, 18, 0);
-        box.addView(in, new android.widget.LinearLayout.LayoutParams(-1, Ui.dp(activity, 48)));
-        new android.app.AlertDialog.Builder(activity)
-                .setTitle("✏️ Edit comment")
+    /** 0ms optimistic reaction update + Firestore write for comments. */
+    private void toggleCommentReaction(Models.Comment c, String type) {
+        String me = Fb.uid();
+        if (me == null || c == null || c.id == null) return;
+        if (c.reactions == null) c.reactions = new HashMap<>();
+        String prev = c.reactions.get(me);
+
+        Map<String, String> nextMap = new HashMap<>(c.reactions);
+        int delta = 0;
+        if (type == null) {
+            if (prev != null) { nextMap.remove(me); delta = -1; }
+        } else if (type.equals(prev)) {
+            nextMap.remove(me);
+            delta = -1;
+        } else {
+            nextMap.put(me, type);
+            if (prev == null) delta = 1;
+        }
+        c.reactions = nextMap;
+        c.likes = Math.max(nextMap.size(), Math.max(0, c.likes + delta));
+        notifyDataSetChanged(); // Instant 0ms UI update!
+
+        DocumentReference ref = Fb.db().collection("comments").document(c.id);
+        Map<String, Object> up = new HashMap<>();
+        up.put("reactions", nextMap);
+        up.put("likes", c.likes);
+        ref.set(up, SetOptions.merge());
+    }
+
+    private void editDialog(Models.Comment c) {
+        EditText e = Ui.multi(activity, "Comment", 3);
+        e.setText(c.text);
+        LinearLayout box = Ui.col(activity);
+        Ui.pad(box, 18, 12, 18, 4);
+        box.addView(e, new LinearLayout.LayoutParams(-1, -2));
+        new AlertDialog.Builder(activity)
+                .setTitle("Edit comment")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
-                    String t = in.getText().toString().trim();
-                    if (t.isEmpty()) return;
-                    Map<String, Object> m = new HashMap<>();
-                    m.put("content", t);
-                    m.put("edited", true);
-                    Fb.db().collection("comments").document(c.id).update(m)
-                            .addOnSuccessListener(x -> Ui.toast(activity, "Comment updated ✓"))
-                            .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
+                    String nv = e.getText().toString().trim();
+                    if (nv.isEmpty()) return;
+                    c.text = nv;
+                    c.edited = true;
+                    notifyDataSetChanged();
+                    Fb.db().collection("comments").document(c.id)
+                            .update("text", nv, "edited", true);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void toggleLike(Models.Comment c, String pickedReaction) {
-        String me = Fb.uid();
-        if (me == null) return;
-        String curReact = c.reactions != null ? c.reactions.get(me) : null;
-        boolean hadLike = (curReact != null && !curReact.isEmpty()) || c.likedBy.contains(me);
-        boolean removing = pickedReaction == null ? hadLike : pickedReaction.equals(curReact);
-
-        Map<String, Object> m = new HashMap<>();
-        if (removing) {
-            c.likedBy.remove(me);
-            if (c.reactions != null) c.reactions.remove(me);
-            c.likes = Math.max(0, c.likes - 1);
-            m.put("likedBy", FieldValue.arrayRemove(me));
-            m.put("reactions." + me, FieldValue.delete());
-            m.put("likes", FieldValue.increment(-1));
-        } else {
-            String rt = pickedReaction == null ? "like" : pickedReaction;
-            if (!c.likedBy.contains(me)) c.likedBy.add(me);
-            if (c.reactions == null) c.reactions = new HashMap<>();
-            c.reactions.put(me, rt);
-            if (!hadLike) {
-                c.likes = c.likes + 1;
-                m.put("likes", FieldValue.increment(1));
-            }
-            m.put("likedBy", FieldValue.arrayUnion(me));
-            m.put("reactions." + me, rt);
-            if (!hadLike && !me.equals(c.authorId)) {
-                Notify.send(c.authorId, "comment_like", "reacted to your comment", c.postId);
-            }
-        }
-        // ⚡ 0.0ms immediate UI refresh!
-        notifyDataSetChanged();
-        Fb.db().collection("comments").document(c.id).update(m);
-    }
-
-    private void deleteComment(Models.Comment c) {
-        Ui.confirm(activity, "Delete comment?", "", "Delete", () -> {
+    private void delete(Models.Comment c) {
+        Ui.confirm(activity, "Delete comment?", "This cannot be undone.", "Delete", () -> {
             Fb.db().collection("comments").document(c.id).delete();
-            String col = counterCollection != null ? counterCollection : "posts";
-            String id = counterId != null ? counterId : c.postId;
-            Fb.db().collection(col).document(id)
-                    .set(com.friendbook.core.Fb.map("comments", FieldValue.increment(-1)),
-                            com.google.firebase.firestore.SetOptions.merge());
-            host.changed();
+            String cid = counterId != null ? counterId : c.postId;
+            if (cid != null) {
+                Map<String, Object> dec = new HashMap<>();
+                dec.put("comments", FieldValue.increment(-1));
+                Fb.db().collection(counterCollection).document(cid).set(dec, SetOptions.merge());
+            }
         });
     }
 
+    static class HeaderVH extends RecyclerView.ViewHolder {
+        HeaderVH(View v) { super(v); }
+    }
+
     static class VH extends RecyclerView.ViewHolder {
-        ImageView av, img, tick;
-        TextView name, text, time, like, reply, likesCount;
-        VH(View v, ImageView a, TextView n, ImageView tk, TextView t, ImageView i, TextView tm, TextView l, TextView r, TextView lc) {
+        ImageView av, tick, media;
+        TextView author, text, time, like, reply, likesCount, more;
+        VH(View v, ImageView a, TextView au, ImageView tk, TextView t, ImageView md,
+           TextView ti, TextView l, TextView r, TextView lc, TextView m) {
             super(v);
-            av = a; name = n; tick = tk; text = t; img = i; time = tm; like = l; reply = r; likesCount = lc;
+            av = a; author = au; tick = tk; text = t; media = md;
+            time = ti; like = l; reply = r; likesCount = lc; more = m;
         }
     }
 }

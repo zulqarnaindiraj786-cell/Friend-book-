@@ -74,14 +74,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (adapter != null) adapter.onFastReactionUpdate(postId, mine, total);
     };
 
+    private HorizontalScrollView notesScroll;
+
     @Nullable
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
         android.app.Activity a = getActivity();
         LinearLayout root = Ui.col(a);
         root.setBackgroundColor(Ui.bg(a));
-        root.addView(filterChips(a));
-        root.addView(buildNotesStrip(a));
+
+        notesScroll = (HorizontalScrollView) buildNotesStrip(a);
+        notesScroll.setVisibility(View.GONE);
+        root.addView(notesScroll);
 
         swipe = new SwipeRefreshLayout(a);
         swipe.setColorSchemeColors(Ui.BLUE);
@@ -156,11 +160,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 myNote != null, this::showEditNoteDialog));
 
         // Friends' active 24h notes
+        int friendNotes = 0;
         String me = Fb.uid();
         for (final Models.User u : noteUsers) {
             if (u == null || u.uid == null || u.uid.equals(me)) continue;
             if (u.statusNote == null || u.statusNote.isEmpty()) continue;
             if ((now - u.statusNoteAt) >= NOTE_TTL_MS) continue;
+            friendNotes++;
             String shortName = u.displayName == null ? "Friend" : u.displayName.split(" ")[0];
             notesRow.addView(noteChip(a, u.photoUrl, shortName, "💭 " + u.statusNote, true, () -> {
                 Intent ci = new Intent(a, ChatActivity.class);
@@ -169,6 +175,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 ci.putExtra("prefill", "Replying to your note \"" + u.statusNote + "\": ");
                 startActivity(ci);
             }));
+        }
+        if (notesScroll != null) {
+            notesScroll.setVisibility((myNote != null || friendNotes > 0) ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -203,7 +212,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         return pill;
     }
 
-    private void showEditNoteDialog() {
+    public void showEditNoteDialog() {
         android.app.Activity a = getActivity();
         if (a == null) return;
         LinearLayout box = Ui.col(a);
@@ -661,4 +670,37 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public boolean hasMore() { return moreAvailable; }
+
+    @Override
+    public void openFindFriends() {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).select(MainActivity.TAB_FRIENDS);
+        } else if (getActivity() != null) {
+            startActivity(new Intent(getActivity(), com.friendbook.friends.SearchActivity.class));
+        }
+    }
+
+    public void showFeedFilterSheet() {
+        android.app.Activity a = getActivity();
+        if (a == null) return;
+        final String[] labels = {
+                "✨ Top Feed (Algorithmic)",
+                "🕒 Most Recent (Chronological)",
+                "⭐ Favorites First",
+                "🖼 Photos Only",
+                "🎬 Videos Only",
+                "🛒 Marketplace Posts",
+                "📝 Text Posts Only"
+        };
+        final String[] keys = {"all", "recent", "favorites", "photos", "videos", "market", "text"};
+        Ui.choose(a, "Feed View & Filter", labels, idx -> {
+            String key = keys[idx];
+            Prefs.setFeedFilter(a, key);
+            if ("recent".equals(key)) Prefs.setFeedSort(a, "recent");
+            else if ("all".equals(key)) Prefs.setFeedSort(a, "top");
+            applyFilterOnCachedFeed();
+            restartPostsListener();
+            Ui.toast(a, "Showing: " + labels[idx]);
+        });
+    }
 }

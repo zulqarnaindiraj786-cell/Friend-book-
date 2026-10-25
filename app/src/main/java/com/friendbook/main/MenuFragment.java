@@ -147,6 +147,14 @@ public class MenuFragment extends Fragment {
         body.addView(scHead);
 
         addGridRow(body, a,
+                tile(a, Icons.CHART, Ui.BLUE, "Creator Dashboard", "Reach, likes & level",
+                        () -> com.friendbook.profile.CreatorDashboardDialog.show(a, null)),
+                tile(a, Icons.DATA_SAVER, 0xFF0E5FC7, "Data mode & 2G", "Free text / Saver",
+                        () -> com.friendbook.core.FastCache.showLiteModeDialog(a, () -> {
+                            if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                        })));
+
+        addGridRow(body, a,
                 tile(a, Icons.FRIENDS, Ui.BLUE, "Friends", "Requests & PYMK",
                         () -> ((MainActivity) a).select(MainActivity.TAB_FRIENDS)),
                 tile(a, Icons.MARKETPLACE, 0xFF00A400, "Marketplace", "Buy & sell nearby",

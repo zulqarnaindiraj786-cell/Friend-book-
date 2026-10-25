@@ -533,4 +533,72 @@ public class Ui {
             c.startActivity(i);
         } catch (Exception e) { toast(c, "No map app installed"); }
     }
+
+    /** Crisp white status bar with dark icons in light mode (exact Facebook Lite v525 look). */
+    @SuppressWarnings("deprecation")
+    public static void statusBarLight(Activity a) {
+        if (a == null) return;
+        Window w = a.getWindow();
+        if (w == null) return;
+        boolean dark = isDark(a);
+        w.setStatusBarColor(card(a));
+        View decor = w.getDecorView();
+        int flags = decor.getSystemUiVisibility();
+        if (!dark && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        decor.setSystemUiVisibility(flags);
+    }
+
+    /**
+     * Authentic Facebook Lite top "Data mode" + "📡 Buy data / Data mode" strip
+     * (matches Screenshots 1 & 2, and opens Pro 2G/Text-Only/Data-Saver controls on tap).
+     */
+    public static LinearLayout dataModeStrip(final Activity a, final Runnable onModeChanged) {
+        LinearLayout wrap = col(a);
+        wrap.setBackgroundColor(card(a));
+        if (!Prefs.dataModeBar(a)) {
+            wrap.setVisibility(View.GONE);
+            return wrap;
+        }
+
+        LinearLayout row = row(a);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        pad(row, 14, 7, 14, 7);
+
+        final TextView leftTv = tvBold(a, dataModeLeftLabel(a), 14, txt(a));
+        row.addView(leftTv, new LinearLayout.LayoutParams(0, -2, 1));
+
+        LinearLayout pill = row(a);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setBackground(round(a, inputBg(a), 8));
+        pad(pill, 12, 6, 12, 6);
+        ImageView sig = Icons.icon(a, Icons.DATA_SAVER, 15, txt(a));
+        pill.addView(sig);
+        final TextView pillTv = tvBold(a,
+                Prefs.textOnlyMode(a) ? "See photos" : "Buy data", 13, txt(a));
+        pillTv.setPadding(dp(a, 6), 0, 0, 0);
+        pill.addView(pillTv);
+        row.addView(pill);
+
+        View.OnClickListener openSheet = v -> FastCache.showLiteModeDialog(a, () -> {
+            leftTv.setText(dataModeLeftLabel(a));
+            pillTv.setText(Prefs.textOnlyMode(a) ? "See photos" : "Buy data");
+            if (onModeChanged != null) onModeChanged.run();
+        });
+        leftTv.setOnClickListener(openSheet);
+        pill.setOnClickListener(openSheet);
+
+        wrap.addView(row);
+        wrap.addView(divider(a));
+        return wrap;
+    }
+
+    public static String dataModeLeftLabel(Context c) {
+        if (Prefs.textOnlyMode(c)) return "Free mode · Text only";
+        if (Prefs.dataSaver(c)) return "Data mode · Saver ON";
+        return "Data mode";
+    }
 }

@@ -47,21 +47,17 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         commentsKey = "reel_" + reelId;
 
         LinearLayout root = Ui.col(this);
-        root.setBackgroundColor(Ui.bg(this));
+        root.setBackgroundColor(Ui.card(this));
         root.addView(Ui.pageBar(this, "Reel comments"));
 
-        ScrollView sv = new ScrollView(this);
-        LinearLayout body = Ui.col(this);
         RecyclerView rv = new RecyclerView(this);
+        rv.setBackgroundColor(Ui.card(this));
         rv.setLayoutManager(new LinearLayoutManager(this));
-        rv.setNestedScrollingEnabled(false);
         adapter = new CommentsAdapter(this, this);
         adapter.counterCollection = "reels";
         adapter.counterId = reelId;
         rv.setAdapter(adapter);
-        body.addView(rv, new LinearLayout.LayoutParams(-1, -2));
-        sv.addView(body);
-        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // composer
         LinearLayout wrap = Ui.col(this);

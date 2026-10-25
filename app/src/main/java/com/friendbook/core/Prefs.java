@@ -500,9 +500,21 @@ public class Prefs {
     public static boolean wifiPreload(Context c) { return p(c).getBoolean("wifiPreload", true); }
     public static void setWifiPreload(Context c, boolean v) { p(c).edit().putBoolean("wifiPreload", v).apply(); }
 
-    /** Comment sort preference: "relevant" | "newest" | "oldest" */
-    public static String commentSort(Context c) { return p(c).getString("commentSort", "relevant"); }
-    public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "relevant" : v).apply(); }
+    /** Comment sort preference: "all" | "newest" | "relevant" */
+    public static String commentSort(Context c) { return p(c).getString("commentSort", "all"); }
+    public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "all" : v).apply(); }
+
+    /** Top Facebook Lite "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
+    public static boolean dataModeBar(Context c) { return p(c).getBoolean("dataModeBar", true); }
+    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", v).apply(); }
+
+    /** Undo hiding a post via the ✕ button on post cards. */
+    public static void unhidePost(Context c, String postId) {
+        if (postId == null) return;
+        Set<String> s = hiddenPosts(c);
+        s.remove(postId);
+        p(c).edit().putStringSet("hiddenPosts", s).apply();
+    }
 
     /** Record exact used & saved bytes from WebP/2G compression. */
     public static void recordBytes(Context c, long used, long saved) {

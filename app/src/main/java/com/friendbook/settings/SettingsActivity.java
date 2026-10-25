@@ -129,6 +129,9 @@ public class SettingsActivity extends Activity {
 
         // ============ 3. TOOLS & MONETIZATION ============
         body.addView(header("Tools & creator hub"));
+        body.addView(rowI(Icons.CHART, "📊 Creator Dashboard",
+                "Live post reach, total likes, comments, level & creator tools",
+                () -> com.friendbook.profile.CreatorDashboardDialog.show(this, null)));
         body.addView(rowI(Icons.VERIFIED, "✓ Tick levels & verification",
                 "Blue · Gold · Diamond — earn FREE via 5 invites or paid",
                 () -> startActivity(new Intent(this, com.friendbook.bluetick.BlueTickActivity.class))));
@@ -166,6 +169,22 @@ public class SettingsActivity extends Activity {
                 "Photo: " + Prefs.photoQualityLabel(this).split(" ")[0]
                         + " · Autoplay: " + Prefs.autoplayModeLabel(this),
                 this::mediaAndDataDialog));
+        body.addView(switchRowI(Icons.DATA_SAVER, "Show top 'Data mode' strip",
+                Prefs.dataModeBar(this), (btn, on) -> {
+                    Prefs.setDataModeBar(this, on);
+                    Ui.toast(this, on ? "Top Data mode strip enabled ✓" : "Top Data mode strip hidden");
+                }));
+        body.addView(rowI(Icons.MESSAGES, "Default comments filter",
+                "Current: " + Prefs.commentSort(this).toUpperCase() + " (All comments / Newest / Relevant)",
+                () -> Ui.choose(this, "Default comments filter", new String[]{
+                        "💬 All comments — show every comment & reply",
+                        "🕐 Newest — show recent comments first",
+                        "⭐ Most relevant — top liked & replied first"
+                }, idx -> {
+                    String m = idx == 1 ? "newest" : (idx == 2 ? "relevant" : "all");
+                    Prefs.setCommentSort(this, m);
+                    Ui.toast(this, "Comments filter set to: " + m);
+                })));
         body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver mode",
                 Prefs.dataSaver(this), (btn, on) -> {
                     Prefs.setDataSaver(this, on);
