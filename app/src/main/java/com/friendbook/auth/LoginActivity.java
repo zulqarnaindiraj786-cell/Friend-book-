@@ -42,9 +42,16 @@ public class LoginActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        Ui.pad(root, 24, 42, 24, 24);
+        Ui.pad(root, 24, 34, 24, 24);
 
-        TextView logo = Ui.tvBold(this, "friendbook", 34, Ui.BLUE);
+        ImageView brandIcon = new ImageView(this);
+        brandIcon.setImageResource(com.friendbook.R.drawable.ic_brand_logo);
+        LinearLayout.LayoutParams bilp = new LinearLayout.LayoutParams(Ui.dp(this, 84), Ui.dp(this, 84));
+        bilp.gravity = Gravity.CENTER_HORIZONTAL;
+        bilp.bottomMargin = Ui.dp(this, 10);
+        root.addView(brandIcon, bilp);
+
+        TextView logo = Ui.tvBold(this, "friendbook", 32, Ui.txt(this));
         logo.setGravity(Gravity.CENTER);
         root.addView(logo);
         TextView tag = Ui.tv(this, "Connect with friends and the world around you.", 13, Ui.sub(this));

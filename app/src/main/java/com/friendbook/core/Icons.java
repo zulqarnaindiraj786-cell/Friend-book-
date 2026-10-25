@@ -64,6 +64,7 @@ public class Icons {
     public static final int FONT = R.drawable.ic_type_outline;
     public static final int MAIL = R.drawable.ic_mail_outline;
     public static final int IMAGE = R.drawable.ic_image_outline;
+    public static final int PHOTO_VIDEO = R.drawable.ic_fb_photo_video;
     public static final int CAMERA = R.drawable.ic_camera_outline;
     public static final int CHART = R.drawable.ic_chart_outline;
     public static final int FLAG = R.drawable.ic_flag_outline;

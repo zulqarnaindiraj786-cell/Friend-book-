@@ -57,6 +57,8 @@ public final class FastCache {
     private static final Map<String, Models.User> USERS = new ConcurrentHashMap<>();
     private static final Map<String, String> MY_REACTIONS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> REACTION_TOTALS = new ConcurrentHashMap<>();
+    private static final Map<String, String> REACTION_EMOJIS = new ConcurrentHashMap<>();
+    private static final Map<String, Long> LOCAL_REACTION_TS = new ConcurrentHashMap<>();
     private static final Set<String> REACTION_FETCHED = Collections.synchronizedSet(new HashSet<>());
     private static final Set<String> REVEALED_PHOTOS = Collections.synchronizedSet(new HashSet<>());
     private static final List<ReactionObserver> REACTION_OBSERVERS = new CopyOnWriteArrayList<>();
@@ -117,6 +119,8 @@ public final class FastCache {
         USERS.clear();
         MY_REACTIONS.clear();
         REACTION_TOTALS.clear();
+        REACTION_EMOJIS.clear();
+        LOCAL_REACTION_TS.clear();
         REACTION_FETCHED.clear();
         REVEALED_PHOTOS.clear();
         FEED = new ArrayList<>();
@@ -177,9 +181,18 @@ public final class FastCache {
         if (posts == null) return;
         List<Models.Post> copy = new ArrayList<>(posts);
         FEED = copy;
+        long now = System.currentTimeMillis();
         for (Models.Post p : copy) {
-            if (p != null && p.id != null && !REACTION_TOTALS.containsKey(p.id)) {
-                REACTION_TOTALS.put(p.id, Math.max(0, p.likes));
+            if (p != null && p.id != null) {
+                Long lastLocal = LOCAL_REACTION_TS.get(p.id);
+                boolean inFlight = lastLocal != null && (now - lastLocal) < 4000L;
+                if (!inFlight) {
+                    Integer prev = REACTION_TOTALS.get(p.id);
+                    int incoming = Math.max(0, p.likes);
+                    if (prev == null || !REACTION_FETCHED.contains(p.id) || incoming > prev) {
+                        REACTION_TOTALS.put(p.id, incoming);
+                    }
+                }
             }
         }
         if (ctx == null) return;
@@ -250,7 +263,29 @@ public final class FastCache {
     public static int getReactionTotal(String postId, int fallback) {
         if (postId == null) return Math.max(0, fallback);
         Integer v = REACTION_TOTALS.get(postId);
-        return v == null ? Math.max(0, fallback) : Math.max(0, v);
+        if (v == null) return Math.max(0, fallback);
+        Long lastLocal = LOCAL_REACTION_TS.get(postId);
+        boolean inFlight = lastLocal != null && (System.currentTimeMillis() - lastLocal) < 4000L;
+        if (!inFlight && !REACTION_FETCHED.contains(postId) && fallback > v) {
+            return fallback;
+        }
+        return Math.max(0, v);
+    }
+
+    public static String getReactionEmojis(String postId) {
+        if (postId == null) return "👍";
+        String s = REACTION_EMOJIS.get(postId);
+        return (s == null || s.isEmpty()) ? "👍" : s;
+    }
+
+    public static void setReactionEmojis(String postId, String emojis) {
+        if (postId != null && emojis != null && !emojis.isEmpty()) {
+            REACTION_EMOJIS.put(postId, emojis);
+        }
+    }
+
+    public static void markLocalReactionTap(String postId) {
+        if (postId != null) LOCAL_REACTION_TS.put(postId, System.currentTimeMillis());
     }
 
     public static boolean isReactionSynced(String postId) {

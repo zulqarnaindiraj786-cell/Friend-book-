@@ -500,9 +500,21 @@ public class Prefs {
     public static boolean wifiPreload(Context c) { return p(c).getBoolean("wifiPreload", true); }
     public static void setWifiPreload(Context c, boolean v) { p(c).edit().putBoolean("wifiPreload", v).apply(); }
 
-    /** Comment sort preference: "relevant" | "newest" | "oldest" */
-    public static String commentSort(Context c) { return p(c).getString("commentSort", "relevant"); }
-    public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "relevant" : v).apply(); }
+    /** Comment sort preference: "all" | "newest" | "relevant" */
+    public static String commentSort(Context c) { return p(c).getString("commentSort", "all"); }
+    public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "all" : v).apply(); }
+
+    /** Top Facebook Lite "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
+    public static boolean dataModeBar(Context c) { return p(c).getBoolean("dataModeBar", true); }
+    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", v).apply(); }
+
+    /** Undo hiding a post via the ✕ button on post cards. */
+    public static void unhidePost(Context c, String postId) {
+        if (postId == null) return;
+        Set<String> s = hiddenPosts(c);
+        s.remove(postId);
+        p(c).edit().putStringSet("hiddenPosts", s).apply();
+    }
 
     /** Record exact used & saved bytes from WebP/2G compression. */
     public static void recordBytes(Context c, long used, long saved) {
@@ -512,4 +524,25 @@ public class Prefs {
                 .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + Math.max(0L, saved))
                 .apply();
     }
+
+    // ---- 🚀 Facebook Lite Pro Extra Settings ----
+    /** Show inline multi-user comments preview + quick comment pill directly on Home Feed cards. */
+    public static boolean inlineFeedComments(Context c) { return p(c).getBoolean("inlineFeedComments", true); }
+    public static void setInlineFeedComments(Context c, boolean v) { p(c).edit().putBoolean("inlineFeedComments", v).apply(); }
+
+    /** Show full uncropped HD profile pictures & full portrait photos in feed. */
+    public static boolean fullPhotoDisplay(Context c) { return p(c).getBoolean("fullPhotoDisplay", true); }
+    public static void setFullPhotoDisplay(Context c, boolean v) { p(c).edit().putBoolean("fullPhotoDisplay", v).apply(); }
+
+    /** Automatically ask/share new Profile Picture updates to News Feed like Facebook Lite. */
+    public static boolean shareDpToFeed(Context c) { return p(c).getBoolean("shareDpToFeed", true); }
+    public static void setShareDpToFeed(Context c, boolean v) { p(c).edit().putBoolean("shareDpToFeed", v).apply(); }
+
+    /** Double-tap on post photos & reels to send instant ❤️ Love/Like reaction. */
+    public static boolean doubleTapToLike(Context c) { return p(c).getBoolean("doubleTapToLike", true); }
+    public static void setDoubleTapToLike(Context c, boolean v) { p(c).edit().putBoolean("doubleTapToLike", v).apply(); }
+
+    /** Start Reels with audio ON by default. */
+    public static boolean reelsStartWithSound(Context c) { return p(c).getBoolean("reelsSoundDefault", true); }
+    public static void setReelsStartWithSound(Context c, boolean v) { p(c).edit().putBoolean("reelsSoundDefault", v).apply(); }
 }

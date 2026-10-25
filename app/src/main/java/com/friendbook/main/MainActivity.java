@@ -13,18 +13,33 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.friendbook.App;
+import com.friendbook.R;
 import com.friendbook.chat.ConversationsActivity;
+import com.friendbook.core.AdsConfig;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
+import com.friendbook.core.Icons;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Presence;
 import com.friendbook.core.Ui;
 import com.friendbook.friends.SearchActivity;
+import com.friendbook.groups.GroupsActivity;
+import com.friendbook.live.LiveActivity;
 import com.friendbook.post.CreatePostActivity;
+import com.friendbook.profile.CreatorDashboardDialog;
+import com.friendbook.reels.AddReelActivity;
+import com.friendbook.social.PagesActivity;
+import com.friendbook.story.AddStoryActivity;
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.LoadAdError;
+import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 
@@ -32,30 +47,40 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * ⚡ Zero-Lag Facebook-Lite 525 Home Shell:
- * - Retained 5-tab fragments (`add` + `hide`/`show`) → 0.0ms instant tab switching with zero reload!
- * - Idle-deferred Ads/RemoteConfig/Badges → Frame #1 paints in <15ms on cold start!
- * - 1-Tap `⚡ Lite / 2G` top-bar pill + Facebook-Lite Basic/Text-Only & Offline smart strip.
+ * ⚡ Authentic Facebook-Lite v525 Pro Home Shell:
+ * - Top "Data mode" + "📡 Buy data" strip (exact FB Lite top bar!)
+ * - Bold blue "friendbook" wordmark + 3 circular gray buttons: [ ＋ ] [ 🔍 ] [ ☰ ]
+ * - 6-Icon Top Navigation Bar directly below header:
+ *     🏠 Home | 👥 Friends | 💬 Messages | 🎬 Reels | 🔔 Notifications | 📊 Creator Dashboard
+ * - Retained 5-tab fragments (`add` + `hide`/`show`) for 0.0ms instant tab switching!
  */
 public class MainActivity extends Activity {
 
     public static final int TAB_HOME = 0, TAB_FRIENDS = 1, TAB_REELS = 2, TAB_NOTIFS = 3, TAB_MENU = 4;
 
-    private static final int[] TAB_ICON_RES = {
-            com.friendbook.core.Icons.HOME,
-            com.friendbook.core.Icons.FRIENDS,
-            com.friendbook.core.Icons.VIDEO,
-            com.friendbook.core.Icons.NOTIFICATIONS,
-            com.friendbook.core.Icons.MENU};
+    private static final int[] TOP_SLOT_ICONS = {
+            Icons.HOME,
+            Icons.FRIENDS,
+            Icons.MESSAGES,
+            Icons.VIDEO,
+            Icons.NOTIFICATIONS,
+            Icons.CHART
+    };
 
     private FrameLayout container;
+    private AdView adView;
+    private FrameLayout bottomAdWrap;
+    private LinearLayout dataStripWrap;
+    private LinearLayout brandBar;
     private LinearLayout navRow;
     private LinearLayout modeStrip;
-    private TextView modeStripText, modeStripAction, litePill;
-    private final android.widget.ImageView[] navIcons = new android.widget.ImageView[5];
-    private final View[] navIndicators = new View[5];
+    private TextView modeStripText, modeStripAction;
+    private ImageView menuBtnIcon;
+    private LinearLayout menuBtnCircle;
+    private final ImageView[] slotIcons = new ImageView[6];
+    private final View[] slotIndicators = new View[6];
     private final Fragment[] tabFragments = new Fragment[5];
-    private TextView msgBadge, notifBadge, friendsBadge;
+    private TextView homeBadge, msgBadge, notifBadge, friendsBadge;
     private int active = -1;
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
@@ -63,46 +88,117 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         if (!Fb.signedIn()) { finish(); return; }
-        Ui.statusBarBlue(this);
+        Ui.statusBarLight(this);
+        setContentView(R.layout.activity_main);
 
-        LinearLayout root = Ui.col(this);
+        LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
+        bottomAdWrap = findViewById(R.id.bottomAdWrap);
+        if (bottomAdWrap != null) bottomAdWrap.setBackgroundColor(Ui.card(this));
+        adView = findViewById(R.id.adView);
 
-        // ---- Facebook Lite Top Bar ----
-        LinearLayout bar = Ui.row(this);
-        bar.setBackgroundColor(Ui.card(this));
-        bar.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 10), Ui.dp(this, 8));
-        bar.setElevation(Ui.dp(this, 2));
+        // 1. Authentic Facebook Lite Top "Data mode" + "[ 📡 Buy data ]" Strip
+        dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
+        root.addView(dataStripWrap);
 
-        LinearLayout brandRow = Ui.row(this);
-        TextView logo = Ui.tvBold(this, "friendbook", 23, Ui.BLUE);
+        // 2. Crisp White Brand & Circular Action Header: friendbook   [ ＋ ] [ 🔍 ] [ ☰ ]
+        brandBar = Ui.row(this);
+        brandBar.setBackgroundColor(Ui.card(this));
+        brandBar.setGravity(Gravity.CENTER_VERTICAL);
+        brandBar.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 6));
+
+        ImageView brandEmblem = new ImageView(this);
+        brandEmblem.setImageResource(R.drawable.ic_brand_logo);
+        LinearLayout.LayoutParams belp = new LinearLayout.LayoutParams(Ui.dp(this, 31), Ui.dp(this, 31));
+        belp.rightMargin = Ui.dp(this, 8);
+        brandEmblem.setOnClickListener(v -> {
+            if (active != TAB_HOME) select(TAB_HOME);
+            else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
+            }
+        });
+        brandBar.addView(brandEmblem, belp);
+
+        TextView logo = Ui.tvBold(this, "friendbook", 26, Ui.BLUE);
+        logo.setLetterSpacing(-0.03f);
         logo.setOnClickListener(v -> {
             if (active != TAB_HOME) select(TAB_HOME);
             else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
             }
         });
-        brandRow.addView(logo);
+        brandBar.addView(logo, new LinearLayout.LayoutParams(0, -2, 1));
 
-        // ⚡ Signature Facebook Lite 2G / Data Mode Pill
-        litePill = Ui.roundChip(this, FastCache.modeBadgeLabel(this),
-                Ui.inputBg(this), Ui.BLUE, 10);
-        Ui.pad(litePill, 8, 4, 8, 4);
-        LinearLayout.LayoutParams lpPill = new LinearLayout.LayoutParams(-2, -2);
-        lpPill.leftMargin = Ui.dp(this, 7);
-        litePill.setOnClickListener(v -> FastCache.showLiteModeDialog(this, this::refreshLiteUi));
-        brandRow.addView(litePill, lpPill);
-
-        bar.addView(brandRow, new LinearLayout.LayoutParams(0, -2, 1));
-
-        bar.addView(topIcon(com.friendbook.core.Icons.PLUS,
-                v -> startActivity(new Intent(this, CreatePostActivity.class))));
-        bar.addView(topIcon(com.friendbook.core.Icons.SEARCH,
+        brandBar.addView(circleHeaderIcon(Icons.PLUS, v -> showUniversalCreateSheet()));
+        brandBar.addView(circleHeaderIcon(Icons.SEARCH,
                 v -> startActivity(new Intent(this, SearchActivity.class))));
-        bar.addView(messengerIcon());
-        root.addView(bar);
 
-        // ---- Slim Facebook Lite Basic/Text-Only 2G & Offline Strip ----
+        menuBtnCircle = Ui.row(this);
+        menuBtnCircle.setGravity(Gravity.CENTER);
+        menuBtnCircle.setBackground(Ui.circle(Ui.inputBg(this)));
+        menuBtnIcon = Icons.icon(this, Icons.MENU, 20, Ui.txt(this));
+        menuBtnCircle.addView(menuBtnIcon);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(Ui.dp(this, 38), Ui.dp(this, 38));
+        mlp.leftMargin = Ui.dp(this, 8);
+        menuBtnCircle.setLayoutParams(mlp);
+        menuBtnCircle.setOnClickListener(v -> select(active == TAB_MENU ? TAB_HOME : TAB_MENU));
+        brandBar.addView(menuBtnCircle);
+        root.addView(brandBar);
+
+        // 3. Signature 6-Icon Facebook Lite Top Navigation Bar directly below Header!
+        navRow = Ui.row(this);
+        navRow.setBackgroundColor(Ui.card(this));
+        navRow.setPadding(0, Ui.dp(this, 2), 0, 0);
+        for (int s = 0; s < 6; s++) {
+            final int slot = s;
+            LinearLayout cell = Ui.col(this);
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+
+            FrameLayout iconWrap = new FrameLayout(this);
+            ImageView ic = Icons.icon(this, TOP_SLOT_ICONS[s], 24, Icons.GRAY);
+            FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(
+                    Ui.dp(this, 24), Ui.dp(this, 24), Gravity.CENTER);
+            iconWrap.addView(ic, ip);
+            iconWrap.setMinimumHeight(Ui.dp(this, 42));
+
+            if (s == 0) {
+                homeBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(homeBadge, fp);
+            } else if (s == 1) {
+                friendsBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(friendsBadge, fp);
+            } else if (s == 2) {
+                msgBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(msgBadge, fp);
+            } else if (s == 4) {
+                notifBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(notifBadge, fp);
+            }
+
+            cell.addView(iconWrap, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 42)));
+
+            View ind = new View(this);
+            ind.setBackgroundColor(Icons.BLUE);
+            ind.setVisibility(View.INVISIBLE);
+            cell.addView(ind, new LinearLayout.LayoutParams(-1, Ui.dp(this, 2.5f)));
+
+            slotIcons[s] = ic;
+            slotIndicators[s] = ind;
+            cell.setOnClickListener(v -> onTopSlotClicked(slot));
+            navRow.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        root.addView(navRow);
+        root.addView(Ui.divider(this));
+
+        // 4. Smart Offline / 2G Strip (only shown when Offline or 2G network active)
         modeStrip = Ui.row(this);
         modeStrip.setBackgroundColor(0xFF1A2942);
         Ui.pad(modeStrip, 12, 5, 10, 5);
@@ -114,70 +210,26 @@ public class MainActivity extends Activity {
         modeStrip.setVisibility(View.GONE);
         root.addView(modeStrip);
 
-        root.addView(Ui.divider(this));
-
-        // ---- Fragment container ----
+        // 5. Full-Bleed Fragment Container
         container = new FrameLayout(this);
         container.setId(View.generateViewId());
         root.addView(container, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // ---- Bottom nav (thin OUTLINE icons — Facebook Lite v525 style) ----
-        navRow = Ui.row(this);
-        navRow.setBackgroundColor(Ui.card(this));
-        navRow.setElevation(Ui.dp(this, 8));
-        navRow.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4));
-        for (int i = 0; i < 5; i++) {
-            final int tab = i;
-            LinearLayout cell = Ui.col(this);
-            cell.setGravity(Gravity.CENTER);
-            View ind = new View(this);
-            ind.setBackgroundColor(com.friendbook.core.Icons.BLUE);
-            ind.setVisibility(View.GONE);
-            cell.addView(ind, new LinearLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 3)));
-            navIndicators[i] = ind;
-
-            FrameLayout iconWrap = new FrameLayout(this);
-            android.widget.ImageView ic = com.friendbook.core.Icons.icon(
-                    this, TAB_ICON_RES[i], 24, com.friendbook.core.Icons.GRAY);
-            FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(
-                    Ui.dp(this, 24), Ui.dp(this, 24), Gravity.CENTER);
-            iconWrap.addView(ic, ip);
-            iconWrap.setMinimumHeight(Ui.dp(this, 40));
-            if (i == TAB_NOTIFS) {
-                notifBadge = Ui.badge(this);
-                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-                iconWrap.addView(notifBadge, fp);
-            }
-            if (i == TAB_FRIENDS) {
-                friendsBadge = Ui.badge(this);
-                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-                iconWrap.addView(friendsBadge, fp);
-            }
-            cell.addView(iconWrap);
-            navIcons[i] = ic;
-            cell.setOnClickListener(v -> select(tab));
-            navRow.addView(cell, new LinearLayout.LayoutParams(0, -2, 1));
-        }
-        root.addView(Ui.divider(this));
-        root.addView(navRow);
-
-        setContentView(root);
         select(TAB_HOME);
         refreshLiteUi();
 
-        // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 renders!
+        // 6. Initialize REAL Google AdMob Production SDK & Load Real Bottom Banner Ad
+        initAndLoadProductionBannerAd();
+
+        // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
             Fb.ensureMeFresh();
             Presence.init();
             startBadgeListeners();
             watchReferralsForFreeTick();
             askNotifPermission();
-            if (!FastCache.isSlow2G(MainActivity.this)) {
-                try {
-                    com.google.android.gms.ads.MobileAds.initialize(MainActivity.this, status -> { });
-                } catch (Throwable ignored) { }
-            }
-            com.friendbook.core.AdsConfig.startWatching();
+            AdsConfig.startWatching();
+            AdsConfig.preloadInterstitial(MainActivity.this);
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
@@ -185,7 +237,7 @@ public class MainActivity extends Activity {
                         .setMinimumFetchIntervalInSeconds(3600).build());
                 rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled", true));
                 rc.fetchAndActivate().addOnCompleteListener(t ->
-                        com.friendbook.core.AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
+                        AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
             } catch (Throwable ignored) { }
             return false;
         });
@@ -193,24 +245,125 @@ public class MainActivity extends Activity {
         App.instance.setShakeListener(this::feedbackDialog);
     }
 
+    private void initAndLoadProductionBannerAd() {
+        try {
+            MobileAds.initialize(this, initializationStatus -> { });
+            if (adView != null) {
+                adView.setAdListener(new AdListener() {
+                    @Override
+                    public void onAdLoaded() {
+                        if (bottomAdWrap != null) bottomAdWrap.setVisibility(View.VISIBLE);
+                    }
+
+                    @Override
+                    public void onAdFailedToLoad(@androidx.annotation.NonNull LoadAdError adError) {
+                        // Retry loading real ad after 25s if network was momentarily unavailable
+                        if (adView != null && !isFinishing()) {
+                            adView.postDelayed(() -> {
+                                if (adView != null && !isFinishing() && AdsConfig.bannersEnabled()) {
+                                    adView.loadAd(new AdRequest.Builder().build());
+                                }
+                            }, 25_000L);
+                        }
+                    }
+                });
+                AdRequest adRequest = new AdRequest.Builder().build();
+                adView.loadAd(adRequest);
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private View circleHeaderIcon(int iconRes, View.OnClickListener l) {
+        LinearLayout circle = Ui.row(this);
+        circle.setGravity(Gravity.CENTER);
+        circle.setBackground(Ui.circle(Ui.inputBg(this)));
+        circle.addView(Icons.icon(this, iconRes, 20, Ui.txt(this)));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(Ui.dp(this, 38), Ui.dp(this, 38));
+        p.leftMargin = Ui.dp(this, 8);
+        circle.setLayoutParams(p);
+        circle.setOnClickListener(l);
+        return circle;
+    }
+
+    private void onTopSlotClicked(int slot) {
+        switch (slot) {
+            case 0:
+                Ui.setBadge(homeBadge, 0);
+                select(TAB_HOME);
+                break;
+            case 1:
+                select(TAB_FRIENDS);
+                break;
+            case 2:
+                startActivity(new Intent(this, ConversationsActivity.class));
+                break;
+            case 3:
+                select(TAB_REELS);
+                break;
+            case 4:
+                select(TAB_NOTIFS);
+                break;
+            case 5:
+                CreatorDashboardDialog.show(this, null);
+                break;
+        }
+    }
+
+    /** Pro Facebook Lite '+' Universal Create Menu. */
+    private void showUniversalCreateSheet() {
+        String[] opts = {
+                "📝 Create Post — text, photos, poll, feeling or check-in",
+                "📖 Add to Story — photo or colorful Aa text story",
+                "🎬 Create Reel — short vertical video",
+                "🔴 Go Live — start live broadcast",
+                "💭 Share 24h Note — status bubble on Home",
+                "🚩 Create / Manage Pages",
+                "👨‍👩‍👧‍👦 Create / Browse Groups",
+                "✨ Feed View & Filter (Top / Recent / Favorites)"
+        };
+        Ui.choose(this, "Create & Explore", opts, which -> {
+            switch (which) {
+                case 0:
+                    startActivity(new Intent(this, CreatePostActivity.class));
+                    break;
+                case 1:
+                    startActivity(new Intent(this, AddStoryActivity.class));
+                    break;
+                case 2:
+                    startActivity(new Intent(this, AddReelActivity.class));
+                    break;
+                case 3:
+                    startActivity(new Intent(this, LiveActivity.class));
+                    break;
+                case 4:
+                    select(TAB_HOME);
+                    if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                        ((HomeFragment) tabFragments[TAB_HOME]).showEditNoteDialog();
+                    }
+                    break;
+                case 5:
+                    startActivity(new Intent(this, PagesActivity.class));
+                    break;
+                case 6:
+                    startActivity(new Intent(this, GroupsActivity.class));
+                    break;
+                case 7:
+                    select(TAB_HOME);
+                    if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                        ((HomeFragment) tabFragments[TAB_HOME]).showFeedFilterSheet();
+                    }
+                    break;
+            }
+        });
+    }
+
     public void refreshLiteUi() {
-        if (litePill != null) {
-            boolean special = Prefs.textOnlyMode(this) || Prefs.dataSaver(this) || FastCache.isSlow2G(this);
-            litePill.setText(FastCache.modeBadgeLabel(this));
-            litePill.setBackground(Ui.round(this, special ? Ui.BLUE : Ui.inputBg(this), 14));
-            litePill.setTextColor(special ? 0xFFFFFFFF : Ui.BLUE);
+        Ui.statusBarLight(this);
+        if (dataStripWrap != null) {
+            dataStripWrap.setVisibility(Prefs.dataModeBar(this) ? View.VISIBLE : View.GONE);
         }
         if (modeStrip != null) {
-            if (Prefs.textOnlyMode(this)) {
-                modeStrip.setVisibility(View.VISIBLE);
-                modeStrip.setBackgroundColor(0xFF1A2942);
-                modeStripText.setText("📵 Text-Only 2G Mode · 0 KB auto photos");
-                modeStripAction.setText("See Photos");
-                modeStripAction.setOnClickListener(v -> {
-                    Prefs.setTextOnlyMode(this, false);
-                    refreshLiteUi();
-                });
-            } else if (FastCache.isOffline(this)) {
+            if (FastCache.isOffline(this)) {
                 modeStrip.setVisibility(View.VISIBLE);
                 modeStrip.setBackgroundColor(0xFF3A3B3C);
                 modeStripText.setText("📴 Offline — viewing cached feed · auto-syncs online");
@@ -232,32 +385,6 @@ public class MainActivity extends Activity {
         if (tabFragments[TAB_HOME] instanceof HomeFragment) {
             ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
         }
-    }
-
-    private View topIcon(int iconRes, View.OnClickListener l) {
-        LinearLayout chip = com.friendbook.core.Icons.chipIcon(
-                this, iconRes, com.friendbook.core.Icons.GRAY);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36));
-        p.leftMargin = Ui.dp(this, 6);
-        chip.setLayoutParams(p);
-        chip.setOnClickListener(l);
-        return chip;
-    }
-
-    private View messengerIcon() {
-        FrameLayout wrap = new FrameLayout(this);
-        LinearLayout chip = com.friendbook.core.Icons.chipIcon(
-                this, com.friendbook.core.Icons.MESSAGES,
-                com.friendbook.core.Icons.GRAY);
-        wrap.addView(chip, new FrameLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
-        msgBadge = Ui.badge(this);
-        FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        wrap.addView(msgBadge, fp);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, -2);
-        p.leftMargin = Ui.dp(this, 6);
-        wrap.setLayoutParams(p);
-        wrap.setOnClickListener(v -> startActivity(new Intent(this, ConversationsActivity.class)));
-        return wrap;
     }
 
     /**
@@ -291,11 +418,23 @@ public class MainActivity extends Activity {
         }
         ft.commitAllowingStateLoss();
         active = tab;
-        for (int i = 0; i < 5; i++) {
-            boolean on = i == tab;
-            navIndicators[i].setVisibility(on ? View.VISIBLE : View.GONE);
-            com.friendbook.core.Icons.setTint(navIcons[i],
-                    on ? com.friendbook.core.Icons.BLUE : com.friendbook.core.Icons.GRAY);
+
+        // Map internal tab index -> 6-slot top navigation bar highlight
+        int activeSlot = -1;
+        if (tab == TAB_HOME) activeSlot = 0;
+        else if (tab == TAB_FRIENDS) activeSlot = 1;
+        else if (tab == TAB_REELS) activeSlot = 3;
+        else if (tab == TAB_NOTIFS) activeSlot = 4;
+
+        for (int s = 0; s < 6; s++) {
+            boolean on = s == activeSlot;
+            slotIndicators[s].setVisibility(on ? View.VISIBLE : View.INVISIBLE);
+            Icons.setTint(slotIcons[s], on ? Icons.BLUE : Icons.GRAY);
+        }
+        if (menuBtnCircle != null && menuBtnIcon != null) {
+            boolean onMenu = (tab == TAB_MENU);
+            menuBtnCircle.setBackground(Ui.circle(onMenu ? 0xFFE7F3FF : Ui.inputBg(this)));
+            Icons.setTint(menuBtnIcon, onMenu ? Icons.BLUE : Ui.txt(this));
         }
     }
 
@@ -388,8 +527,23 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        if (adView != null) {
+            try { adView.pause(); } catch (Throwable ignored) { }
+        }
+        super.onPause();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        if (bottomAdWrap != null) {
+            bottomAdWrap.setBackgroundColor(Ui.card(this));
+            bottomAdWrap.setVisibility(AdsConfig.bannersEnabled() ? View.VISIBLE : View.GONE);
+        }
+        if (adView != null && AdsConfig.bannersEnabled()) {
+            try { adView.resume(); } catch (Throwable ignored) { }
+        }
         refreshLiteUi();
         Fb.ensureMeFresh();
         Presence.init();
@@ -397,6 +551,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (adView != null) {
+            try { adView.destroy(); } catch (Throwable ignored) { }
+            adView = null;
+        }
         super.onDestroy();
         if (referralReg != null) referralReg.remove();
         if (notifReg != null) notifReg.remove();
