@@ -396,11 +396,12 @@ public class ConversationsActivity extends Activity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
-            Models.User u = userCache.get(r.other);
-            if (u == null) {
-                u = com.friendbook.core.FastCache.getUser(r.other);
-                if (u != null) userCache.put(r.other, u);
+            Models.User tmpU = userCache.get(r.other);
+            if (tmpU == null) {
+                tmpU = com.friendbook.core.FastCache.getUser(r.other);
+                if (tmpU != null) userCache.put(r.other, tmpU);
             }
+            final Models.User u = tmpU;
             String nick = Prefs.chatNickname(ConversationsActivity.this, r.room.id);
             h.name.setText(!nick.isEmpty() ? nick : (u != null ? u.displayName : "friendbook user"));
             Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
