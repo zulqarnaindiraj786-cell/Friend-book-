@@ -682,6 +682,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("💙 See friendship");
             pm.getMenu().add("🔗 Copy profile link");
             pm.getMenu().add("🚩 Report profile");
+            // 🛡 ADMIN: open ANY profile → grant/remove ticks, ban/unban right here
+            if (com.example.frienbook.core.Admin.isAdmin()) {
+                pm.getMenu().add("🛡 ✓ Tick level (admin)…");
+                pm.getMenu().add(user != null && user.banned
+                        ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
+            }
         } else {
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
@@ -704,6 +710,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("profile",
                         "https://friendbook.app/user/" + uid));
                 Ui.toast(this, "Profile link copied 🔗");
+            } else if (t.contains("Tick level (admin)")) {
+                Ui.choose(this, "🛡 Set tick for " + (user != null ? user.displayName : "user"),
+                        new String[]{"✓ Blue tick", "✨ Gold tick", "💎 Diamond tick", "✕ Remove tick"},
+                        w -> com.example.frienbook.core.Admin.setTickLevel(this, uid,
+                                user != null ? user.displayName : "user",
+                                w == 0 ? "blue" : w == 1 ? "gold" : w == 2 ? "diamond" : "none"));
+            } else if (t.contains("Ban user") || t.contains("Unban user")) {
+                boolean unban = t.contains("Unban");
+                String name = user != null ? user.displayName : "this user";
+                Ui.confirm(this, unban ? "✓ Unban " + name + "?" : "🚫 Ban " + name + "?",
+                        unban ? "They can use friendbook again."
+                                : "They will be signed out and blocked from using friendbook.",
+                        unban ? "Unban" : "Ban", () -> {
+                            Fb.db().collection("users").document(uid)
+                                    .set(Fb.map("banned", !unban),
+                                            com.google.firebase.firestore.SetOptions.merge())
+                                    .addOnSuccessListener(x -> {
+                                        Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");
+                                        if (!unban) com.example.frienbook.core.Notify.send(
+                                                uid, "ban", "Your account was suspended by an admin.", null);
+                                    })
+                                    .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+                        });
             } else if (t.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
                         "type", "profile", "createdAt", FieldValue.serverTimestamp()));

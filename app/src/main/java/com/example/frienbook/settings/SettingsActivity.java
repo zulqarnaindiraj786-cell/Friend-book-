@@ -133,6 +133,24 @@ public class SettingsActivity extends Activity {
         body.addView(div());
         body.addView(rowI(Icons.SNOOZE, "Snoozed people", "Who you're hiding for 30 days", this::snoozedDialog));
         body.addView(div());
+        body.addView(rowI(Icons.TRASH, "Clear recent searches", "Wipe your search history", () -> {
+            int n = com.example.frienbook.core.Prefs.searchHistory(this).size();
+            if (n == 0) { Ui.toast(this, "Search history already clean ✓"); return; }
+            Ui.confirm(this, "Clear " + n + " recent search(es)?", "", "Clear", () -> {
+                com.example.frienbook.core.Prefs.clearSearch(this);
+                Ui.toast(this, "Search history cleared 🧹");
+            });
+        }));
+        body.addView(div());
+        body.addView(rowI(Icons.IMAGE, "Clear image cache", "Free up space (photos re-download)", () -> {
+            new Thread(() -> {
+                try {
+                    com.bumptech.glide.Glide.get(this).clearDiskCache();
+                } catch (Throwable ignored) { }
+                runOnUiThread(() -> Ui.toast(this, "Image cache cleared 🧹"));
+            }).start();
+        }));
+        body.addView(div());
         body.addView(rowI(Icons.EXPORT, "Export your data", "Your profile data as text (share/save)", this::exportData));
         body.addView(div());
         body.addView(rowI(Icons.CHART, "Monetization", "In-stream ads, Stars, fan subscriptions",
