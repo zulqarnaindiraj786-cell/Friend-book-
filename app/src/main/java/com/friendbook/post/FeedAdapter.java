@@ -65,6 +65,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
+    public boolean showInlineComments = true;
 
     public FeedAdapter(Activity a, Host h) {
         this.activity = a;
@@ -482,6 +483,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         };
         vh.avatar.setOnClickListener(prof);
+        vh.avatar.setOnLongClickListener(v -> {
+            String dpUrl = pagePost ? p.pagePhoto : p.authorPhoto;
+            if (dpUrl != null && !dpUrl.isEmpty()) {
+                Intent fullDp = new Intent(c, FullscreenMediaActivity.class);
+                fullDp.putExtra("type", "image");
+                fullDp.putExtra("url", dpUrl);
+                fullDp.putExtra("title", (pagePost ? p.pageName : p.authorName) + "'s Profile Picture");
+                c.startActivity(fullDp);
+                return true;
+            }
+            return false;
+        });
         vh.name.setOnClickListener(prof);
         vh.like.setOnClickListener(v -> { Ui.haptic(v); Reactions.tapLike(c, p); });
         vh.like.setOnLongClickListener(v -> {
@@ -686,41 +699,68 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 nwp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
                 vh.mediaWrap.setLayoutParams(nwp);
                 vh.playBadge.setVisibility(View.GONE);
-                Ui.img(c, vh.image, fImg);
+                Ui.imgFeed(c, vh.image, fImg);
                 vh.image.setOnClickListener(iv -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
                     i.putExtra("type", "image");
                     i.putExtra("url", fImg);
+                    i.putExtra("post_id", p.id);
+                    i.putExtra("title", p.authorName);
                     c.startActivity(i);
                 });
             });
         } else if (fImg != null) {
             vh.image.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x99000000);
-            Ui.img(c, vh.image, fImg);
+            Ui.imgFeed(c, vh.image, fImg);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
                 vh.pageBadge.setText("📷 " + album + " photos");
             }
-            vh.image.setOnClickListener(v -> {
-                Intent i = new Intent(c, FullscreenMediaActivity.class);
-                i.putExtra("type", "image");
-                i.putExtra("url", fImg);
-                c.startActivity(i);
-            });
+            android.view.GestureDetector gd = new android.view.GestureDetector(c,
+                    new android.view.GestureDetector.SimpleOnGestureListener() {
+                        @Override public boolean onDown(android.view.MotionEvent e) { return true; }
+                        @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e) {
+                            Intent i = new Intent(c, FullscreenMediaActivity.class);
+                            i.putExtra("type", "image");
+                            i.putExtra("url", fImg);
+                            i.putExtra("post_id", p.id);
+                            i.putExtra("title", p.authorName);
+                            c.startActivity(i);
+                            return true;
+                        }
+                        @Override public boolean onDoubleTap(android.view.MotionEvent e) {
+                            if (Prefs.doubleTapToLike(c)) {
+                                Ui.haptic(vh.image);
+                                Reactions.apply(c, p, "love");
+                                Ui.toast(c, "❤️ Loved!");
+                                return true;
+                            }
+                            return false;
+                        }
+                    });
+            vh.image.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
         } else if (isVideo) {
-            // video posts: lightweight dark thumbnail box + ▶ overlay → fullscreen player on tap (0 KB auto video load!)
+            // video posts: lightweight dark thumbnail box + ▶ overlay → Reels-style player on tap!
             vh.image.setVisibility(View.VISIBLE);
             vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x99000000);
             vh.playBadge.setTextSize(15);
-            vh.playBadge.setText("▶ Tap to play video");
+            vh.playBadge.setText("▶ Tap to watch with Like · Comment · Share");
             vh.mediaWrap.setOnClickListener(v -> {
-                Intent i = new Intent(c, FullscreenMediaActivity.class);
-                i.putExtra("type", "video");
-                i.putExtra("url", p.mediaUrl);
+                Intent i = new Intent(c, com.friendbook.reels.ReelPlayerActivity.class);
+                i.putExtra("reel_id", p.id);
+                i.putExtra("is_post", true);
+                i.putExtra("video_url", p.mediaUrl);
+                i.putExtra("author_id", p.authorId);
+                i.putExtra("author_name", p.authorName);
+                i.putExtra("author_photo", p.authorPhoto);
+                i.putExtra("caption", p.content);
+                i.putExtra("likes", p.likes);
+                i.putExtra("comments", p.comments);
+                i.putExtra("shares", p.shares);
                 c.startActivity(i);
             });
         }
@@ -731,10 +771,91 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int totalLikes = com.friendbook.core.FastCache.getReactionTotal(p.id, p.likes);
         String myReact = com.friendbook.core.FastCache.getMyReaction(p.id);
         renderReactionBar(c, vh, p, myReact, totalLikes);
+        bindInlineComments(c, vh, p);
 
         if (p.id != null && !com.friendbook.core.FastCache.isOffline(c)) {
             Reactions.syncPostReactions(c, p);
         }
+    }
+
+    /**
+     * 💬 Authentic Facebook Lite Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
+     */
+    private void bindInlineComments(Context c, PostVH vh, Models.Post p) {
+        if (vh.inlineCommentsBox == null) return;
+        vh.inlineCommentsBox.removeAllViews();
+        if (!showInlineComments || !Prefs.inlineFeedComments(c)) {
+            vh.inlineCommentsBox.setVisibility(View.GONE);
+            return;
+        }
+        vh.inlineCommentsBox.setVisibility(View.VISIBLE);
+        vh.inlineCommentsBox.addView(Ui.divider(c));
+
+        List<Models.Comment> list = p.inlineComments != null ? p.inlineComments : new ArrayList<>();
+        int total = Math.max(p.comments, list.size());
+
+        // Show "View all X comments" link when more than 2 comments exist or comments need full open
+        if (total > 2 || (total > 0 && list.isEmpty())) {
+            TextView viewAll = Ui.tvBold(c, "View all " + total + (total == 1 ? " comment…" : " comments…"), 13, Ui.sub(c));
+            Ui.pad(viewAll, 12, 8, 12, 4);
+            viewAll.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+            vh.inlineCommentsBox.addView(viewAll);
+        }
+
+        // Show up to the latest 2 comments from ALL users directly on the feed card!
+        int startIdx = Math.max(0, list.size() - 2);
+        for (int i = startIdx; i < list.size(); i++) {
+            final Models.Comment cm = list.get(i);
+            if (cm == null) continue;
+            LinearLayout row = Ui.row(c);
+            row.setGravity(Gravity.TOP);
+            Ui.pad(row, 12, 5, 12, 4);
+
+            ImageView av = new ImageView(c);
+            int s = Ui.dp(c, 28);
+            row.addView(av, new LinearLayout.LayoutParams(s, s));
+            Models.User cachedU = com.friendbook.core.FastCache.getUser(cm.authorId);
+            String uPhoto = (cachedU != null && cachedU.photoUrl != null && !cachedU.photoUrl.isEmpty())
+                    ? cachedU.photoUrl : cm.authorPhoto;
+            String uName = (cachedU != null && cachedU.displayName != null && !cachedU.displayName.isEmpty())
+                    ? cachedU.displayName : (cm.authorName == null || cm.authorName.isEmpty() ? "friendbook User" : cm.authorName);
+            Ui.avatar(c, av, uPhoto);
+            av.setOnClickListener(v -> { if (host != null) host.openProfile(cm.authorId); });
+
+            LinearLayout bubble = Ui.col(c);
+            bubble.setBackground(Ui.round(c, Ui.inputBg(c), 14));
+            Ui.pad(bubble, 10, 6, 10, 6);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
+            bp.leftMargin = Ui.dp(c, 8);
+
+            TextView authorT = Ui.tvBold(c, (cm.pinned ? "📌 " : "") + uName, 12.5f, Ui.txt(c));
+            bubble.addView(authorT);
+            String bodyTxt = cm.content != null && !cm.content.isEmpty()
+                    ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
+            TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
+            bodyT.setMaxLines(3);
+            bubble.addView(bodyT);
+            bubble.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+            row.addView(bubble, bp);
+            vh.inlineCommentsBox.addView(row);
+        }
+
+        // Quick "Write a comment…" pill right below every post (Facebook Lite signature!)
+        LinearLayout quickRow = Ui.row(c);
+        quickRow.setGravity(Gravity.CENTER_VERTICAL);
+        Ui.pad(quickRow, 12, 6, 12, 9);
+        ImageView myAv = new ImageView(c);
+        int ms = Ui.dp(c, 26);
+        quickRow.addView(myAv, new LinearLayout.LayoutParams(ms, ms));
+        Ui.avatar(c, myAv, Fb.myPhoto());
+        TextView hintPill = Ui.tv(c, "Write a comment…", 13, Ui.sub(c));
+        hintPill.setBackground(Ui.round(c, Ui.inputBg(c), 18));
+        Ui.pad(hintPill, 12, 6, 12, 6);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(0, -2, 1);
+        hlp.leftMargin = Ui.dp(c, 8);
+        quickRow.addView(hintPill, hlp);
+        quickRow.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+        vh.inlineCommentsBox.addView(quickRow);
     }
 
     private void renderReactionBar(Context c, PostVH vh, Models.Post p, String mine, int total) {
@@ -911,12 +1032,39 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         menu.getMenu().add("🔗 Copy link");
         menu.getMenu().add("📤 Share to other apps");
         menu.getMenu().add("👍 See who reacted");
+        menu.getMenu().add("📊 View post insights");
+        if (p.authorPhoto != null && !p.authorPhoto.isEmpty()) {
+            menu.getMenu().add("👁 View full profile picture");
+        }
         menu.getMenu().add("📖 Add to your story");
         if (!mine) menu.getMenu().add("❓ Why am I seeing this?");
         if (!mine) menu.getMenu().add("🚩 Report post");
         menu.setOnMenuItemClickListener(item -> {
             String t = item.getTitle().toString();
             if (t.contains("See who reacted")) Reactions.showWhoReacted(activity, p.id);
+            else if (t.contains("View post insights")) {
+                int rxCount = com.friendbook.core.FastCache.getReactionTotal(p.id, p.likes);
+                int cmCount = Math.max(p.comments, p.inlineComments != null ? p.inlineComments.size() : 0);
+                int reach = Math.max(12, rxCount * 11 + cmCount * 14 + p.shares * 22 + 18);
+                new android.app.AlertDialog.Builder(c)
+                        .setTitle("📊 Post Insights")
+                        .setMessage("👁 Estimated Reach: " + Format.count(reach) + " people\n\n"
+                                + "👍 Total Reactions: " + rxCount + "\n"
+                                + "💬 Total Comments: " + cmCount + "\n"
+                                + "↗ Total Shares: " + p.shares + "\n"
+                                + "🔖 Total Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
+                        .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
+                        .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
+                        .setNegativeButton("Close", null)
+                        .show();
+            }
+            else if (t.contains("View full profile picture")) {
+                Intent fullDp = new Intent(c, FullscreenMediaActivity.class);
+                fullDp.putExtra("type", "image");
+                fullDp.putExtra("url", p.authorPhoto);
+                fullDp.putExtra("title", p.authorName + "'s Profile Picture");
+                c.startActivity(fullDp);
+            }
             else if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("notifications for this post")) {
                 if (Fb.uid() != null) {
@@ -1376,7 +1524,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         TextView name, meta, more, closeBtn, content, like, comment, share;
         TextView boostTag, tagSummary, commentsSummary;
         TextView sharedName, sharedContent, playBadge, pageBadge;
-        LinearLayout specialBox, sharedBox, pollBox, summaryRow;
+        LinearLayout specialBox, sharedBox, pollBox, summaryRow, inlineCommentsBox;
         FrameLayout mediaWrap;
         ListenerRegistration reactReg;
 
@@ -1457,8 +1605,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, -2));
             image = new ImageView(c);
             image.setAdjustViewBounds(true);
-            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            image.setMaxHeight(Ui.dp(c, 460));
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setMaxHeight(Ui.dp(c, 680));
             mediaWrap.addView(image, new FrameLayout.LayoutParams(-1, -2));
             playBadge = Ui.tv(c, "▶", 44, 0xEEFFFFFF);
             playBadge.setGravity(Gravity.CENTER);
@@ -1503,6 +1651,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             actions.addView(comment, a2);
             actions.addView(share, a3);
             card.addView(actions);
+
+            // ---- Inline Multi-User Comments Preview + Quick Comment Bar (Facebook Lite Pro!) ----
+            inlineCommentsBox = Ui.col(c);
+            inlineCommentsBox.setBackgroundColor(Ui.card(c));
+            inlineCommentsBox.setVisibility(View.GONE);
+            card.addView(inlineCommentsBox, new LinearLayout.LayoutParams(-1, -2));
 
             // FB-Lite gap between posts
             View gap = new View(c);

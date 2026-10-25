@@ -168,11 +168,17 @@ public class Reactions {
 
         if (nextType == null) {
             reactRef.delete().addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
-            if (delta != 0) {
-                Map<String, Object> up = new HashMap<>();
-                up.put("likes", FieldValue.increment(delta));
-                postRef.set(up, SetOptions.merge());
-            }
+            Map<String, Object> dot = new HashMap<>();
+            dot.put("reactionsMap." + me, FieldValue.delete());
+            if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+            postRef.update(dot).addOnFailureListener(err -> {
+                if (delta != 0) {
+                    Map<String, Object> up = new HashMap<>();
+                    up.put("likes", FieldValue.increment(delta));
+                    postRef.set(up, SetOptions.merge());
+                }
+            });
+            if (post.reactionsMap != null) post.reactionsMap.remove(me);
         } else {
             Map<String, Object> data = new HashMap<>();
             data.put("userId", me);
@@ -182,11 +188,21 @@ public class Reactions {
             data.put("type", nextType);
             data.put("createdAt", System.currentTimeMillis());
             reactRef.set(data).addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
-            if (delta != 0) {
-                Map<String, Object> up = new HashMap<>();
-                up.put("likes", FieldValue.increment(delta));
-                postRef.set(up, SetOptions.merge());
-            }
+
+            Map<String, Object> dot = new HashMap<>();
+            dot.put("reactionsMap." + me, data);
+            if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+            postRef.update(dot).addOnFailureListener(err -> {
+                Map<String, Object> nested = new HashMap<>();
+                Map<String, Object> rmap = new HashMap<>();
+                rmap.put(me, data);
+                nested.put("reactionsMap", rmap);
+                if (delta != 0) nested.put("likes", FieldValue.increment(delta));
+                postRef.set(nested, SetOptions.merge());
+            });
+            if (post.reactionsMap == null) post.reactionsMap = new HashMap<>();
+            post.reactionsMap.put(me, data);
+
             if (delta > 0 && post.authorId != null && !me.equals(post.authorId)) {
                 Notify.send(post.authorId, "like",
                         Fb.myName() + " reacted " + emojiFor(nextType) + " to your post",
@@ -197,11 +213,26 @@ public class Reactions {
 
     /**
      * Syncs BOTH the current user's reaction AND the exact reaction count + top emoji stack
-     * from posts/{postId}/reactions, healing posts/{postId}.likes if out-of-sync!
+     * from post.reactionsMap + posts/{postId}/reactions, healing posts/{postId}.likes if out-of-sync!
      */
     public static void syncPostReactions(final Context c, final Models.Post post) {
         if (post == null || post.id == null) return;
         final String postId = post.id;
+        // 0ms immediate hydrate from embedded post.reactionsMap (multi-user guaranteed!)
+        if (post.reactionsMap != null && !post.reactionsMap.isEmpty()) {
+            String me = Fb.uid();
+            String myType = null;
+            StringBuilder em = new StringBuilder();
+            for (Map.Entry<String, Map<String, Object>> e : post.reactionsMap.entrySet()) {
+                String t = Format.strOr(e.getValue(), "type", "like");
+                String emoji = emojiFor(t);
+                if (em.indexOf(emoji) < 0 && em.length() < 6) em.append(emoji);
+                if (me != null && me.equals(e.getKey())) myType = t;
+            }
+            if (em.length() > 0) FastCache.setReactionEmojis(postId, em.toString());
+            int count = Math.max(post.likes, post.reactionsMap.size());
+            FastCache.setReactionState(c, postId, myType, count, false);
+        }
         if (FastCache.isReactionSynced(postId)) return;
         FastCache.markReactionSynced(postId);
         reconcileFromCollection(c, postId, post.likes);
@@ -297,15 +328,45 @@ public class Reactions {
                 .create();
         dlg.show();
 
+        final Map<String, ReactorEntry> byUid = new LinkedHashMap<>();
+        final Runnable renderMerged = () -> {
+            if (activity.isFinishing()) return;
+            List<ReactorEntry> all = new ArrayList<>(byUid.values());
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            for (String t : TYPES) counts.put(t, 0);
+            for (ReactorEntry r : all) {
+                counts.put(r.type, (counts.get(r.type) == null ? 0 : counts.get(r.type)) + 1);
+            }
+            Collections.sort(all, (a, b) -> Long.compare(b.createdAt, a.createdAt));
+            titleTv.setText("People who reacted · " + all.size());
+            renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all");
+        };
+
+        // 1) Read from posts/{postId}.reactionsMap (100% readable across all users!)
+        Fb.db().collection("posts").document(postId).get()
+                .addOnSuccessListener(doc -> {
+                    if (doc != null && doc.exists()) {
+                        Models.Post p = Models.Post.fromDoc(doc);
+                        for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {
+                            Map<String, Object> m = e.getValue();
+                            ReactorEntry r = new ReactorEntry();
+                            r.uid = e.getKey();
+                            r.name = Format.str(m, "userName");
+                            r.photo = Format.str(m, "userPhoto");
+                            r.tickLevel = Format.str(m, "userTickLevel");
+                            r.type = Format.strOr(m, "type", "like");
+                            r.createdAt = Format.ts(m.get("createdAt"));
+                            byUid.put(r.uid, r);
+                        }
+                        renderMerged.run();
+                    }
+                });
+
+        // 2) Also merge from posts/{postId}/reactions subcollection
         Fb.db().collection("posts").document(postId).collection("reactions")
                 .limit(200)
                 .get()
                 .addOnSuccessListener(snap -> {
-                    if (activity.isFinishing()) return;
-                    final List<ReactorEntry> all = new ArrayList<>();
-                    final Map<String, Integer> counts = new LinkedHashMap<>();
-                    for (String t : TYPES) counts.put(t, 0);
-
                     if (snap != null) {
                         for (DocumentSnapshot d : snap.getDocuments()) {
                             ReactorEntry r = new ReactorEntry();
@@ -316,21 +377,73 @@ public class Reactions {
                             r.tickLevel = Format.str(d.getData(), "userTickLevel");
                             r.type = Format.strOr(d.getData(), "type", "like");
                             r.createdAt = Format.ts(d.get("createdAt"));
-                            all.add(r);
-                            counts.put(r.type, (counts.get(r.type) == null ? 0 : counts.get(r.type)) + 1);
+                            byUid.put(r.uid, r);
                         }
                     }
-                    Collections.sort(all, (a, b) -> Long.compare(b.createdAt, a.createdAt));
-                    titleTv.setText("People who reacted · " + all.size());
-                    renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all");
+                    renderMerged.run();
                 })
                 .addOnFailureListener(e -> {
-                    if (activity.isFinishing()) return;
-                    listCol.removeAllViews();
-                    TextView err = Ui.tv(activity, "Could not load reactions: " + e.getMessage(), 13, Ui.sub(activity));
-                    Ui.pad(err, 8, 16, 8, 16);
-                    listCol.addView(err);
+                    if (!byUid.isEmpty()) renderMerged.run();
                 });
+    }
+
+    /**
+     * 👥 Facebook Lite Pro "People who reacted to Reel" Viewer!
+     */
+    public static void showReelReactors(final Activity activity, final Models.Reel reel) {
+        if (activity == null || activity.isFinishing() || reel == null) return;
+        final List<ReactorEntry> all = new ArrayList<>();
+        final Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String t : TYPES) counts.put(t, 0);
+
+        Map<String, String> reacts = new LinkedHashMap<>();
+        if (reel.reactions != null) reacts.putAll(reel.reactions);
+        if (reel.likedBy != null) {
+            for (String u : reel.likedBy) {
+                if (u != null && !u.isEmpty() && !reacts.containsKey(u)) reacts.put(u, "love");
+            }
+        }
+        for (Map.Entry<String, String> e : reacts.entrySet()) {
+            ReactorEntry r = new ReactorEntry();
+            r.uid = e.getKey();
+            r.type = (e.getValue() == null || e.getValue().isEmpty()) ? "love" : e.getValue();
+            Models.User cached = FastCache.getUser(r.uid);
+            if (cached != null) {
+                r.name = cached.displayName;
+                r.photo = cached.photoUrl;
+                r.tickLevel = cached.tickLevel;
+            }
+            all.add(r);
+            counts.put(r.type, (counts.get(r.type) == null ? 0 : counts.get(r.type)) + 1);
+        }
+
+        LinearLayout root = Ui.col(activity);
+        root.setBackgroundColor(Ui.card(activity));
+        Ui.pad(root, 14, 12, 14, 8);
+        TextView titleTv = Ui.tvBold(activity, "Reel reactions · " + Math.max(all.size(), reel.likes), 17, Ui.txt(activity));
+        root.addView(titleTv);
+
+        HorizontalScrollView filterScroll = new HorizontalScrollView(activity);
+        filterScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout filterRow = Ui.row(activity);
+        Ui.pad(filterRow, 0, 10, 0, 8);
+        filterScroll.addView(filterRow);
+        root.addView(filterScroll);
+        root.addView(Ui.divider(activity));
+
+        ScrollView sv = new ScrollView(activity);
+        LinearLayout listCol = Ui.col(activity);
+        Ui.pad(listCol, 0, 6, 0, 10);
+        sv.addView(listCol);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, Ui.dp(activity, 320)));
+
+        final AlertDialog dlg = new AlertDialog.Builder(activity)
+                .setView(root)
+                .setNegativeButton("Close", null)
+                .create();
+        dlg.show();
+
+        renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all");
     }
 
     /**

@@ -68,6 +68,8 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     /** Collection holding the parent counter ("posts" or "reels"), and its document id. */
     public String counterCollection = "posts";
     public String counterId;
+    public String postAuthorId = "";
+    public String pinnedCommentId = "";
     /** Sort mode: "all" | "newest" | "relevant" */
     public String sortMode = "all";
 
@@ -117,9 +119,13 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
 
         if ("newest".equals(sortMode)) {
-            Collections.sort(roots, (a, b) -> Long.compare(b.createdAt, a.createdAt));
+            Collections.sort(roots, (a, b) -> {
+                if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+                return Long.compare(b.createdAt, a.createdAt);
+            });
         } else if ("relevant".equals(sortMode)) {
             Collections.sort(roots, (a, b) -> {
+                if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
                 int aReplies = byParent.containsKey(a.id) ? byParent.get(a.id).size() : 0;
                 int bReplies = byParent.containsKey(b.id) ? byParent.get(b.id).size() : 0;
                 int aScore = Math.max(a.likes, a.reactions != null ? a.reactions.size() : 0) * 3 + aReplies * 2;
@@ -128,8 +134,11 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 return Long.compare(b.createdAt, a.createdAt);
             });
         } else {
-            // "all" -> chronological order so all comments & threads read naturally
-            Collections.sort(roots, (a, b) -> Long.compare(a.createdAt, b.createdAt));
+            // "all" -> pinned first, then chronological order so ALL users' comments & threads read naturally
+            Collections.sort(roots, (a, b) -> {
+                if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+                return Long.compare(a.createdAt, b.createdAt);
+            });
         }
 
         Set<String> visited = new HashSet<>();
@@ -292,8 +301,25 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         avLp.height = Ui.dp(activity, avDp);
         h.av.setLayoutParams(avLp);
 
-        Ui.avatar(activity, h.av, c.authorPhoto);
-        h.author.setText(c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
+        Models.User liveUser = com.friendbook.core.FastCache.getUser(c.authorId);
+        String dispName = (liveUser != null && liveUser.displayName != null && !liveUser.displayName.isEmpty())
+                ? liveUser.displayName
+                : (c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
+        String dispPhoto = (liveUser != null && liveUser.photoUrl != null && !liveUser.photoUrl.isEmpty())
+                ? liveUser.photoUrl : c.authorPhoto;
+        if (liveUser == null && c.authorId != null && !c.authorId.isEmpty()) {
+            Fb.db().collection("users").document(c.authorId).get()
+                    .addOnSuccessListener(doc -> {
+                        if (doc != null && doc.exists()) {
+                            com.friendbook.models.Models.User u = com.friendbook.models.Models.User.fromDoc(doc);
+                            com.friendbook.core.FastCache.putUser(u);
+                            notifyDataSetChanged();
+                        }
+                    });
+        }
+
+        Ui.avatar(activity, h.av, dispPhoto);
+        h.author.setText((c.pinned ? "📌 " : "") + dispName);
         TickCache.attach(h.tick, c.authorId);
 
         boolean hasText = c.content != null && !c.content.isEmpty();
@@ -303,16 +329,19 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         boolean hasMedia = c.imageUrl != null && !c.imageUrl.isEmpty();
         h.media.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
         if (hasMedia) {
-            Ui.img(activity, h.media, c.imageUrl);
+            Ui.imgFeed(activity, h.media, c.imageUrl);
             h.media.setOnClickListener(v -> {
                 android.content.Intent in = new android.content.Intent(activity, FullscreenMediaActivity.class);
                 in.putExtra("type", "image");
                 in.putExtra("url", c.imageUrl);
+                in.putExtra("title", dispName + "'s comment photo");
                 activity.startActivity(in);
             });
         }
 
-        h.time.setText(Format.ago(c.createdAt) + (c.edited ? " · edited" : ""));
+        h.time.setText(Format.ago(c.createdAt)
+                + (c.edited ? " · edited" : "")
+                + (c.pinned ? " · Pinned" : ""));
 
         String me = Fb.uid();
         String myReact = (me != null && c.reactions != null) ? c.reactions.get(me) : null;
@@ -344,9 +373,21 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             h.likesCount.setOnClickListener(null);
         }
 
-        View.OnClickListener prof = v -> host.openProfile(c.authorId);
-        h.av.setOnClickListener(prof);
-        h.author.setOnClickListener(prof);
+        final String finalDispPhoto = dispPhoto;
+        final String finalDispName = dispName;
+        h.av.setOnClickListener(v -> host.openProfile(c.authorId));
+        h.av.setOnLongClickListener(v -> {
+            if (finalDispPhoto != null && !finalDispPhoto.isEmpty()) {
+                android.content.Intent in = new android.content.Intent(activity, FullscreenMediaActivity.class);
+                in.putExtra("type", "image");
+                in.putExtra("url", finalDispPhoto);
+                in.putExtra("title", finalDispName + "'s Profile Picture");
+                activity.startActivity(in);
+                return true;
+            }
+            return false;
+        });
+        h.author.setOnClickListener(v -> host.openProfile(c.authorId));
 
         h.like.setOnClickListener(v -> {
             Ui.haptic(v);
@@ -360,30 +401,62 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         h.reply.setOnClickListener(v -> host.onReply(c));
 
         boolean mineOrAdmin = (me != null && me.equals(c.authorId)) || Admin.isAdmin();
+        boolean isPostOwner = (me != null && me.equals(postAuthorId)) || Admin.isAdmin();
         h.more.setVisibility(View.VISIBLE);
         h.more.setOnClickListener(v -> {
             PopupMenu m = new PopupMenu(activity, v);
-            if (hasText) m.getMenu().add(0, 3, 0, "📋 Copy comment");
+            if (isPostOwner && r.depth == 0) {
+                m.getMenu().add(0, 6, 0, c.pinned ? "📌 Unpin comment" : "📌 Pin comment to top");
+            }
+            if (hasText) {
+                m.getMenu().add(0, 3, 0, "📋 Copy comment");
+                m.getMenu().add(0, 7, 0, "🌐 Translate comment");
+            }
+            if (finalDispPhoto != null && !finalDispPhoto.isEmpty()) {
+                m.getMenu().add(0, 8, 0, "👁 View full profile picture");
+            }
             if (totalLikes > 0) m.getMenu().add(0, 5, 0, "👍 See who reacted");
             if (me != null && me.equals(c.authorId)) m.getMenu().add(0, 1, 0, "✏️ Edit");
-            if (mineOrAdmin) {
+            if (mineOrAdmin || isPostOwner) {
                 m.getMenu().add(0, 2, 0, (Admin.isAdmin() && (me == null || !me.equals(c.authorId)))
                         ? "🛡 Admin delete" : "🗑 Delete");
             }
             if (!mineOrAdmin) m.getMenu().add(0, 4, 0, "🚩 Report comment");
             m.setOnMenuItemClickListener(it -> {
-                if (it.getItemId() == 3) Ui.copy(activity, c.content);
-                else if (it.getItemId() == 5) Reactions.showCommentReactors(activity, c);
-                else if (it.getItemId() == 1) editDialog(c);
-                else if (it.getItemId() == 2) delete(c);
-                else if (it.getItemId() == 4) Ui.toast(activity, "Comment reported to moderators ✓");
+                if (it.getItemId() == 6) {
+                    boolean nextPin = !c.pinned;
+                    c.pinned = nextPin;
+                    pinnedCommentId = nextPin ? c.id : "";
+                    CommentsEngine.pinComment(counterCollection, counterId, c.id, nextPin);
+                    notifyDataSetChanged();
+                    Ui.toast(activity, nextPin ? "Comment pinned to top 📌" : "Comment unpinned");
+                } else if (it.getItemId() == 3) {
+                    Ui.copy(activity, c.content);
+                } else if (it.getItemId() == 7) {
+                    String q = android.net.Uri.encode(c.content);
+                    Ui.openUrl(activity, "https://translate.google.com/?sl=auto&tl=en&text=" + q + "&op=translate");
+                } else if (it.getItemId() == 8) {
+                    android.content.Intent in = new android.content.Intent(activity, FullscreenMediaActivity.class);
+                    in.putExtra("type", "image");
+                    in.putExtra("url", finalDispPhoto);
+                    in.putExtra("title", finalDispName + "'s Profile Picture");
+                    activity.startActivity(in);
+                } else if (it.getItemId() == 5) {
+                    Reactions.showCommentReactors(activity, c);
+                } else if (it.getItemId() == 1) {
+                    editDialog(c);
+                } else if (it.getItemId() == 2) {
+                    delete(c);
+                } else if (it.getItemId() == 4) {
+                    Ui.toast(activity, "Comment reported to moderators ✓");
+                }
                 return true;
             });
             m.show();
         });
     }
 
-    /** 0ms optimistic reaction update + Firestore write for comments. */
+    /** 0ms optimistic reaction update + multi-user Firestore sync via CommentsEngine! */
     private void toggleCommentReaction(Models.Comment c, String type) {
         String me = Fb.uid();
         if (me == null || c == null || c.id == null) return;
@@ -405,11 +478,8 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         c.likes = Math.max(nextMap.size(), Math.max(0, c.likes + delta));
         notifyDataSetChanged(); // Instant 0ms UI update!
 
-        DocumentReference ref = Fb.db().collection("comments").document(c.id);
-        Map<String, Object> up = new HashMap<>();
-        up.put("reactions", nextMap);
-        up.put("likes", c.likes);
-        ref.set(up, SetOptions.merge());
+        String cid = counterId != null ? counterId : c.postId;
+        CommentsEngine.updateCommentReaction(counterCollection, cid, c);
     }
 
     private void editDialog(Models.Comment c) {
@@ -427,8 +497,8 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                     c.content = nv;
                     c.edited = true;
                     notifyDataSetChanged();
-                    Fb.db().collection("comments").document(c.id)
-                            .update("content", nv, "text", nv, "edited", true);
+                    String cid = counterId != null ? counterId : c.postId;
+                    CommentsEngine.editComment(counterCollection, cid, c, nv);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -436,13 +506,10 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     private void delete(Models.Comment c) {
         Ui.confirm(activity, "Delete comment?", "This cannot be undone.", "Delete", () -> {
-            Fb.db().collection("comments").document(c.id).delete();
             String cid = counterId != null ? counterId : c.postId;
-            if (cid != null) {
-                Map<String, Object> dec = new HashMap<>();
-                dec.put("comments", FieldValue.increment(-1));
-                Fb.db().collection(counterCollection).document(cid).set(dec, SetOptions.merge());
-            }
+            rows.removeIf(rw -> rw.c != null && c.id != null && c.id.equals(rw.c.id));
+            notifyDataSetChanged();
+            CommentsEngine.deleteComment(counterCollection, cid, c);
         });
     }
 

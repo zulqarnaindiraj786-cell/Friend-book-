@@ -190,15 +190,28 @@ public class Ui {
         }
         String transform;
         if (avatar) {
-            transform = "w_96,h_96,c_fill,f_webp,q_auto:low/";
+            // Face-aware crisp WebP avatar so heads/faces are never chopped or blurry!
+            transform = "w_240,h_240,c_fill,g_auto,f_webp,q_auto:good/";
         } else if (FastCache.isSlow2G(c) || Prefs.photoQuality(c) == 0) {
-            transform = "w_340,c_limit,f_webp,q_auto:low/";
+            transform = "w_480,c_limit,f_webp,q_auto:eco/";
         } else if (Prefs.photoQuality(c) == 1 || Prefs.turbo2g(c)) {
-            transform = "w_620,c_limit,f_webp,q_auto:eco/";
+            transform = "w_780,c_limit,f_webp,q_auto:good/";
         } else {
-            transform = "w_1080,c_limit,f_webp,q_auto:good/";
+            transform = "w_1200,c_limit,f_webp,q_auto:best/";
         }
         return url.substring(0, idx + "/image/upload/".length()) + transform + after;
+    }
+
+    /** Returns full-resolution HD uncropped URL for Full-Screen DP & Photo Viewer. */
+    public static String hdImageUrl(String url) {
+        if (url == null || url.isEmpty()) return url;
+        int idx = url.indexOf("/image/upload/");
+        if (idx < 0) return url;
+        String after = url.substring(idx + "/image/upload/".length());
+        if (after.startsWith("w_") || after.startsWith("f_") || after.startsWith("q_") || after.startsWith("c_")) {
+            return url;
+        }
+        return url.substring(0, idx + "/image/upload/".length()) + "w_1600,c_limit,f_webp,q_auto:best/" + after;
     }
 
     public static void avatar(Context c, ImageView iv, String url) {
@@ -210,38 +223,53 @@ public class Ui {
         String fastUrl = optimizeImageUrl(c, url, true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .circleCrop()
-                .override(96, 96)
+                .override(240, 240)
                 .dontAnimate()
-                .format(DecodeFormat.PREFER_RGB_565)
                 .placeholder(ph).error(ph)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .into(iv);
     }
 
-    public static void img(Context c, ImageView iv, String url) {
+    /** High-definition large circular DP for Profile hero header (never blurry!). */
+    public static void avatarLarge(Context c, ImageView iv, String url) {
+        Drawable ph = circle(inputBg(c));
+        if (url == null || url.isEmpty()) {
+            iv.setImageDrawable(ph);
+            return;
+        }
+        String hdUrl = url;
+        int idx = url.indexOf("/image/upload/");
+        if (idx >= 0) {
+            String after = url.substring(idx + "/image/upload/".length());
+            if (!after.startsWith("w_") && !after.startsWith("f_") && !after.startsWith("q_") && !after.startsWith("c_")) {
+                hdUrl = url.substring(0, idx + "/image/upload/".length()) + "w_512,h_512,c_fill,g_auto,f_webp,q_auto:best/" + after;
+            }
+        }
+        Glide.with(c.getApplicationContext()).load(hdUrl)
+                .circleCrop()
+                .override(512, 512)
+                .dontAnimate()
+                .placeholder(ph).error(ph)
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .into(iv);
+    }
+
+    /**
+     * Full-aspect-ratio Feed & DP Post Photo loader (Facebook Lite style):
+     * Preserves 100% of vertical/portrait/landscape photos from head to toe without square-chopping!
+     */
+    public static void imgFeed(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        boolean slow = FastCache.isSlow2G(c);
-        int q = slow ? 0 : Prefs.photoQuality(c);
         String fastUrl = optimizeImageUrl(c, url, false);
-        if (q == 0) {
-            Prefs.recordBytes(c, 15_000L, 185_000L);
+        Prefs.recordBytes(c, 38_000L, 162_000L);
+        if (Prefs.fullPhotoDisplay(c)) {
             Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(360, 360).centerCrop()
+                    .fitCenter()
                     .dontAnimate()
-                    .format(DecodeFormat.PREFER_RGB_565)
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
-        } else if (q == 1 || Prefs.turbo2g(c)) {
-            Prefs.recordBytes(c, 36_000L, 164_000L);
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(640, 640).centerCrop()
-                    .dontAnimate()
-                    .format(DecodeFormat.PREFER_RGB_565)
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
                     .placeholder(ph).error(ph).into(iv);
         } else {
-            Prefs.recordBytes(c, 95_000L, 105_000L);
             Glide.with(c.getApplicationContext()).load(fastUrl)
                     .centerCrop()
                     .dontAnimate()
@@ -250,12 +278,24 @@ public class Ui {
         }
     }
 
-    public static void imgFit(Context c, ImageView iv, String url) {
+    public static void img(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
         String fastUrl = optimizeImageUrl(c, url, false);
-        Prefs.recordBytes(c, 45_000L, 135_000L);
+        Prefs.recordBytes(c, 36_000L, 164_000L);
         Glide.with(c.getApplicationContext()).load(fastUrl)
+                .centerCrop()
+                .dontAnimate()
+                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(ph).error(ph).into(iv);
+    }
+
+    public static void imgFit(Context c, ImageView iv, String url) {
+        Drawable ph = round(c, inputBg(c), 0);
+        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
+        String hdUrl = hdImageUrl(url);
+        Prefs.recordBytes(c, 55_000L, 125_000L);
+        Glide.with(c.getApplicationContext()).load(hdUrl)
                 .fitCenter()
                 .dontAnimate()
                 .diskCacheStrategy(DiskCacheStrategy.ALL)

@@ -60,6 +60,8 @@
             android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.friendbook.reels.ReelCommentsActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.friendbook.reels.ReelPlayerActivity" android:screenOrientation="portrait"
+            android:theme="@style/BlackTheme" />
 
         <activity android:name="com.friendbook.friends.SearchActivity" android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />

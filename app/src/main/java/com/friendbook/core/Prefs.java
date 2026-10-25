@@ -524,4 +524,25 @@ public class Prefs {
                 .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + Math.max(0L, saved))
                 .apply();
     }
+
+    // ---- 🚀 Facebook Lite Pro Extra Settings ----
+    /** Show inline multi-user comments preview + quick comment pill directly on Home Feed cards. */
+    public static boolean inlineFeedComments(Context c) { return p(c).getBoolean("inlineFeedComments", true); }
+    public static void setInlineFeedComments(Context c, boolean v) { p(c).edit().putBoolean("inlineFeedComments", v).apply(); }
+
+    /** Show full uncropped HD profile pictures & full portrait photos in feed. */
+    public static boolean fullPhotoDisplay(Context c) { return p(c).getBoolean("fullPhotoDisplay", true); }
+    public static void setFullPhotoDisplay(Context c, boolean v) { p(c).edit().putBoolean("fullPhotoDisplay", v).apply(); }
+
+    /** Automatically ask/share new Profile Picture updates to News Feed like Facebook Lite. */
+    public static boolean shareDpToFeed(Context c) { return p(c).getBoolean("shareDpToFeed", true); }
+    public static void setShareDpToFeed(Context c, boolean v) { p(c).edit().putBoolean("shareDpToFeed", v).apply(); }
+
+    /** Double-tap on post photos & reels to send instant ❤️ Love/Like reaction. */
+    public static boolean doubleTapToLike(Context c) { return p(c).getBoolean("doubleTapToLike", true); }
+    public static void setDoubleTapToLike(Context c, boolean v) { p(c).edit().putBoolean("doubleTapToLike", v).apply(); }
+
+    /** Start Reels with audio ON by default. */
+    public static boolean reelsStartWithSound(Context c) { return p(c).getBoolean("reelsSoundDefault", true); }
+    public static void setReelsStartWithSound(Context c, boolean v) { p(c).edit().putBoolean("reelsSoundDefault", v).apply(); }
 }

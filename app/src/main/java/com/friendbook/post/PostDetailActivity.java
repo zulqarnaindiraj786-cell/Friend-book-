@@ -51,7 +51,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private FeedAdapter postAdapter;
     private CommentsAdapter commentsAdapter;
     private RecyclerView mainRv;
-    private ListenerRegistration postReg, commentsReg;
+    private ListenerRegistration postReg;
+    private CommentsEngine.Handle commentsHandle;
     private EditText input;
     private TextView sendBtn, replyChip, sortLabel, whoReactedChip;
     private ImageView mediaThumb;
@@ -100,6 +101,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postAdapter = new FeedAdapter(this, this);
         postAdapter.showHeader = false;
         postAdapter.showFooter = false;
+        postAdapter.showInlineComments = false; // Full comment thread is rendered directly below!
         postRv.setAdapter(postAdapter);
         headerBox.addView(postRv, new LinearLayout.LayoutParams(-1, -2));
 
@@ -108,6 +110,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             if (cached != null && postId.equals(cached.id)) {
                 post = cached;
                 postAdapter.setPosts(Collections.singletonList(post));
+                if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
+                    rawComments.addAll(post.inlineComments);
+                }
                 break;
             }
         }
@@ -144,8 +149,13 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         commentsAdapter = new CommentsAdapter(this, this);
         commentsAdapter.counterCollection = "posts";
         commentsAdapter.counterId = postId;
+        commentsAdapter.postAuthorId = post != null ? post.authorId : "";
         commentsAdapter.sortMode = Prefs.commentSort(this);
         commentsAdapter.setHeaderView(headerBox);
+        if (!rawComments.isEmpty()) {
+            sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
+            commentsAdapter.setAll(rawComments);
+        }
         mainRv.setAdapter(commentsAdapter);
         root.addView(mainRv, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -269,40 +279,32 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
             if (d == null || !d.exists()) { finish(); return; }
             post = Models.Post.fromDoc(d);
+            commentsAdapter.postAuthorId = post.authorId;
+            commentsAdapter.pinnedCommentId = post.pinnedCommentId;
             postAdapter.setPosts(Collections.singletonList(post));
             int likes = FastCache.getReactionTotal(postId, post.likes);
             whoReactedChip.setText(likes > 0 ? ("👍 " + likes + " · Who liked") : "👍 Who liked");
         });
 
-        commentsReg = Fb.db().collection("comments")
-                .whereEqualTo("postId", postId)
-                .addSnapshotListener((snap, e) -> {
-                    if (snap == null) return;
-                    rawComments.clear();
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        rawComments.add(Models.Comment.fromDoc(d));
-                    }
-                    sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
-                    commentsAdapter.setAll(rawComments);
-
-                    // Auto-heal posts/{postId}.comments counter so feed cards always show exact count!
-                    int realSize = rawComments.size();
-                    if (post != null && post.comments != realSize && lastSyncedCommentCount != realSize) {
-                        lastSyncedCommentCount = realSize;
-                        post.comments = realSize;
-                        postAdapter.notifyDataSetChanged();
-                        Map<String, Object> heal = new HashMap<>();
-                        heal.put("comments", realSize);
-                        Fb.db().collection("posts").document(postId).set(heal, SetOptions.merge());
-                    }
-                });
+        // Multi-user real-time CommentsEngine: merges posts/{postId}.commentsMap + subcollection + root comments!
+        commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+            rawComments.clear();
+            rawComments.addAll(allComments);
+            commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
+            sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
+            commentsAdapter.setAll(rawComments);
+            if (post != null && post.comments != rawComments.size()) {
+                post.comments = rawComments.size();
+                postAdapter.notifyDataSetChanged();
+            }
+        });
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         if (postReg != null) postReg.remove();
-        if (commentsReg != null) commentsReg.remove();
+        if (commentsHandle != null) commentsHandle.remove();
     }
 
     private void send() {
@@ -335,65 +337,42 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
     private void writeCommentDoc(String me, String text, String mediaUrl) {
         final Models.Comment replyTarget = replyingTo;
-        final String newId = Fb.db().collection("comments").document().getId();
-        final long now = System.currentTimeMillis();
-
-        // 0ms optimistic render right into the comments list!
-        Models.Comment local = new Models.Comment();
-        local.id = newId;
-        local.postId = postId;
-        local.authorId = me;
-        local.authorName = Fb.myName();
-        local.authorPhoto = Fb.myPhoto();
-        local.content = text;
-        local.imageUrl = mediaUrl == null ? "" : mediaUrl;
-        local.parentId = replyTarget != null ? replyTarget.id : null;
-        local.createdAt = now;
-        rawComments.add(local);
-        sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
-        commentsAdapter.setAll(rawComments);
-        mainRv.scrollToPosition(Math.max(0, commentsAdapter.getItemCount() - 1));
+        String parentId = replyTarget != null ? replyTarget.id : "";
 
         input.setText("");
         replyingTo = null;
         replyChip.setVisibility(View.GONE);
+        if (replyChip.getParent() instanceof LinearLayout) {
+            ((LinearLayout) replyChip.getParent()).getChildAt(1).setVisibility(View.GONE);
+        }
         refreshSendState();
 
-        Map<String, Object> m = Fb.map(
-                "postId", postId,
-                "authorId", me,
-                "authorName", Fb.myName(),
-                "authorPhotoUrl", Fb.myPhoto(),
-                "authorPhoto", Fb.myPhoto(),
-                "content", text,
-                "text", text,
-                "imageUrl", mediaUrl == null ? "" : mediaUrl,
-                "mediaUrl", mediaUrl == null ? "" : mediaUrl,
-                "parentId", replyTarget != null ? replyTarget.id : null,
-                "likes", 0,
-                "reactions", new HashMap<String, String>(),
-                "createdAt", now);
-
-        Fb.db().collection("comments").document(newId).set(m)
-                .addOnSuccessListener(ref -> {
+        // Writes atomically to posts/{postId}.commentsMap.<newId> (100% visible to ALL users!) + mirrors!
+        Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId,
+                (ok, errMsg) -> {
                     busy = false;
-                    lastSyncedCommentCount = rawComments.size();
-                    Map<String, Object> inc = new HashMap<>();
-                    inc.put("comments", FieldValue.increment(1));
-                    Fb.db().collection("posts").document(postId).set(inc, SetOptions.merge());
-                    if (post != null && !me.equals(post.authorId)) {
-                        Notify.send(post.authorId, "comment",
-                                Fb.myName() + " commented on your post", postId);
+                    if (ok) {
+                        if (post != null && !me.equals(post.authorId)) {
+                            Notify.send(post.authorId, "comment",
+                                    Fb.myName() + " commented on your post", postId);
+                        }
+                        if (replyTarget != null && !me.equals(replyTarget.authorId)) {
+                            Notify.send(replyTarget.authorId, "reply",
+                                    Fb.myName() + " replied to your comment", postId);
+                        }
+                    } else {
+                        Ui.toast(PostDetailActivity.this, errMsg != null ? errMsg : "Comment failed");
                     }
-                    if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                        Notify.send(replyTarget.authorId, "reply",
-                                Fb.myName() + " replied to your comment", postId);
-                    }
-                })
-                .addOnFailureListener(e -> {
-                    busy = false;
-                    Ui.toast(this, e.getMessage());
                 });
+
+        if (local != null) {
+            rawComments.add(local);
+            sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
+            commentsAdapter.setAll(rawComments);
+            mainRv.scrollToPosition(Math.max(0, commentsAdapter.getItemCount() - 1));
+        } else {
+            busy = false;
+        }
     }
 
     // ---------- hosts ----------

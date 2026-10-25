@@ -89,7 +89,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private int userPostCount = 0;
     private String profileSearchQuery = "";
 
-    private TextView topTitleTv, editTopIcon;
+    private TextView topTitleTv, editTopIcon, guardBadge;
     private TextView nameT, categoryT, bioT, statsT, presenceT;
     private ImageView nameTick, cover, avatar;
     private View coverCamBtn, avatarCamBtn;
@@ -244,6 +244,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         aclp.setMargins(0, 0, Ui.dp(this, 2), Ui.dp(this, 2));
         avatarCamBtn = avCamWrap;
         avWrap.addView(avCamWrap, aclp);
+
+        guardBadge = Ui.tvBold(this, "🛡️", 13, Color.WHITE);
+        guardBadge.setGravity(Gravity.CENTER);
+        guardBadge.setBackground(Ui.roundStroke(this, Ui.BLUE, 15, Ui.card(this), 2));
+        guardBadge.setVisibility(View.GONE);
+        FrameLayout.LayoutParams gblp = new FrameLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28), Gravity.BOTTOM | Gravity.START);
+        gblp.setMargins(Ui.dp(this, 2), 0, 0, Ui.dp(this, 2));
+        avWrap.addView(guardBadge, gblp);
         avatarAndNameRow.addView(avWrap, avWrapLp);
 
         // Right of Avatar: Bold Name + Scalloped Blue Tick + Bold Stats ("8 followers · 0 following · 8 posts")
@@ -500,40 +508,60 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         View.OnClickListener coverClick = v -> {
             if (mine && !viewAsPublic) {
                 Ui.choose(this, "Cover photo", new String[]{
-                        "🖼 Upload new cover photo",
-                        "👁 View cover photo"
+                        "👁 View full cover photo (HD)",
+                        "🖼 Upload new cover photo"
                 }, w -> {
-                    if (w == 0) pickImage(REQ_PICK_COVER);
-                    else openFullscreenImage(user != null ? user.coverUrl : null);
+                    if (w == 0) openFullscreenImage(user != null ? user.coverUrl : null, "Cover Photo", false);
+                    else pickImage(REQ_PICK_COVER);
                 });
             } else {
-                openFullscreenImage(user != null ? user.coverUrl : null);
+                openFullscreenImage(user != null ? user.coverUrl : null,
+                        (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false);
             }
         };
-        cover.setOnClickListener(v -> openFullscreenImage(user != null ? user.coverUrl : null));
+        cover.setOnClickListener(v -> openFullscreenImage(user != null ? user.coverUrl : null,
+                (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false));
         coverCamBtn.setOnClickListener(coverClick);
 
-        View.OnClickListener avatarClick = v -> {
+        avatar.setOnClickListener(v -> {
             if (mine && !viewAsPublic) {
-                Ui.choose(this, "Profile picture", new String[]{
-                        "📷 Upload new profile picture",
-                        "👁 View profile picture",
+                boolean guarded = user != null && user.profilePicGuard;
+                Ui.choose(this, "Profile picture (DP)", new String[]{
+                        "👁 View full profile picture (HD)",
+                        "📷 Select new profile picture",
+                        guarded ? "🛡️ Turn OFF Profile Picture Guard" : "🛡️ Turn ON Profile Picture Guard",
                         "📖 View active story"
                 }, w -> {
-                    if (w == 0) pickImage(REQ_PICK_AVATAR);
-                    else if (w == 1) openFullscreenImage(user != null ? user.photoUrl : null);
-                    else {
+                    if (w == 0) {
+                        openFullscreenImage(user != null ? user.photoUrl : null,
+                                (user != null ? user.displayName + "'s Profile Picture" : "Profile Picture"), false);
+                    } else if (w == 1) {
+                        pickImage(REQ_PICK_AVATAR);
+                    } else if (w == 2) {
+                        boolean next = !guarded;
+                        Map<String, Object> up = new HashMap<>();
+                        up.put("profilePicGuard", next);
+                        Fb.patchMe(up);
+                        if (user != null) { user.profilePicGuard = next; bindUser(); }
+                        Ui.toast(this, next
+                                ? "🛡️ Profile Picture Guard turned ON!"
+                                : "Profile Picture Guard turned OFF");
+                    } else {
                         Intent si = new Intent(this, StoryViewerActivity.class);
                         si.putExtra("author", uid);
                         startActivity(si);
                     }
                 });
             } else {
-                openFullscreenImage(user != null ? user.photoUrl : null);
+                boolean guarded = user != null && user.profilePicGuard;
+                openFullscreenImage(user != null ? user.photoUrl : null,
+                        (user != null ? user.displayName + "'s Profile Picture" : "Profile Picture"),
+                        guarded);
             }
-        };
-        avatar.setOnClickListener(avatarClick);
-        avatarCamBtn.setOnClickListener(avatarClick);
+        });
+        avatarCamBtn.setOnClickListener(v -> {
+            if (mine && !viewAsPublic) pickImage(REQ_PICK_AVATAR);
+        });
 
         showTab(0);
 
@@ -562,13 +590,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void openFullscreenImage(String url) {
+        openFullscreenImage(url, user != null ? user.displayName : "Photo", false);
+    }
+
+    private void openFullscreenImage(String url, String title, boolean guarded) {
         if (url == null || url.isEmpty()) {
             if (mine) pickImage(REQ_PICK_AVATAR);
+            else Ui.toast(this, "No profile photo uploaded yet");
             return;
         }
         Intent i = new Intent(this, FullscreenMediaActivity.class);
         i.putExtra("type", "image");
         i.putExtra("url", url);
+        i.putExtra("title", title);
+        i.putExtra("guarded", guarded);
         startActivity(i);
     }
 
@@ -578,7 +613,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (res != RESULT_OK || data == null || data.getData() == null || !mine) return;
         Uri uri = data.getData();
         boolean isAvatar = (req == REQ_PICK_AVATAR);
-        Ui.toast(this, isAvatar ? "Uploading profile photo…" : "Uploading cover photo…");
+        Ui.toast(this, isAvatar ? "Uploading HD profile photo…" : "Uploading HD cover photo…");
         String path = (isAvatar ? "avatars/" : "covers/") + uid + "_" + System.currentTimeMillis() + ".jpg";
         Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
@@ -590,7 +625,27 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         else user.coverUrl = url;
                         bindUser();
                     }
-                    Ui.toast(ProfileActivity.this, isAvatar ? "Profile photo updated ✓" : "Cover photo updated ✓");
+                    // Facebook Lite signature feature: Share full DP / Cover update onto News Feed!
+                    if (Prefs.shareDpToFeed(ProfileActivity.this)) {
+                        Map<String, Object> dpPost = Fb.map(
+                                "authorId", uid,
+                                "authorName", Fb.myName(),
+                                "authorPhotoUrl", isAvatar ? url : Fb.myPhoto(),
+                                "authorVerified", Fb.me != null && Fb.me.isVerified,
+                                "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none",
+                                "content", "",
+                                "feeling", isAvatar ? "updated their profile picture" : "updated their cover photo",
+                                "mediaType", "image",
+                                "mediaUrl", url,
+                                "privacy", "Public",
+                                "likes", 0, "comments", 0, "shares", 0,
+                                "savedBy", new ArrayList<String>(),
+                                "createdAt", FieldValue.serverTimestamp());
+                        Fb.db().collection("posts").add(dpPost);
+                    }
+                    Ui.toast(ProfileActivity.this, isAvatar
+                            ? "Profile picture updated & shared in full HD ✓"
+                            : "Cover photo updated ✓");
                 })
                 .addOnFailureListener(err ->
                         Ui.toast(ProfileActivity.this, "Upload failed: " + err.getMessage()));
@@ -860,7 +915,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         bioT.setText(hasBio ? user.bio : "");
         bioT.setVisibility(hasBio ? View.VISIBLE : View.GONE);
 
-        Ui.avatar(this, avatar, user.photoUrl);
+        Ui.avatarLarge(this, avatar, user.photoUrl);
+        if (guardBadge != null) {
+            guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
+        }
         if (user.coverUrl != null && !user.coverUrl.isEmpty()) {
             Ui.img(this, cover, user.coverUrl);
         } else {
@@ -1639,9 +1697,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             }
             h.countTv.setText("▶ " + Format.count(Math.max(1, r.likes + r.comments)));
             h.itemView.setOnClickListener(v -> {
-                Intent in = new Intent(ProfileActivity.this, FullscreenMediaActivity.class);
-                in.putExtra("type", "video");
-                in.putExtra("url", r.videoUrl);
+                Intent in = new Intent(ProfileActivity.this, com.friendbook.reels.ReelPlayerActivity.class);
+                in.putExtra("reel_id", r.id);
+                in.putExtra("is_post", r.isFromPost);
+                in.putExtra("video_url", r.videoUrl);
+                in.putExtra("author_id", r.authorId);
+                in.putExtra("author_name", r.authorName);
+                in.putExtra("author_photo", r.authorPhoto);
+                in.putExtra("caption", r.caption);
+                in.putExtra("likes", r.likes);
+                in.putExtra("comments", r.comments);
+                in.putExtra("shares", r.shares);
                 startActivity(in);
             });
         }

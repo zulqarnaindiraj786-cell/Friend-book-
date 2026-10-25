@@ -191,6 +191,50 @@ public class SettingsActivity extends Activity {
                     Ui.toast(this, on ? "Data Saver ON — saving up to 90% mobile data" : "Data Saver OFF");
                 }));
 
+        // ============ 4A+. 🚀 FACEBOOK LITE PRO EXTRA FEATURES & CONTROLS ============
+        body.addView(header("Facebook Lite Pro extras"));
+        body.addView(switchRowI(Icons.MESSAGES, "💬 Inline comments on Home Feed",
+                Prefs.inlineFeedComments(this), (btn, on) -> {
+                    Prefs.setInlineFeedComments(this, on);
+                    Ui.toast(this, on
+                            ? "💬 Inline multi-user comments enabled on Home Feed!"
+                            : "Inline feed comments hidden");
+                }));
+        body.addView(switchRowI(Icons.IMAGE, "🖼 Full uncropped HD DP & portrait photos",
+                Prefs.fullPhotoDisplay(this), (btn, on) -> {
+                    Prefs.setFullPhotoDisplay(this, on);
+                    Ui.toast(this, on
+                            ? "🖼 Full uncropped photos & DPs enabled!"
+                            : "Compact cropped photos enabled");
+                }));
+        body.addView(switchRowI(Icons.LOCK, "🛡️ Profile Picture Guard (DP protection)",
+                Fb.me != null && Fb.me.profilePicGuard, (btn, on) -> {
+                    java.util.Map<String, Object> up = new java.util.HashMap<>();
+                    up.put("profilePicGuard", on);
+                    Fb.patchMe(up);
+                    if (Fb.me != null) Fb.me.profilePicGuard = on;
+                    Ui.toast(this, on
+                            ? "🛡️ Profile Picture Guard ON — downloads & screenshots blocked!"
+                            : "Profile Picture Guard OFF");
+                }));
+        body.addView(switchRowI(Icons.IMAGE, "📢 Share new DP updates to News Feed",
+                Prefs.shareDpToFeed(this), (btn, on) -> {
+                    Prefs.setShareDpToFeed(this, on);
+                    Ui.toast(this, on
+                            ? "New DP updates will share in full HD to News Feed ✓"
+                            : "DP updates won't auto-post to News Feed");
+                }));
+        body.addView(switchRowI(Icons.LIKE, "❤️ Double-tap photos & Reels to Like",
+                Prefs.doubleTapToLike(this), (btn, on) -> {
+                    Prefs.setDoubleTapToLike(this, on);
+                    Ui.toast(this, on ? "Double-tap ❤️ Like enabled" : "Double-tap Like disabled");
+                }));
+        body.addView(switchRowI(Icons.VIDEO, "🔊 Start Reels with audio ON",
+                Prefs.reelsStartWithSound(this), (btn, on) -> {
+                    Prefs.setReelsStartWithSound(this, on);
+                    Ui.toast(this, on ? "Reels start with sound ON 🔊" : "Reels start muted 🔇");
+                }));
+
         // ============ 4B. ⚡ 2G SPEED, TEXT-ONLY MODE & OFFLINE ENGINE ============
         body.addView(header("2G speed & offline engine"));
         body.addView(rowI(Icons.DATA_SAVER, "⚡ Lite 2G mode switcher",

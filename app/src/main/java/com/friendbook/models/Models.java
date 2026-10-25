@@ -25,6 +25,7 @@ public class Models {
         public boolean subscriptionsEnabled;
         public int subscriptionPrice;     // USD per month (2 / 5 / 10)
         public boolean profileLocked;     // 🔒 FB-style locked profile
+        public boolean profilePicGuard;   // 🛡 FB-Lite Profile Picture Guard shield
         public String lookupPrivacy = "Everyone";    // Everyone | Friends | Only me
         public String friendsListPrivacy = "Public"; // Public | Friends | Only me
         public String contactPrivacy = "Friends";    // Public | Friends | Only me
@@ -97,6 +98,7 @@ public class Models {
             u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
             u.subscriptionPrice = Format.intOf(m, "subscriptionPrice");
             u.profileLocked = Format.boolOf(m, "profileLocked");
+            u.profilePicGuard = Format.boolOf(m, "profilePicGuard");
             u.lookupPrivacy = Format.strOr(m, "lookupPrivacy", "Everyone");
             u.friendsListPrivacy = Format.strOr(m, "friendsListPrivacy", "Public");
             u.contactPrivacy = Format.strOr(m, "contactPrivacy", "Friends");
@@ -147,6 +149,9 @@ public class Models {
         public List<String> taggedNames = new ArrayList<>(); // denormalized for fast render
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
+        public String pinnedCommentId = "";
+        public List<Comment> inlineComments = new ArrayList<>(); // synced multi-user commentsMap on post doc
+        public Map<String, Map<String, Object>> reactionsMap = new HashMap<>(); // synced multi-user reactions on post doc
 
         public boolean authorVerified; // copied from author's profile when the post is created
         public String authorTickLevel = "none"; // none | blue | gold | diamond (denormalized)
@@ -228,6 +233,24 @@ public class Models {
                         p.pollVotes.put(String.valueOf(e.getKey()), ((Number) e.getValue()).longValue());
                 }
             }
+            p.pinnedCommentId = Format.str(m, "pinnedCommentId");
+            p.inlineComments = Comment.parseEmbeddedComments(p.id, m, p.pinnedCommentId);
+            if (p.inlineComments.size() > p.comments) {
+                p.comments = p.inlineComments.size();
+            }
+            Object rxm = m == null ? null : m.get("reactionsMap");
+            if (rxm instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rxm).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof Map) {
+                        Map<String, Object> sub = new HashMap<>();
+                        for (Map.Entry<?, ?> se : ((Map<?, ?>) e.getValue()).entrySet()) {
+                            if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
+                        }
+                        p.reactionsMap.put(String.valueOf(e.getKey()), sub);
+                    }
+                }
+                if (p.reactionsMap.size() > p.likes) p.likes = p.reactionsMap.size();
+            }
             return p;
         }
     }
@@ -235,25 +258,34 @@ public class Models {
     public static class Comment {
         public String id, postId, authorId, authorName, authorPhoto, content, imageUrl, parentId;
         public boolean edited;
+        public boolean pinned;
         public int likes;
         public long createdAt;
         public List<String> likedBy = new ArrayList<>();
         public Map<String, String> reactions = new HashMap<>(); // uid -> like|love|haha|wow|sad|angry
 
         public static Comment fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        @SuppressWarnings("unchecked")
+        public static Comment fromMap(String id, Map<String, Object> m) {
             Comment c = new Comment();
-            Map<String, Object> m = d.getData();
-            c.id = d.getId();
-            c.postId = Format.str(m, "postId");
-            c.authorId = Format.str(m, "authorId");
-            c.authorName = Format.strOr(m, "authorName", "User");
-            c.authorPhoto = Format.strOr(m, "authorPhotoUrl", Format.str(m, "authorPhoto"));
-            c.content = Format.strOr(m, "content", Format.str(m, "text"));
+            c.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
+            c.postId = Format.strOr(m, "postId", Format.str(m, "post_id"));
+            c.authorId = Format.strOr(m, "authorId", Format.strOr(m, "userId", Format.str(m, "uid")));
+            c.authorName = Format.strOr(m, "authorName",
+                    Format.strOr(m, "userName", Format.strOr(m, "name", "friendbook User")));
+            c.authorPhoto = Format.strOr(m, "authorPhotoUrl",
+                    Format.strOr(m, "authorPhoto", Format.str(m, "userPhoto")));
+            c.content = Format.strOr(m, "content",
+                    Format.strOr(m, "text", Format.str(m, "message")));
             c.imageUrl = Format.strOr(m, "imageUrl", Format.str(m, "mediaUrl"));
             c.parentId = Format.str(m, "parentId");
             c.edited = m != null && Boolean.TRUE.equals(m.get("edited"));
+            c.pinned = m != null && Boolean.TRUE.equals(m.get("pinned"));
             c.likes = Format.intOf(m, "likes");
-            c.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
+            c.createdAt = m == null ? 0L : Format.ts(m.get("createdAt"));
             c.likedBy = Format.listOf(m, "likedBy");
             Object rx = m == null ? null : m.get("reactions");
             if (rx instanceof Map) {
@@ -271,6 +303,43 @@ public class Models {
             }
             c.likes = Math.max(c.likes, c.reactions.size());
             return c;
+        }
+
+        @SuppressWarnings("unchecked")
+        public static List<Comment> parseEmbeddedComments(String parentDocId, Map<String, Object> docMap, String pinnedId) {
+            List<Comment> out = new ArrayList<>();
+            if (docMap == null) return out;
+            Object cm = docMap.get("commentsMap");
+            if (cm instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) cm).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof Map) {
+                        Map<String, Object> sub = new HashMap<>();
+                        for (Map.Entry<?, ?> se : ((Map<?, ?>) e.getValue()).entrySet()) {
+                            if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
+                        }
+                        Comment c = fromMap(String.valueOf(e.getKey()), sub);
+                        if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
+                        if (pinnedId != null && !pinnedId.isEmpty() && pinnedId.equals(c.id)) c.pinned = true;
+                        out.add(c);
+                    }
+                }
+            }
+            Object cl = docMap.get("commentsList");
+            if (cl instanceof List) {
+                for (Object item : (List<?>) cl) {
+                    if (item instanceof Map) {
+                        Map<String, Object> sub = new HashMap<>();
+                        for (Map.Entry<?, ?> se : ((Map<?, ?>) item).entrySet()) {
+                            if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
+                        }
+                        Comment c = fromMap(Format.str(sub, "id"), sub);
+                        if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
+                        out.add(c);
+                    }
+                }
+            }
+            java.util.Collections.sort(out, (a, b) -> Long.compare(a.createdAt, b.createdAt));
+            return out;
         }
     }
 
@@ -317,7 +386,15 @@ public class Models {
         public String id, authorId, authorName, authorPhoto, videoUrl, caption;
         public int likes, comments, shares;
         public long createdAt;
+        public boolean isFromPost; // true when sourced from posts (mediaType == "video")
         public List<String> likedBy = new ArrayList<>();
+        public List<String> savedBy = new ArrayList<>();
+        public Map<String, String> reactions = new HashMap<>();
+        public List<Comment> inlineComments = new ArrayList<>();
+
+        public String collectionName() {
+            return isFromPost ? "posts" : "reels";
+        }
 
         public static Reel fromDoc(DocumentSnapshot d) {
             Reel r = new Reel();
@@ -326,13 +403,52 @@ public class Models {
             r.authorId = Format.str(m, "authorId");
             r.authorName = Format.strOr(m, "authorName", "User");
             r.authorPhoto = Format.str(m, "authorPhotoUrl");
-            r.videoUrl = Format.str(m, "videoUrl");
-            r.caption = Format.str(m, "caption");
+            r.videoUrl = Format.strOr(m, "videoUrl", Format.str(m, "mediaUrl"));
+            r.caption = Format.strOr(m, "caption", Format.str(m, "content"));
             r.likes = Format.intOf(m, "likes");
             r.comments = Format.intOf(m, "comments");
             r.shares = Format.intOf(m, "shares");
             r.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             r.likedBy = Format.listOf(m, "likedBy");
+            r.savedBy = Format.listOf(m, "savedBy");
+            Object rx = m == null ? null : m.get("reactions");
+            if (rx instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rx).entrySet()) {
+                    if (e.getValue() != null)
+                        r.reactions.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                }
+            }
+            for (String u : r.likedBy) {
+                if (u != null && !u.isEmpty() && !r.reactions.containsKey(u)) r.reactions.put(u, "love");
+            }
+            r.likes = Math.max(r.likes, r.reactions.size());
+            r.inlineComments = Comment.parseEmbeddedComments(r.id, m, null);
+            if (r.inlineComments.size() > r.comments) r.comments = r.inlineComments.size();
+            return r;
+        }
+
+        public static Reel fromVideoPost(Post p) {
+            Reel r = new Reel();
+            r.id = p.id;
+            r.isFromPost = true;
+            r.authorId = p.authorId;
+            r.authorName = p.authorName;
+            r.authorPhoto = p.authorPhoto;
+            r.videoUrl = p.mediaUrl;
+            r.caption = p.content;
+            r.likes = p.likes;
+            r.comments = p.comments;
+            r.shares = p.shares;
+            r.createdAt = p.createdAt;
+            r.savedBy = p.savedBy != null ? new ArrayList<>(p.savedBy) : new ArrayList<>();
+            r.inlineComments = p.inlineComments != null ? new ArrayList<>(p.inlineComments) : new ArrayList<>();
+            if (p.reactionsMap != null) {
+                for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {
+                    String t = Format.strOr(e.getValue(), "type", "like");
+                    r.reactions.put(e.getKey(), t);
+                    r.likedBy.add(e.getKey());
+                }
+            }
             return r;
         }
     }

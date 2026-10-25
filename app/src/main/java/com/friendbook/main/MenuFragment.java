@@ -218,10 +218,24 @@ public class MenuFragment extends Fragment {
                             }
                         }));
 
+        addGridRow(body, a,
+                tile(a, Icons.VIDEO, 0xFFE41E3F, "🎬 Reels Pro", "Watch, Like, Comment & Share",
+                        () -> startActivity(new Intent(a, com.friendbook.reels.ReelPlayerActivity.class))),
+                tile(a, Icons.LOCK, Ui.BLUE, "🛡️ DP Guard",
+                        (Fb.me != null && Fb.me.profilePicGuard) ? "Protected ON ✓" : "Protect your DP",
+                        () -> {
+                            boolean next = !(Fb.me != null && Fb.me.profilePicGuard);
+                            java.util.Map<String, Object> up = new java.util.HashMap<>();
+                            up.put("profilePicGuard", next);
+                            Fb.patchMe(up);
+                            if (Fb.me != null) Fb.me.profilePicGuard = next;
+                            Ui.toast(a, next ? "🛡️ Profile Picture Guard ON!" : "Profile Picture Guard OFF");
+                        }));
+
         body.addView(spacer(a, 10));
 
         // ---- Quick Lite Controls ----
-        TextView qHead = Ui.tvBold(a, "Lite quick controls", 13, Ui.sub(a));
+        TextView qHead = Ui.tvBold(a, "Lite Pro quick controls", 13, Ui.sub(a));
         qHead.setPadding(Ui.dp(a, 4), Ui.dp(a, 4), 0, Ui.dp(a, 6));
         body.addView(qHead);
 
@@ -229,6 +243,18 @@ public class MenuFragment extends Fragment {
             Prefs.setDark(a, on);
             a.recreate();
         }));
+        body.addView(switchItem(a, Icons.MESSAGES, "💬 Inline Feed Comments (all users)",
+                Prefs.inlineFeedComments(a), (btn, on) -> {
+                    Prefs.setInlineFeedComments(a, on);
+                    if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                    Ui.toast(a, on ? "💬 Inline multi-user comments ON!" : "Inline feed comments hidden");
+                }));
+        body.addView(switchItem(a, Icons.IMAGE, "🖼 Full Uncropped HD Photos & DP",
+                Prefs.fullPhotoDisplay(a), (btn, on) -> {
+                    Prefs.setFullPhotoDisplay(a, on);
+                    if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                    Ui.toast(a, on ? "🖼 Full uncropped HD photos & DP ON!" : "Compact crop mode");
+                }));
         body.addView(switchItem(a, Icons.DATA_SAVER, "📵 Text-Only 2G Mode (0 KB auto photos)",
                 Prefs.textOnlyMode(a), (btn, on) -> {
                     Prefs.setTextOnlyMode(a, on);
