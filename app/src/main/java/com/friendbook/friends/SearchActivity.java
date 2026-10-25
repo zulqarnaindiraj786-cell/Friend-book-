@@ -108,8 +108,25 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             @Override public void onTextChanged(CharSequence s, int a, int b2, int c) {
                 if (pending != null) handler.removeCallbacks(pending);
                 final String q = s.toString().trim();
+                // ⚡ 0.0ms immediate local FastCache search on every keystroke!
+                if (!q.isEmpty()) {
+                    String ql = q.toLowerCase();
+                    List<Models.Post> fastPosts = new ArrayList<>();
+                    for (Models.Post p : com.friendbook.core.FastCache.getFeed()) {
+                        if (p == null) continue;
+                        String hay = ((p.authorName == null ? "" : p.authorName) + " "
+                                + (p.content == null ? "" : p.content)).toLowerCase();
+                        if (hay.contains(ql)) fastPosts.add(p);
+                    }
+                    if (!fastPosts.isEmpty()) {
+                        historyBox.setVisibility(View.GONE);
+                        noResults.setVisibility(View.GONE);
+                        postsTitle.setVisibility(View.VISIBLE);
+                        postsAdapter.setPosts(fastPosts);
+                    }
+                }
                 pending = () -> search(q);
-                handler.postDelayed(pending, 350);
+                handler.postDelayed(pending, 120);
             }
             @Override public void afterTextChanged(Editable s) { }
         });

@@ -51,7 +51,8 @@ public class ConversationsActivity extends Activity {
     private ConvAdapter adapter;
     private ListenerRegistration reg;
     private LinearLayout activeRow, activeWrap;
-    private TextView inboxTab, archiveTab, empty;
+    private TextView inboxTab, unreadTab, archiveTab, empty;
+    private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 2 = Archived
     private boolean showArchived = false;
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
@@ -95,19 +96,26 @@ public class ConversationsActivity extends Activity {
 
         LinearLayout tabs = Ui.row(this);
         tabs.setPadding(0, Ui.dp(this, 8), 0, 0);
-        inboxTab = Ui.tvBold(this, "💬 Inbox", 13, Color.WHITE);
+        inboxTab = Ui.tvBold(this, "💬 All", 12, Color.WHITE);
         inboxTab.setGravity(Gravity.CENTER);
-        Ui.pad(inboxTab, 12, 6, 12, 6);
-        archiveTab = Ui.tvBold(this, "📦 Archived", 13, Ui.sub(this));
+        Ui.pad(inboxTab, 10, 6, 10, 6);
+        unreadTab = Ui.tvBold(this, "🔵 Unread", 12, Ui.sub(this));
+        unreadTab.setGravity(Gravity.CENTER);
+        Ui.pad(unreadTab, 10, 6, 10, 6);
+        archiveTab = Ui.tvBold(this, "📦 Archived", 12, Ui.sub(this));
         archiveTab.setGravity(Gravity.CENTER);
-        Ui.pad(archiveTab, 12, 6, 12, 6);
+        Ui.pad(archiveTab, 10, 6, 10, 6);
         LinearLayout.LayoutParams tp1 = new LinearLayout.LayoutParams(0, -2, 1);
+        LinearLayout.LayoutParams tpU = new LinearLayout.LayoutParams(0, -2, 1);
+        tpU.leftMargin = Ui.dp(this, 6);
         LinearLayout.LayoutParams tp2 = new LinearLayout.LayoutParams(0, -2, 1);
-        tp2.leftMargin = Ui.dp(this, 8);
+        tp2.leftMargin = Ui.dp(this, 6);
         tabs.addView(inboxTab, tp1);
+        tabs.addView(unreadTab, tpU);
         tabs.addView(archiveTab, tp2);
-        inboxTab.setOnClickListener(v -> { showArchived = false; updateTabs(); applyFilter(); });
-        archiveTab.setOnClickListener(v -> { showArchived = true; updateTabs(); applyFilter(); });
+        inboxTab.setOnClickListener(v -> { tabMode = 0; showArchived = false; updateTabs(); applyFilter(); });
+        unreadTab.setOnClickListener(v -> { tabMode = 1; showArchived = false; updateTabs(); applyFilter(); });
+        archiveTab.setOnClickListener(v -> { tabMode = 2; showArchived = true; updateTabs(); applyFilter(); });
         top.addView(tabs);
         root.addView(top);
         updateTabs();
@@ -136,17 +144,41 @@ public class ConversationsActivity extends Activity {
 
         rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(20);
         adapter = new ConvAdapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
+
+        // ⚡ 0.0ms Instant Frame #1 Hydration from FastCache!
+        String me0 = Fb.uid();
+        if (me0 != null) {
+            for (Models.ChatRoom cr : com.friendbook.core.FastCache.getChats()) {
+                Room r = new Room();
+                r.room = cr;
+                r.other = cr.otherUid(me0);
+                if (r.other.isEmpty()) continue;
+                Models.User cu = com.friendbook.core.FastCache.getUser(r.other);
+                if (cu != null) userCache.put(r.other, cu);
+                allRooms.add(r);
+            }
+            if (!allRooms.isEmpty()) {
+                renderActiveNow();
+                applyFilter();
+            }
+        }
     }
 
     private void updateTabs() {
-        inboxTab.setBackground(Ui.round(this, !showArchived ? Ui.BLUE : Ui.inputBg(this), 16));
-        inboxTab.setTextColor(!showArchived ? Color.WHITE : Ui.sub(this));
-        archiveTab.setBackground(Ui.round(this, showArchived ? Ui.BLUE : Ui.inputBg(this), 16));
-        archiveTab.setTextColor(showArchived ? Color.WHITE : Ui.sub(this));
+        inboxTab.setBackground(Ui.round(this, tabMode == 0 ? Ui.BLUE : Ui.inputBg(this), 16));
+        inboxTab.setTextColor(tabMode == 0 ? Color.WHITE : Ui.sub(this));
+        if (unreadTab != null) {
+            unreadTab.setBackground(Ui.round(this, tabMode == 1 ? Ui.BLUE : Ui.inputBg(this), 16));
+            unreadTab.setTextColor(tabMode == 1 ? Color.WHITE : Ui.sub(this));
+        }
+        archiveTab.setBackground(Ui.round(this, tabMode == 2 ? Ui.BLUE : Ui.inputBg(this), 16));
+        archiveTab.setTextColor(tabMode == 2 ? Color.WHITE : Ui.sub(this));
     }
 
     @Override
@@ -183,6 +215,9 @@ public class ConversationsActivity extends Activity {
                             }
                         }
                     }
+                    List<Models.ChatRoom> toCache = new ArrayList<>();
+                    for (Room r : allRooms) toCache.add(r.room);
+                    com.friendbook.core.FastCache.saveChats(toCache);
                     renderActiveNow();
                     applyFilter();
                 });
@@ -226,6 +261,7 @@ public class ConversationsActivity extends Activity {
         for (Room r : allRooms) {
             boolean arch = Prefs.isChatArchived(this, r.room.id);
             if (arch != showArchived) continue;
+            if (tabMode == 1 && r.unread <= 0) continue;
             if (!query.isEmpty()) {
                 Models.User u = userCache.get(r.other);
                 String nick = Prefs.chatNickname(this, r.room.id);
@@ -361,8 +397,12 @@ public class ConversationsActivity extends Activity {
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
             Models.User u = userCache.get(r.other);
+            if (u == null) {
+                u = com.friendbook.core.FastCache.getUser(r.other);
+                if (u != null) userCache.put(r.other, u);
+            }
             String nick = Prefs.chatNickname(ConversationsActivity.this, r.room.id);
-            h.name.setText(!nick.isEmpty() ? nick : (u != null ? u.displayName : "Loading…"));
+            h.name.setText(!nick.isEmpty() ? nick : (u != null ? u.displayName : "friendbook user"));
             Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
             Ui.avatar(ConversationsActivity.this, h.av, u != null ? u.photoUrl : "");
 

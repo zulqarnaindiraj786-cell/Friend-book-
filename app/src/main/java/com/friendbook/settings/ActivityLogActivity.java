@@ -80,17 +80,35 @@ public class ActivityLogActivity extends Activity {
         root.addView(Ui.divider(this));
         updateChips();
 
-        empty = Ui.tv(this, "Loading…", 14, Ui.sub(this));
+        empty = Ui.tv(this, "", 14, Ui.sub(this));
         empty.setGravity(Gravity.CENTER);
         Ui.pad(empty, 24, 60, 24, 0);
+        empty.setVisibility(View.GONE);
         root.addView(empty);
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
+
+        // ⚡ 0.0ms Instant Activity Pre-Render from FastCache!
+        String me0 = Fb.uid();
+        if (me0 != null) {
+            for (Models.Post p : com.friendbook.core.FastCache.getFeed()) {
+                if (p != null && me0.equals(p.authorId)) {
+                    Entry e = new Entry();
+                    e.kind = "post";
+                    e.text = p.content == null || p.content.isEmpty() ? "[" + p.mediaType + " post]" : p.content;
+                    e.refId = p.id;
+                    e.when = p.createdAt;
+                    allEntries.add(e);
+                }
+            }
+            if (!allEntries.isEmpty()) applyFilter();
+        }
     }
 
     private void updateChips() {

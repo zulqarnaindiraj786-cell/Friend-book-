@@ -482,4 +482,34 @@ public class Prefs {
     public static void setPendingReferral(Context c, String code) {
         p(c).edit().putString("pendingRef", code == null ? "" : code).apply();
     }
+
+    // ---- ⚡ Facebook Lite 2G Turbo Engine & Text-Only Basic Mode ----
+    /** Turbo 2G Engine ON by default: WebP CDN compression, 0ms optimistic UI, cache-first reads, compressed uploads. */
+    public static boolean turbo2g(Context c) { return p(c).getBoolean("turbo2g", true); }
+    public static void setTurbo2g(Context c, boolean v) { p(c).edit().putBoolean("turbo2g", v).apply(); }
+
+    /** Facebook Lite "Basic / Text-Only 2G Mode": 0 KB auto photo downloads — tap "See Photo" per post. */
+    public static boolean textOnlyMode(Context c) { return p(c).getBoolean("textOnly2g", false); }
+    public static void setTextOnlyMode(Context c, boolean v) { p(c).edit().putBoolean("textOnly2g", v).apply(); }
+
+    /** Zero-lag instant screen transitions (disables 300ms heavy window slide animations, like native FB Lite). */
+    public static boolean instantTransitions(Context c) { return p(c).getBoolean("instantTrans", true); }
+    public static void setInstantTransitions(Context c, boolean v) { p(c).edit().putBoolean("instantTrans", v).apply(); }
+
+    /** Preload feed text & tiny thumbnails automatically when on Wi-Fi for offline reading. */
+    public static boolean wifiPreload(Context c) { return p(c).getBoolean("wifiPreload", true); }
+    public static void setWifiPreload(Context c, boolean v) { p(c).edit().putBoolean("wifiPreload", v).apply(); }
+
+    /** Comment sort preference: "relevant" | "newest" | "oldest" */
+    public static String commentSort(Context c) { return p(c).getString("commentSort", "relevant"); }
+    public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "relevant" : v).apply(); }
+
+    /** Record exact used & saved bytes from WebP/2G compression. */
+    public static void recordBytes(Context c, long used, long saved) {
+        SharedPreferences sp = p(c);
+        sp.edit()
+                .putLong("dataBytesUsed", sp.getLong("dataBytesUsed", 0L) + Math.max(0L, used))
+                .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + Math.max(0L, saved))
+                .apply();
+    }
 }

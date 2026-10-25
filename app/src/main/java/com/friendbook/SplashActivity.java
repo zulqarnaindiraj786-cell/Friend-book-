@@ -3,42 +3,26 @@ package com.friendbook;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.view.Gravity;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
 import com.friendbook.auth.LoginActivity;
+import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Presence;
-import com.friendbook.core.Ui;
 import com.friendbook.main.MainActivity;
 
+/**
+ * ⚡ Zero-delay Facebook Lite launcher:
+ * Routes immediately in onCreate (0ms wait — NO artificial splash sleep!)
+ * with crisp zero-lag transition.
+ */
 public class SplashActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(Ui.BLUE_DARK);
-        getWindow().setNavigationBarColor(Ui.BLUE);
-
-        LinearLayout root = Ui.col(this);
-        root.setBackgroundColor(Ui.BLUE);
-        root.setGravity(Gravity.CENTER);
-
-        TextView logo = Ui.tvBold(this, "friendbook", 38, 0xFFFFFFFF);
-        logo.setGravity(Gravity.CENTER);
-        root.addView(logo);
-        TextView tag = Ui.tv(this, "lite • fast • connected", 14, 0xCFFFFFFF);
-        tag.setGravity(Gravity.CENTER);
-        tag.setPadding(0, Ui.dp(this, 8), 0, 0);
-        root.addView(tag);
-
-        setContentView(root);
-
-        new Handler(Looper.getMainLooper()).postDelayed(this::route, 900);
+        FastCache.init(this);
+        route();
     }
 
     private void route() {
@@ -53,6 +37,7 @@ public class SplashActivity extends Activity {
                 Intent g = new Intent(this, com.friendbook.groups.GroupDetailActivity.class);
                 g.putExtra("group_id", gid);
                 startActivity(g);
+                overridePendingTransition(0, 0);
                 finish();
                 return;
             }
@@ -66,6 +51,7 @@ public class SplashActivity extends Activity {
             Presence.init();
             startActivity(new Intent(this, MainActivity.class));
         }
+        overridePendingTransition(0, 0);
         finish();
     }
 }

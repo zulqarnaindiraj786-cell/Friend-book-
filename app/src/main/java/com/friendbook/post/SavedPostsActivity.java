@@ -68,12 +68,23 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(16);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
         adapter.showFooter = false;
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
+
+        // ⚡ 0.0ms Instant Saved Hydration from FastCache!
+        String me0 = Fb.uid();
+        if (me0 != null) {
+            for (Models.Post p : com.friendbook.core.FastCache.getFeed()) {
+                if (p != null && p.savedBy != null && p.savedBy.contains(me0)) allSaved.add(p);
+            }
+            if (!allSaved.isEmpty()) applyFilter();
+        }
     }
 
     private void refreshChips() {

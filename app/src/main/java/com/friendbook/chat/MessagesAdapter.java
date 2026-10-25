@@ -37,9 +37,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final List<Models.Message> data = new ArrayList<>();
     private String peerPhoto = "";
 
-    /** one MediaPlayer at a time for voice notes */
+    /** one MediaPlayer at a time for voice notes + 1x / 1.5x / 2x speed (FB Lite Messenger feature) */
     private static MediaPlayer voicePlayer;
     private static String playingId;
+    private static float voiceSpeed = 1.0f;
 
     public MessagesAdapter(Activity a, Actions actions) {
         this.activity = a;
@@ -90,17 +91,20 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         ImageView img = new ImageView(c);
         img.setVisibility(View.GONE);
 
-        // voice row: ▶ icon + duration
+        // voice row: ▶ icon + duration + 1x/1.5x/2x speed pill
         LinearLayout voiceRow = Ui.row(c);
         voiceRow.setVisibility(View.GONE);
         TextView play = Ui.tvBold(c, "▶", 18, 0);
         TextView dur = Ui.tv(c, "", 13, 0);
-        dur.setPadding(Ui.dp(c, 8), 0, Ui.dp(c, 4), 0);
+        dur.setPadding(Ui.dp(c, 8), 0, Ui.dp(c, 6), 0);
+        TextView speed = Ui.roundChip(c, "1x", 0x33000000, Color.WHITE, 10);
+        Ui.pad(speed, 7, 2, 7, 2);
         voiceRow.addView(play);
-        voiceRow.addView(dur);
+        voiceRow.addView(dur, new LinearLayout.LayoutParams(0, -2, 1));
+        voiceRow.addView(speed);
         bubble.addView(quote, qlp);
         bubble.addView(text);
-        bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 170), -2));
+        bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 210), -2));
         bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 160)));
 
         TextView ticks = Ui.tv(c, "", 10, 0);
@@ -126,7 +130,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         } else {
             row.setGravity(Gravity.START);
         }
-        VH vh = new VH(row, av, bubble, quote, text, img, ticks, voiceRow, play, dur, react);
+        VH vh = new VH(row, av, bubble, quote, text, img, ticks, voiceRow, play, dur, speed, react);
         vh.mine = viewType == 1;
         return vh;
     }
@@ -203,10 +207,25 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setVisibility(View.GONE);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.VISIBLE);
+            boolean isPlaying = m.id.equals(playingId);
+            h.play.setText(isPlaying ? "⏸" : "▶");
             h.play.setTextColor(h.mine ? Color.WHITE : Ui.BLUE);
             h.dur.setTextColor(h.mine ? 0xDDFFFFFF : Ui.txt(c));
-            h.dur.setText("Voice note · " + Format.duration(m.voiceDurationSec)
-                    + (m.id.equals(playingId) ? "  ▶ playing…" : ""));
+            h.dur.setText("Voice · " + Format.duration(m.voiceDurationSec)
+                    + (isPlaying ? "  playing" : ""));
+            String spLabel = voiceSpeed == 1.5f ? "1.5x" : (voiceSpeed == 2.0f ? "2x" : "1x");
+            h.speed.setText(spLabel);
+            h.speed.setTextColor(h.mine ? Color.WHITE : Ui.BLUE);
+            h.speed.setBackground(Ui.round(c, h.mine ? 0x33000000 : Ui.card(c), 10));
+            h.speed.setOnClickListener(v -> {
+                voiceSpeed = voiceSpeed == 1.0f ? 1.5f : (voiceSpeed == 1.5f ? 2.0f : 1.0f);
+                if (voicePlayer != null && playingId != null) {
+                    try {
+                        voicePlayer.setPlaybackParams(voicePlayer.getPlaybackParams().setSpeed(voiceSpeed));
+                    } catch (Throwable ignored) { }
+                }
+                notifyDataSetChanged();
+            });
             h.voiceRow.setOnClickListener(v -> toggleVoice(h, m));
         } else {
             h.voiceRow.setVisibility(View.GONE);
@@ -249,10 +268,16 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             voicePlayer.setDataSource(m.voiceUrl);
             voicePlayer.setOnPreparedListener(mp -> {
                 playingId = m.id;
+                try {
+                    mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(voiceSpeed));
+                } catch (Throwable ignored) { }
                 voicePlayer.start();
                 notifyDataSetChanged();
             });
-            voicePlayer.setOnCompletionListener(mp -> stopVoice());
+            voicePlayer.setOnCompletionListener(mp -> {
+                stopVoice();
+                notifyDataSetChanged();
+            });
             voicePlayer.prepareAsync();
             Ui.toast(activity, "▶ Playing voice note…");
         } catch (Exception e) {
@@ -279,13 +304,13 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     static class VH extends RecyclerView.ViewHolder {
         ImageView av, img;
         LinearLayout bubble, voiceRow;
-        TextView quote, text, ticks, play, dur, react;
+        TextView quote, text, ticks, play, dur, speed, react;
         boolean mine;
         VH(View v, ImageView a, LinearLayout b, TextView q, TextView t, ImageView i, TextView tk,
-           LinearLayout vr, TextView pl, TextView du, TextView re) {
+           LinearLayout vr, TextView pl, TextView du, TextView sp, TextView re) {
             super(v);
             av = a; bubble = b; quote = q; text = t; img = i; ticks = tk;
-            voiceRow = vr; play = pl; dur = du; react = re;
+            voiceRow = vr; play = pl; dur = du; speed = sp; react = re;
         }
     }
 }

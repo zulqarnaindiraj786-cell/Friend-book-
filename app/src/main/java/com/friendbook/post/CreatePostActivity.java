@@ -770,16 +770,22 @@ public class CreatePostActivity extends Activity {
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
-            Fb.db().collection("posts").document(editId).update(m)
-                    .addOnSuccessListener(x -> { Ui.toast(this, "Post updated ✓"); finish(); })
-                    .addOnFailureListener(e -> fail(e.getMessage()));
+            Fb.db().collection("posts").document(editId).update(m);
+            Ui.toast(this, "Post updated ✓");
+            finish();
             return;
         }
-        m.put("authorId", Fb.uid());
-        m.put("authorName", Fb.myName());
-        m.put("authorPhotoUrl", Fb.myPhoto());
-        m.put("authorVerified", Fb.me != null && Fb.me.isVerified);
-        m.put("authorTickLevel", Fb.me != null && Fb.me.tickLevel != null ? Fb.me.tickLevel : "none");
+        String myUid = Fb.uid();
+        String myName = Fb.myName();
+        String myPhoto = Fb.myPhoto();
+        boolean myVer = Fb.me != null && Fb.me.isVerified;
+        String myTick = Fb.me != null && Fb.me.tickLevel != null ? Fb.me.tickLevel : "none";
+
+        m.put("authorId", myUid);
+        m.put("authorName", myName);
+        m.put("authorPhotoUrl", myPhoto);
+        m.put("authorVerified", myVer);
+        m.put("authorTickLevel", myTick);
         m.put("taggedUids", new ArrayList<>(taggedUids));
         m.put("taggedNames", new ArrayList<>(taggedNames));
         if (uploadedUrl == null && bgColor == 0) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
@@ -789,13 +795,49 @@ public class CreatePostActivity extends Activity {
         m.put("shares", 0);
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("posts").add(m)
-                .addOnSuccessListener(x -> {
-                    Prefs.setPostDraft(this, "");
-                    Ui.toast(this, "Posted ✓");
-                    finish();
-                })
-                .addOnFailureListener(e -> fail(e.getMessage()));
+
+        // ⚡ 0.0ms Optimistic Publish: write to local persistence + prepend to FastCache immediately!
+        com.google.firebase.firestore.DocumentReference docRef = Fb.db().collection("posts").document();
+        com.friendbook.models.Models.Post optimistic = new com.friendbook.models.Models.Post();
+        optimistic.id = docRef.getId();
+        optimistic.authorId = myUid;
+        optimistic.authorName = myName;
+        optimistic.authorPhoto = myPhoto;
+        optimistic.authorVerified = myVer;
+        optimistic.authorTickLevel = myTick;
+        optimistic.content = content;
+        optimistic.feeling = feeling;
+        optimistic.privacy = privacy;
+        optimistic.location = location == null ? "" : location;
+        optimistic.postType = postType;
+        optimistic.lifeEventIcon = lifeEventIcon;
+        optimistic.lifeEventTitle = lifeEventTitle;
+        optimistic.marketTitle = marketTitle;
+        optimistic.marketPrice = marketPrice;
+        optimistic.marketCategory = marketCategory;
+        optimistic.pageId = pageId;
+        optimistic.pageName = pageName;
+        optimistic.pagePhoto = pagePhoto;
+        optimistic.groupId = groupId;
+        optimistic.bgColor = bgColor;
+        optimistic.mediaUrl = uploadedUrl == null ? "" : uploadedUrl;
+        optimistic.mediaType = bgColor != 0 ? "none" : (uploadedUrl == null ? "none" : mediaType);
+        if (allUrls != null) optimistic.mediaUrls = new ArrayList<>(allUrls);
+        optimistic.taggedUids = new ArrayList<>(taggedUids);
+        optimistic.taggedNames = new ArrayList<>(taggedNames);
+        optimistic.pollOptions = new ArrayList<>(pollOptions);
+        optimistic.createdAt = System.currentTimeMillis();
+        if (groupId == null || groupId.isEmpty()) {
+            com.friendbook.core.FastCache.prependFeedPost(this, optimistic);
+        }
+
+        docRef.set(m).addOnFailureListener(e ->
+                android.util.Log.e("CreatePost", "Background sync failed: " + e));
+        Prefs.setPostDraft(this, "");
+        Ui.toast(this, com.friendbook.core.FastCache.isOffline(this)
+                ? "Posted offline ✓ — will sync automatically"
+                : "Posted ✓");
+        finish();
     }
 
     private void fail(String msg) {

@@ -39,6 +39,8 @@ public class Models {
         public List<String> savedReelIds = new ArrayList<>();
         public List<String> hobbies = new ArrayList<>();
         public String pinnedPostId;       // 📌 post pinned on own profile
+        public String statusNote;         // 💭 24h FB-Lite Note bubble ("Share a thought")
+        public long statusNoteAt;         // 💭 timestamp of Note bubble
         public int dailyStreak;           // 🎁 consecutive daily-bonus days
         public long lastBonusAt;          // 🎁 last daily-bonus claim (epoch ms)
 
@@ -110,6 +112,9 @@ public class Models {
             u.savedReelIds = Format.listOf(m, "savedReelIds");
             u.hobbies = Format.listOf(m, "hobbies");
             u.pinnedPostId = Format.str(m, "pinnedPostId");
+            u.statusNote = Format.str(m, "statusNote");
+            Object sna = m == null ? null : m.get("statusNoteAt");
+            u.statusNoteAt = sna instanceof Number ? ((Number) sna).longValue() : Format.ts(sna);
             u.dailyStreak = Format.intOf(m, "dailyStreak");
             Object lb = m == null ? null : m.get("lastBonusAt");
             u.lastBonusAt = lb instanceof Number ? ((Number) lb).longValue() : Format.ts(lb);
@@ -232,6 +237,7 @@ public class Models {
         public int likes;
         public long createdAt;
         public List<String> likedBy = new ArrayList<>();
+        public Map<String, String> reactions = new HashMap<>(); // uid -> like|love|haha|wow|sad|angry
 
         public static Comment fromDoc(DocumentSnapshot d) {
             Comment c = new Comment();
@@ -247,6 +253,13 @@ public class Models {
             c.likes = Format.intOf(m, "likes");
             c.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             c.likedBy = Format.listOf(m, "likedBy");
+            Object rx = m == null ? null : m.get("reactions");
+            if (rx instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rx).entrySet()) {
+                    if (e.getValue() != null)
+                        c.reactions.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                }
+            }
             return c;
         }
     }
@@ -403,7 +416,7 @@ public class Models {
     }
 
     public static class Group {
-        public String id, name, about, photoUrl, adminId;
+        public String id, name, about, photoUrl, coverUrl, adminId, privacy, rules, pinnedPostId;
         public long createdAt;
         public List<String> members = new ArrayList<>();
 
@@ -414,7 +427,11 @@ public class Models {
             g.name = Format.strOr(m, "name", "Group");
             g.about = Format.str(m, "about");
             g.photoUrl = Format.str(m, "photoUrl");
+            g.coverUrl = Format.str(m, "coverUrl");
             g.adminId = Format.str(m, "adminId");
+            g.privacy = Format.strOr(m, "privacy", "Public");
+            g.rules = Format.str(m, "rules");
+            g.pinnedPostId = Format.str(m, "pinnedPostId");
             g.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             g.members = Format.listOf(m, "members");
             return g;

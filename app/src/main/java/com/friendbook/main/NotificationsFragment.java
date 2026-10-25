@@ -84,9 +84,20 @@ public class NotificationsFragment extends Fragment {
 
         RecyclerView rv = new RecyclerView(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
+        rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(20);
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        // ⚡ 0.0ms Instant Cached Notifications Hydration!
+        List<Models.Notif> cached = com.friendbook.core.FastCache.getNotifications();
+        if (!cached.isEmpty()) {
+            data.clear();
+            data.addAll(cached);
+            empty.setVisibility(View.GONE);
+            adapter.notifyDataSetChanged();
+        }
         return root;
     }
 
@@ -122,6 +133,9 @@ public class NotificationsFragment extends Fragment {
                     }
                     Collections.sort(data, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     if (data.size() > 80) data.subList(80, data.size()).clear();
+                    if (!unreadOnly && !data.isEmpty()) {
+                        com.friendbook.core.FastCache.saveNotifications(data);
+                    }
                     adapter.notifyDataSetChanged();
                     empty.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
                 });

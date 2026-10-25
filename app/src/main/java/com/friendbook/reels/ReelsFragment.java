@@ -95,8 +95,23 @@ public class ReelsFragment extends Fragment {
                         }
                     }
                     adapter.setData(list);
-                    pager.postDelayed(() -> adapter.playOnly(pager, pager.getCurrentItem()), 350);
+                    if (!isHidden()) {
+                        pager.postDelayed(() -> {
+                            if (!isHidden()) adapter.playOnly(pager, pager.getCurrentItem());
+                        }, 200);
+                    }
                 });
+    }
+
+    @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (adapter == null) return;
+        if (hidden) {
+            adapter.stopAll();
+        } else if (pager != null) {
+            pager.post(() -> adapter.playOnly(pager, pager.getCurrentItem()));
+        }
     }
 
     @Override

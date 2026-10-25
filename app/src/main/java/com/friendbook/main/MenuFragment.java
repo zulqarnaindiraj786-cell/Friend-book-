@@ -114,6 +114,14 @@ public class MenuFragment extends Fragment {
         ncol.setOnClickListener(goProfile);
         body.addView(card);
 
+        // ⚡ 0.0ms immediate profile card render from cached Fb.me!
+        if (Fb.me != null) {
+            name.setText(Fb.me.displayName);
+            bio.setText(Fb.me.bio == null || Fb.me.bio.isEmpty() ? "View your profile" : Fb.me.bio);
+            Ui.avatar(a, avatar, Fb.me.photoUrl);
+            Icons.setTickBadge(tickIv, Fb.me.tickLevel, false);
+        }
+
         // ---- Admin Zone (owner / promoted admins only) ----
         if (Admin.isAdmin()) {
             LinearLayout adminCard = Ui.col(a);
@@ -186,6 +194,22 @@ public class MenuFragment extends Fragment {
                 tile(a, Icons.CHART, 0xFFF7B928, "🏆 Leaderboard", "Top ⭐ creators",
                         () -> startActivity(new Intent(a, com.friendbook.social.LeaderboardActivity.class))));
 
+        addGridRow(body, a,
+                tile(a, Icons.DATA_SAVER, 0xFF00A400, "⚡ 2G Turbo Mode",
+                        com.friendbook.core.FastCache.modeBadgeLabel(a),
+                        () -> com.friendbook.core.FastCache.showLiteModeDialog(a, () -> {
+                            if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                        })),
+                tile(a, Icons.GLOBE, Ui.BLUE, "📡 Find Wi-Fi",
+                        com.friendbook.core.FastCache.netLabel(a).replace("📡 ", "").replace("⚡ ", ""),
+                        () -> {
+                            try {
+                                startActivity(new Intent(android.provider.Settings.ACTION_WIFI_SETTINGS));
+                            } catch (Throwable t) {
+                                Ui.toast(a, com.friendbook.core.FastCache.netLabel(a));
+                            }
+                        }));
+
         body.addView(spacer(a, 10));
 
         // ---- Quick Lite Controls ----
@@ -197,15 +221,25 @@ public class MenuFragment extends Fragment {
             Prefs.setDark(a, on);
             a.recreate();
         }));
+        body.addView(switchItem(a, Icons.DATA_SAVER, "📵 Text-Only 2G Mode (0 KB auto photos)",
+                Prefs.textOnlyMode(a), (btn, on) -> {
+                    Prefs.setTextOnlyMode(a, on);
+                    if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                    Ui.toast(a, on ? "📵 Text-Only 2G Mode ON — tap photos to load!" : "Photos auto-loading restored");
+                }));
         body.addView(switchItem(a, Icons.DATA_SAVER, "Data Saver (" + Ui.formatBytes(Prefs.dataBytesSaved(a)) + " saved)",
                 Prefs.dataSaver(a), (btn, on) -> {
                     Prefs.setDataSaver(a, on);
-                    Ui.toast(a, on ? "Data Saver ON — lighter images & manual video play" : "Data Saver OFF");
+                    if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
+                    Ui.toast(a, on ? "Data Saver ON — ~14 KB WebP photos & manual video" : "Data Saver OFF");
                 }));
         body.addView(switchItem(a, Icons.QUIET, "Quiet mode", Prefs.quiet(a), (btn, on) -> {
             Prefs.setQuiet(a, on);
             Ui.toast(a, on ? "Quiet mode ON — badges muted" : "Quiet mode OFF");
         }));
+        body.addView(item(a, Icons.BOOKMARK, "📥 Preload 30 Posts for Offline / 2G",
+                "Cache latest feed posts & mini thumbnails for instant 0ms offline reading",
+                () -> com.friendbook.core.FastCache.preloadFeedForOffline(a, null)));
 
         body.addView(spacer(a, 10));
 
@@ -239,6 +273,7 @@ public class MenuFragment extends Fragment {
                                 Fb.myName(), Fb.myPhoto());
                     }
                     Presence.goOffline();
+                    com.friendbook.core.FastCache.clearAll(a);
                     Fb.auth().signOut();
                     Fb.me = null;
                     Prefs.setUnlockedSession(a, false);

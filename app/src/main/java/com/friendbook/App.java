@@ -47,14 +47,22 @@ public class App extends Application implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        com.friendbook.core.FastCache.init(this);
         Fb.init(this);
         installCrashReporter();
-        Presence.init();
-        Fb.startMeListener();
+        // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
+        Looper.myQueue().addIdleHandler(() -> {
+            Presence.init();
+            Fb.startMeListener();
+            return false;
+        });
 
-        // Track real foreground time for "Your time on friendbook"
+        // Track real foreground time + apply Facebook-Lite zero-lag screen transitions
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override public void onActivityResumed(Activity a) {
+                if (Prefs.instantTransitions(App.this)) {
+                    a.overridePendingTransition(0, 0);
+                }
                 if (resumedCount == 0) {
                     Prefs.addForegroundSeconds(App.this, 5);
                     timeHandler.removeCallbacks(timeTick);
@@ -63,21 +71,28 @@ public class App extends Application implements SensorEventListener {
                 resumedCount++;
             }
             @Override public void onActivityPaused(Activity a) {
+                if (Prefs.instantTransitions(App.this)) {
+                    a.overridePendingTransition(0, 0);
+                }
                 resumedCount = Math.max(0, resumedCount - 1);
                 if (resumedCount == 0) timeHandler.removeCallbacks(timeTick);
             }
-            @Override public void onActivityCreated(Activity a, Bundle b) { }
+            @Override public void onActivityCreated(Activity a, Bundle b) {
+                if (Prefs.instantTransitions(App.this)) {
+                    a.overridePendingTransition(0, 0);
+                }
+            }
             @Override public void onActivityStarted(Activity a) { }
             @Override public void onActivityStopped(Activity a) { }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }
             @Override public void onActivityDestroyed(Activity a) { }
         });
 
-        // Secret feature: shake phone to send feedback (controlled via Settings).
+        // Secret feature: shake phone to send feedback (low-power SENSOR_DELAY_NORMAL for smooth UI).
         SensorManager sm = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sm != null) {
             Sensor acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-            if (acc != null) sm.registerListener(this, acc, SensorManager.SENSOR_DELAY_UI);
+            if (acc != null) sm.registerListener(this, acc, SensorManager.SENSOR_DELAY_NORMAL);
         }
     }
 

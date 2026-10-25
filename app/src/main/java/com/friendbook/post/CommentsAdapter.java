@@ -45,10 +45,15 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
     /** Override which doc holds the comments counter (default: posts/{postId}). */
     public String counterCollection = null;
     public String counterId = null;
+    private String sortMode = "relevant";
 
     public CommentsAdapter(Activity a, Host h) {
         this.activity = a;
         this.host = h;
+    }
+
+    public void setSortMode(String mode) {
+        this.sortMode = mode == null ? "relevant" : mode;
     }
 
     /** Rebuild the flattened display list from raw comments. */
@@ -64,7 +69,16 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
                 l.add(c);
             }
         }
-        roots.sort((a, b) -> Long.compare(a.createdAt, b.createdAt));
+        if ("newest".equals(sortMode)) {
+            roots.sort((a, b) -> Long.compare(b.createdAt, a.createdAt));
+        } else if ("oldest".equals(sortMode)) {
+            roots.sort((a, b) -> Long.compare(a.createdAt, b.createdAt));
+        } else {
+            roots.sort((a, b) -> {
+                if (b.likes != a.likes) return Integer.compare(b.likes, a.likes);
+                return Long.compare(b.createdAt, a.createdAt);
+            });
+        }
         for (Models.Comment r : roots) {
             addRow(r, 0, byParent);
         }
@@ -173,11 +187,24 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
         } else h.img.setVisibility(View.GONE);
 
         h.time.setText(Format.ago(c.createdAt));
-        boolean liked = c.likedBy.contains(Fb.uid());
-        h.like.setTextColor(liked ? Ui.BLUE : Ui.sub(activity));
-        h.likesCount.setText(c.likes > 0 ? "👍 " + Format.count(c.likes) : "");
+        String me = Fb.uid();
+        String myEmojiType = (me != null && c.reactions != null) ? c.reactions.get(me) : null;
+        boolean liked = (myEmojiType != null && !myEmojiType.isEmpty()) || (me != null && c.likedBy.contains(me));
+        if (myEmojiType != null && !myEmojiType.isEmpty()) {
+            h.like.setText(Reactions.emojiFor(myEmojiType) + " " + Reactions.labelFor(myEmojiType));
+            h.like.setTextColor(Reactions.colorFor(myEmojiType));
+        } else {
+            h.like.setText("Like");
+            h.like.setTextColor(liked ? Ui.BLUE : Ui.sub(activity));
+        }
+        String topEm = (myEmojiType != null && !myEmojiType.isEmpty()) ? Reactions.emojiFor(myEmojiType) : "👍";
+        h.likesCount.setText(c.likes > 0 ? topEm + " " + Format.count(c.likes) : "");
 
-        h.like.setOnClickListener(v -> toggleLike(c));
+        h.like.setOnClickListener(v -> { Ui.haptic(v); toggleLike(c, null); });
+        h.like.setOnLongClickListener(v -> {
+            Reactions.show(h.like, type -> toggleLike(c, type));
+            return true;
+        });
         h.reply.setOnClickListener(v -> host.replyTo(c));
         View.OnClickListener prof = v -> {
             Intent i = new Intent(activity, ProfileActivity.class);
@@ -189,12 +216,15 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
 
         h.itemView.setOnLongClickListener(v -> {
             boolean mine = c.authorId.equals(Fb.uid());
-            String[] opts = mine ? new String[]{"Reply", "✏️ Edit comment", "Delete comment"}
-                    : new String[]{"Reply", "Report comment"};
+            String[] opts = mine
+                    ? new String[]{"↩ Reply", "📋 Copy comment", "✏️ Edit comment", "🗑 Delete comment"}
+                    : new String[]{"↩ Reply", "📋 Copy comment", "🚩 Report comment"};
             Ui.choose(activity, "Comment", opts, w -> {
                 if (w == 0) host.replyTo(c);
-                else if (mine) {
-                    if (w == 1) editComment(c);
+                else if (w == 1) {
+                    Ui.copy(activity, c.content);
+                } else if (mine) {
+                    if (w == 2) editComment(c);
                     else deleteComment(c);
                 } else {
                     Fb.db().collection("reports").add(Fb.map(
@@ -233,15 +263,39 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
                 .show();
     }
 
-    private void toggleLike(Models.Comment c) {
+    private void toggleLike(Models.Comment c, String pickedReaction) {
         String me = Fb.uid();
         if (me == null) return;
-        boolean liked = c.likedBy.contains(me);
+        String curReact = c.reactions != null ? c.reactions.get(me) : null;
+        boolean hadLike = (curReact != null && !curReact.isEmpty()) || c.likedBy.contains(me);
+        boolean removing = pickedReaction == null ? hadLike : pickedReaction.equals(curReact);
+
         Map<String, Object> m = new HashMap<>();
-        m.put("likedBy", liked ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-        m.put("likes", FieldValue.increment(liked ? -1 : 1));
+        if (removing) {
+            c.likedBy.remove(me);
+            if (c.reactions != null) c.reactions.remove(me);
+            c.likes = Math.max(0, c.likes - 1);
+            m.put("likedBy", FieldValue.arrayRemove(me));
+            m.put("reactions." + me, FieldValue.delete());
+            m.put("likes", FieldValue.increment(-1));
+        } else {
+            String rt = pickedReaction == null ? "like" : pickedReaction;
+            if (!c.likedBy.contains(me)) c.likedBy.add(me);
+            if (c.reactions == null) c.reactions = new HashMap<>();
+            c.reactions.put(me, rt);
+            if (!hadLike) {
+                c.likes = c.likes + 1;
+                m.put("likes", FieldValue.increment(1));
+            }
+            m.put("likedBy", FieldValue.arrayUnion(me));
+            m.put("reactions." + me, rt);
+            if (!hadLike && !me.equals(c.authorId)) {
+                Notify.send(c.authorId, "comment_like", "reacted to your comment", c.postId);
+            }
+        }
+        // ⚡ 0.0ms immediate UI refresh!
+        notifyDataSetChanged();
         Fb.db().collection("comments").document(c.id).update(m);
-        if (!liked) Notify.send(c.authorId, "comment_like", "liked your comment", c.postId);
     }
 
     private void deleteComment(Models.Comment c) {

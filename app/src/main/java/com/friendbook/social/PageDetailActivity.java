@@ -95,7 +95,8 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         LinearLayout info = Ui.col(this);
         info.setBackgroundColor(Ui.card(this));
         Ui.pad(info, 16, 12, 16, 14);
-        titleTv = Ui.tvBold(this, "Loading…", 21, Ui.txt(this));
+        String initName = getIntent().getStringExtra("name");
+        titleTv = Ui.tvBold(this, initName != null && !initName.isEmpty() ? initName : "Page", 21, Ui.txt(this));
         catTv = Ui.tvBold(this, "", 12, Ui.BLUE);
         statsTv = Ui.tv(this, "", 13, Ui.sub(this));
         statsTv.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 6));

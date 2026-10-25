@@ -169,7 +169,64 @@ public class SettingsActivity extends Activity {
         body.addView(switchRowI(Icons.DATA_SAVER, "Data Saver mode",
                 Prefs.dataSaver(this), (btn, on) -> {
                     Prefs.setDataSaver(this, on);
-                    Ui.toast(this, on ? "Data Saver ON — saving up to 80% mobile data" : "Data Saver OFF");
+                    Ui.toast(this, on ? "Data Saver ON — saving up to 90% mobile data" : "Data Saver OFF");
+                }));
+
+        // ============ 4B. ⚡ 2G SPEED, TEXT-ONLY MODE & OFFLINE ENGINE ============
+        body.addView(header("2G speed & offline engine"));
+        body.addView(rowI(Icons.DATA_SAVER, "⚡ Lite 2G mode switcher",
+                "Current: " + com.friendbook.core.FastCache.modeBadgeLabel(this)
+                        + " · " + com.friendbook.core.FastCache.netLabel(this),
+                () -> com.friendbook.core.FastCache.showLiteModeDialog(this, null)));
+        body.addView(switchRowI(Icons.DATA_SAVER, "⚡ 2G Ultra-Lite Turbo Engine",
+                Prefs.turbo2g(this), (btn, on) -> {
+                    Prefs.setTurbo2g(this, on);
+                    Ui.toast(this, on
+                            ? "⚡ 2G Turbo Engine ON — WebP CDN compression + 0ms instant UI"
+                            : "2G Turbo Engine OFF");
+                }));
+        body.addView(switchRowI(Icons.IMAGE, "📵 Text-Only Basic 2G Mode (0 KB auto photos)",
+                Prefs.textOnlyMode(this), (btn, on) -> {
+                    Prefs.setTextOnlyMode(this, on);
+                    Ui.toast(this, on
+                            ? "📵 Text-Only 2G Mode ON — tap 'See Photo' only when needed"
+                            : "Auto photo loading restored");
+                }));
+        body.addView(switchRowI(Icons.ACTIVE, "🚀 Instant screen transitions (zero animation lag)",
+                Prefs.instantTransitions(this), (btn, on) -> {
+                    Prefs.setInstantTransitions(this, on);
+                    Ui.toast(this, on
+                            ? "🚀 Instant 0ms transitions enabled"
+                            : "Standard Android animations enabled");
+                }));
+        body.addView(switchRowI(Icons.GLOBE, "📡 Auto-preload feed on Wi-Fi",
+                Prefs.wifiPreload(this), (btn, on) -> {
+                    Prefs.setWifiPreload(this, on);
+                    Ui.toast(this, on ? "Wi-Fi feed preload ON" : "Wi-Fi feed preload OFF");
+                }));
+        body.addView(rowI(Icons.BOOKMARK, "📥 Save 30 posts for offline reading",
+                "Download text & tiny thumbnails now (" + com.friendbook.core.FastCache.cachedFeedCount() + " cached)",
+                () -> com.friendbook.core.FastCache.preloadFeedForOffline(this, null)));
+        body.addView(rowI(Icons.CHART, "📊 Live network & speed diagnostics",
+                com.friendbook.core.FastCache.netLabel(this) + " · "
+                        + Ui.formatBytes(Prefs.dataBytesSaved(this)) + " saved",
+                () -> Ui.info(this, "📊 Speed & 2G Diagnostics",
+                        "Connection: " + com.friendbook.core.FastCache.netLabel(this)
+                        + "\nActive Mode: " + com.friendbook.core.FastCache.modeBadgeLabel(this)
+                        + "\nCached Posts in RAM/Disk: " + com.friendbook.core.FastCache.cachedFeedCount()
+                        + "\nCached Profiles in RAM: " + com.friendbook.core.FastCache.cachedUserCount()
+                        + "\n0ms RAM Cache Hits: " + com.friendbook.core.FastCache.ramHits()
+                        + "\nFirestore Offline Cache: 100 MB Persistent Enabled"
+                        + "\nData Saved: " + Ui.formatBytes(Prefs.dataBytesSaved(this))
+                        + "\nData Used: " + Ui.formatBytes(Prefs.dataBytesUsed(this)))));
+        body.addView(rowI(Icons.GLOBE, "📡 Find Wi-Fi networks",
+                "Open Wi-Fi settings to connect to fast free Wi-Fi",
+                () -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_WIFI_SETTINGS));
+                    } catch (Throwable t) {
+                        Ui.toast(this, com.friendbook.core.FastCache.netLabel(this));
+                    }
                 }));
         body.addView(rowI(Icons.SNOOZE, "Your time on friendbook",
                 "Today: " + Prefs.todayMinutes(this) + "m · 7-day chart & daily reminder",

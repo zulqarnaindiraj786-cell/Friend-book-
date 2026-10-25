@@ -44,7 +44,15 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private ImageView imgPreview;
     private String postAuthorId;
     private List<String> postSubscribers = new ArrayList<>();
+    private final List<Models.Comment> rawComments = new ArrayList<>();
+    private TextView sortBtn;
     private boolean busy;
+
+    private final com.friendbook.core.FastCache.ReactionObserver reactionObserver = (pid, mine, total) -> {
+        if (postId != null && postId.equals(pid) && postAdapter != null) {
+            postAdapter.onFastReactionUpdate(pid, mine, total);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle b) {
@@ -62,6 +70,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
         RecyclerView postRv = new RecyclerView(this);
         postRv.setLayoutManager(new LinearLayoutManager(this));
+        postRv.setItemAnimator(null);
         postRv.setNestedScrollingEnabled(false);
         postAdapter = new FeedAdapter(this, this);
         postAdapter.showHeader = false;
@@ -69,12 +78,29 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postRv.setAdapter(postAdapter);
         scrollBody.addView(postRv, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView cTitle = Ui.tvBold(this, "Comments", 14, Ui.sub(this));
-        Ui.pad(cTitle, 12, 8, 12, 2);
-        scrollBody.addView(cTitle);
+        // ⚡ 0.0ms Instant Pre-Render from FastCache!
+        for (Models.Post cached : com.friendbook.core.FastCache.getFeed()) {
+            if (cached != null && postId.equals(cached.id)) {
+                postAuthorId = cached.authorId;
+                List<Models.Post> one = new ArrayList<>();
+                one.add(cached);
+                postAdapter.setPosts(one);
+                break;
+            }
+        }
+
+        LinearLayout cHead = Ui.row(this);
+        Ui.pad(cHead, 12, 8, 12, 4);
+        TextView cTitle = Ui.tvBold(this, "Comments", 14, Ui.txt(this));
+        cHead.addView(cTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        sortBtn = Ui.tvBold(this, sortLabel(com.friendbook.core.Prefs.commentSort(this)), 12, Ui.BLUE);
+        sortBtn.setOnClickListener(v -> pickCommentSort());
+        cHead.addView(sortBtn);
+        scrollBody.addView(cHead);
 
         RecyclerView cRv = new RecyclerView(this);
         cRv.setLayoutManager(new LinearLayoutManager(this));
+        cRv.setItemAnimator(null);
         cRv.setNestedScrollingEnabled(false);
         commentsAdapter = new CommentsAdapter(this, this);
         cRv.setAdapter(commentsAdapter);
@@ -109,6 +135,22 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         chipRow.addView(cancelReply);
         wrap.addView(chipRow);
         cancelReply.setTag("cancelReply");
+
+        // ⚡ Facebook Lite Quick Emoji Bar above comment input
+        LinearLayout emojiRow = Ui.row(this);
+        Ui.pad(emojiRow, 10, 4, 10, 0);
+        String[] emojis = {"❤️", "😂", "🔥", "👏", "😢", "😍", "👍", "💯"};
+        for (final String em : emojis) {
+            TextView et = Ui.tv(this, em, 18, Ui.txt(this));
+            et.setGravity(android.view.Gravity.CENTER);
+            et.setOnClickListener(v -> {
+                Ui.haptic(v);
+                int pos = Math.max(0, input.getSelectionStart());
+                input.getText().insert(pos, em);
+            });
+            emojiRow.addView(et, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        wrap.addView(emojiRow);
 
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 10, 8, 10, 8);
@@ -162,12 +204,34 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         return wrap;
     }
 
+    private String sortLabel(String s) {
+        if ("newest".equals(s)) return "Newest first ▾";
+        if ("oldest".equals(s)) return "All comments (oldest) ▾";
+        return "Most relevant ▾";
+    }
+
+    private void pickCommentSort() {
+        String[] opts = {"⭐ Most relevant (top liked)", "🕒 Newest first", "📜 All comments (oldest first)"};
+        Ui.choose(this, "Filter comments", opts, w -> {
+            String key = w == 1 ? "newest" : (w == 2 ? "oldest" : "relevant");
+            com.friendbook.core.Prefs.setCommentSort(this, key);
+            if (sortBtn != null) sortBtn.setText(sortLabel(key));
+            commentsAdapter.setSortMode(key);
+            commentsAdapter.setAll(rawComments);
+        });
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
+        com.friendbook.core.FastCache.addReactionObserver(reactionObserver);
+        commentsAdapter.setSortMode(com.friendbook.core.Prefs.commentSort(this));
         postReg = Fb.db().collection("posts").document(postId)
                 .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) { Ui.toast(this, "Post was deleted"); finish(); return; }
+                    if (d == null || !d.exists()) {
+                        if (postAdapter.getItemCount() == 0) { Ui.toast(this, "Post was deleted"); finish(); }
+                        return;
+                    }
                     Models.Post p = Models.Post.fromDoc(d);
                     postAuthorId = p.authorId;
                     postSubscribers = p.subscribedBy != null ? p.subscribedBy : new ArrayList<>();
@@ -178,19 +242,20 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         commentsReg = Fb.db().collection("comments").whereEqualTo("postId", postId)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null) return;
-                    List<Models.Comment> all = new ArrayList<>();
+                    rawComments.clear();
                     for (DocumentSnapshot d : snap) {
                         Models.Comment c = Models.Comment.fromDoc(d);
                         if (Fb.me != null && Fb.me.blocked.contains(c.authorId)) continue;
-                        all.add(c);
+                        rawComments.add(c);
                     }
-                    commentsAdapter.setAll(all);
+                    commentsAdapter.setAll(rawComments);
                 });
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        com.friendbook.core.FastCache.removeReactionObserver(reactionObserver);
         if (postReg != null) postReg.remove();
         if (commentsReg != null) commentsReg.remove();
     }
@@ -243,6 +308,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     }
 
     private void write(String text, String imageUrl) {
+        final Models.Comment prevReply = replyingTo;
         java.util.Map<String, Object> m = Fb.map(
                 "postId", postId,
                 "authorId", Fb.uid(),
@@ -252,34 +318,35 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                 "imageUrl", imageUrl,
                 "likes", 0,
                 "likedBy", new ArrayList<String>(),
-                "parentId", replyingTo == null ? null : replyingTo.id,
+                "parentId", prevReply == null ? null : prevReply.id,
                 "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("comments").add(m)
-                .addOnSuccessListener(x -> {
-                    Fb.db().collection("posts").document(postId).update("comments", FieldValue.increment(1));
-                    if (postAuthorId != null) Notify.comment(this, postAuthorId, postId);
-                    if (replyingTo != null && !replyingTo.authorId.equals(Fb.uid()))
-                        Notify.send(replyingTo.authorId, "comment_reply", "replied to your comment", postId);
-                    for (String subUid : postSubscribers) {
-                        if (subUid != null && !subUid.equals(Fb.uid()) && !subUid.equals(postAuthorId)) {
-                            Notify.send(subUid, "comment", "commented on a post you turned notifications on for", postId);
-                        }
-                    }
-                    replyingTo = null;
-                    replyChip.setVisibility(View.GONE);
-                    input.setText("");
-                    input.setHint("Write a comment…");
-                    commentImage = null;
-                    imgPreview.setVisibility(View.GONE);
-                    busy = false;
-                    sendBtn.setEnabled(true);
-                    Ui.hideKeyboard(this);
-                })
-                .addOnFailureListener(e -> {
-                    busy = false;
-                    sendBtn.setEnabled(true);
-                    Ui.toast(this, "Failed to comment");
-                });
+
+        // ⚡ 0.0ms Optimistic Comment Write: clear composer & queue locally immediately!
+        replyingTo = null;
+        replyChip.setVisibility(View.GONE);
+        View cancel = replyChip.getParent() instanceof View
+                ? ((LinearLayout) replyChip.getParent()).getChildAt(1) : null;
+        if (cancel != null) cancel.setVisibility(View.GONE);
+        input.setText("");
+        input.setHint("Write a comment…");
+        commentImage = null;
+        imgPreview.setVisibility(View.GONE);
+        busy = false;
+        sendBtn.setEnabled(true);
+        Ui.hideKeyboard(this);
+
+        com.google.firebase.firestore.DocumentReference cRef = Fb.db().collection("comments").document();
+        cRef.set(m);
+        Fb.db().collection("posts").document(postId).update("comments", FieldValue.increment(1));
+        if (postAuthorId != null) Notify.comment(this, postAuthorId, postId);
+        if (prevReply != null && prevReply.authorId != null && !prevReply.authorId.equals(Fb.uid())) {
+            Notify.send(prevReply.authorId, "comment_reply", "replied to your comment", postId);
+        }
+        for (String subUid : postSubscribers) {
+            if (subUid != null && !subUid.equals(Fb.uid()) && !subUid.equals(postAuthorId)) {
+                Notify.send(subUid, "comment", "commented on a post you turned notifications on for", postId);
+            }
+        }
     }
 
     // ---------- FeedAdapter.Host (single post card) ----------

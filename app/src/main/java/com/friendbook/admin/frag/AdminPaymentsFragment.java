@@ -53,7 +53,7 @@ public class AdminPaymentsFragment extends Fragment {
         Ui.pad(list, 12, 10, 12, 24);
         sv.addView(list);
 
-        countT = Ui.tv(a, "Loading payments…", 12, Ui.sub(a));
+        countT = Ui.tv(a, "💵 Payments", 12, Ui.sub(a));
         Ui.pad(countT, 2, 0, 2, 8);
         list.addView(countT);
         return sv;

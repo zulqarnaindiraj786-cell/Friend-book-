@@ -76,6 +76,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         notifyDataSetChanged();
     }
 
+    /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (no full list redraw!). */
+    public void onFastReactionUpdate(String postId, String mine, int total) {
+        if (postId == null) return;
+        for (int i = 0; i < posts.size(); i++) {
+            Models.Post p = posts.get(i);
+            if (p != null && postId.equals(p.id)) {
+                p.likes = total;
+                int slot = adsEnabled ? (i + (i / 3)) : i;
+                notifyItemChanged(offset() + slot);
+                return;
+            }
+        }
+    }
+
     public void addPosts(List<Models.Post> list) {
         int start = posts.size();
         posts.addAll(list);
@@ -616,18 +630,49 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 && p.mediaUrl != null && !p.mediaUrl.isEmpty();
         final String fImg = imgUrl;
 
+        final boolean textOnlyPhotoHidden = fImg != null && Prefs.textOnlyMode(c)
+                && !com.friendbook.core.FastCache.isPhotoRevealed(p.id);
+
         vh.image.setImageDrawable(null);
         vh.image.setOnClickListener(null);
         vh.mediaWrap.setOnClickListener(null);
         vh.playBadge.setVisibility(View.GONE);
+        vh.playBadge.setTextSize(44);
         vh.pageBadge.setVisibility(View.GONE);
         ViewGroup.LayoutParams wp = vh.mediaWrap.getLayoutParams();
-        wp.height = isVideo ? Ui.dp(c, 280) : ViewGroup.LayoutParams.WRAP_CONTENT;
+        wp.height = textOnlyPhotoHidden ? Ui.dp(c, 92)
+                : (isVideo ? Ui.dp(c, 240) : ViewGroup.LayoutParams.WRAP_CONTENT);
         vh.mediaWrap.setLayoutParams(wp);
         vh.mediaWrap.setVisibility((fImg != null || isVideo) ? View.VISIBLE : View.GONE);
 
-        if (fImg != null) {
+        if (textOnlyPhotoHidden) {
+            // 📵 Facebook Lite Basic / Text-Only 2G Mode: 0 KB automatic photo load!
             vh.image.setVisibility(View.VISIBLE);
+            vh.image.setImageDrawable(Ui.round(c, Ui.inputBg(c), 0));
+            vh.playBadge.setVisibility(View.VISIBLE);
+            vh.playBadge.setBackgroundColor(0xCC182438);
+            vh.playBadge.setTextSize(14);
+            int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
+            vh.playBadge.setText(album > 1
+                    ? "🖼 Tap to view " + album + " photos (~14 KB each)"
+                    : "🖼 Tap to view photo (~14 KB)");
+            vh.mediaWrap.setOnClickListener(v -> {
+                com.friendbook.core.FastCache.revealPhoto(p.id);
+                ViewGroup.LayoutParams nwp = vh.mediaWrap.getLayoutParams();
+                nwp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                vh.mediaWrap.setLayoutParams(nwp);
+                vh.playBadge.setVisibility(View.GONE);
+                Ui.img(c, vh.image, fImg);
+                vh.image.setOnClickListener(iv -> {
+                    Intent i = new Intent(c, FullscreenMediaActivity.class);
+                    i.putExtra("type", "image");
+                    i.putExtra("url", fImg);
+                    c.startActivity(i);
+                });
+            });
+        } else if (fImg != null) {
+            vh.image.setVisibility(View.VISIBLE);
+            vh.playBadge.setBackgroundColor(0x99000000);
             Ui.img(c, vh.image, fImg);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
@@ -641,11 +686,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 c.startActivity(i);
             });
         } else if (isVideo) {
-            // video posts: dark thumbnail box + ▶ overlay → fullscreen player on tap
+            // video posts: lightweight dark thumbnail box + ▶ overlay → fullscreen player on tap (0 KB auto video load!)
             vh.image.setVisibility(View.VISIBLE);
             vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
             vh.playBadge.setVisibility(View.VISIBLE);
-            vh.playBadge.setText("▶");
+            vh.playBadge.setBackgroundColor(0x99000000);
+            vh.playBadge.setTextSize(15);
+            vh.playBadge.setText("▶ Tap to play video");
             vh.mediaWrap.setOnClickListener(v -> {
                 Intent i = new Intent(c, FullscreenMediaActivity.class);
                 i.putExtra("type", "video");
@@ -654,54 +701,84 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
         }
 
-        // plain gray baseline labels with counts (live reaction listener refines Like)
-        vh.like.setText("👍 Like" + (p.likes > 0 ? " · " + Format.count(p.likes) : ""));
-        vh.like.setTextColor(Ui.sub(c));
+        // ---------- ⚡ 0.0ms Instant Reaction & Counter Render (Zero N+1 WebSocket Churn!) ----------
+        if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
+        vh.itemView.setTag(p.id);
+        int totalLikes = com.friendbook.core.FastCache.getReactionTotal(p.id, p.likes);
+        String myReact = com.friendbook.core.FastCache.getMyReaction(p.id);
+        renderReactionBar(c, vh, p, myReact, totalLikes);
+
+        String me = Fb.uid();
+        if (me != null && p.id != null && !com.friendbook.core.FastCache.isReactionSynced(p.id)) {
+            com.friendbook.core.FastCache.markReactionSynced(p.id);
+            final String boundId = p.id;
+            com.google.firebase.firestore.DocumentReference myReactRef =
+                    Fb.db().collection("posts").document(boundId).collection("reactions").document(me);
+            myReactRef.get(com.google.firebase.firestore.Source.CACHE)
+                    .addOnSuccessListener(d -> {
+                        if (d != null && d.exists()) {
+                            String rt = d.getString("type");
+                            int tot = Math.max(1, com.friendbook.core.FastCache.getReactionTotal(boundId, p.likes));
+                            com.friendbook.core.FastCache.setReactionState(c, boundId, rt == null ? "like" : rt, tot, false);
+                            if (boundId.equals(vh.itemView.getTag())) {
+                                renderReactionBar(c, vh, p, rt == null ? "like" : rt, tot);
+                            }
+                        } else if (!com.friendbook.core.FastCache.isOffline(c)) {
+                            myReactRef.get().addOnSuccessListener(netDoc -> {
+                                String rt = (netDoc != null && netDoc.exists()) ? netDoc.getString("type") : null;
+                                int tot = com.friendbook.core.FastCache.getReactionTotal(boundId, p.likes);
+                                if (rt != null && tot == 0) tot = 1;
+                                com.friendbook.core.FastCache.setReactionState(c, boundId, rt, tot, false);
+                                if (boundId.equals(vh.itemView.getTag())) {
+                                    renderReactionBar(c, vh, p, rt, tot);
+                                }
+                            });
+                        }
+                    })
+                    .addOnFailureListener(e -> {
+                        if (!com.friendbook.core.FastCache.isOffline(c)) {
+                            myReactRef.get().addOnSuccessListener(netDoc -> {
+                                String rt = (netDoc != null && netDoc.exists()) ? netDoc.getString("type") : null;
+                                int tot = com.friendbook.core.FastCache.getReactionTotal(boundId, p.likes);
+                                if (rt != null && tot == 0) tot = 1;
+                                com.friendbook.core.FastCache.setReactionState(c, boundId, rt, tot, false);
+                                if (boundId.equals(vh.itemView.getTag())) {
+                                    renderReactionBar(c, vh, p, rt, tot);
+                                }
+                            });
+                        }
+                    });
+        }
+    }
+
+    private void renderReactionBar(Context c, PostVH vh, Models.Post p, String mine, int total) {
+        boolean hideCounts = Prefs.hideReactionCounts(c)
+                || (Fb.me != null && Fb.me.hideReactionCounts);
+        StringBuilder sum = new StringBuilder();
+        if (total > 0) {
+            String em = (mine != null && !mine.isEmpty()) ? Reactions.emojiFor(mine) : "👍";
+            if (total > 1 && !"love".equals(mine)) em += "❤️";
+            sum.append(em);
+            if (!hideCounts) sum.append(' ').append(Format.count(total));
+        }
+        if (p.comments > 0)
+            sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.comments)).append(" comments");
+        if (p.shares > 0)
+            sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.shares)).append(" shares");
+        vh.tagSummary.setText(sum);
+        vh.tagSummary.setVisibility(sum.length() > 0 ? View.VISIBLE : View.GONE);
+
         vh.comment.setText("💬 Comment" + (p.comments > 0 ? " · " + Format.count(p.comments) : ""));
         vh.share.setText("↗ Share" + (p.shares > 0 ? " · " + Format.count(p.shares) : ""));
 
-        // ---------- realtime reaction state → Like button ----------
-        if (vh.reactReg != null) vh.reactReg.remove();
-        String me = Fb.uid();
-        vh.reactReg = Fb.db().collection("posts").document(p.id).collection("reactions")
-                .addSnapshotListener((snap, err) -> {
-                    int total = snap == null ? 0 : snap.size();
-                    String mine = null;
-                    java.util.Set<String> kinds = new java.util.HashSet<>();
-                    if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            String t = d.getString("type");
-                            if (t == null) t = "like";
-                            kinds.add(t);
-                            if (d.getId().equals(me)) mine = t;
-                        }
-                    }
-                    // FB-Lite summary row: emoji stack + total · comments · shares (respects Hide Reaction Counts)
-                    boolean hideCounts = Prefs.hideReactionCounts(c)
-                            || (Fb.me != null && Fb.me.hideReactionCounts);
-                    StringBuilder em = new StringBuilder();
-                    for (String t : Reactions.TYPES) if (kinds.contains(t)) em.append(Reactions.emojiFor(t));
-                    StringBuilder sum = new StringBuilder();
-                    if (total > 0) {
-                        sum.append(em);
-                        if (!hideCounts) sum.append(' ').append(Format.count(total));
-                    }
-                    if (p.comments > 0)
-                        sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.comments)).append(" comments");
-                    if (p.shares > 0)
-                        sum.append(sum.length() > 0 ? " · " : "").append(Format.count(p.shares)).append(" shares");
-                    vh.tagSummary.setText(sum);
-                    vh.tagSummary.setVisibility(sum.length() > 0 ? View.VISIBLE : View.GONE);
-
-                    if (mine != null && !mine.isEmpty()) {
-                        vh.like.setText(Reactions.emojiFor(mine) + " " + Reactions.labelFor(mine)
-                                + (!hideCounts && total > 0 ? " · " + Format.count(total) : ""));
-                        vh.like.setTextColor(Reactions.colorFor(mine));
-                    } else {
-                        vh.like.setText("👍 Like" + (!hideCounts && total > 0 ? " · " + Format.count(total) : ""));
-                        vh.like.setTextColor(Ui.sub(c));
-                    }
-                });
+        if (mine != null && !mine.isEmpty()) {
+            vh.like.setText(Reactions.emojiFor(mine) + " " + Reactions.labelFor(mine)
+                    + (!hideCounts && total > 0 ? " · " + Format.count(total) : ""));
+            vh.like.setTextColor(Reactions.colorFor(mine));
+        } else {
+            vh.like.setText("👍 Like" + (!hideCounts && total > 0 ? " · " + Format.count(total) : ""));
+            vh.like.setTextColor(Ui.sub(c));
+        }
     }
 
     private void votePoll(Models.Post p, int idx) {

@@ -62,7 +62,7 @@ public class InAppBrowserActivity extends Activity {
         bar.addView(close);
 
         LinearLayout mid = Ui.col(this);
-        titleTv = Ui.tvBold(this, "Loading…", 14, Color.WHITE);
+        titleTv = Ui.tvBold(this, hostOf(url), 14, Color.WHITE);
         titleTv.setSingleLine(true);
         domainTv = Ui.tv(this, hostOf(url), 11, 0xCCFFFFFF);
         domainTv.setSingleLine(true);
@@ -96,6 +96,11 @@ public class InAppBrowserActivity extends Activity {
             ws.setDisplayZoomControls(false);
             ws.setAllowFileAccess(false);
             ws.setAllowContentAccess(false);
+            // ⚡ 2G / Text-Only Browser Turbo: skip images when Text-Only 2G Mode is on & prefer cache on 2G/offline
+            ws.setLoadsImagesAutomatically(!com.friendbook.core.Prefs.textOnlyMode(this));
+            if (com.friendbook.core.FastCache.isSlow2G(this)) {
+                ws.setCacheMode(android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK);
+            }
 
             web.setWebChromeClient(new WebChromeClient() {
                 @Override public void onProgressChanged(WebView v, int p) {

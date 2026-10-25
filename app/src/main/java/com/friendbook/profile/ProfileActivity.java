@@ -292,6 +292,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         primaryBtn.setOnClickListener(v -> primary());
         secondaryBtn.setOnClickListener(v -> secondary());
         showTab(0);
+
+        // ⚡ 0.0ms Instant Profile & Posts Hydration from FastCache!
+        Models.User cachedUser = mine ? Fb.me : com.friendbook.core.FastCache.getUser(uid);
+        if (cachedUser != null) {
+            user = cachedUser;
+            bindUser();
+        }
+        List<Models.Post> cachedPosts = new ArrayList<>();
+        for (Models.Post p : com.friendbook.core.FastCache.getFeed()) {
+            if (p != null && uid.equals(p.authorId)) cachedPosts.add(p);
+        }
+        if (!cachedPosts.isEmpty() && postsAdapter != null) {
+            postsAdapter.setPosts(cachedPosts);
+        }
     }
 
     private View gap() {
@@ -334,6 +348,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         return;
                     }
                     user = Models.User.fromDoc(d);
+                    com.friendbook.core.FastCache.putUser(user);
                     bindUser();
                 });
         watchSubscription();

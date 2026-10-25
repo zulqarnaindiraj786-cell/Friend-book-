@@ -85,6 +85,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
         RecyclerView rv = new RecyclerView(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
+        rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(20);
         adapter = new UsersAdapter(a, this);
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -193,10 +195,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             empty.setText("No pending requests.\nWhen someone sends you a friend request, it'll show here.");
             for (Models.FriendRequest r : incoming) {
                 Models.User u = userCache.get(r.fromUid);
+                if (u == null) u = com.friendbook.core.FastCache.getUser(r.fromUid);
                 if (u == null) {
                     u = new Models.User();
                     u.uid = r.fromUid;
-                    u.displayName = r.fromName.isEmpty() ? "Loading…" : r.fromName;
+                    u.displayName = r.fromName.isEmpty() ? "friendbook user" : r.fromName;
                     u.photoUrl = r.fromPhoto;
                 }
                 UsersAdapter.Row row = new UsersAdapter.Row();

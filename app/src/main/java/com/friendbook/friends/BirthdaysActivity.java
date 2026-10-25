@@ -50,16 +50,24 @@ public class BirthdaysActivity extends Activity {
         Ui.statusBarBlue(this);
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "🎂 Birthdays"));
+        LinearLayout bar = Ui.pageBar(this, "🎂 Birthdays");
+        TextView setMine = Ui.tvBold(this, "＋ My Birthday", 12, 0xFFFFFFFF);
+        setMine.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        setMine.setOnClickListener(v ->
+                startActivity(new Intent(this, com.friendbook.profile.EditProfileActivity.class)));
+        bar.addView(setMine);
+        root.addView(bar);
 
-        empty = Ui.tv(this, "No upcoming birthdays.\nFriends who add their birthday in Edit Profile show up here.",
+        empty = Ui.tv(this, "No upcoming birthdays.\nTap '＋ My Birthday' or ask friends to add their birthday in Edit Profile.",
                 14, Ui.sub(this));
         empty.setGravity(Gravity.CENTER);
         Ui.pad(empty, 24, 60, 24, 0);
+        empty.setVisibility(View.GONE);
         root.addView(empty);
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -184,11 +192,43 @@ public class BirthdaysActivity extends Activity {
             if (r.daysAway == 0) h.when.setTextColor(Ui.BLUE);
             else h.when.setTextColor(Ui.sub(BirthdaysActivity.this));
             h.wish.setOnClickListener(v -> {
-                Intent i = new Intent(BirthdaysActivity.this, ChatActivity.class);
-                i.putExtra("uid", r.user.uid);
-                i.putExtra("name", r.user.displayName);
-                i.putExtra("prefill", "🎂 Happy Birthday " + r.user.displayName.split(" ")[0] + "! 🎉");
-                startActivity(i);
+                String fname = r.user.displayName == null ? "Friend" : r.user.displayName.split(" ")[0];
+                String[] opts = {
+                        "💬 Send Birthday Message in Chat",
+                        "✍️ Post Birthday Wish to Feed"
+                };
+                Ui.choose(BirthdaysActivity.this, "🎉 Wish " + fname + " Happy Birthday", opts, w -> {
+                    if (w == 0) {
+                        Intent i = new Intent(BirthdaysActivity.this, ChatActivity.class);
+                        i.putExtra("uid", r.user.uid);
+                        i.putExtra("name", r.user.displayName);
+                        i.putExtra("prefill", "🎂 Happy Birthday " + fname + "! Wishing you an amazing year ahead 🎉🎈");
+                        startActivity(i);
+                    } else {
+                        java.util.Map<String, Object> post = Fb.map(
+                                "authorId", Fb.uid(),
+                                "authorName", Fb.myName(),
+                                "authorPhotoUrl", Fb.myPhoto(),
+                                "authorVerified", Fb.me != null && Fb.me.isVerified,
+                                "authorTickLevel", Fb.me != null && Fb.me.tickLevel != null ? Fb.me.tickLevel : "none",
+                                "content", "🎂🎉 Happy Birthday " + r.user.displayName + "! Wishing you happiness & success always! 🎈✨",
+                                "feeling", "🎉 celebrating",
+                                "privacy", "Public",
+                                "postType", "regular",
+                                "taggedUids", java.util.Collections.singletonList(r.user.uid),
+                                "taggedNames", java.util.Collections.singletonList(r.user.displayName),
+                                "mediaUrl", "",
+                                "mediaType", "none",
+                                "likes", 0,
+                                "comments", 0,
+                                "shares", 0,
+                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                        Fb.db().collection("posts").document().set(post);
+                        com.friendbook.core.Notify.send(r.user.uid, "birthday",
+                                "wished you a Happy Birthday 🎂🎉", "");
+                        Ui.toast(BirthdaysActivity.this, "🎂 Birthday wish posted!");
+                    }
+                });
             });
             h.itemView.setOnClickListener(v -> {
                 Intent i = new Intent(BirthdaysActivity.this, ProfileActivity.class);

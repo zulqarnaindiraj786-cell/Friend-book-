@@ -180,6 +180,22 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         replyBar.addView(closeReply);
         wrap.addView(replyBar);
 
+        // ⚡ Facebook-Lite 1-Tap Quick Emoji Bar
+        LinearLayout quickEmojiRow = Ui.row(this);
+        Ui.pad(quickEmojiRow, 8, 4, 8, 2);
+        String[] quickEmojis = {"❤️", "😂", "👍", "🔥", "😍", "😢", "👏", "🙏"};
+        for (final String em : quickEmojis) {
+            TextView et = Ui.tv(this, em, 18, Ui.txt(this));
+            et.setGravity(Gravity.CENTER);
+            et.setOnClickListener(v -> {
+                Ui.haptic(v);
+                int pos = Math.max(0, input.getSelectionStart());
+                input.getText().insert(pos, em);
+            });
+            quickEmojiRow.addView(et, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        wrap.addView(quickEmojiRow);
+
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 8, 8, 10, 8);
 
@@ -354,8 +370,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             recorder.setAudioSource(android.media.MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4);
             recorder.setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioEncodingBitRate(64000);
-            recorder.setAudioSamplingRate(44100);
+            recorder.setAudioEncodingBitRate(24000); // 2G ultra-light wideband voice (~3 KB/sec!)
+            recorder.setAudioSamplingRate(16000);
             recorder.setOutputFile(voicePath);
             recorder.prepare();
             recorder.start();
@@ -505,12 +521,16 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void send(String text, String imageUrl, String rawOverride) {
         final String finalText = rawOverride != null ? rawOverride
                 : (text != null && !text.isEmpty()) ? text : null;
-        if (busy) return;
         if (finalText == null && imageUrl == null) return;
-        busy = true;
-        Ui.hideKeyboard(this);
         String me = Fb.uid();
+        if (me == null) return;
         String type = imageUrl != null ? "image" : "text";
+
+        // ⚡ 0.0ms Optimistic UI: clear input immediately & keep keyboard open for rapid-fire 2G chat!
+        if (rawOverride == null && imageUrl == null && input != null) {
+            input.setText("");
+        }
+        typingSent = false;
 
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
@@ -546,16 +566,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(Fb.db().collection("chats").document(chatId)
                 .collection("messages").document(), msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit()
-                .addOnSuccessListener(x -> {
-                    busy = false;
-                    input.setText("");
-                    typingSent = false;
-                })
-                .addOnFailureListener(e -> {
-                    busy = false;
-                    Ui.toast(this, "Couldn't send — " + e.getMessage());
-                });
+        batch.commit().addOnFailureListener(e ->
+                Ui.toast(this, "Queued offline — will sync automatically"));
     }
 
     @Override

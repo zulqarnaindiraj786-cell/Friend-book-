@@ -36,18 +36,27 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📅 On this day"));
+        LinearLayout bar = Ui.pageBar(this, "📅 On this day");
+        TextView shareNew = Ui.tvBold(this, "＋ Post Memory", 12, 0xFFFFFFFF);
+        shareNew.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        shareNew.setOnClickListener(v -> {
+            android.content.Intent ci = new android.content.Intent(this, CreatePostActivity.class);
+            startActivity(ci);
+        });
+        bar.addView(shareNew);
+        root.addView(bar);
         root.addView(Ui.divider(this));
 
         androidx.recyclerview.widget.RecyclerView rv = new androidx.recyclerview.widget.RecyclerView(this);
         rv.setLayoutManager(new androidx.recyclerview.widget.LinearLayoutManager(this));
+        rv.setItemAnimator(null);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
         adapter.showFooter = false;
         rv.setAdapter(adapter);
 
         LinearLayout wrap = Ui.col(this);
-        countT = Ui.tvBold(this, "Looking back…", 14, Ui.sub(this));
+        countT = Ui.tvBold(this, "📅 Today's Memories", 14, Ui.txt(this));
         Ui.pad(countT, 14, 10, 14, 6);
         wrap.addView(countT);
         TextView hint = Ui.tv(this,
