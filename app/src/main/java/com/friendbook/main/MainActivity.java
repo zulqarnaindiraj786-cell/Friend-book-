@@ -18,7 +18,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.friendbook.App;
+import com.friendbook.R;
 import com.friendbook.chat.ConversationsActivity;
+import com.friendbook.core.AdsConfig;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
 import com.friendbook.core.Icons;
@@ -33,6 +35,11 @@ import com.friendbook.profile.CreatorDashboardDialog;
 import com.friendbook.reels.AddReelActivity;
 import com.friendbook.social.PagesActivity;
 import com.friendbook.story.AddStoryActivity;
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.LoadAdError;
+import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 
@@ -61,6 +68,8 @@ public class MainActivity extends Activity {
     };
 
     private FrameLayout container;
+    private AdView adView;
+    private FrameLayout bottomAdWrap;
     private LinearLayout dataStripWrap;
     private LinearLayout brandBar;
     private LinearLayout navRow;
@@ -80,9 +89,13 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         if (!Fb.signedIn()) { finish(); return; }
         Ui.statusBarLight(this);
+        setContentView(R.layout.activity_main);
 
-        LinearLayout root = Ui.col(this);
+        LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
+        bottomAdWrap = findViewById(R.id.bottomAdWrap);
+        if (bottomAdWrap != null) bottomAdWrap.setBackgroundColor(Ui.card(this));
+        adView = findViewById(R.id.adView);
 
         // 1. Authentic Facebook Lite Top "Data mode" + "[ 📡 Buy data ]" Strip
         dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
@@ -190,9 +203,11 @@ public class MainActivity extends Activity {
         container.setId(View.generateViewId());
         root.addView(container, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        setContentView(root);
         select(TAB_HOME);
         refreshLiteUi();
+
+        // 6. Initialize REAL Google AdMob Production SDK & Load Real Bottom Banner Ad
+        initAndLoadProductionBannerAd();
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
@@ -201,12 +216,8 @@ public class MainActivity extends Activity {
             startBadgeListeners();
             watchReferralsForFreeTick();
             askNotifPermission();
-            if (!FastCache.isSlow2G(MainActivity.this)) {
-                try {
-                    com.google.android.gms.ads.MobileAds.initialize(MainActivity.this, status -> { });
-                } catch (Throwable ignored) { }
-            }
-            com.friendbook.core.AdsConfig.startWatching();
+            AdsConfig.startWatching();
+            AdsConfig.preloadInterstitial(MainActivity.this);
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
@@ -214,12 +225,40 @@ public class MainActivity extends Activity {
                         .setMinimumFetchIntervalInSeconds(3600).build());
                 rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled", true));
                 rc.fetchAndActivate().addOnCompleteListener(t ->
-                        com.friendbook.core.AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
+                        AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
             } catch (Throwable ignored) { }
             return false;
         });
 
         App.instance.setShakeListener(this::feedbackDialog);
+    }
+
+    private void initAndLoadProductionBannerAd() {
+        try {
+            MobileAds.initialize(this, initializationStatus -> { });
+            if (adView != null) {
+                adView.setAdListener(new AdListener() {
+                    @Override
+                    public void onAdLoaded() {
+                        if (bottomAdWrap != null) bottomAdWrap.setVisibility(View.VISIBLE);
+                    }
+
+                    @Override
+                    public void onAdFailedToLoad(@androidx.annotation.NonNull LoadAdError adError) {
+                        // Retry loading real ad after 25s if network was momentarily unavailable
+                        if (adView != null && !isFinishing()) {
+                            adView.postDelayed(() -> {
+                                if (adView != null && !isFinishing() && AdsConfig.bannersEnabled()) {
+                                    adView.loadAd(new AdRequest.Builder().build());
+                                }
+                            }, 25_000L);
+                        }
+                    }
+                });
+                AdRequest adRequest = new AdRequest.Builder().build();
+                adView.loadAd(adRequest);
+            }
+        } catch (Throwable ignored) { }
     }
 
     private View circleHeaderIcon(int iconRes, View.OnClickListener l) {
@@ -476,8 +515,23 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        if (adView != null) {
+            try { adView.pause(); } catch (Throwable ignored) { }
+        }
+        super.onPause();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        if (bottomAdWrap != null) {
+            bottomAdWrap.setBackgroundColor(Ui.card(this));
+            bottomAdWrap.setVisibility(AdsConfig.bannersEnabled() ? View.VISIBLE : View.GONE);
+        }
+        if (adView != null && AdsConfig.bannersEnabled()) {
+            try { adView.resume(); } catch (Throwable ignored) { }
+        }
         refreshLiteUi();
         Fb.ensureMeFresh();
         Presence.init();
@@ -485,6 +539,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (adView != null) {
+            try { adView.destroy(); } catch (Throwable ignored) { }
+            adView = null;
+        }
         super.onDestroy();
         if (referralReg != null) referralReg.remove();
         if (notifReg != null) notifReg.remove();

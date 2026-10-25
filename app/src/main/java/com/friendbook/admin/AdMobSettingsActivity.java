@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -15,15 +16,14 @@ import com.friendbook.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
 /**
- * 📢 AdMob Settings — ONLY zulqarnaindiraj786@gmail.com (or promoted admins).
- * Shows live App ID / Banner unit, lets admin change the Banner ID and toggle
- * banners on/off. Saved to Firestore `config/ads` (applies live to every install)
- * and mirrored into Firebase Remote Config's runtime view; console key
- * `ads_enabled` remains an extra kill switch.
+ * 📢 Real Production AdMob Settings (Admin Only):
+ * Displays the live Production App ID, Production Banner Ad Unit ID, and optional
+ * Production Interstitial Ad Unit ID. Blocks non-production/test IDs automatically.
  */
 public class AdMobSettingsActivity extends Activity {
 
     private EditText bannerEdit;
+    private EditText interstitialEdit;
     private Switch enabledSwitch;
     private TextView previewT;
     private ListenerRegistration reg;
@@ -36,42 +36,50 @@ public class AdMobSettingsActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📢 AdMob Settings"));
+        root.addView(Ui.pageBar(this, "📢 Real AdMob Production Ads"));
         root.addView(Ui.divider(this));
 
-        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        ScrollView sv = new ScrollView(this);
         LinearLayout body = Ui.col(this);
         Ui.pad(body, 14, 14, 14, 24);
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // App ID card
+        // 1. Real App ID Card
         LinearLayout card1 = Ui.col(this);
         card1.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card1, 14, 12, 14, 12);
-        card1.addView(Ui.tvBold(this, "AdMob App ID", 13, Ui.sub(this)));
-        TextView appId = Ui.tvBold(this, AdsConfig.APP_ID, 13, Ui.txt(this));
+        card1.addView(Ui.tvBold(this, "Production AdMob App ID (Active)", 13, Ui.sub(this)));
+        TextView appId = Ui.tvBold(this, AdsConfig.APP_ID, 14, Ui.txt(this));
         appId.setPadding(0, Ui.dp(this, 4), 0, 0);
         card1.addView(appId);
-        TextView hint1 = Ui.tv(this, "Set in AndroidManifest.xml (com.google.android.gms.ads.APPLICATION_ID)", 11, Ui.sub(this));
+        TextView hint1 = Ui.tv(this, "Configured in AndroidManifest.xml · Package: com.friendbook", 11, Ui.GREEN);
         hint1.setPadding(0, Ui.dp(this, 4), 0, 0);
         card1.addView(hint1);
         body.addView(card1, Ui.lpw(-2));
 
-        // Banner unit editor
+        // 2. Real Banner + Optional Interstitial Unit Editor
         LinearLayout card2 = Ui.col(this);
         card2.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card2, 14, 12, 14, 14);
-        card2.addView(Ui.tvBold(this, "Banner Ad Unit ID", 13, Ui.sub(this)));
-        bannerEdit = Ui.input(this, "ca-app-pub-…/…");
+        card2.addView(Ui.tvBold(this, "Production Banner Ad Unit ID (Bottom + Feed)", 13, Ui.sub(this)));
+        bannerEdit = Ui.input(this, AdsConfig.DEFAULT_BANNER_ID);
         bannerEdit.setText(AdsConfig.bannerId());
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
-        ep.setMargins(0, Ui.dp(this, 8), 0, 0);
+        ep.setMargins(0, Ui.dp(this, 6), 0, Ui.dp(this, 12));
         card2.addView(bannerEdit, ep);
 
+        card2.addView(Ui.tvBold(this, "Optional Production Interstitial Ad Unit ID", 13, Ui.sub(this)));
+        interstitialEdit = Ui.input(this, "Leave blank for Banner-only, or paste ca-app-pub-3387480177023669/...");
+        interstitialEdit.setText(AdsConfig.interstitialId());
+        LinearLayout.LayoutParams iep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
+        iep.setMargins(0, Ui.dp(this, 6), 0, 0);
+        card2.addView(interstitialEdit, iep);
+
         LinearLayout switchRow = Ui.row(this);
-        switchRow.setPadding(0, Ui.dp(this, 10), 0, 0);
-        TextView onT = Ui.tvBold(this, "Show banner ads (every 3 posts in Home)", 13, Ui.txt(this));
+        switchRow.setGravity(Gravity.CENTER_VERTICAL);
+        switchRow.setPadding(0, Ui.dp(this, 12), 0, 0);
+        TextView onT = Ui.tvBold(this, "Enable Real Production Ads (Bottom + Feed)", 13, Ui.txt(this));
         switchRow.addView(onT, new LinearLayout.LayoutParams(0, -2, 1));
         enabledSwitch = new Switch(this);
         enabledSwitch.setChecked(AdsConfig.bannersEnabled());
@@ -87,28 +95,37 @@ public class AdMobSettingsActivity extends Activity {
         previewT.setPadding(0, Ui.dp(this, 10), 0, 0);
         body.addView(previewT);
 
-        TextView save = Ui.btn(this, "💾 Save (applies to all users instantly)");
+        TextView save = Ui.btn(this, "💾 Save Real Production IDs");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
         sp.setMargins(0, Ui.dp(this, 10), 0, 0);
         save.setOnClickListener(v -> {
-            String id = bannerEdit.getText().toString().trim();
-            if (!id.startsWith("ca-app-pub-")) { Ui.toast(this, "Enter a valid ca-app-pub-…/… ID"); return; }
-            AdsConfig.save(id, enabledSwitch.isChecked(), this);
+            String bId = bannerEdit.getText().toString().trim();
+            String iId = interstitialEdit.getText().toString().trim();
+            if (!AdsConfig.isRealProductionUnit(bId)) {
+                Ui.toast(this, "Enter a real production Banner ID starting with " + AdsConfig.PUBLISHER_PREFIX);
+                return;
+            }
+            if (!iId.isEmpty() && !AdsConfig.isRealProductionUnit(iId)) {
+                Ui.toast(this, "Interstitial ID must start with " + AdsConfig.PUBLISHER_PREFIX + " (or leave blank)");
+                return;
+            }
+            AdsConfig.save(bId, iId, enabledSwitch.isChecked(), this);
         });
         body.addView(save, sp);
 
-        TextView reset = Ui.btnGrey(this, "↩ Reset to default live banner");
+        TextView reset = Ui.btnGrey(this, "↩ Reset to Built-In Production Banner ID");
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
         rp.setMargins(0, Ui.dp(this, 8), 0, 0);
         reset.setOnClickListener(v -> {
             AdsConfig.reset(this);
             bannerEdit.setText(AdsConfig.DEFAULT_BANNER_ID);
+            interstitialEdit.setText("");
             enabledSwitch.setChecked(true);
         });
         body.addView(reset, rp);
 
         TextView note = Ui.tv(this,
-                "ℹ️ Firebase Remote Config key `ads_enabled` (console) acts as an emergency kill switch — it always overrides this toggle. Saving here updates every device live via Firestore `config/ads`.",
+                "ℹ️ Test ad IDs & test device modes are strictly disabled. Only real production AdMob ad units under publisher ca-app-pub-3387480177023669 are served for real earnings.",
                 11, Ui.sub(this));
         note.setPadding(0, Ui.dp(this, 12), 0, 0);
         body.addView(note);
@@ -123,13 +140,16 @@ public class AdMobSettingsActivity extends Activity {
                 .addSnapshotListener((d, err) -> {
                     if (d != null && d.exists()) {
                         String id = d.getString("bannerId");
+                        String iId = d.getString("interstitialId");
                         Boolean en = d.getBoolean("enabled");
-                        if (id != null) bannerEdit.setText(id);
+                        String activeBanner = AdsConfig.isRealProductionUnit(id) ? id : AdsConfig.DEFAULT_BANNER_ID;
+                        bannerEdit.setText(activeBanner);
+                        if (iId != null && AdsConfig.isRealProductionUnit(iId)) interstitialEdit.setText(iId);
                         if (en != null) enabledSwitch.setChecked(en);
-                        previewT.setText("Live now: " + (en != null && en ? "ON" : "OFF")
-                                + " — " + (id == null ? AdsConfig.DEFAULT_BANNER_ID : id));
+                        previewT.setText("Live Production Banner: " + (en == null || en ? "ON" : "OFF")
+                                + " — " + activeBanner);
                     } else {
-                        previewT.setText("Live now: ON (default) — " + AdsConfig.DEFAULT_BANNER_ID);
+                        previewT.setText("Live Production Banner: ON — " + AdsConfig.DEFAULT_BANNER_ID);
                     }
                 });
     }

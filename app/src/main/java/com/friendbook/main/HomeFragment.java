@@ -127,8 +127,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onLiteModeChanged() {
         android.app.Activity a = getActivity();
         if (adapter != null && a != null) {
-            boolean allowAds = com.friendbook.core.AdsConfig.bannersEnabled()
-                    && !FastCache.isSlow2G(a) && !Prefs.textOnlyMode(a);
+            boolean allowAds = com.friendbook.core.AdsConfig.bannersEnabled();
             adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(), allowAds);
             adapter.notifyDataSetChanged();
         }
@@ -351,15 +350,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startBoostsListener();
         startLivesListener();
         loadNotesUsers();
-        android.app.Activity a = getActivity();
         com.friendbook.core.AdsConfig.setChangeListener((id, en) -> {
-            android.app.Activity act = getActivity();
-            boolean allow = en && (act == null || (!FastCache.isSlow2G(act) && !Prefs.textOnlyMode(act)));
-            if (adapter != null) adapter.setAdsConfig(id, allow);
+            if (adapter != null) adapter.setAdsConfig(id, en);
         });
-        boolean allowAds = com.friendbook.core.AdsConfig.bannersEnabled()
-                && (a == null || (!FastCache.isSlow2G(a) && !Prefs.textOnlyMode(a)));
-        adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(), allowAds);
+        adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(),
+                com.friendbook.core.AdsConfig.bannersEnabled());
     }
 
     @Override
