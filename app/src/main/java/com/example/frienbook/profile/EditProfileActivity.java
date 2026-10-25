@@ -175,7 +175,7 @@ public class EditProfileActivity extends Activity {
         Ui.toast(this, "Uploading…");
         String path = "profiles/" + Fb.uid() + "/" + (isAvatar ? "avatar" : "cover")
                 + "_" + System.currentTimeMillis() + ".jpg";
-        Fb.upload(path, uri)
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
                     Map<String, Object> patch = new HashMap<>();
                     patch.put(isAvatar ? "photoUrl" : "coverUrl", url.toString());

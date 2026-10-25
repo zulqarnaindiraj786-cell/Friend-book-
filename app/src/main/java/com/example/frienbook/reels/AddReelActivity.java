@@ -89,7 +89,7 @@ public class AddReelActivity extends Activity {
         busy = true;
         shareBtn.setText("Uploading…");
         String path = "reels/" + Fb.uid() + "/" + System.currentTimeMillis() + ".mp4";
-        Fb.upload(path, videoUri)
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, videoUri)
                 .addOnSuccessListener(url -> {
                     Map<String, Object> m = Fb.map(
                             "authorId", Fb.uid(),

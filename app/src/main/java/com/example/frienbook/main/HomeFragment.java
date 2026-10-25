@@ -246,6 +246,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     android.app.Activity act = getActivity();
                     if (act != null) Ui.toast(act, "Feed error — retrying simple query…");
                     startPostsQuery(false);
+                } else {
+                    // both queries failed (rules/network) — render the empty state instead
+                    // of leaving a bare white screen
+                    android.app.Activity act = getActivity();
+                    if (act != null) Ui.toast(act, "Couldn't load posts — check internet / Firestore rules");
+                    if (adapter != null) adapter.setPosts(new ArrayList<>());
                 }
                 return;
             }

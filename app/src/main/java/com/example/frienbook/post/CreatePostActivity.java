@@ -573,7 +573,7 @@ public class CreatePostActivity extends Activity {
         String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
         String path = "posts/" + Fb.uid() + "/" + System.currentTimeMillis() + "_" + done.size() + ext;
         postBtn.setText("Uploading " + (done.size() + 1) + "/" + mediaUris.size() + "…");
-        Fb.upload(path, uri)
+        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
                     done.add(url.toString());
                     uploadAll(content, done);

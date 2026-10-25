@@ -244,20 +244,54 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             boolean more = host != null && host.hasMore();
             fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
             fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
+            // Never leave a blank white feed unexplained — say WHY it's empty
+            fh.end.setText(posts.isEmpty()
+                    ? "😴 No posts to show yet.\nPull down to refresh.\nIf posts exist but stay missing, check the internet & try re-login."
+                    : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
             ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
         } else {
-            // Guard: realtime list swaps between measure & bind must not crash the feed
+            // Guard: realtime list swaps between measure & bind must not crash the feed.
+            // A broken post gets a small placeholder card — NEVER an invisible one
+            // (invisible cards made the home feed look like a blank white screen).
             int idx = postIndexForSlot(position - offset());
-            if (idx < 0 || idx >= posts.size()) { h.itemView.setVisibility(View.GONE); return; }
-            h.itemView.setVisibility(View.VISIBLE);
+            if (idx < 0 || idx >= posts.size()) {
+                showBrokenCard((PostVH) null, null);
+                return;
+            }
             try {
                 bindPost((PostVH) h, posts.get(idx));
             } catch (Throwable t) {
-                h.itemView.setVisibility(View.GONE);
+                android.util.Log.e("HomeFeed", "bindPost failed for "
+                        + (idx < posts.size() ? String.valueOf(posts.get(idx).id) : idx) + ": " + t);
+                showBrokenCard((PostVH) h, posts.get(idx));
             }
         }
+    }
+
+    /** Renders a minimal "something went wrong with this post" card instead of hiding it. */
+    private void showBrokenCard(PostVH vh, Models.Post p) {
+        if (vh == null) return;
+        try {
+            vh.image.setImageDrawable(null);
+            vh.image.setVisibility(View.GONE);
+            vh.playBadge.setVisibility(View.GONE);
+            vh.pageBadge.setVisibility(View.GONE);
+            vh.mediaWrap.setVisibility(View.GONE);
+            vh.pollBox.setVisibility(View.GONE);
+            vh.sharedBox.setVisibility(View.GONE);
+            vh.tick.setVisibility(View.GONE);
+            vh.name.setText(p != null && p.authorName != null ? p.authorName : "friendbook");
+            vh.meta.setText(p != null ? Format.ago(p.createdAt) : "");
+            vh.content.setVisibility(View.VISIBLE);
+            vh.content.setText("⚠ This post couldn't be displayed.\nReport it via shake-to-feedback.");
+            vh.content.setTextColor(Ui.sub(activity));
+            vh.content.setTextSize(14);
+            vh.like.setText("👍 Like");
+            vh.comment.setText("💬 Comment");
+            vh.share.setText("↗ Share");
+        } catch (Throwable ignored) { }
     }
 
     /** #hashtags aur @mentions ko Facebook jaisa blue+bold style karo. */
@@ -289,13 +323,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (h instanceof PostVH) {
             PostVH vh = (PostVH) h;
             if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
-            if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
-            vh.video.stopPlayback();
-            vh.video.setVisibility(View.GONE);
+            vh.image.setImageDrawable(null);
+            vh.image.setOnClickListener(null);
+            vh.mediaWrap.setOnClickListener(null);
             vh.playBadge.setVisibility(View.GONE);
-            vh.pager.setVisibility(View.GONE);
             vh.pageBadge.setVisibility(View.GONE);
-            vh.mediaBox.setOnTouchListener(null);
         }
     }
 
@@ -303,9 +335,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private void bindPost(PostVH vh, Models.Post p) {
         Context c = activity;
+
+        // ---------- header: 40dp circular avatar · bold name · gray time below · ⋮ ----------
         Ui.avatar(c, vh.avatar, p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
-        String nameLine = p.authorName + (hasFeeling ? " is feeling " + p.feeling : "");
+        String nameLine = (p.authorName == null ? "User" : p.authorName)
+                + (hasFeeling ? " is feeling " + p.feeling : "");
         if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
             nameLine += " — with " + p.taggedNames.get(0)
                     + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
@@ -313,7 +348,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         vh.name.setText(nameLine);
         vh.tick.setImageDrawable(null);
-        if (!"none".equals(p.authorTickLevel) && p.authorTickLevel != null) {
+        if (p.authorTickLevel != null && !"none".equals(p.authorTickLevel)) {
             vh.tick.setVisibility(View.VISIBLE);
             vh.tick.setImageResource(com.example.frienbook.core.Icons.badgeFor(p.authorTickLevel));
         } else {
@@ -322,40 +357,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         if (vh.boostTag != null)
             vh.boostTag.setVisibility(boostedPostIds.contains(p.id) ? View.VISIBLE : View.GONE);
+
         String icon = "🌐";
         if ("Friends".equalsIgnoreCase(p.privacy)) icon = "👥";
         if ("Only me".equalsIgnoreCase(p.privacy)) icon = "🔒";
-        vh.meta.setText(Format.ago(p.createdAt) + " · " + icon
-                + (p.sharedFromId != null && !p.sharedFromId.isEmpty() ? " · shared" : ""));
-        // colored-background text posts (Facebook style)
-        if (p.isBgPost() && p.content != null && !p.content.isEmpty()) {
-            vh.content.setBackground(Ui.gradient(p.bgColor, shade(p.bgColor, 0.55f), Ui.dp(c, 12)));
-            vh.content.setTextColor(0xFFFFFFFF);
-            vh.content.setTextSize(23);
-            vh.content.setGravity(Gravity.CENTER);
-            vh.content.setMinHeight(Ui.dp(c, 200));
-            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-            clp.setMargins(Ui.dp(c, 12), Ui.dp(c, 4), Ui.dp(c, 12), Ui.dp(c, 8));
-            vh.content.setLayoutParams(clp);
-            Ui.pad(vh.content, 18, 24, 18, 24);
-        } else {
-            vh.content.setBackground(null);
-            vh.content.setTextColor(Ui.txt(c));
-            vh.content.setTextSize(15);
-            vh.content.setGravity(Gravity.START);
-            vh.content.setMinHeight(0);
-            vh.content.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
-            vh.content.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
-            Ui.pad(vh.content, 12, 4, 12, 8);
-        }
-        vh.content.setText(styleHashtags(p.content));
-        vh.content.setVisibility(p.content == null || p.content.isEmpty() ? View.GONE : View.VISIBLE);
-        // location line
-        if (p.location != null && !p.location.isEmpty())
-            vh.meta.append(" · 📍 " + p.location);
+        String meta = Format.ago(p.createdAt) + " · " + icon
+                + (p.sharedFromId != null && !p.sharedFromId.isEmpty() ? " · shared" : "");
+        if (p.location != null && !p.location.isEmpty()) meta += " · 📍 " + p.location;
+        vh.meta.setText(meta);
 
-        // ---------- poll ----------
+        // ---------- content: plain 16sp black text (NO colored background box) ----------
+        boolean hasText = p.content != null && !p.content.isEmpty();
+        vh.content.setVisibility(hasText ? View.VISIBLE : View.GONE);
+        vh.content.setText(hasText ? styleHashtags(p.content) : "");
+
+        // ---------- poll (unchanged logic, simple gray rows) ----------
         vh.pollBox.removeAllViews();
         vh.pollBox.setVisibility(p.isPoll() ? View.VISIBLE : View.GONE);
         if (p.isPoll()) {
@@ -378,9 +394,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 int pct = total == 0 ? 0 : Math.round(votes * 100f / total);
                 boolean mine = myVote != null && myVote == i;
                 TextView opt = new TextView(c);
-                String txt = (mine ? "✓ " : "") + p.pollOptions.get(i)
-                        + (total > 0 ? "  —  " + pct + "% (" + votes + ")" : "");
-                opt.setText(txt);
+                opt.setText((mine ? "✓ " : "") + p.pollOptions.get(i)
+                        + (total > 0 ? "  —  " + pct + "% (" + votes + ")" : ""));
                 opt.setTextSize(15);
                 opt.setTextColor(mine ? Ui.BLUE : Ui.txt(c));
                 if (mine) opt.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -393,20 +408,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 opt.setOnClickListener(v -> votePoll(p, idx));
                 vh.pollBox.addView(opt);
             }
-            TextView hint = Ui.tv(c, total + (total == 1 ? " vote" : " votes") + " · tap to vote / again to undo",
-                    11, Ui.sub(c));
-            vh.pollBox.addView(hint);
+            vh.pollBox.addView(Ui.tv(c, total + (total == 1 ? " vote" : " votes")
+                    + " · tap to vote / again to undo", 11, Ui.sub(c)));
         }
 
-        View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
-        vh.avatar.setOnClickListener(prof);
-        vh.name.setOnClickListener(prof);
-
-        // shared embed
+        // ---------- shared embed (kept, plain gray box) ----------
         boolean isShared = p.sharedFromId != null && !p.sharedFromId.isEmpty();
         vh.sharedBox.setVisibility(isShared ? View.VISIBLE : View.GONE);
         if (isShared) {
-            vh.sharedName.setText("Originally shared by " + (p.sharedFromAuthor == null ? "" : p.sharedFromAuthor));
+            vh.sharedName.setText("Originally shared by "
+                    + (p.sharedFromAuthor == null ? "" : p.sharedFromAuthor));
             vh.sharedContent.setText(p.sharedFromContent);
             vh.sharedBox.setOnClickListener(v -> {
                 Models.Post orig = new Models.Post();
@@ -415,77 +426,60 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
         }
 
-        // media
-        vh.video.stopPlayback();
-        vh.video.setVisibility(View.GONE);
+        // ---------- media: ONE ImageView (fully null-safe) — match_parent × wrap_content ----------
+        // pick the image: single photo or the first of a multi-photo album
+        String imgUrl = null;
+        if (p.mediaUrls != null) {
+            for (String u : p.mediaUrls) if (u != null && !u.isEmpty()) { imgUrl = u; break; }
+        }
+        if (imgUrl == null && "image".equals(p.mediaType)
+                && p.mediaUrl != null && !p.mediaUrl.isEmpty()) imgUrl = p.mediaUrl;
+        final boolean isVideo = imgUrl == null && "video".equals(p.mediaType)
+                && p.mediaUrl != null && !p.mediaUrl.isEmpty();
+        final String fImg = imgUrl;
+
+        vh.image.setImageDrawable(null);
+        vh.image.setOnClickListener(null);
+        vh.mediaWrap.setOnClickListener(null);
         vh.playBadge.setVisibility(View.GONE);
-        vh.image.setVisibility(View.GONE);
-        vh.pager.setVisibility(View.GONE);
         vh.pageBadge.setVisibility(View.GONE);
-        if (vh.pageCb != null) { vh.pager.unregisterOnPageChangeCallback(vh.pageCb); vh.pageCb = null; }
-        vh.mediaBox.setOnClickListener(null);
-        vh.mediaBox.setOnTouchListener(null);
-        boolean multiPhoto = p.isMultiPhoto();
-        boolean hasMedia = multiPhoto || (p.mediaType != null && !"none".equals(p.mediaType)
-                && p.mediaUrl != null && !p.mediaUrl.isEmpty());
-        ViewGroup.LayoutParams mlp = vh.mediaBox.getLayoutParams();
-        mlp.height = Ui.dp(c, hasMedia ? 280 : 0);
-        vh.mediaBox.setLayoutParams(mlp);
-        vh.mediaBox.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
-        if (multiPhoto) {
-            // multi-photo carousel (Facebook-style swipeable album)
-            vh.pager.setVisibility(View.VISIBLE);
-            vh.pageBadge.setVisibility(View.VISIBLE);
-            vh.pager.setAdapter(new PhotoPager(p.mediaUrls));
-            vh.pageBadge.setText("1/" + p.mediaUrls.size());
-            vh.pageCb = new ViewPager2.OnPageChangeCallback() {
-                @Override public void onPageSelected(int position) {
-                    vh.pageBadge.setText((position + 1) + "/" + p.mediaUrls.size());
-                }
-            };
-            vh.pager.registerOnPageChangeCallback(vh.pageCb);
-        } else if ("image".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+        ViewGroup.LayoutParams wp = vh.mediaWrap.getLayoutParams();
+        wp.height = isVideo ? Ui.dp(c, 280) : ViewGroup.LayoutParams.WRAP_CONTENT;
+        vh.mediaWrap.setLayoutParams(wp);
+        vh.mediaWrap.setVisibility((fImg != null || isVideo) ? View.VISIBLE : View.GONE);
+
+        if (fImg != null) {
             vh.image.setVisibility(View.VISIBLE);
-            Ui.img(c, vh.image, p.mediaUrl);
-            GestureDetector gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
-                @Override public boolean onDown(MotionEvent e) { return true; }
-                @Override public boolean onDoubleTap(MotionEvent e) {
-                    Ui.haptic(vh.image);
-                    Reactions.tapLike(c, p);
-                    Ui.toast(c, Reactions.emojiFor("love") + " Liked");
-                    return true;
-                }
-                @Override public boolean onSingleTapConfirmed(MotionEvent e) {
-                    Intent i = new Intent(c, FullscreenMediaActivity.class);
-                    i.putExtra("type", "image");
-                    i.putExtra("url", p.mediaUrl);
-                    c.startActivity(i);
-                    return true;
-                }
-            });
-            vh.mediaBox.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
-        } else if ("video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
-            vh.playBadge.setText("▶");
-            vh.playBadge.setTextSize(34);
-            boolean holdForTap = Prefs.dataSaver(c) || !Prefs.autoplay(c);
-            if (holdForTap) {
-                vh.image.setVisibility(View.VISIBLE);
-                vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
-                vh.playBadge.setText(Prefs.dataSaver(c) ? "▶  Load video (Data Saver)" : "▶  Tap to play");
-                vh.playBadge.setTextSize(15);
-                vh.playBadge.setVisibility(View.VISIBLE);
-                vh.mediaBox.setOnClickListener(v -> { vh.playBadge.setText("⏳"); streamVideo(vh, p.mediaUrl, true); });
-            } else {
-                vh.playBadge.setVisibility(View.VISIBLE);
-                vh.video.setVisibility(View.VISIBLE);
-                vh.video.setVideoURI(android.net.Uri.parse(p.mediaUrl));
-                vh.video.setOnPreparedListener(mp -> { mp.setLooping(true); vh.video.seekTo(1); });
-                vh.mediaBox.setOnClickListener(v -> toggleVideo(vh));
+            Ui.img(c, vh.image, fImg);
+            int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
+            if (album > 1) {
+                vh.pageBadge.setVisibility(View.VISIBLE);
+                vh.pageBadge.setText("📷 " + album + " photos");
             }
-        } else {
-            vh.mediaBox.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+            vh.image.setOnClickListener(v -> {
+                Intent i = new Intent(c, FullscreenMediaActivity.class);
+                i.putExtra("type", "image");
+                i.putExtra("url", fImg);
+                c.startActivity(i);
+            });
+        } else if (isVideo) {
+            // video posts: dark thumbnail box + ▶ overlay → fullscreen player on tap
+            vh.image.setVisibility(View.VISIBLE);
+            vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
+            vh.playBadge.setVisibility(View.VISIBLE);
+            vh.playBadge.setText("▶");
+            vh.mediaWrap.setOnClickListener(v -> {
+                Intent i = new Intent(c, FullscreenMediaActivity.class);
+                i.putExtra("type", "video");
+                i.putExtra("url", p.mediaUrl);
+                c.startActivity(i);
+            });
         }
 
+        // ---------- taps ----------
+        View.OnClickListener prof = v -> { if (host != null) host.openProfile(p.authorId); };
+        vh.avatar.setOnClickListener(prof);
+        vh.name.setOnClickListener(prof);
         vh.like.setOnClickListener(v -> { Ui.haptic(v); Reactions.tapLike(c, p); });
         vh.like.setOnLongClickListener(v -> {
             Reactions.show(vh.like, type -> Reactions.apply(c, p, type));
@@ -496,37 +490,33 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.share.setOnClickListener(v -> shareDialog(p));
         vh.more.setOnClickListener(v -> postMenu(vh.more, p));
 
-        // realtime reaction summary
+        // plain gray baseline labels with counts (live reaction listener refines Like)
+        vh.like.setText("👍 Like" + (p.likes > 0 ? " · " + Format.count(p.likes) : ""));
+        vh.like.setTextColor(Ui.sub(c));
+        vh.comment.setText("💬 Comment" + (p.comments > 0 ? " · " + Format.count(p.comments) : ""));
+        vh.share.setText("↗ Share" + (p.shares > 0 ? " · " + Format.count(p.shares) : ""));
+
+        // ---------- realtime reaction state → Like button ----------
         if (vh.reactReg != null) vh.reactReg.remove();
         String me = Fb.uid();
         vh.reactReg = Fb.db().collection("posts").document(p.id).collection("reactions")
                 .addSnapshotListener((snap, err) -> {
-                    Map<String, Integer> agg = new HashMap<>();
+                    int total = snap == null ? 0 : snap.size();
                     String mine = null;
-                    int total = 0;
                     if (snap != null) {
                         for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            String t = d.getString("type");
-                            if (t == null) t = "like";
-                            Integer x = agg.get(t);
-                            agg.put(t, x == null ? 1 : x + 1);
-                            total++;
-                            if (d.getId().equals(me)) mine = t;
+                            if (d.getId().equals(me)) {
+                                mine = d.getString("type");
+                                if (mine == null) mine = "like";
+                            }
                         }
                     }
-                    StringBuilder em = new StringBuilder();
-                    for (String t : Reactions.TYPES) if (agg.containsKey(t)) em.append(Reactions.emojiFor(t));
-                    vh.rEmojis.setText(total == 0 ? "" : em.toString());
-                    vh.rCount.setText(total == 0 ? "" : Format.count(total));
-                    String right = "";
-                    if (p.comments > 0) right += Format.count(p.comments) + " comments";
-                    if (p.shares > 0) right += (right.isEmpty() ? "" : " · ") + Format.count(p.shares) + " shares";
-                    vh.rRight.setText(right);
                     if (mine != null && !mine.isEmpty()) {
-                        vh.like.setText(Reactions.emojiFor(mine) + " " + Reactions.labelFor(mine));
+                        vh.like.setText(Reactions.emojiFor(mine) + " " + Reactions.labelFor(mine)
+                                + (total > 0 ? " · " + Format.count(total) : ""));
                         vh.like.setTextColor(Reactions.colorFor(mine));
                     } else {
-                        vh.like.setText("👍 Like");
+                        vh.like.setText("👍 Like" + (total > 0 ? " · " + Format.count(total) : ""));
                         vh.like.setTextColor(Ui.sub(c));
                     }
                 });
@@ -591,22 +581,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             ImageView img;
             PVH(ImageView v) { super(v); img = v; }
         }
-    }
-
-    private void streamVideo(PostVH vh, String url, boolean autoPlay) {
-        vh.video.setVisibility(View.VISIBLE);
-        vh.video.setVideoURI(android.net.Uri.parse(url));
-        vh.video.setOnPreparedListener(mp -> {
-            mp.setLooping(true);
-            if (autoPlay) { vh.video.start(); vh.playBadge.setVisibility(View.GONE); }
-            else vh.video.seekTo(1);
-        });
-        vh.mediaBox.setOnClickListener(v -> toggleVideo(vh));
-    }
-
-    private void toggleVideo(PostVH vh) {
-        if (vh.video.isPlaying()) { vh.video.pause(); vh.playBadge.setVisibility(View.VISIBLE); }
-        else { vh.video.start(); vh.playBadge.setVisibility(View.GONE); }
     }
 
     /** 📖 Share a post to my story (image posts reuse the photo; text → caption story). */
@@ -988,23 +962,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         ImageView avatar, image, tick;
         TextView name, meta, more, content, like, comment, share;
         TextView boostTag;
-        TextView sharedName, sharedContent, rEmojis, rCount, rRight, playBadge, pageBadge;
+        TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout sharedBox, pollBox;
-        FrameLayout mediaBox;
-        VideoView video;
-        ViewPager2 pager;
-        ViewPager2.OnPageChangeCallback pageCb;
+        FrameLayout mediaWrap;
         ListenerRegistration reactReg;
 
         PostVH(Context c) {
             super(cardRoot(c));
             LinearLayout card = (LinearLayout) itemView;
 
-            // header
+            // ---- top row: 40dp circular avatar · bold name (+time below) · ⋮ ----
             LinearLayout head = Ui.row(c);
             Ui.pad(head, 12, 10, 8, 6);
             avatar = new ImageView(c);
-            int s = Ui.dp(c, 42);
+            int s = Ui.dp(c, 40);
             head.addView(avatar, new LinearLayout.LayoutParams(s, s));
             LinearLayout nameCol = Ui.col(c);
             LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
@@ -1033,16 +1004,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             head.addView(more);
             card.addView(head);
 
-            content = Ui.tv(c, "", 15, Ui.txt(c));
-            Ui.pad(content, 12, 4, 12, 8);
+            // ---- content: 16sp, plain black-on-white (no background box) ----
+            content = Ui.tv(c, "", 16, Ui.txt(c));
+            Ui.pad(content, 12, 2, 12, 8);
             card.addView(content);
 
-            // poll options go here (dynamically rebuilt per post)
+            // ---- poll rows ----
             pollBox = Ui.col(c);
             Ui.pad(pollBox, 12, 2, 12, 6);
             card.addView(pollBox);
 
-            // shared embed
+            // ---- shared embed ----
             sharedBox = Ui.col(c);
             sharedBox.setBackground(Ui.roundStroke(c, Ui.bg(c), 10, Ui.div(c), 1));
             LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
@@ -1056,45 +1028,29 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             sharedBox.addView(sharedContent);
             card.addView(sharedBox);
 
-            // media
-            mediaBox = new FrameLayout(c);
-            card.addView(mediaBox, new LinearLayout.LayoutParams(-1, Ui.dp(c, 280)));
+            // ---- media: single full-width image, natural height (video via ▶ overlay) ----
+            mediaWrap = new FrameLayout(c);
+            card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, -2));
             image = new ImageView(c);
+            image.setAdjustViewBounds(true);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            mediaBox.addView(image, new FrameLayout.LayoutParams(-1, -1));
-            pager = new ViewPager2(c);
-            pager.setVisibility(View.GONE);
-            mediaBox.addView(pager, new FrameLayout.LayoutParams(-1, -1));
-            video = new VideoView(c);
-            video.setVisibility(View.GONE);
-            mediaBox.addView(video, new FrameLayout.LayoutParams(-1, -1));
-            playBadge = Ui.tv(c, "▶", 34, 0xEEFFFFFF);
+            image.setMaxHeight(Ui.dp(c, 420));
+            mediaWrap.addView(image, new FrameLayout.LayoutParams(-1, -2));
+            playBadge = Ui.tv(c, "▶", 44, 0xEEFFFFFF);
             playBadge.setGravity(Gravity.CENTER);
+            playBadge.setBackgroundColor(0x99000000);
             playBadge.setVisibility(View.GONE);
-            mediaBox.addView(playBadge, new FrameLayout.LayoutParams(-1, -1));
+            mediaWrap.addView(playBadge, new FrameLayout.LayoutParams(-1, -1));
             pageBadge = Ui.tvBold(c, "", 12, 0xFFFFFFFF);
             pageBadge.setBackground(Ui.round(c, 0x99000000, 20));
             Ui.pad(pageBadge, 8, 4, 8, 4);
             pageBadge.setVisibility(View.GONE);
             FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP);
             blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
-            mediaBox.addView(pageBadge, blp);
+            mediaWrap.addView(pageBadge, blp);
 
-            // reaction summary
-            LinearLayout summary = Ui.row(c);
-            Ui.pad(summary, 12, 6, 12, 6);
-            rEmojis = Ui.tv(c, "", 13, Ui.sub(c));
-            rCount = Ui.tv(c, "", 13, Ui.sub(c));
-            rCount.setPadding(Ui.dp(c, 4), 0, 0, 0);
-            rRight = Ui.tv(c, "", 13, Ui.sub(c));
-            rRight.setGravity(Gravity.END);
-            summary.addView(rEmojis);
-            summary.addView(rCount);
-            summary.addView(rRight, new LinearLayout.LayoutParams(0, -2, 1));
-            card.addView(summary);
+            // ---- divider + 3 gray action buttons (Like · Comment · Share, with counts) ----
             card.addView(Ui.divider(c));
-
-            // actions
             LinearLayout actions = Ui.row(c);
             Ui.pad(actions, 6, 2, 6, 2);
             like = actionBtn(c, "👍 Like");
@@ -1105,6 +1061,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             actions.addView(share, new LinearLayout.LayoutParams(0, -2, 1));
             card.addView(actions);
 
+            // FB-Lite gap between posts instead of card elevation
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             card.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 8)));
