@@ -178,9 +178,17 @@ public class ConversationsActivity extends Activity {
             LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
             mp.leftMargin = Ui.dp(ConversationsActivity.this, 12);
             TextView name = Ui.tvBold(ConversationsActivity.this, "", 16, Ui.txt(ConversationsActivity.this));
+            ImageView tick = new ImageView(ConversationsActivity.this);
+            int ts = Ui.dp(ConversationsActivity.this, 17);
+            LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
+            tickp.leftMargin = Ui.dp(ConversationsActivity.this, 5);
+            tickp.gravity = Gravity.CENTER_VERTICAL;
+            LinearLayout nameRow = Ui.row(ConversationsActivity.this);
+            nameRow.addView(name);
+            nameRow.addView(tick, tickp);
             TextView last = Ui.tv(ConversationsActivity.this, "", 13, Ui.sub(ConversationsActivity.this));
             last.setMaxLines(1);
-            mid.addView(name);
+            mid.addView(nameRow);
             mid.addView(last);
             row.addView(mid, mp);
 
@@ -193,7 +201,7 @@ public class ConversationsActivity extends Activity {
             right.addView(badge);
             right.addView(pin);
             row.addView(right);
-            return new VH(row, av, dot, name, last, time, badge, pin);
+            return new VH(row, av, dot, name, tick, last, time, badge, pin);
         }
 
         @Override
@@ -201,6 +209,8 @@ public class ConversationsActivity extends Activity {
             Room r = rooms.get(position);
             Models.User u = userCache.get(r.other);
             h.name.setText(u != null ? u.displayName : "Loading…");
+            com.example.frienbook.core.Icons.setTickBadge(h.tick,
+                    u != null ? u.tickLevel : "none", false);
             Ui.avatar(ConversationsActivity.this, h.av, u != null ? u.photoUrl : "");
             boolean unread = r.unread > 0;
             h.last.setText(r.room.lastMessage == null || r.room.lastMessage.isEmpty()
@@ -234,13 +244,13 @@ public class ConversationsActivity extends Activity {
         }
 
         class VH extends RecyclerView.ViewHolder {
-            ImageView av;
+            ImageView av, tick;
             View dot;
             TextView name, last, time, badge, pin;
             Presence.Handle presence;
-            VH(View v, ImageView a, View d, TextView n, TextView l, TextView t, TextView b, TextView p) {
+            VH(View v, ImageView a, View d, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p) {
                 super(v);
-                av = a; dot = d; name = n; last = l; time = t; badge = b; pin = p;
+                av = a; dot = d; name = n; tick = tk; last = l; time = t; badge = b; pin = p;
             }
         }
     }

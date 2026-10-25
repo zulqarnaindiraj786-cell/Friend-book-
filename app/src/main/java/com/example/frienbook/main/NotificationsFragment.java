@@ -230,6 +230,10 @@ public class NotificationsFragment extends Fragment {
             typeDot.setGravity(Gravity.CENTER);
             FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END);
             avWrap.addView(typeDot, tp);
+            ImageView tick = new ImageView(c);
+            int tks = Ui.dp(c, 16);
+            FrameLayout.LayoutParams tkp = new FrameLayout.LayoutParams(tks, tks, Gravity.TOP | Gravity.END);
+            avWrap.addView(tick, tkp);
             row.addView(avWrap);
 
             LinearLayout mid = Ui.col(c);
@@ -241,7 +245,7 @@ public class NotificationsFragment extends Fragment {
             mid.addView(text);
             mid.addView(time);
             row.addView(mid, mp);
-            return new VH(row, av, typeDot, text, time);
+            return new VH(row, av, typeDot, tick, text, time);
         }
 
         @Override
@@ -250,6 +254,7 @@ public class NotificationsFragment extends Fragment {
             android.app.Activity c = getActivity();
             Ui.avatar(c, h.av, n.fromUserPhoto);
             h.typeDot.setText(emoji(n.type));
+            com.example.frienbook.core.TickCache.attach(h.tick, n.fromUserId);
             SpannableStringBuilder sb = new SpannableStringBuilder();
             int start = sb.length();
             sb.append(n.fromUserName);
@@ -263,11 +268,11 @@ public class NotificationsFragment extends Fragment {
         }
 
         class VH extends RecyclerView.ViewHolder {
-            ImageView av;
+            ImageView av, tick;
             TextView typeDot, text, time;
-            VH(View v, ImageView a, TextView td, TextView t, TextView tm) {
+            VH(View v, ImageView a, TextView td, ImageView tk, TextView t, TextView tm) {
                 super(v);
-                av = a; typeDot = td; text = t; time = tm;
+                av = a; typeDot = td; tick = tk; text = t; time = tm;
             }
         }
     }

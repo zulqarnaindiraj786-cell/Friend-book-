@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -45,6 +46,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private String peerId, peerName = "", chatId;
     private TextView presenceTv, nameTv;
+    private ImageView barTick;
     private ImageView barAvatar;
     private EditText input;
     private MessagesAdapter adapter;
@@ -89,8 +91,16 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
         ncp.leftMargin = Ui.dp(this, 10);
         nameTv = Ui.tvBold(this, peerName, 16, Color.WHITE);
+        barTick = new ImageView(this);
+        int ts = Ui.dp(this, 17);
+        LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
+        tickp.leftMargin = Ui.dp(this, 5);
+        tickp.gravity = Gravity.CENTER_VERTICAL;
+        LinearLayout nameRow = new LinearLayout(this);
+        nameRow.addView(nameTv);
+        nameRow.addView(barTick, tickp);
         presenceTv = Ui.tv(this, "…", 12, 0xCCFFFFFF);
-        nameCol.addView(nameTv);
+        nameCol.addView(nameRow);
         nameCol.addView(presenceTv);
         bar.addView(nameCol, ncp);
         TextView menu = Ui.tv(this, "⋮", 22, Color.WHITE);
@@ -217,6 +227,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     Models.User u = Models.User.fromDoc(d);
                     peerName = u.displayName;
                     nameTv.setText(peerName);
+                    com.example.frienbook.core.Icons.setTickBadge(barTick, u.tickLevel, false);
                     Ui.avatar(this, barAvatar, u.photoUrl);
                     adapter.setPeerPhoto(u.photoUrl);
                 });

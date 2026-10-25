@@ -312,14 +312,20 @@ public class MenuFragment extends Fragment {
                     }
                     int newStreak = (last >= todayStart - 24L * 3600_000L) ? streak + 1 : 1;
                     int bonus = 5 + Math.min(newStreak - 1, 5); // streak day 6+ → 10 ⭐
+                    boolean verified = com.example.frienbook.core.Fb.me != null
+                            && com.example.frienbook.core.Icons.tickRank(
+                                    com.example.frienbook.core.Fb.me.tickLevel) > 0;
+                    if (verified) bonus *= 2; // ✓ verified perk: double daily bonus
+                    final int bonusF = bonus;
                     java.util.Map<String, Object> upd = new java.util.HashMap<>();
                     upd.put("stars", com.google.firebase.firestore.FieldValue.increment(bonus));
                     upd.put("dailyStreak", newStreak);
                     upd.put("lastBonusAt", now);
                     com.example.frienbook.core.Fb.db().collection("users").document(me).update(upd)
                             .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
-                                    "+" + bonus + " ⭐ added to your balance!\n\n"
+                                    "+" + bonusF + " ⭐ added to your balance!\n\n"
                                             + "🔥 Streak: " + newStreak + " day(s)\n"
+                                            + (verified ? "✓ Verified ×2 bonus applied 💙\n" : "")
                                             + (newStreak >= 5 ? "Max bonus unlocked — keep it going! 👑"
                                             : "Come back tomorrow — streak rewards grow!")))
                             .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));

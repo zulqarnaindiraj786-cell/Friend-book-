@@ -64,6 +64,7 @@ public class Admin {
                 .set(Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0),
                         com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener(x -> {
+                    TickCache.put(uid, level);
                     syncAuthorVerified(uid, Icons.tickRank(level) > 0);
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", uid,

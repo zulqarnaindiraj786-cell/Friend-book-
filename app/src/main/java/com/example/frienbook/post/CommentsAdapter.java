@@ -105,10 +105,18 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
         bubble.setBackground(Ui.round(c, Ui.inputBg(c), 12));
         Ui.pad(bubble, 10, 7, 10, 7);
         TextView name = Ui.tvBold(c, "", 13, Ui.txt(c));
+        ImageView tick = new ImageView(c);
+        int ts = Ui.dp(c, 15);
+        LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
+        tickp.leftMargin = Ui.dp(c, 4);
+        tickp.gravity = android.view.Gravity.CENTER_VERTICAL;
+        LinearLayout nameRow = Ui.row(c);
+        nameRow.addView(name);
+        nameRow.addView(tick, tickp);
         TextView text = Ui.tv(c, "", 14, Ui.txt(c));
         ImageView img = new ImageView(c);
         img.setVisibility(View.GONE);
-        bubble.addView(name);
+        bubble.addView(nameRow);
         bubble.addView(text);
         bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 180), Ui.dp(c, 120)));
         right.addView(bubble);
@@ -130,7 +138,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
 
         outer.addView(row);
         row.addView(right, rp);
-        return new VH(outer, av, name, text, img, time, like, reply, likesCount);
+        return new VH(outer, av, name, tick, text, img, time, like, reply, likesCount);
     }
 
     private View spacer(Activity c) {
@@ -151,6 +159,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
 
         Ui.avatar(activity, h.av, c.authorPhoto);
         h.name.setText(c.authorName + (c.authorId.equals(Fb.uid()) ? " (you)" : ""));
+        com.example.frienbook.core.TickCache.attach(h.tick, c.authorId);
         h.text.setText(c.content);
         if (c.imageUrl != null && !c.imageUrl.isEmpty()) {
             h.img.setVisibility(View.VISIBLE);
@@ -248,11 +257,11 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
     }
 
     static class VH extends RecyclerView.ViewHolder {
-        ImageView av, img;
+        ImageView av, img, tick;
         TextView name, text, time, like, reply, likesCount;
-        VH(View v, ImageView a, TextView n, TextView t, ImageView i, TextView tm, TextView l, TextView r, TextView lc) {
+        VH(View v, ImageView a, TextView n, ImageView tk, TextView t, ImageView i, TextView tm, TextView l, TextView r, TextView lc) {
             super(v);
-            av = a; name = n; text = t; img = i; time = tm; like = l; reply = r; likesCount = lc;
+            av = a; name = n; tick = tk; text = t; img = i; time = tm; like = l; reply = r; likesCount = lc;
         }
     }
 }

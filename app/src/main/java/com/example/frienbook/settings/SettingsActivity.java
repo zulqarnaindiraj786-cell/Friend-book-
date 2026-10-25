@@ -162,6 +162,18 @@ public class SettingsActivity extends Activity {
                         com.example.frienbook.bluetick.BlueTickActivity.class))));
         body.addView(cardEnd());
 
+        // ============ ✓ VERIFIED TOOLS (tick holders only) ============
+        if (Fb.me != null && Icons.tickRank(Fb.me.tickLevel) > 0) {
+            body.addView(header("✓ Verified tools"));
+            body.addView(card());
+            body.addView(rowI(Icons.VERIFIED, "Priority support",
+                    "Verified accounts jump the queue", this::verifiedSupport));
+            body.addView(div());
+            body.addView(rowI(Icons.CHART, "Profile insights",
+                    "Your posts, likes received, followers & stars", this::verifiedInsights));
+            body.addView(cardEnd());
+        }
+
         // ============ ADMIN (owner only) ============
         if (com.example.frienbook.core.Admin.isAdmin()) {
             body.addView(header("Admin"));
@@ -247,8 +259,45 @@ public class SettingsActivity extends Activity {
     // ---------- rows ----------
     /** 🛡 FB-style guided privacy checkup — 3 quick steps. */
     /** ❓ Help & support — offline FAQs + email support (FB Lite help center style). */
-    private void helpDialog() {
-        String[] opts = {
+    /** ✓ Verified perk: flagged support email to the owner. */
+    private void verifiedSupport() {
+        Intent i = new Intent(Intent.ACTION_SENDTO,
+                android.net.Uri.parse("mailto:zulqarnaindiraj786@gmail.com"));
+        i.putExtra(Intent.EXTRA_SUBJECT, "✓ Verified support request");
+        i.putExtra(Intent.EXTRA_TEXT,
+                "Verified account: " + (Fb.me != null ? Fb.me.displayName : "") + "\n\n");
+        try { startActivity(i); } catch (Exception e) { Ui.toast(this, "No email app installed"); }
+    }
+
+    /** ✓ Verified perk: quick stats about your own account (real Firestore data). */
+    private void verifiedInsights() {
+        Ui.toast(this, "Crunching your numbers…");
+        Fb.db().collection("posts").whereEqualTo("authorId", Fb.uid()).limit(300).get()
+                .addOnSuccessListener(snap -> {
+                    int posts = snap.size();
+                    int likes = 0;
+                    for (com.google.firebase.firestore.DocumentSnapshot d : snap.getDocuments()) {
+                        Long l = d.getLong("likes");
+                        if (l != null) likes += l;
+                    }
+                    int friends = Fb.me != null ? Fb.me.friendsCount : 0;
+                    int followers = Fb.me != null && Fb.me.followers != null
+                            ? Fb.me.followers.size() : 0;
+                    int stars = Fb.me != null ? Fb.me.stars : 0;
+                    Ui.info(this, "✓ Profile insights",
+                            "📝 Posts: " + posts + (posts >= 300 ? "+" : "") + "\n"
+                            + "❤️ Likes received: " + likes + "\n"
+                            + "👥 Friends: " + friends + "\n"
+                            + "👀 Followers: " + followers + "\n"
+                            + "⭐ Stars balance: " + stars + "\n"
+                            + "🔥 Daily streak: " + (Fb.me != null ? Fb.me.dailyStreak : 0)
+                            + " day(s)\n\n"
+                            + "Tip: keep your streak alive for up to 20⭐/day (verified ×2).");
+                })
+                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+    }
+
+    private void helpDialog() {        String[] opts = {
                 "🔐 Login / account problems",
                 "📮 Post not showing on feed?",
                 "⭐ Stars, ticks & payments",
