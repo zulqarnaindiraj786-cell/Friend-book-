@@ -15,22 +15,20 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 📢 Google AdMob Production Configuration:
- * Uses ONLY real production AdMob IDs for com.friendbook.
- * - Real App ID:        ca-app-pub-3387480177023669~4887770836
- * - Real Banner Unit:   ca-app-pub-3387480177023669/6266308174
- * - Optional Real Interstitial Unit (configurable live via Admin AdMob Settings; Banner-only by default).
+ * 📢 Google AdMob Production Native Ads Configuration:
+ * - Zero Banner Ads anywhere in the app.
+ * - Serves real AdMob Native Ads in-feed after every 5 posts.
+ * - Strictly blocks Google sample/test ad unit prefixes.
  */
 public class AdsConfig {
 
-    public static final String PUBLISHER_PREFIX = "ca-app-pub-3387480177023669/";
+    private static final String GOOGLE_TEST_PREFIX = "ca-app-pub-3940256099942544";
+
     public static final String APP_ID = "ca-app-pub-3387480177023669~4887770836";
-    public static final String DEFAULT_BANNER_ID = "ca-app-pub-3387480177023669/6266308174";
-    public static final String DEFAULT_INTERSTITIAL_ID = ""; // Banner-only unless admin sets a real production unit
+    public static final String DEFAULT_NATIVE_ID = "";
+    public static final String DEFAULT_INTERSTITIAL_ID = "";
 
-    private static final String LEGACY_OBSOLETE_UNIT = "ca-app-pub-3387480177023669/2691090902";
-
-    private static String bannerId = DEFAULT_BANNER_ID;
+    private static String nativeId = DEFAULT_NATIVE_ID;
     private static String interstitialId = DEFAULT_INTERSTITIAL_ID;
     private static boolean enabled = true;
     private static boolean remoteAllowed = true;
@@ -39,27 +37,32 @@ public class AdsConfig {
     private static boolean loadingInterstitial = false;
     private static long lastInterstitialShownAt = 0L;
 
-    /** Ensures only real production AdMob unit IDs for this publisher are accepted. */
+    /** Ensures only real production AdMob unit IDs (never Google sample/test IDs) are accepted. */
     public static boolean isRealProductionUnit(String id) {
         if (id == null) return false;
         String clean = id.trim();
-        if (clean.isEmpty() || LEGACY_OBSOLETE_UNIT.equals(clean)) return false;
-        return clean.startsWith(PUBLISHER_PREFIX) && clean.length() > PUBLISHER_PREFIX.length() + 5;
+        if (clean.isEmpty() || clean.startsWith(GOOGLE_TEST_PREFIX)) return false;
+        return clean.startsWith("ca-app-pub-") && clean.contains("/") && clean.length() > 25;
     }
 
-    public static String bannerId() {
-        return isRealProductionUnit(bannerId) ? bannerId : DEFAULT_BANNER_ID;
+    public static String nativeId() {
+        if (isRealProductionUnit(nativeId)) return nativeId.trim();
+        return isRealProductionUnit(DEFAULT_NATIVE_ID) ? DEFAULT_NATIVE_ID : "";
     }
 
     public static String interstitialId() {
-        return isRealProductionUnit(interstitialId) ? interstitialId : "";
+        return isRealProductionUnit(interstitialId) ? interstitialId.trim() : "";
     }
 
-    public static boolean bannersEnabled() {
+    public static boolean nativeAdsEnabled() {
+        return enabled && remoteAllowed && !nativeId().isEmpty();
+    }
+
+    public static boolean isMasterSwitchEnabled() {
         return enabled && remoteAllowed;
     }
 
-    public interface ChangeListener { void onChange(String bannerId, boolean enabled); }
+    public interface ChangeListener { void onChange(String nativeAdUnitId, boolean enabled); }
     private static ChangeListener changeListener;
     public static void setChangeListener(ChangeListener l) { changeListener = l; }
 
@@ -69,11 +72,11 @@ public class AdsConfig {
         reg = Fb.db().collection("config").document("ads")
                 .addSnapshotListener((d, err) -> {
                     if (d != null && d.exists()) {
-                        String bId = d.getString("bannerId");
+                        String nId = d.getString("nativeId");
                         String iId = d.getString("interstitialId");
                         Boolean en = d.getBoolean("enabled");
-                        bannerId = isRealProductionUnit(bId) ? bId.trim() : DEFAULT_BANNER_ID;
-                        interstitialId = isRealProductionUnit(iId) ? iId.trim() : "";
+                        nativeId = isRealProductionUnit(nId) ? nId.trim() : DEFAULT_NATIVE_ID;
+                        interstitialId = isRealProductionUnit(iId) ? iId.trim() : DEFAULT_INTERSTITIAL_ID;
                         if (en != null) enabled = en;
                         notifyChange();
                     }
@@ -87,13 +90,13 @@ public class AdsConfig {
     }
 
     public static void notifyChange() {
-        if (changeListener != null) changeListener.onChange(bannerId(), bannersEnabled());
+        if (changeListener != null) changeListener.onChange(nativeId(), nativeAdsEnabled());
     }
 
-    /** Preload optional real production InterstitialAd if admin configured a real unit ID. */
+    /** Preload optional real production InterstitialAd if configured. */
     public static void preloadInterstitial(Context ctx) {
         String unit = interstitialId();
-        if (ctx == null || unit.isEmpty() || !bannersEnabled() || cachedInterstitial != null || loadingInterstitial) {
+        if (ctx == null || unit.isEmpty() || !isMasterSwitchEnabled() || cachedInterstitial != null || loadingInterstitial) {
             return;
         }
         loadingInterstitial = true;
@@ -115,7 +118,7 @@ public class AdsConfig {
 
     /** Show preloaded real InterstitialAd at natural screen transitions (max once per 3 minutes). */
     public static void showInterstitialIfReady(Activity activity) {
-        if (activity == null || activity.isFinishing() || !bannersEnabled()) return;
+        if (activity == null || activity.isFinishing() || !isMasterSwitchEnabled()) return;
         long now = System.currentTimeMillis();
         if (cachedInterstitial != null && (now - lastInterstitialShownAt) > 180_000L) {
             lastInterstitialShownAt = now;
@@ -128,33 +131,27 @@ public class AdsConfig {
         }
     }
 
-    /** Admin saves Banner ID (+ optional Interstitial ID) & toggle. */
-    public static void save(String newBannerId, boolean on, Context c) {
-        save(newBannerId, interstitialId, on, c);
-    }
-
-    public static void save(String newBannerId, String newInterstitialId, boolean on, Context c) {
-        String cleanBanner = isRealProductionUnit(newBannerId) ? newBannerId.trim() : DEFAULT_BANNER_ID;
+    public static void save(String newNativeId, String newInterstitialId, boolean on, Context c) {
+        String cleanNative = isRealProductionUnit(newNativeId) ? newNativeId.trim() : DEFAULT_NATIVE_ID;
         String cleanInter = isRealProductionUnit(newInterstitialId) ? newInterstitialId.trim() : "";
         Map<String, Object> m = new HashMap<>();
-        m.put("bannerId", cleanBanner);
+        m.put("nativeId", cleanNative);
         m.put("interstitialId", cleanInter);
         m.put("enabled", on);
         m.put("updatedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
         Fb.db().collection("config").document("ads")
                 .set(m, com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> Ui.toast(c, "Real AdMob production settings saved ✓"))
+                .addOnSuccessListener(x -> Ui.toast(c, "Real AdMob Native Ad settings saved ✓"))
                 .addOnFailureListener(e -> Ui.toast(c, "Save failed: " + e.getMessage()));
     }
 
-    /** Reset override → use built-in live production Banner ID. */
     public static void reset(Context c) {
         Fb.db().collection("config").document("ads").delete()
                 .addOnSuccessListener(x -> {
-                    bannerId = DEFAULT_BANNER_ID;
+                    nativeId = DEFAULT_NATIVE_ID;
                     interstitialId = DEFAULT_INTERSTITIAL_ID;
                     enabled = true;
-                    Ui.toast(c, "Reset to production Banner ID ✓");
+                    Ui.toast(c, "Reset to built-in Native Ad config ✓");
                     notifyChange();
                 });
     }

@@ -16,13 +16,13 @@ import com.friendbook.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
 /**
- * 📢 Real Production AdMob Settings (Admin Only):
- * Displays the live Production App ID, Production Banner Ad Unit ID, and optional
- * Production Interstitial Ad Unit ID. Blocks non-production/test IDs automatically.
+ * 📢 Real Production AdMob Native Ads Settings (Admin Only):
+ * Configures the live Production Native Ad Unit ID (in-feed after every 5 posts)
+ * and optional Production Interstitial Ad Unit ID. Blocks test IDs automatically.
  */
 public class AdMobSettingsActivity extends Activity {
 
-    private EditText bannerEdit;
+    private EditText nativeEdit;
     private EditText interstitialEdit;
     private Switch enabledSwitch;
     private TextView previewT;
@@ -36,7 +36,7 @@ public class AdMobSettingsActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📢 Real AdMob Production Ads"));
+        root.addView(Ui.pageBar(this, "📢 Real AdMob Native Ads"));
         root.addView(Ui.divider(this));
 
         ScrollView sv = new ScrollView(this);
@@ -45,7 +45,6 @@ public class AdMobSettingsActivity extends Activity {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // 1. Real App ID Card
         LinearLayout card1 = Ui.col(this);
         card1.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card1, 14, 12, 14, 12);
@@ -58,19 +57,18 @@ public class AdMobSettingsActivity extends Activity {
         card1.addView(hint1);
         body.addView(card1, Ui.lpw(-2));
 
-        // 2. Real Banner + Optional Interstitial Unit Editor
         LinearLayout card2 = Ui.col(this);
         card2.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card2, 14, 12, 14, 14);
-        card2.addView(Ui.tvBold(this, "Production Banner Ad Unit ID (Bottom + Feed)", 13, Ui.sub(this)));
-        bannerEdit = Ui.input(this, AdsConfig.DEFAULT_BANNER_ID);
-        bannerEdit.setText(AdsConfig.bannerId());
+        card2.addView(Ui.tvBold(this, "Production Native Ad Unit ID (After Every 5 Posts)", 13, Ui.sub(this)));
+        nativeEdit = Ui.input(this, "ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY");
+        nativeEdit.setText(AdsConfig.nativeId());
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
         ep.setMargins(0, Ui.dp(this, 6), 0, Ui.dp(this, 12));
-        card2.addView(bannerEdit, ep);
+        card2.addView(nativeEdit, ep);
 
         card2.addView(Ui.tvBold(this, "Optional Production Interstitial Ad Unit ID", 13, Ui.sub(this)));
-        interstitialEdit = Ui.input(this, "Leave blank for Banner-only, or paste ca-app-pub-3387480177023669/...");
+        interstitialEdit = Ui.input(this, "Optional: ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY");
         interstitialEdit.setText(AdsConfig.interstitialId());
         LinearLayout.LayoutParams iep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
         iep.setMargins(0, Ui.dp(this, 6), 0, 0);
@@ -79,10 +77,10 @@ public class AdMobSettingsActivity extends Activity {
         LinearLayout switchRow = Ui.row(this);
         switchRow.setGravity(Gravity.CENTER_VERTICAL);
         switchRow.setPadding(0, Ui.dp(this, 12), 0, 0);
-        TextView onT = Ui.tvBold(this, "Enable Real Production Ads (Bottom + Feed)", 13, Ui.txt(this));
+        TextView onT = Ui.tvBold(this, "Enable In-Feed Native Ads (Every 5 Posts)", 13, Ui.txt(this));
         switchRow.addView(onT, new LinearLayout.LayoutParams(0, -2, 1));
         enabledSwitch = new Switch(this);
-        enabledSwitch.setChecked(AdsConfig.bannersEnabled());
+        enabledSwitch.setChecked(AdsConfig.isMasterSwitchEnabled());
         switchRow.addView(enabledSwitch);
         card2.addView(switchRow);
 
@@ -95,37 +93,37 @@ public class AdMobSettingsActivity extends Activity {
         previewT.setPadding(0, Ui.dp(this, 10), 0, 0);
         body.addView(previewT);
 
-        TextView save = Ui.btn(this, "💾 Save Real Production IDs");
+        TextView save = Ui.btn(this, "💾 Save Real Production Native ID");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
         sp.setMargins(0, Ui.dp(this, 10), 0, 0);
         save.setOnClickListener(v -> {
-            String bId = bannerEdit.getText().toString().trim();
+            String nId = nativeEdit.getText().toString().trim();
             String iId = interstitialEdit.getText().toString().trim();
-            if (!AdsConfig.isRealProductionUnit(bId)) {
-                Ui.toast(this, "Enter a real production Banner ID starting with " + AdsConfig.PUBLISHER_PREFIX);
+            if (!AdsConfig.isRealProductionUnit(nId)) {
+                Ui.toast(this, "Enter a real production Native Ad Unit ID (ca-app-pub-...)");
                 return;
             }
             if (!iId.isEmpty() && !AdsConfig.isRealProductionUnit(iId)) {
-                Ui.toast(this, "Interstitial ID must start with " + AdsConfig.PUBLISHER_PREFIX + " (or leave blank)");
+                Ui.toast(this, "Interstitial ID must be a real production unit (or leave blank)");
                 return;
             }
-            AdsConfig.save(bId, iId, enabledSwitch.isChecked(), this);
+            AdsConfig.save(nId, iId, enabledSwitch.isChecked(), this);
         });
         body.addView(save, sp);
 
-        TextView reset = Ui.btnGrey(this, "↩ Reset to Built-In Production Banner ID");
+        TextView reset = Ui.btnGrey(this, "↩ Reset to Built-In Native Ad ID");
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
         rp.setMargins(0, Ui.dp(this, 8), 0, 0);
         reset.setOnClickListener(v -> {
             AdsConfig.reset(this);
-            bannerEdit.setText(AdsConfig.DEFAULT_BANNER_ID);
+            nativeEdit.setText(AdsConfig.DEFAULT_NATIVE_ID);
             interstitialEdit.setText("");
             enabledSwitch.setChecked(true);
         });
         body.addView(reset, rp);
 
         TextView note = Ui.tv(this,
-                "ℹ️ Test ad IDs & test device modes are strictly disabled. Only real production AdMob ad units under publisher ca-app-pub-3387480177023669 are served for real earnings.",
+                "ℹ️ Banner ads are completely removed. Only real production AdMob Native Ads appear in the News Feed after every 5 posts.",
                 11, Ui.sub(this));
         note.setPadding(0, Ui.dp(this, 12), 0, 0);
         body.addView(note);
@@ -139,17 +137,19 @@ public class AdMobSettingsActivity extends Activity {
         reg = Fb.db().collection("config").document("ads")
                 .addSnapshotListener((d, err) -> {
                     if (d != null && d.exists()) {
-                        String id = d.getString("bannerId");
+                        String id = d.getString("nativeId");
                         String iId = d.getString("interstitialId");
                         Boolean en = d.getBoolean("enabled");
-                        String activeBanner = AdsConfig.isRealProductionUnit(id) ? id : AdsConfig.DEFAULT_BANNER_ID;
-                        bannerEdit.setText(activeBanner);
+                        String activeNative = AdsConfig.isRealProductionUnit(id) ? id : AdsConfig.DEFAULT_NATIVE_ID;
+                        nativeEdit.setText(activeNative);
                         if (iId != null && AdsConfig.isRealProductionUnit(iId)) interstitialEdit.setText(iId);
                         if (en != null) enabledSwitch.setChecked(en);
-                        previewT.setText("Live Production Banner: " + (en == null || en ? "ON" : "OFF")
-                                + " — " + activeBanner);
+                        previewT.setText("Live Native Ads (every 5 posts): "
+                                + (en == null || en ? "ON" : "OFF")
+                                + (activeNative.isEmpty() ? " — awaiting Native ID" : " — " + activeNative));
                     } else {
-                        previewT.setText("Live Production Banner: ON — " + AdsConfig.DEFAULT_BANNER_ID);
+                        previewT.setText("Live Native Ads (every 5 posts): "
+                                + (AdsConfig.DEFAULT_NATIVE_ID.isEmpty() ? "awaiting Native ID" : AdsConfig.DEFAULT_NATIVE_ID));
                     }
                 });
     }

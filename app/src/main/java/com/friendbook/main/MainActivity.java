@@ -36,10 +36,6 @@ import com.friendbook.profile.CreatorDashboardDialog;
 import com.friendbook.reels.AddReelActivity;
 import com.friendbook.social.PagesActivity;
 import com.friendbook.story.AddStoryActivity;
-import com.google.android.gms.ads.AdListener;
-import com.google.android.gms.ads.AdRequest;
-import com.google.android.gms.ads.AdView;
-import com.google.android.gms.ads.LoadAdError;
 import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
@@ -69,8 +65,6 @@ public class MainActivity extends Activity {
     };
 
     private FrameLayout container;
-    private AdView adView;
-    private FrameLayout bottomAdWrap;
     private LinearLayout dataStripWrap;
     private LinearLayout brandBar;
     private LinearLayout navRow;
@@ -96,9 +90,6 @@ public class MainActivity extends Activity {
 
         LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
-        bottomAdWrap = findViewById(R.id.bottomAdWrap);
-        if (bottomAdWrap != null) bottomAdWrap.setBackgroundColor(Ui.card(this));
-        adView = findViewById(R.id.adView);
 
         // 1. Authentic Facebook Lite Top "Data mode" + "[ 📡 Buy data ]" Strip
         dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
@@ -221,8 +212,10 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Initialize REAL Google AdMob Production SDK & Load Real Bottom Banner Ad
-        initAndLoadProductionBannerAd();
+        // 6. Initialize Google Mobile Ads SDK for In-Feed Native Ads (no banner ads anywhere!)
+        try {
+            MobileAds.initialize(this, initializationStatus -> { });
+        } catch (Throwable ignored) { }
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
@@ -246,44 +239,6 @@ public class MainActivity extends Activity {
         });
 
         App.instance.setShakeListener(this::feedbackDialog);
-    }
-
-    private void initAndLoadProductionBannerAd() {
-        try {
-            MobileAds.initialize(this, initializationStatus -> { });
-            if (adView != null) {
-                adView.setAdListener(new AdListener() {
-                    @Override
-                    public void onAdLoaded() {
-                        if (bottomAdWrap != null) bottomAdWrap.setVisibility(View.VISIBLE);
-                    }
-
-                    @Override
-                    public void onAdFailedToLoad(@androidx.annotation.NonNull LoadAdError adError) {
-                        // Retry loading real ad after 25s if network was momentarily unavailable
-                        if (adView != null && !isFinishing()) {
-                            adView.postDelayed(() -> {
-                                if (adView != null && !isFinishing() && AdsConfig.bannersEnabled()) {
-                                    adView.loadAd(new AdRequest.Builder().build());
-                                }
-                            }, 25_000L);
-                        }
-                    }
-                });
-                AdRequest adRequest = new AdRequest.Builder().build();
-                adView.loadAd(adRequest);
-            }
-        } catch (Throwable ignored) { }
-    }
-
-    /** Reloads a fresh live production AdMob creative on pull-to-refresh or app reopen. */
-    public void refreshBottomBannerAd() {
-        try {
-            if (adView != null && !isFinishing() && AdsConfig.bannersEnabled()) {
-                adView.loadAd(new AdRequest.Builder().build());
-            }
-            AdsConfig.preloadInterstitial(this);
-        } catch (Throwable ignored) { }
     }
 
     private View circleHeaderIcon(int iconRes, View.OnClickListener l) {
@@ -410,7 +365,6 @@ public class MainActivity extends Activity {
                 ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
             } else if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.reels.ReelsFragment) {
                 ((com.friendbook.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
-                refreshBottomBannerAd();
             }
             return;
         }
@@ -545,9 +499,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         FeedAlgorithm.onAppBackgrounded(this);
-        if (adView != null) {
-            try { adView.pause(); } catch (Throwable ignored) { }
-        }
         super.onPause();
     }
 
@@ -555,15 +506,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
-        if (bottomAdWrap != null) {
-            bottomAdWrap.setBackgroundColor(Ui.card(this));
-            bottomAdWrap.setVisibility(AdsConfig.bannersEnabled() ? View.VISIBLE : View.GONE);
-        }
-        if (adView != null && AdsConfig.bannersEnabled()) {
-            try { adView.resume(); } catch (Throwable ignored) { }
-        }
         if (freshSession) {
-            refreshBottomBannerAd();
+            AdsConfig.preloadInterstitial(this);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onWarmSessionResume();
             }
@@ -578,10 +522,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (adView != null) {
-            try { adView.destroy(); } catch (Throwable ignored) { }
-            adView = null;
-        }
         super.onDestroy();
         if (referralReg != null) referralReg.remove();
         if (notifReg != null) notifReg.remove();

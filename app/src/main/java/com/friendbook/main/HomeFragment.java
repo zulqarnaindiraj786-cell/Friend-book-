@@ -152,7 +152,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
-        if (a instanceof MainActivity) ((MainActivity) a).refreshBottomBannerAd();
         restartPostsListener();
         loadPymk();
         loadNotesUsers();
@@ -207,8 +206,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onLiteModeChanged() {
         android.app.Activity a = getActivity();
         if (adapter != null && a != null) {
-            boolean allowAds = com.friendbook.core.AdsConfig.bannersEnabled();
-            adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(), allowAds);
+            adapter.setAdsConfig(com.friendbook.core.AdsConfig.nativeId(),
+                    com.friendbook.core.AdsConfig.nativeAdsEnabled());
             adapter.notifyDataSetChanged();
         }
     }
@@ -430,8 +429,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         com.friendbook.core.AdsConfig.setChangeListener((id, en) -> {
             if (adapter != null) adapter.setAdsConfig(id, en);
         });
-        adapter.setAdsConfig(com.friendbook.core.AdsConfig.bannerId(),
-                com.friendbook.core.AdsConfig.bannersEnabled());
+        adapter.setAdsConfig(com.friendbook.core.AdsConfig.nativeId(),
+                com.friendbook.core.AdsConfig.nativeAdsEnabled());
     }
 
     @Override
