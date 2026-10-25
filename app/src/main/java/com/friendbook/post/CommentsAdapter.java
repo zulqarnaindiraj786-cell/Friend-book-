@@ -296,18 +296,18 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         h.author.setText(c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
         TickCache.bind(c.authorId, h.tick, false);
 
-        boolean hasText = c.text != null && !c.text.isEmpty();
+        boolean hasText = c.content != null && !c.content.isEmpty();
         h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
-        h.text.setText(hasText ? c.text : "");
+        h.text.setText(hasText ? c.content : "");
 
-        boolean hasMedia = c.mediaUrl != null && !c.mediaUrl.isEmpty();
+        boolean hasMedia = c.imageUrl != null && !c.imageUrl.isEmpty();
         h.media.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
         if (hasMedia) {
-            Ui.img(activity, h.media, c.mediaUrl);
+            Ui.img(activity, h.media, c.imageUrl);
             h.media.setOnClickListener(v -> {
                 android.content.Intent in = new android.content.Intent(activity, FullscreenMediaActivity.class);
                 in.putExtra("type", "image");
-                in.putExtra("url", c.mediaUrl);
+                in.putExtra("url", c.imageUrl);
                 activity.startActivity(in);
             });
         }
@@ -372,7 +372,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
             if (!mineOrAdmin) m.getMenu().add(0, 4, 0, "🚩 Report comment");
             m.setOnMenuItemClickListener(it -> {
-                if (it.getItemId() == 3) Ui.copy(activity, c.text);
+                if (it.getItemId() == 3) Ui.copy(activity, c.content);
                 else if (it.getItemId() == 5) Reactions.showCommentReactors(activity, c);
                 else if (it.getItemId() == 1) editDialog(c);
                 else if (it.getItemId() == 2) delete(c);
@@ -414,7 +414,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     private void editDialog(Models.Comment c) {
         EditText e = Ui.multi(activity, "Comment", 3);
-        e.setText(c.text);
+        e.setText(c.content);
         LinearLayout box = Ui.col(activity);
         Ui.pad(box, 18, 12, 18, 4);
         box.addView(e, new LinearLayout.LayoutParams(-1, -2));
@@ -424,11 +424,11 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 .setPositiveButton("Save", (d, w) -> {
                     String nv = e.getText().toString().trim();
                     if (nv.isEmpty()) return;
-                    c.text = nv;
+                    c.content = nv;
                     c.edited = true;
                     notifyDataSetChanged();
                     Fb.db().collection("comments").document(c.id)
-                            .update("text", nv, "edited", true);
+                            .update("content", nv, "text", nv, "edited", true);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

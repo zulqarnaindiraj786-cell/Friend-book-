@@ -31,11 +31,11 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.friendbook.bluetick.BlueTickActivity;
 import com.friendbook.chat.ChatActivity;
 import com.friendbook.core.Admin;
+import com.friendbook.core.Cloudinary;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
 import com.friendbook.core.Format;
 import com.friendbook.core.Icons;
-import com.friendbook.core.MediaStore;
 import com.friendbook.core.Notify;
 import com.friendbook.core.Presence;
 import com.friendbook.core.Ui;
@@ -579,22 +579,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         Uri uri = data.getData();
         boolean isAvatar = (req == REQ_PICK_AVATAR);
         Ui.toast(this, isAvatar ? "Uploading profile photo…" : "Uploading cover photo…");
-        MediaStore.upload(this, uri, isAvatar ? "avatars" : "covers", new MediaStore.Callback() {
-            @Override public void ok(String url, String type) {
-                Map<String, Object> up = new HashMap<>();
-                up.put(isAvatar ? "photoUrl" : "coverUrl", url);
-                Fb.patchMe(up);
-                if (user != null) {
-                    if (isAvatar) user.photoUrl = url;
-                    else user.coverUrl = url;
-                    bindUser();
-                }
-                Ui.toast(ProfileActivity.this, isAvatar ? "Profile photo updated ✓" : "Cover photo updated ✓");
-            }
-            @Override public void fail(String reason) {
-                Ui.toast(ProfileActivity.this, "Upload failed: " + reason);
-            }
-        });
+        String path = (isAvatar ? "avatars/" : "covers/") + uid + "_" + System.currentTimeMillis() + ".jpg";
+        Cloudinary.uploadOrFirebase(this, path, uri)
+                .addOnSuccessListener(url -> {
+                    Map<String, Object> up = new HashMap<>();
+                    up.put(isAvatar ? "photoUrl" : "coverUrl", url);
+                    Fb.patchMe(up);
+                    if (user != null) {
+                        if (isAvatar) user.photoUrl = url;
+                        else user.coverUrl = url;
+                        bindUser();
+                    }
+                    Ui.toast(ProfileActivity.this, isAvatar ? "Profile photo updated ✓" : "Cover photo updated ✓");
+                })
+                .addOnFailureListener(err ->
+                        Ui.toast(ProfileActivity.this, "Upload failed: " + err.getMessage()));
     }
 
     private void showProfileSearchDialog() {

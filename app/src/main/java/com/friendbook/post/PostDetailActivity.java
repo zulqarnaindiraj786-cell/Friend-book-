@@ -16,10 +16,10 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.friendbook.core.Cloudinary;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
 import com.friendbook.core.Icons;
-import com.friendbook.core.MediaStore;
 import com.friendbook.core.Notify;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Ui;
@@ -321,17 +321,17 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
             Ui.toast(this, "Uploading comment photo…");
-            MediaStore.upload(this, toUpload, "comments", new MediaStore.Callback() {
-                @Override public void ok(String url, String type) {
-                    pendingPhotoUri = null;
-                    mediaPreviewRow.setVisibility(View.GONE);
-                    writeCommentDoc(me, text, url);
-                }
-                @Override public void fail(String reason) {
-                    busy = false;
-                    Ui.toast(PostDetailActivity.this, "Photo upload failed: " + reason);
-                }
-            });
+            String path = "comments/" + me + "_" + System.currentTimeMillis() + ".jpg";
+            Cloudinary.uploadOrFirebase(this, path, toUpload)
+                    .addOnSuccessListener(url -> {
+                        pendingPhotoUri = null;
+                        mediaPreviewRow.setVisibility(View.GONE);
+                        writeCommentDoc(me, text, url);
+                    })
+                    .addOnFailureListener(err -> {
+                        busy = false;
+                        Ui.toast(PostDetailActivity.this, "Photo upload failed: " + err.getMessage());
+                    });
         } else {
             writeCommentDoc(me, text, "");
         }
@@ -349,8 +349,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         local.authorId = me;
         local.authorName = Fb.myName();
         local.authorPhoto = Fb.myPhoto();
-        local.text = text;
-        local.mediaUrl = mediaUrl == null ? "" : mediaUrl;
+        local.content = text;
+        local.imageUrl = mediaUrl == null ? "" : mediaUrl;
         local.parentId = replyTarget != null ? replyTarget.id : null;
         local.createdAt = now;
         rawComments.add(local);
@@ -367,8 +367,11 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                 "postId", postId,
                 "authorId", me,
                 "authorName", Fb.myName(),
+                "authorPhotoUrl", Fb.myPhoto(),
                 "authorPhoto", Fb.myPhoto(),
+                "content", text,
                 "text", text,
+                "imageUrl", mediaUrl == null ? "" : mediaUrl,
                 "mediaUrl", mediaUrl == null ? "" : mediaUrl,
                 "parentId", replyTarget != null ? replyTarget.id : null,
                 "likes", 0,

@@ -234,6 +234,7 @@ public class Models {
 
     public static class Comment {
         public String id, postId, authorId, authorName, authorPhoto, content, imageUrl, parentId;
+        public boolean edited;
         public int likes;
         public long createdAt;
         public List<String> likedBy = new ArrayList<>();
@@ -246,10 +247,11 @@ public class Models {
             c.postId = Format.str(m, "postId");
             c.authorId = Format.str(m, "authorId");
             c.authorName = Format.strOr(m, "authorName", "User");
-            c.authorPhoto = Format.str(m, "authorPhotoUrl");
-            c.content = Format.str(m, "content");
-            c.imageUrl = Format.str(m, "imageUrl");
+            c.authorPhoto = Format.strOr(m, "authorPhotoUrl", Format.str(m, "authorPhoto"));
+            c.content = Format.strOr(m, "content", Format.str(m, "text"));
+            c.imageUrl = Format.strOr(m, "imageUrl", Format.str(m, "mediaUrl"));
             c.parentId = Format.str(m, "parentId");
+            c.edited = m != null && Boolean.TRUE.equals(m.get("edited"));
             c.likes = Format.intOf(m, "likes");
             c.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             c.likedBy = Format.listOf(m, "likedBy");
@@ -260,6 +262,14 @@ public class Models {
                         c.reactions.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
                 }
             }
+            if (c.likedBy != null) {
+                for (String uid : c.likedBy) {
+                    if (uid != null && !uid.isEmpty() && !c.reactions.containsKey(uid)) {
+                        c.reactions.put(uid, "like");
+                    }
+                }
+            }
+            c.likes = Math.max(c.likes, c.reactions.size());
             return c;
         }
     }
