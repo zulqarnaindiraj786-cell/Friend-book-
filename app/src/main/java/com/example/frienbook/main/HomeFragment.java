@@ -216,36 +216,64 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     // ---------- posts ----------
+    private boolean postsFallbackUsed;
+
     private void restartPostsListener() {
+        postsFallbackUsed = false;
+        startPostsQuery(true);
+    }
+
+    /**
+     * Home feed — SIMPLE query only: posts ordered by createdAt DESC, no server-side
+     * friend/privacy filter (privacy is applied client-side in visible()).
+     * If the ordered query fails (missing index / docs without createdAt / rules),
+     * we log it loudly and fall back to an unordered query + client-side sort
+     * so the feed is NEVER silently empty.
+     */
+    private void startPostsQuery(boolean ordered) {
         if (postsReg != null) postsReg.remove();
         lastDoc = null;
         moreAvailable = true;
-        postsReg = Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(PAGE)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null) return;
-                    if (!snap.isEmpty()) lastDoc = snap.getDocuments().get(snap.size() - 1);
-                    android.app.Activity a2 = getActivity();
-                    String filter = a2 == null ? "all" : com.example.frienbook.core.Prefs.feedFilter(a2);
-                    List<Models.Post> list = new ArrayList<>();
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Models.Post p = Models.Post.fromDoc(d);
-                        if (!visible(p)) continue;
-                        if (!matchesFilter(p, filter)) continue;
-                        list.add(p);
-                    }
-                    // ⭐ Favorites first (FB Lite "Feed preferences") on the ALL view
-                    if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
-                        list.sort((x, y) -> {
-                            boolean xf = Fb.me.favoriteUids.contains(x.authorId);
-                            boolean yf = Fb.me.favoriteUids.contains(y.authorId);
-                            if (xf != yf) return xf ? -1 : 1;
-                            return Long.compare(y.createdAt, x.createdAt);
-                        });
-                    }
-                    adapter.setPosts(list);
+        Query q = Fb.db().collection("posts");
+        if (ordered) q = q.orderBy("createdAt", Query.Direction.DESCENDING);
+        postsReg = q.limit(PAGE).addSnapshotListener((snap, err) -> {
+            if (err != null || snap == null) {
+                // 🔴 never swallow: log + tell the user + fall back to the simplest query
+                android.util.Log.e("HomeFeed", "posts query failed: "
+                        + (err == null ? "null snapshot" : err.getCode() + " " + err.getMessage()));
+                if (!postsFallbackUsed) {
+                    postsFallbackUsed = true;
+                    android.app.Activity act = getActivity();
+                    if (act != null) Ui.toast(act, "Feed error — retrying simple query…");
+                    startPostsQuery(false);
+                }
+                return;
+            }
+            if (!snap.isEmpty()) lastDoc = snap.getDocuments().get(snap.size() - 1);
+            android.app.Activity a2 = getActivity();
+            String filter = a2 == null ? "all" : com.example.frienbook.core.Prefs.feedFilter(a2);
+            List<Models.Post> list = new ArrayList<>();
+            for (DocumentSnapshot d : snap.getDocuments()) {
+                Models.Post p = Models.Post.fromDoc(d);
+                if (!visible(p)) continue;
+                if (!matchesFilter(p, filter)) continue;
+                list.add(p);
+            }
+            android.util.Log.d("HomeFeed", "fetched=" + snap.size() + " visible=" + list.size()
+                    + " filter=" + filter + " ordered=" + ordered);
+            // fallback path: unordered snapshot needs a client-side sort
+            if (!ordered) list.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
+            // ⭐ Favorites first (FB Lite "Feed preferences") on the ALL view
+            if ("all".equals(filter) && Fb.me != null && !Fb.me.favoriteUids.isEmpty()) {
+                list.sort((x, y) -> {
+                    boolean xf = Fb.me.favoriteUids.contains(x.authorId);
+                    boolean yf = Fb.me.favoriteUids.contains(y.authorId);
+                    if (xf != yf) return xf ? -1 : 1;
+                    return Long.compare(y.createdAt, x.createdAt);
                 });
+            }
+            adapter.setPosts(list);
+        });
     }
 
     /** Feed chip filter: photos / videos / text-only. */
