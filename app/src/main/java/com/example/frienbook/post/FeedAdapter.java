@@ -383,6 +383,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
                     : p.taggedNames.size() == 2 ? " and " + p.taggedNames.get(1) : "");
         }
+        if (Fb.me != null && Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(p.authorId))
+            nameLine = "⭐ " + nameLine; // favorite friends stand out (they also sort first)
         vh.name.setText(nameLine);
         vh.tick.setImageDrawable(null);
         if (p.authorTickLevel != null && !"none".equals(p.authorTickLevel)) {

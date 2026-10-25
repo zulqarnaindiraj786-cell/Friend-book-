@@ -682,11 +682,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("💙 See friendship");
             pm.getMenu().add("🔗 Copy profile link");
             pm.getMenu().add("🚩 Report profile");
+            boolean isFav = Fb.me != null && Fb.me.favoriteUids != null
+                    && Fb.me.favoriteUids.contains(uid);
+            pm.getMenu().add(isFav ? "✖ Remove from Favorites" : "⭐ Add to Favorites");
             // 🛡 ADMIN: open ANY profile → grant/remove ticks, ban/unban right here
             if (com.example.frienbook.core.Admin.isAdmin()) {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
+                pm.getMenu().add("🛡 ⭐ Adjust stars (admin)…");
+                pm.getMenu().add("🛡 📢 Send official message (admin)…");
+                pm.getMenu().add("🛡 📊 User stats (admin)…");
             }
         } else {
             pm.getMenu().add("📷 Change profile photo");
@@ -733,6 +739,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                     })
                                     .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
                         });
+            } else if (t.contains("Adjust stars")) {
+                adminAdjustStars();
+            } else if (t.contains("official message")) {
+                adminMessageDialog();
+            } else if (t.contains("User stats (admin)")) {
+                adminStats();
+            } else if (t.contains("Favorites")) {
+                toggleFavorite();
             } else if (t.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
                         "type", "profile", "createdAt", FieldValue.serverTimestamp()));
@@ -746,8 +760,102 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     /** 💙 See friendship — FB Lite style: since when + mutual friends count. */
-    private void showFriendship() {
-        if (user == null) return;
+    /** ⭐ Favorites toggle: their posts float to the top of your feed. */
+    private void toggleFavorite() {
+        if (Fb.me == null) return;
+        boolean removing = Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(uid);
+        Fb.db().collection("users").document(Fb.uid())
+                .update("favoriteUids", removing
+                        ? com.google.firebase.firestore.FieldValue.arrayRemove(uid)
+                        : com.google.firebase.firestore.FieldValue.arrayUnion(uid))
+                .addOnSuccessListener(x -> {
+                    if (removing) Fb.me.favoriteUids.remove(uid);
+                    else Fb.me.favoriteUids.add(uid);
+                    Ui.toast(this, removing ? "Removed from Favorites"
+                            : "⭐ Favorites — " + firstOnly(user != null ? user.displayName : "")
+                            + "'s posts show first");
+                })
+                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+    }
+
+    /** 🛡 ADMIN: adjust a user's stars balance (±). */
+    private void adminAdjustStars() {
+        int cur = user != null ? user.stars : 0;
+        android.widget.EditText e = Ui.input(this, "e.g. 50 or -20 (current: " + cur + " ⭐)");
+        e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
+                | android.text.InputType.TYPE_NUMBER_FLAG_SIGNED);
+        android.widget.LinearLayout box = Ui.col(this);
+        Ui.pad(box, 20, 10, 20, 0);
+        box.addView(e, new android.widget.LinearLayout.LayoutParams(-1, -2));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("🛡 ⭐ Adjust stars")
+                .setMessage("For " + (user != null ? user.displayName : "user")
+                        + " · current balance " + cur + " ⭐")
+                .setView(box)
+                .setPositiveButton("Apply", (d, w) -> {
+                    String s = e.getText().toString().trim();
+                    int delta;
+                    try { delta = Integer.parseInt(s); } catch (Exception ex) {
+                        Ui.toast(this, "Enter a number like 50 or -20"); return;
+                    }
+                    if (delta == 0) return;
+                    Fb.db().collection("users").document(uid)
+                            .update("stars", com.google.firebase.firestore.FieldValue.increment(delta))
+                            .addOnSuccessListener(x -> {
+                                if (user != null) user.stars += delta;
+                                com.example.frienbook.core.Notify.send(uid, "stars",
+                                        "⭐ " + delta + " Stars adjusted on your account.", null);
+                                Ui.toast(this, "Stars updated ✓ (" + (cur + delta) + ")");
+                            })
+                            .addOnFailureListener(err -> Ui.toast(this, err.getMessage()));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** 🛡 ADMIN: one-tap official message → user's notifications. */
+    private void adminMessageDialog() {
+        android.widget.EditText e = Ui.multi(this, "Message from friendbook Team…", 3);
+        android.widget.LinearLayout box = Ui.col(this);
+        Ui.pad(box, 20, 10, 20, 0);
+        box.addView(e, new android.widget.LinearLayout.LayoutParams(-1, -2));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("🛡 📢 Message user")
+                .setMessage("Delivered to " + (user != null ? user.displayName : "user")
+                        + "'s notifications as from friendbook Team.")
+                .setView(box)
+                .setPositiveButton("Send", (d, w) -> {
+                    String text = e.getText().toString().trim();
+                    if (text.isEmpty()) return;
+                    com.example.frienbook.core.Notify.send(uid, "team",
+                            "🛡 " + text, null);
+                    Ui.toast(this, "Sent ✓");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** 🛡 ADMIN: quick stats — posts, friends, stars, joined. */
+    private void adminStats() {
+        Ui.toast(this, "Counting posts…");
+        Fb.db().collection("posts").whereEqualTo("authorId", uid).limit(100).get()
+                .addOnSuccessListener(snap -> {
+                    int pcount = snap.size();
+                    Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
+                            "• Posts: " + pcount + (pcount >= 100 ? "+" : "") + "\n"
+                            + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
+                            + "• Followers: " + (user != null && user.followers != null
+                                    ? user.followers.size() : 0) + "\n"
+                            + "• Stars: " + (user != null ? user.stars : 0) + " ⭐\n"
+                            + "• Tick: " + (user != null
+                                    ? com.example.frienbook.core.Admin.tickLabel(user.tickLevel)
+                                    : "none") + "\n"
+                            + "• ID: " + uid);
+                })
+                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+    }
+
+    private void showFriendship() {        if (user == null) return;
         String me = Fb.uid();
         StringBuilder sb = new StringBuilder();
         sb.append(user.displayName).append(" & ").append(Fb.myName()).append("\n\n");
