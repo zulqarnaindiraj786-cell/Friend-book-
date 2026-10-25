@@ -28,6 +28,7 @@ public class App extends Application implements SensorEventListener {
         // Firestore offline persistence is enabled by default on Android,
         // which gives Facebook-Lite style offline reading/writing.
         Fb.init(this);
+        installCrashReporter();
         Presence.init();
         Fb.startMeListener();
 
@@ -37,6 +38,37 @@ public class App extends Application implements SensorEventListener {
             Sensor acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             if (acc != null) sm.registerListener(this, acc, SensorManager.SENSOR_DELAY_UI);
         }
+    }
+
+    /**
+     * 📱 Device crash reporter — writes the uncaught exception stack into Firestore
+     * `crashReports` (admin-read) so the failing line can be found without logcat,
+     * then re-throws to the system handler so the OS still records the crash.
+     */
+    private void installCrashReporter() {
+        final Thread.UncaughtExceptionHandler sys =
+                Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, ex) -> {
+            try {
+                java.io.StringWriter sw = new java.io.StringWriter();
+                ex.printStackTrace(new java.io.PrintWriter(sw));
+                String stack = sw.toString();
+                if (stack.length() > 7000) stack = stack.substring(0, 7000);
+                java.util.Map<String, Object> c = new java.util.HashMap<>();
+                c.put("stack", stack);
+                c.put("thread", thread.getName());
+                c.put("uid", Fb.uid());
+                c.put("device", android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+                        + " · Android " + android.os.Build.VERSION.RELEASE);
+                c.put("appVersion", 3);
+                c.put("createdAt",
+                        com.google.firebase.firestore.FieldValue.serverTimestamp());
+                Fb.db().collection("crashReports").add(c);
+                Thread.sleep(500); // give the write a moment to hit the offline queue
+            } catch (Throwable ignored) { }
+            if (sys != null) sys.uncaughtException(thread, ex);
+            else { android.os.Process.killProcess(android.os.Process.myPid()); System.exit(10); }
+        });
     }
 
     public void setShakeListener(ShakeListener l) { this.shakeListener = l; }

@@ -234,5 +234,11 @@ service cloud.firestore {
       allow create: if signedIn();
       allow delete: if isAdmin();
     }
+    match /crashReports/{doc} {
+      // automatic device crash reports (written by the app's uncaught-exception handler)
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow delete: if isAdmin();
+    }
   }
 }
