@@ -14,6 +14,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
+import com.friendbook.core.FeedAlgorithm;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Ui;
 import com.friendbook.models.Models;
@@ -69,8 +70,10 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         rv.setAdapter(adapter);
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
+            FeedAlgorithm.nextRefreshGeneration(this);
+            adapter.refreshSponsoredAds();
             listen();
-            swipe.postDelayed(() -> swipe.setRefreshing(false), 500);
+            swipe.postDelayed(() -> swipe.setRefreshing(false), 450);
         });
         root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
@@ -135,7 +138,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         if ("popular".equals(mode)) {
             out.sort((a, b2) -> Integer.compare(b2.likes + b2.comments, a.likes + a.comments));
         } else {
-            out.sort((a, b2) -> Long.compare(b2.createdAt, a.createdAt));
+            out = FeedAlgorithm.rankWatchVideos(this, out);
         }
         adapter.setPosts(out);
     }

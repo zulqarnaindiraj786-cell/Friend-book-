@@ -28,7 +28,9 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
+import com.friendbook.core.AdsConfig;
 import com.friendbook.core.Fb;
+import com.friendbook.core.FeedAlgorithm;
 import com.friendbook.core.Format;
 import com.friendbook.core.Notify;
 import com.friendbook.core.Prefs;
@@ -124,6 +126,16 @@ public class ReelsFragment extends Fragment {
         title.setShadowLayer(4f, 0f, 1f, 0xCC000000);
         bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
 
+        TextView refreshPill = Ui.roundChip(a, "↻ Fresh", 0x55000000, Color.WHITE, 13);
+        Ui.pad(refreshPill, 11, 6, 11, 6);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+        rlp.rightMargin = Ui.dp(a, 8);
+        refreshPill.setOnClickListener(v -> {
+            refreshWithAlgorithm();
+            Ui.toast(a, "🎬 Fresh reels & videos loaded");
+        });
+        bar.addView(refreshPill, rlp);
+
         TextView camPill = Ui.roundChip(a, "🎥 Create", 0x55000000, Color.WHITE, 13);
         Ui.pad(camPill, 12, 6, 12, 6);
         camPill.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
@@ -134,9 +146,24 @@ public class ReelsFragment extends Fragment {
             @Override
             public void onPageSelected(int position) {
                 adapter.playOnly(pager, position);
+                Models.Reel cur = adapter.reelAtPosition(position);
+                if (cur != null && cur.id != null) {
+                    FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
+                }
             }
         });
         return root;
+    }
+
+    /** Advances the Facebook discovery epoch so new/unwatched Reels & fresh Sponsored Ads appear immediately! */
+    public void refreshWithAlgorithm() {
+        Activity a = getActivity();
+        if (a == null) return;
+        initialReelId = null; // allow full dynamic rotation after initial deep-link view
+        FeedAlgorithm.nextRefreshGeneration(a);
+        if (adapter != null) adapter.bumpAdEpoch();
+        rebuildMergedFeed();
+        if (pager != null) pager.setCurrentItem(0, false);
     }
 
     private void rebuildMergedFeed() {
@@ -149,19 +176,8 @@ public class ReelsFragment extends Fragment {
                 map.put(r.id, r);
             }
         }
-        List<Models.Reel> merged = new ArrayList<>(map.values());
-        Collections.sort(merged, (a, b) -> Long.compare(b.createdAt, a.createdAt));
-
-        // If opened for a specific reel (from Profile Reels tab), jump/move it first!
-        if (initialReelId != null && !initialReelId.isEmpty()) {
-            for (int i = 0; i < merged.size(); i++) {
-                if (initialReelId.equals(merged.get(i).id)) {
-                    Models.Reel target = merged.remove(i);
-                    merged.add(0, target);
-                    break;
-                }
-            }
-        }
+        List<Models.Reel> merged = FeedAlgorithm.rankReels(
+                getActivity(), new ArrayList<>(map.values()), initialReelId);
 
         if (emptyState != null) {
             emptyState.setVisibility(merged.isEmpty() ? View.VISIBLE : View.GONE);
@@ -232,18 +248,56 @@ public class ReelsFragment extends Fragment {
 
     // ================== Reel Adapter ==================
 
-    static class ReelAdapter extends RecyclerView.Adapter<ReelAdapter.VH> {
+    static class ReelAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        private static final int VT_REEL = 0, VT_AD = 1;
         private final Activity activity;
         private final List<Models.Reel> data = new ArrayList<>();
         private int playingPos = -1;
+        private int adEpoch = 1;
 
         ReelAdapter(Activity a) { this.activity = a; }
+
+        void bumpAdEpoch() { adEpoch++; }
 
         void setData(List<Models.Reel> list) {
             data.clear();
             data.addAll(list);
             notifyDataSetChanged();
             playingPos = -1;
+        }
+
+        private int firstAdSlot() {
+            return FeedAlgorithm.adFirstPostCount(); // 2, 3, or 4 reels before first Sponsored card
+        }
+
+        private int adInterval() { return 4; }
+
+        private int adCount() {
+            int first = firstAdSlot();
+            if (!AdsConfig.bannersEnabled() || data.size() < first) return 0;
+            return 1 + (data.size() - first) / adInterval();
+        }
+
+        private boolean isAdPos(int pos) {
+            int first = firstAdSlot();
+            if (!AdsConfig.bannersEnabled() || pos < first) return false;
+            int step = adInterval() + 1;
+            int rel = pos - first;
+            return (rel % step == 0) && ((rel / step) < adCount());
+        }
+
+        private int reelIndex(int pos) {
+            int first = firstAdSlot();
+            if (!AdsConfig.bannersEnabled() || pos <= first) return pos;
+            int step = adInterval() + 1;
+            int adsBefore = Math.min(adCount(), ((pos - 1 - first) / step) + 1);
+            return pos - adsBefore;
+        }
+
+        Models.Reel reelAtPosition(int pos) {
+            if (pos < 0 || isAdPos(pos)) return null;
+            int idx = reelIndex(pos);
+            return (idx >= 0 && idx < data.size()) ? data.get(idx) : null;
         }
 
         void stopAll() {
@@ -267,23 +321,98 @@ public class ReelsFragment extends Fragment {
             }
         }
 
-        @Override public int getItemCount() { return data.size(); }
+        @Override public int getItemCount() { return data.size() + adCount(); }
+
+        @Override public int getItemViewType(int position) {
+            return isAdPos(position) ? VT_AD : VT_REEL;
+        }
 
         @NonNull
         @Override
-        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            if (viewType == VT_AD) return new ReelAdVH(activity);
             return new VH(activity);
         }
 
         @Override
-        public void onBindViewHolder(@NonNull VH h, int position) {
-            h.bind(data.get(position));
+        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
+            if (h instanceof ReelAdVH) {
+                ((ReelAdVH) h).bind(AdsConfig.bannerId(), adEpoch + FeedAlgorithm.epoch() + position);
+            } else if (h instanceof VH) {
+                int idx = reelIndex(position);
+                if (idx >= 0 && idx < data.size()) ((VH) h).bind(data.get(idx));
+            }
         }
 
         @Override
-        public void onViewRecycled(@NonNull VH h) {
+        public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
             super.onViewRecycled(h);
-            h.video.stopPlayback();
+            if (h instanceof VH) ((VH) h).video.stopPlayback();
+            else if (h instanceof ReelAdVH) ((ReelAdVH) h).destroyAd();
+        }
+
+        /** Full-screen vertical Facebook Reels Sponsored Ad Card (Real Production AdMob only). */
+        static class ReelAdVH extends RecyclerView.ViewHolder {
+            final FrameLayout adHost;
+            com.google.android.gms.ads.AdView adView;
+            int boundKey = -1;
+
+            ReelAdVH(Activity a) {
+                super(buildRoot(a));
+                FrameLayout root = (FrameLayout) itemView;
+                LinearLayout col = Ui.col(a);
+                col.setGravity(Gravity.CENTER);
+                Ui.pad(col, 20, 40, 20, 40);
+
+                TextView pill = Ui.roundChip(a, "Sponsored · friendbook Reels", 0x33FFFFFF, Color.WHITE, 12);
+                Ui.pad(pill, 14, 6, 14, 6);
+                col.addView(pill);
+
+                adHost = new FrameLayout(a);
+                LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-2, -2);
+                alp.topMargin = Ui.dp(a, 18);
+                alp.bottomMargin = Ui.dp(a, 18);
+                col.addView(adHost, alp);
+
+                TextView hint = Ui.tv(a, "Swipe up for next video ↑", 13, 0xAAFFFFFF);
+                col.addView(hint);
+                root.addView(col, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+            }
+
+            void bind(final String unitId, int key) {
+                if (adView != null && boundKey == key) return;
+                boundKey = key;
+                loadSize(unitId, com.google.android.gms.ads.AdSize.MEDIUM_RECTANGLE, true);
+            }
+
+            private void loadSize(final String unitId,
+                                  final com.google.android.gms.ads.AdSize sz,
+                                  final boolean fallback) {
+                destroyAd();
+                try {
+                    adView = new com.google.android.gms.ads.AdView(adHost.getContext());
+                    adView.setAdSize(sz);
+                    adView.setAdUnitId(unitId);
+                    adView.setAdListener(new com.google.android.gms.ads.AdListener() {
+                        @Override
+                        public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError err) {
+                            if (fallback && sz != com.google.android.gms.ads.AdSize.BANNER) {
+                                loadSize(unitId, com.google.android.gms.ads.AdSize.BANNER, false);
+                            }
+                        }
+                    });
+                    adHost.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+                    adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                } catch (Throwable ignored) {}
+            }
+
+            void destroyAd() {
+                if (adView != null) {
+                    adHost.removeView(adView);
+                    try { adView.destroy(); } catch (Throwable ignored) {}
+                    adView = null;
+                }
+            }
         }
 
         class VH extends RecyclerView.ViewHolder {

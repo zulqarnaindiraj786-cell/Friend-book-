@@ -133,9 +133,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
-    // ---- 📢 AdMob banner slots: one banner after every 3 posts ----
+    // ---- 📢 Dynamic Facebook-Style Sponsored AdMob Slots (rotates slot position & live ad creative per epoch!) ----
     private String bannerId = com.friendbook.core.AdsConfig.bannerId();
     private boolean adsEnabled = com.friendbook.core.AdsConfig.bannersEnabled();
+    private int adEpoch = 1;
 
     public void setAdsConfig(String id, boolean enabled) {
         bannerId = id == null || id.isEmpty() ? com.friendbook.core.AdsConfig.DEFAULT_BANNER_ID : id;
@@ -143,16 +144,41 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         notifyDataSetChanged();
     }
 
-    private int adCount() { return adsEnabled ? posts.size() / 3 : 0; }
+    /** Forces all in-feed Sponsored Ad slots to rotate position & fetch fresh live AdMob creatives! */
+    public void refreshSponsoredAds() {
+        adEpoch++;
+        notifyDataSetChanged();
+    }
 
-    /** Does this feed slot (after the header) hold an ad? Slots 3, 7, 11… */
+    private int firstAdAfterPosts() {
+        return com.friendbook.core.FeedAlgorithm.adFirstPostCount(); // 2, 3, or 4
+    }
+
+    private int adIntervalPosts() {
+        return com.friendbook.core.FeedAlgorithm.adIntervalPosts(); // 3 or 4
+    }
+
+    private int adCount() {
+        int first = firstAdAfterPosts();
+        if (!adsEnabled || posts.size() < first) return 0;
+        return 1 + (posts.size() - first) / adIntervalPosts();
+    }
+
+    /** Does this feed slot (after the header) hold a Sponsored Ad? Dynamically shifts per refresh! */
     private boolean isAdSlot(int slot) {
-        return adsEnabled && (slot + 1) % 4 == 0 && slot / 4 < adCount();
+        int first = firstAdAfterPosts();
+        if (!adsEnabled || slot < first) return false;
+        int step = adIntervalPosts() + 1;
+        int rel = slot - first;
+        return (rel % step == 0) && ((rel / step) < adCount());
     }
 
     private int postIndexForSlot(int slot) {
-        if (!adsEnabled) return slot;
-        return slot - ((slot + 1) / 4);
+        int first = firstAdAfterPosts();
+        if (!adsEnabled || slot <= first) return slot;
+        int step = adIntervalPosts() + 1;
+        int adsBefore = Math.min(adCount(), ((slot - 1 - first) / step) + 1);
+        return slot - adsBefore;
     }
 
     private int slotCount() { return posts.size() + adCount(); }
@@ -311,7 +337,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
-            ((AdVH) h).loadAd(bannerId); // fresh load on every bind = refreshed ad each time
+            ((AdVH) h).loadAd(bannerId, adEpoch + com.friendbook.core.FeedAlgorithm.epoch(), position);
         } else {
             // Guard: realtime list swaps between measure & bind must not crash the feed.
             // A broken post gets a small placeholder card — NEVER an invisible one
@@ -443,6 +469,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private void bindPost(PostVH vh, Models.Post p) {
         Context c = activity;
+        if (showHeader && p != null && p.id != null) {
+            com.friendbook.core.FeedAlgorithm.recordPostImpression(c, p.id);
+            if ("video".equals(p.mediaType)) {
+                com.friendbook.core.FeedAlgorithm.recordVideoImpression(c, p.id);
+            }
+        }
 
         // ---------- header: 40dp circular avatar · bold name · gray time below · ⋮ ----------
         boolean pagePost = p.isPagePost();
@@ -1487,33 +1519,80 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
-    /** 📢 AdMob banner slot — Google BANNER ad, loaded fresh on every bind. */
+    /** 📢 Facebook-Style Sponsored Ad Card — Real Production AdMob (rotates rich sizes & fresh creatives on every refresh/reopen!). */
     static class AdVH extends RecyclerView.ViewHolder {
         final FrameLayout box;
+        final TextView subtitle;
         com.google.android.gms.ads.AdView adView;
+        int lastEpochKey = -1;
 
         AdVH(Context c) {
             super(PostVH.cardRoot(c));
             LinearLayout card = (LinearLayout) itemView;
-            TextView label = Ui.tv(c, "Sponsored", 11, Ui.sub(c));
-            label.setGravity(Gravity.CENTER);
-            Ui.pad(label, 0, 8, 0, 2);
-            card.addView(label, new LinearLayout.LayoutParams(-1, -2));
+
+            LinearLayout head = Ui.row(c);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(head, 12, 10, 12, 6);
+
+            ImageView badge = new ImageView(c);
+            badge.setImageResource(com.friendbook.R.drawable.ic_brand_logo);
+            int bs = Ui.dp(c, 34);
+            head.addView(badge, new LinearLayout.LayoutParams(bs, bs));
+
+            LinearLayout metaCol = Ui.col(c);
+            metaCol.setPadding(Ui.dp(c, 10), 0, 0, 0);
+            metaCol.addView(Ui.tvBold(c, "Sponsored", 14, Ui.txt(c)));
+            subtitle = Ui.tv(c, "Suggested for you · 🌐", 11.5f, Ui.sub(c));
+            metaCol.addView(subtitle);
+            head.addView(metaCol, new LinearLayout.LayoutParams(0, -2, 1));
+
+            card.addView(head);
             box = new FrameLayout(c);
             card.addView(box, new LinearLayout.LayoutParams(-1, -2));
         }
 
-        void loadAd(String bannerId) {
+        void loadAd(String bannerId, int epochKey, int adapterPos) {
+            itemView.setVisibility(View.VISIBLE);
+            int key = epochKey * 31 + adapterPos;
+            if (adView != null && lastEpochKey == key) return;
+            lastEpochKey = key;
+
+            String[] labels = {
+                    "Suggested for you · 🌐",
+                    "Recommended partner · 🌐",
+                    "Featured today · 🌐"
+            };
+            subtitle.setText(labels[Math.abs(key) % labels.length]);
+
+            // Alternate rich rectangular Facebook-style ad format (300x250) & Large Banner (320x100),
+            // with instant fallback to standard Banner (320x50) so fill rate stays 100% maximized!
+            int variant = Math.abs(key) % 3;
+            com.google.android.gms.ads.AdSize primarySize =
+                    (variant == 0) ? com.google.android.gms.ads.AdSize.MEDIUM_RECTANGLE
+                    : (variant == 1) ? com.google.android.gms.ads.AdSize.LARGE_BANNER
+                    : com.google.android.gms.ads.AdSize.BANNER;
+            requestWithSize(bannerId, primarySize, true);
+        }
+
+        private void requestWithSize(final String bannerId,
+                                     final com.google.android.gms.ads.AdSize size,
+                                     final boolean allowFallback) {
             destroyAd();
-            // Guard: devices without Google Play Services / ads provider throw here —
-            // that used to crash the whole home feed on bind.
             try {
                 adView = new com.google.android.gms.ads.AdView(box.getContext());
-                adView.setAdSize(com.google.android.gms.ads.AdSize.BANNER);
+                adView.setAdSize(size);
                 adView.setAdUnitId(bannerId);
+                adView.setAdListener(new com.google.android.gms.ads.AdListener() {
+                    @Override
+                    public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError err) {
+                        if (allowFallback && size != com.google.android.gms.ads.AdSize.BANNER) {
+                            requestWithSize(bannerId, com.google.android.gms.ads.AdSize.BANNER, false);
+                        }
+                    }
+                });
                 box.addView(adView, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
                 adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-                Ui.pad(box, 0, 0, 0, 8);
+                Ui.pad(box, 0, 4, 0, 10);
             } catch (Throwable t) {
                 adView = null;
                 box.removeAllViews();

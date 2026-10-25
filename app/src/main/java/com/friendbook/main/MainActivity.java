@@ -23,6 +23,7 @@ import com.friendbook.chat.ConversationsActivity;
 import com.friendbook.core.AdsConfig;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
+import com.friendbook.core.FeedAlgorithm;
 import com.friendbook.core.Icons;
 import com.friendbook.core.Prefs;
 import com.friendbook.core.Presence;
@@ -88,6 +89,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         if (!Fb.signedIn()) { finish(); return; }
+        // Advance Facebook discovery epoch on every app open so user greets fresh posts, videos & ads!
+        FeedAlgorithm.onColdAppLaunch(this);
         Ui.statusBarLight(this);
         setContentView(R.layout.activity_main);
 
@@ -273,6 +276,16 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
     }
 
+    /** Reloads a fresh live production AdMob creative on pull-to-refresh or app reopen. */
+    public void refreshBottomBannerAd() {
+        try {
+            if (adView != null && !isFinishing() && AdsConfig.bannersEnabled()) {
+                adView.loadAd(new AdRequest.Builder().build());
+            }
+            AdsConfig.preloadInterstitial(this);
+        } catch (Throwable ignored) { }
+    }
+
     private View circleHeaderIcon(int iconRes, View.OnClickListener l) {
         LinearLayout circle = Ui.row(this);
         circle.setGravity(Gravity.CENTER);
@@ -395,6 +408,9 @@ public class MainActivity extends Activity {
         if (tab == active) {
             if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
+            } else if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.reels.ReelsFragment) {
+                ((com.friendbook.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
+                refreshBottomBannerAd();
             }
             return;
         }
@@ -528,6 +544,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        FeedAlgorithm.onAppBackgrounded(this);
         if (adView != null) {
             try { adView.pause(); } catch (Throwable ignored) { }
         }
@@ -537,12 +554,22 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (bottomAdWrap != null) {
             bottomAdWrap.setBackgroundColor(Ui.card(this));
             bottomAdWrap.setVisibility(AdsConfig.bannersEnabled() ? View.VISIBLE : View.GONE);
         }
         if (adView != null && AdsConfig.bannersEnabled()) {
             try { adView.resume(); } catch (Throwable ignored) { }
+        }
+        if (freshSession) {
+            refreshBottomBannerAd();
+            if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                ((HomeFragment) tabFragments[TAB_HOME]).onWarmSessionResume();
+            }
+            if (tabFragments[TAB_REELS] instanceof com.friendbook.reels.ReelsFragment && active != TAB_REELS) {
+                ((com.friendbook.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
+            }
         }
         refreshLiteUi();
         Fb.ensureMeFresh();
