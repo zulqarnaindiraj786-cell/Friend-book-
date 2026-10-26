@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
-  <title>friendbook — Official Android APK Download (v525.0.0.5.102)</title>
+  <title>friendbook — Official Android App Download (v525.0.0.5.102)</title>
   <meta name="description" content="Download friendbook official Android app (com.friendbook). Ultra-fast even on 2G — Stories, Reels, Voice Messenger, Groups, Pages & HD Photos." />
   <meta name="theme-color" content="#0B0F19" />
 
   <!-- WhatsApp / Facebook / Telegram Rich Link Preview -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="friendbook — Official Android App Download" />
-  <meta property="og:description" content="Tap to download friendbook APK (v525.0.0.5.102). Fast, lightweight & Pro social network with Reels, Stories & Voice Chat!" />
-  <meta property="og:image" content="https://raw.githubusercontent.com/zulqarnaindiraj786-cell/Friend-book-/arena/4be1f297-friend-book/docs/logo.png" />
+  <meta property="og:description" content="Tap to download friendbook APK (8.7 MB · v525.0.0.5.102). Fast, lightweight & Pro social network with Reels, Stories & Voice Chat!" />
+  <meta property="og:image" content="/logo.png" />
 
   <link rel="icon" type="image/png" href="./logo.png" />
   <style>
@@ -24,7 +24,6 @@
       --gold-deep: #d49a1a;
       --blue: #1877f2;
       --blue-glow: rgba(24, 119, 242, 0.42);
-      --green: #25d366;
       --text: #f8fafc;
       --muted: #94a3b8;
     }
@@ -53,7 +52,6 @@
       padding: 20px 16px 64px;
     }
 
-    /* Top Nav */
     .topbar {
       display: flex;
       align-items: center;
@@ -95,7 +93,6 @@
       border-radius: 999px;
     }
 
-    /* Hero Card */
     .hero {
       background: linear-gradient(165deg, rgba(24, 31, 48, 0.94), rgba(14, 18, 28, 0.96));
       border: 1px solid rgba(245, 196, 81, 0.22);
@@ -165,7 +162,6 @@
       margin: 0 auto 22px;
     }
 
-    /* App Meta Strip */
     .meta-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -189,7 +185,6 @@
       color: var(--muted);
     }
 
-    /* Primary Download Button */
     .btn-download {
       display: inline-flex;
       align-items: center;
@@ -218,18 +213,6 @@
       transform: scale(0.98);
     }
 
-    .mirror-row {
-      margin-top: 12px;
-      font-size: 0.83rem;
-      color: var(--muted);
-    }
-
-    .mirror-row a {
-      color: var(--gold);
-      text-decoration: none;
-      font-weight: 700;
-    }
-
     .download-toast {
       display: none;
       margin: 16px auto 0;
@@ -243,7 +226,6 @@
       font-weight: 600;
     }
 
-    /* Share Row */
     .share-row {
       display: flex;
       flex-wrap: wrap;
@@ -274,7 +256,6 @@
       color: #4ade80;
     }
 
-    /* Section Headings */
     .section-title {
       font-size: 1.3rem;
       font-weight: 800;
@@ -284,7 +265,6 @@
       gap: 8px;
     }
 
-    /* Features Grid */
     .features {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -313,7 +293,6 @@
       color: var(--muted);
     }
 
-    /* 3-Step Install Guide */
     .steps {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -370,19 +349,17 @@
 </head>
 <body>
   <div class="container">
-    <!-- Top Header -->
     <header class="topbar">
       <div class="brand-mini">
-        <img src="./logo.png" onerror="this.src='https://raw.githubusercontent.com/zulqarnaindiraj786-cell/Friend-book-/arena/4be1f297-friend-book/docs/logo.png'" alt="friendbook logo" />
+        <img src="./logo.png" alt="friendbook logo" />
         <span>friendbook</span>
       </div>
-      <div class="verified-pill">✔ Verified Official APK</div>
+      <div class="verified-pill">✔ Verified Official App</div>
     </header>
 
-    <!-- Main Download Hero -->
     <section class="hero">
       <div class="logo-wrap">
-        <img class="app-logo" src="./logo.png" onerror="this.src='https://raw.githubusercontent.com/zulqarnaindiraj786-cell/Friend-book-/arena/4be1f297-friend-book/docs/logo.png'" alt="friendbook Crown F Icon" />
+        <img class="app-logo" src="./logo.png" alt="friendbook Crown F Icon" />
       </div>
 
       <span class="crown-tag">👑 Official Pro Edition</span>
@@ -410,26 +387,20 @@
         </div>
       </div>
 
-      <!-- 1-Click Direct APK Download -->
+      <!-- Downloads ./friendbook.apk directly from your own website domain! -->
       <a
         id="mainDownloadBtn"
         class="btn-download"
-        href="https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk"
+        href="./friendbook.apk"
         download="friendbook.apk"
       >
         <span>⬇️ Download friendbook APK (8.7 MB)</span>
       </a>
 
-      <div class="mirror-row">
-        Direct link not starting?
-        <a id="mirrorLink" href="https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk">Tap here for Direct Mirror APK</a>
-      </div>
-
       <div id="downloadNotice" class="download-toast">
         ✅ Downloading <strong>friendbook.apk</strong>! Once finished, tap the file in your browser notifications or Downloads folder to install.
       </div>
 
-      <!-- Easy Share Buttons -->
       <div class="share-row">
         <a id="waShareBtn" class="btn-secondary btn-whatsapp" href="#" target="_blank" rel="noopener">
           📲 Share on WhatsApp
@@ -443,7 +414,6 @@
       </div>
     </section>
 
-    <!-- 3-Step Install Instructions -->
     <h2 class="section-title">📲 How to Install (3 Easy Steps)</h2>
     <div class="steps">
       <div class="step-card">
@@ -469,7 +439,6 @@
       </div>
     </div>
 
-    <!-- App Features -->
     <h2 class="section-title">✨ Why Everyone Loves friendbook</h2>
     <div class="features">
       <div class="feature-card">
@@ -504,7 +473,6 @@
 
   <script>
     (function () {
-      var APK_RELEASE_URL = "https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk";
       var pageUrl = window.location.href;
       var mainBtn = document.getElementById("mainDownloadBtn");
       var notice = document.getElementById("downloadNotice");
@@ -512,16 +480,11 @@
       var copyBtn = document.getElementById("copyLinkBtn");
       var nativeShareBtn = document.getElementById("nativeShareBtn");
 
-      // If local ./friendbook.apk exists on the same Pages host, mirror link points to it; main button uses fast GitHub Release CDN
-      if (window.location.hostname.indexOf("github.io") !== -1) {
-        document.getElementById("mirrorLink").href = "./friendbook.apk";
-      }
-
       mainBtn.addEventListener("click", function () {
         notice.style.display = "block";
       });
 
-      var shareMessage = "👑 Download *friendbook* Official Android App!\nFast Reels, Stories, HD Photos & Voice Chat:\n👉 " + pageUrl + "\n\nDirect APK Download:\n⬇️ " + APK_RELEASE_URL;
+      var shareMessage = "👑 Download *friendbook* Official Android App!\nFast Reels, Stories, HD Photos & Voice Chat:\n👉 " + pageUrl;
       waBtn.href = "https://wa.me/?text=" + encodeURIComponent(shareMessage);
 
       copyBtn.addEventListener("click", function () {

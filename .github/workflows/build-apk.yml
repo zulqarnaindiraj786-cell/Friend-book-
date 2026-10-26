@@ -87,6 +87,8 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk friendbook.apk
           cp app/build/outputs/apk/debug/app-debug.apk friendbook-debug.apk
           cp friendbook.apk docs/friendbook.apk
+          (cd docs && zip -r ../friendbook-website.zip .)
+          ls -lh friendbook-website.zip
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -100,19 +102,25 @@ jobs:
           name: FriendBook-release-apk
           path: friendbook.apk
 
-      - name: Publish Public 1-Click APK to GitHub Releases
+      - name: Upload Standalone Website + APK ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-Website-Bundle-ZIP
+          path: friendbook-website.zip
+
+      - name: Publish Public 1-Click APK & Website Bundle to Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v525.0.0.5.102"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook.apk friendbook-debug.apk --clobber
-            gh release edit "$TAG" --latest --title "friendbook v525.0.0.5.102 (Official Signed Android APK)"
+            gh release upload "$TAG" friendbook.apk friendbook-debug.apk friendbook-website.zip --clobber
+            gh release edit "$TAG" --latest --title "friendbook v525.0.0.5.102 (Official Signed APK + Standalone Website ZIP)"
           else
-            gh release create "$TAG" friendbook.apk friendbook-debug.apk \
+            gh release create "$TAG" friendbook.apk friendbook-debug.apk friendbook-website.zip \
               --latest \
-              --title "friendbook v525.0.0.5.102 (Official Signed Android APK)" \
-              --notes "Official signed installable Android APK for **friendbook** (\`com.friendbook\` v525.0.0.5.102). Tap **friendbook.apk** below to download & install on any Android 7.0+ phone."
+              --title "friendbook v525.0.0.5.102 (Official Signed APK + Standalone Website ZIP)" \
+              --notes "Official signed installable Android APK for **friendbook** (\`com.friendbook\` v525.0.0.5.102) + Complete Standalone Website ZIP (\`friendbook-website.zip\`)."
           fi
 
       - name: Upload Website Pages Artifact
