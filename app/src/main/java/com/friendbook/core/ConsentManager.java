@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 🛡️ Google UMP GDPR Consent + Safe MobileAds Initializer (`com.friendbook`):
  * - Runs ONLY on real physical Android devices (emulators are blocked via AdsConfig.isRealDevice()).
- * - Works seamlessly both WITH a configured GDPR message AND in "Requires review" / non-Play-Store state
+ * - Works seamlessly both WITH a configured GDPR message AND in "Requires review" / direct APK state
  *   (falls back safely so real Native Ad requests are never deadlocked if no UMP form is configured yet).
  * - Signals `isAdsSdkReady()` only after `MobileAds.initialize(...)` completes so the first Native Ad
  *   request never races ahead of adapter initialization.

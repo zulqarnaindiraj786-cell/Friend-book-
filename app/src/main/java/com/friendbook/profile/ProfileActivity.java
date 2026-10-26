@@ -1413,7 +1413,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
             } else if (t.contains("See friendship")) showFriendship();
             else if (t.contains("Copy profile link")) {
-                Ui.copy(this, "https://friendbook.app/user/" + uid);
+                Ui.copy(this, com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
             } else if (t.contains("Tick level (admin)")) {
                 Ui.choose(this, "🛡 Set tick for " + (user != null ? user.displayName : "user"),
                         new String[]{"✓ Blue tick", "✨ Gold tick", "💎 Diamond tick", "✕ Remove tick"},
@@ -1445,7 +1445,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list");
             } else if (t.contains("QR code")) {
                 Ui.showQrDialog(this, user != null ? user.displayName : "friendbook",
-                        "https://friendbook.app/user/" + uid);
+                        com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
             } else if (t.contains("View as Public")) {
                 viewAsPublic = true;
                 viewAsBanner.setVisibility(View.VISIBLE);

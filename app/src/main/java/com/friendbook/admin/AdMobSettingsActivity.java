@@ -19,11 +19,13 @@ import com.friendbook.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
 /**
- * 📢 Real Production AdMob Native Advanced & Play Store Approval Dashboard:
+ * 📢 Real Production AdMob Native Advanced Dashboard (Direct APK Distribution):
  * - App ID:                    ca-app-pub-3387480177023669~5696528190
  * - Native Advanced Unit ID:   ca-app-pub-3387480177023669/5657602381 (friendbook native)
+ * - Official Website URL:      https://friendbook-official-app-2026.blogspot.com
  * - Placement:                 After every 5 posts in RecyclerView (`native_ad_layout.xml`)
- * - app-ads.txt:               friendbook.com/app-ads.txt -> google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
+ * - app-ads.txt:               https://friendbook-official-app-2026.blogspot.com/app-ads.txt
+ *                              -> google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
  * - Live Telemetry:            Requests, Impressions, Match Rate %, Error Code 3 count & Est. eCPM ($0.17+)
  */
 public class AdMobSettingsActivity extends Activity {
@@ -60,11 +62,11 @@ public class AdMobSettingsActivity extends Activity {
         statsT.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 4));
         statsCard.addView(statsT);
         statsCard.addView(Ui.tv(this,
-                "Once published on Play Store & linked in AdMob Console, 'Requires review' clears and match rate climbs to 90%+.",
+                "Direct APK distribution mode active with real-device guard, 1-req/30s rate limiter, 60s No-Fill backoff & Blogger app-ads.txt.",
                 11, Ui.sub(this)));
         body.addView(statsCard, Ui.lpw(-2));
 
-        // 2. App ID & Play Store Link Card
+        // 2. App ID & Official Website URL Card
         LinearLayout card1 = Ui.col(this);
         card1.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card1, 14, 12, 14, 12);
@@ -72,18 +74,22 @@ public class AdMobSettingsActivity extends Activity {
         TextView appId = Ui.tvBold(this, AdsConfig.APP_ID, 14, Ui.txt(this));
         appId.setPadding(0, Ui.dp(this, 4), 0, 0);
         card1.addView(appId);
-        TextView storeLink = Ui.tv(this, "Play Store URL: " + AdsConfig.PLAY_STORE_URL, 11.5f, Ui.GREEN);
-        storeLink.setPadding(0, Ui.dp(this, 4), 0, 0);
-        card1.addView(storeLink);
+        TextView websiteLabel = Ui.tvBold(this, "Official Website URL", 12, Ui.sub(this));
+        websiteLabel.setPadding(0, Ui.dp(this, 8), 0, 0);
+        card1.addView(websiteLabel);
+        TextView websiteLink = Ui.tvBold(this, AdsConfig.OFFICIAL_WEBSITE_URL, 12.5f, Ui.GREEN);
+        websiteLink.setPadding(0, Ui.dp(this, 2), 0, 0);
+        websiteLink.setOnClickListener(v -> Ui.openUrl(this, AdsConfig.OFFICIAL_WEBSITE_URL));
+        card1.addView(websiteLink);
         LinearLayout.LayoutParams cp1 = new LinearLayout.LayoutParams(-1, -2);
         cp1.topMargin = Ui.dp(this, 10);
         body.addView(card1, cp1);
 
-        // 3. Verified app-ads.txt Card (Blogger / Blogspot Hosting Ready)
+        // 3. Verified app-ads.txt Card (Blogger Hosting: friendbook-official-app-2026.blogspot.com)
         LinearLayout adsTxtCard = Ui.col(this);
         adsTxtCard.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(adsTxtCard, 14, 12, 14, 12);
-        adsTxtCard.addView(Ui.tvBold(this, "📄 Blogger / Blogspot app-ads.txt Setup", 13, Ui.sub(this)));
+        adsTxtCard.addView(Ui.tvBold(this, "📄 Blogger app-ads.txt (" + AdsConfig.APP_ADS_TXT_URL + ")", 13, Ui.sub(this)));
         final String bundledLine = AdsConfig.readBundledAppAdsTxt(this);
         TextView adsTxtLine = Ui.tvBold(this, bundledLine, 12, Ui.txt(this));
         adsTxtLine.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));

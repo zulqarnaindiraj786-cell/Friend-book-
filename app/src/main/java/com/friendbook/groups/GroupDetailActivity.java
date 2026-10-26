@@ -81,12 +81,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         actions.setPadding(0, Ui.dp(this, 8), 0, 0);
 
         TextView invite = actionPill("🔗 Invite Link", () -> {
-            Ui.copy(this, "https://friendbook.app/group?id=" + groupId);
+            Ui.copy(this, com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?id=" + groupId);
             Ui.toast(this, "Group invite link copied 🔗");
         });
         TextView qr = actionPill("📱 Group QR", () ->
                 Ui.showQrDialog(this, group == null ? "Group" : group.name,
-                        "https://friendbook.app/group?id=" + groupId));
+                        com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?id=" + groupId));
         TextView rulesBtn = actionPill("📜 Group Rules", this::showRulesDialog);
         actions.addView(invite);
         actions.addView(qr);

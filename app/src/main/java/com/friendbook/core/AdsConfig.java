@@ -24,10 +24,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 📢 Real Earning AdMob Native Advanced Engine (`com.friendbook`) — Works Even Without Play Store!
+ * 📢 Real Earning AdMob Native Advanced Engine (`com.friendbook` — Direct APK Distribution):
  *
  * - Real App ID:              ca-app-pub-3387480177023669~5696528190
  * - Real Native Ad Unit ID:   ca-app-pub-3387480177023669/5657602381
+ * - Official Website URL:     https://friendbook-official-app-2026.blogspot.com
  * - app-ads.txt (Blogger):    google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
  *
  * Key Match-Rate & Anti-Ban Protections (Fixes 519 req / 5.2% match rate):
@@ -52,11 +53,12 @@ public class AdsConfig {
     /** On Error Code 3 (No-Fill during "Requires review"), wait 60 seconds before retrying! */
     public static final long NO_FILL_RETRY_DELAY_MS = 60_000L;
 
-    public static final String APP_ADS_TXT_URL = "https://yourblog.blogspot.com/app-ads.txt";
+    public static final String OFFICIAL_WEBSITE_URL =
+            "https://friendbook-official-app-2026.blogspot.com";
+    public static final String APP_ADS_TXT_URL =
+            "https://friendbook-official-app-2026.blogspot.com/app-ads.txt";
     public static final String APP_ADS_TXT_CONTENT =
             "google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0";
-    public static final String PLAY_STORE_URL =
-            "https://play.google.com/store/apps/details?id=com.friendbook";
 
     private static final String PREF_STATS = "friendbook_admob_stats";
     private static final double BASELINE_TARGET_ECPM_USD = 0.17;
