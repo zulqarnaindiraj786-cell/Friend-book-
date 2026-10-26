@@ -1,9 +1,14 @@
-name: Build FriendBook APK
+name: Build FriendBook APK & Publish Website
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -75,17 +80,66 @@ jobs:
         if: steps.dbg.outputs.exit != '0'
         run: exit 1
 
-      - name: Build release APK
-        run: gradle assembleRelease --console=plain --stacktrace
+      - name: Build signed release APK
+        run: |
+          gradle assembleRelease --console=plain --stacktrace
+          ls -lh app/build/outputs/apk/release/
+          cp app/build/outputs/apk/release/app-release.apk friendbook.apk
+          cp app/build/outputs/apk/debug/app-debug.apk friendbook-debug.apk
+          cp friendbook.apk docs/friendbook.apk
+          (cd docs && zip -r ../friendbook-website.zip .)
+          ls -lh friendbook-website.zip
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: FriendBook-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: friendbook-debug.apk
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: FriendBook-release-apk
-          path: app/build/outputs/apk/release/app-release*.apk
+          path: friendbook.apk
+
+      - name: Upload Standalone Website + APK ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-Website-Bundle-ZIP
+          path: friendbook-website.zip
+
+      - name: Publish Public 1-Click APK & Website Bundle to Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v525.0.0.5.102"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" friendbook.apk friendbook-debug.apk friendbook-website.zip --clobber
+            gh release edit "$TAG" --latest --title "friendbook v525.0.0.5.102 (Official Signed APK + Standalone Website ZIP)"
+          else
+            gh release create "$TAG" friendbook.apk friendbook-debug.apk friendbook-website.zip \
+              --latest \
+              --title "friendbook v525.0.0.5.102 (Official Signed APK + Standalone Website ZIP)" \
+              --notes "Official signed installable Android APK for **friendbook** (\`com.friendbook\` v525.0.0.5.102) + Complete Standalone Website ZIP (\`friendbook-website.zip\`)."
+          fi
+
+      - name: Upload Website Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs
+
+  deploy-website:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Deploy Website to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

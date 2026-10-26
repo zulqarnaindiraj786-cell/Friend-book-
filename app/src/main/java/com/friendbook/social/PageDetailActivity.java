@@ -70,7 +70,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         qrBtn.setBackground(Ui.round(this, 0x33FFFFFF, 10));
         Ui.pad(qrBtn, 10, 5, 10, 5);
         qrBtn.setOnClickListener(v -> Ui.showQrDialog(this, pageName, "Official Page on friendbook",
-                "https://friendbook.app/page/" + pageId));
+                com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?page=" + pageId));
         bar.addView(qrBtn);
         root.addView(bar);
 
@@ -139,7 +139,8 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         shareBtn.setOnClickListener(v -> {
             Intent s = new Intent(Intent.ACTION_SEND);
             s.setType("text/plain");
-            s.putExtra(Intent.EXTRA_TEXT, "Follow " + pageName + " on friendbook!\nhttps://friendbook.app/page/" + pageId);
+            s.putExtra(Intent.EXTRA_TEXT, "Follow " + pageName + " on friendbook!\n"
+                    + com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?page=" + pageId);
             startActivity(Intent.createChooser(s, "Share Page"));
         });
         actions.addView(shareBtn, sp);

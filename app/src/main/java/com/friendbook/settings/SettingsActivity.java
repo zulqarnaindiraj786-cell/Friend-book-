@@ -308,11 +308,10 @@ public class SettingsActivity extends Activity {
         body.addView(rowI(Icons.FONT, "Font size", fontLabel(), this::fontPicker));
         body.addView(switchRowI(Icons.QUIET, "Quiet mode", Prefs.quiet(this),
                 (btn, on) -> Prefs.setQuiet(this, on)));
-        body.addView(switchRowI(Icons.GLOBE, "Open links in external browser",
+        body.addView(switchRowI(Icons.GLOBE, "Confirm before opening external links",
                 Prefs.externalBrowser(this), (btn, on) -> {
                     Prefs.setExternalBrowser(this, on);
-                    Ui.toast(this, on ? "Links will open in external browser"
-                            : "Links open inside friendbook Lite Browser");
+                    Ui.toast(this, "External browser preference saved ✓");
                 }));
 
         // ============ 5. AUDIENCE AND VISIBILITY (PRIVACY) ============
@@ -416,13 +415,17 @@ public class SettingsActivity extends Activity {
                         + "2. You own the content you share and grant friendbook permission to display it to the audience you select.\n"
                         + "3. Spam, impersonation, fraud or illegal content leads to account suspension.\n"
                         + "4.Creator monetization & tick verifications follow transparent platform guidelines.")));
-        body.addView(rowI(Icons.SHIELD, "Privacy Policy (Data Policy)",
-                "How Firebase & Cloudinary store your content", () -> Ui.info(this,
+        body.addView(rowI(Icons.SHIELD, "Privacy Policy (Data & Ads Policy)",
+                "Firebase, Cloudinary & Google AdMob / GDPR disclosure", () -> Ui.info(this,
                 "Privacy Policy",
                 "• Account & posts are stored securely in Firebase Authentication & Cloud Firestore.\n"
-                        + "• Presence & typing indicators use Firebase Realtime Database and honor your Active Status switch.\n"
                         + "• Photos, videos & voice notes are stored on Cloudinary / Firebase Storage.\n"
+                        + "• friendbook displays Sponsored Native Ads powered by Google AdMob (Publisher pub-3387480177023669), which may use the Android Advertising ID in accordance with your GDPR / UMP privacy choices.\n"
+                        + "• EU/UK/EEA & eligible users can review or withdraw ad personalization consent anytime via Settings → Ad Privacy & GDPR Consent.\n"
                         + "• You can export or permanently delete your account anytime from Settings.")));
+        body.addView(rowI(Icons.LOCK, "Ad Privacy & GDPR Consent (UMP)",
+                "Manage Google AdMob personalized ad consent",
+                () -> com.friendbook.core.ConsentManager.showPrivacyOptionsForm(this)));
         body.addView(rowI(Icons.FLAG, "Community Standards", "Safety, respect & moderation", () -> Ui.info(this,
                 "Community Standards",
                 "• Be respectful — zero tolerance for harassment, hate speech or bullying.\n"

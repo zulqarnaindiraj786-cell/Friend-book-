@@ -163,9 +163,9 @@ public class Admin {
                 });
     }
 
-    /** Referral invite link for a user (friendbook.app deep link). */
+    /** Referral invite link for a user (official Blogger website). */
     public static String inviteLink(String uid) {
-        return "https://friendbook.app/invite?ref=" + uid;
+        return AdsConfig.OFFICIAL_WEBSITE_URL + "/?ref=" + uid;
     }
 
     /** Extract the referral code from an invite link or raw code. Returns null when empty. */

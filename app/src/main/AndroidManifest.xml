@@ -30,13 +30,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- referral invite links: https://friendbook.app/invite?ref=USER_ID -->
+            <!-- referral invite links: https://friendbook-official-app-2026.blogspot.com/?ref=USER_ID -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/invite" />
-                <data android:scheme="https" android:host="friendbook.app" android:pathPrefix="/group" />
+                <data android:scheme="https" android:host="friendbook-official-app-2026.blogspot.com" />
             </intent-filter>
         </activity>
 
@@ -92,7 +91,6 @@
         <activity android:name="com.friendbook.settings.SessionsActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.settings.TimeSpentActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.settings.ArchiveTrashActivity" android:screenOrientation="portrait" />
-        <activity android:name="com.friendbook.settings.InAppBrowserActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.PageDetailActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.friends.BirthdaysActivity" android:screenOrientation="portrait" />
 

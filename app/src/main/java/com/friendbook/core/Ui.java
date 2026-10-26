@@ -460,22 +460,15 @@ public class Ui {
         return t;
     }
 
-    /** Open URL in FB-Lite built-in browser (or external browser if toggled in Settings). */
+    /** Open URL cleanly in the user's system browser (100% WebView-free for AdMob policy safety). */
     public static void openUrl(Context c, String url) {
         if (url == null || url.trim().isEmpty()) return;
         String u = url.trim();
         if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://" + u;
         try {
-            if (Prefs.externalBrowser(c)) {
-                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                c.startActivity(i);
-            } else {
-                Intent i = new Intent(c, com.friendbook.settings.InAppBrowserActivity.class);
-                i.putExtra("url", u);
-                if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                c.startActivity(i);
-            }
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+            if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
         } catch (Exception e) {
             toast(c, "Couldn't open link");
         }

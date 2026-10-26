@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">friendbook</string>
+    <string name="official_website_url">https://friendbook-official-app-2026.blogspot.com</string>
 </resources>

@@ -21,6 +21,7 @@ import com.friendbook.App;
 import com.friendbook.R;
 import com.friendbook.chat.ConversationsActivity;
 import com.friendbook.core.AdsConfig;
+import com.friendbook.core.ConsentManager;
 import com.friendbook.core.FastCache;
 import com.friendbook.core.Fb;
 import com.friendbook.core.FeedAlgorithm;
@@ -36,7 +37,6 @@ import com.friendbook.profile.CreatorDashboardDialog;
 import com.friendbook.reels.AddReelActivity;
 import com.friendbook.social.PagesActivity;
 import com.friendbook.story.AddStoryActivity;
-import com.google.android.gms.ads.MobileAds;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 
@@ -212,10 +212,12 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Initialize Google Mobile Ads SDK for In-Feed Native Ads (no banner ads anywhere!)
-        try {
-            MobileAds.initialize(this, initializationStatus -> { });
-        } catch (Throwable ignored) { }
+        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK for Real Native Advanced Ads
+        ConsentManager.gatherConsentAndInitAds(this, () -> {
+            if (tabFragments[TAB_HOME] instanceof HomeFragment) {
+                ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
+            }
+        });
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
@@ -225,7 +227,6 @@ public class MainActivity extends Activity {
             watchReferralsForFreeTick();
             askNotifPermission();
             AdsConfig.startWatching();
-            AdsConfig.preloadInterstitial(MainActivity.this);
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
@@ -507,7 +508,6 @@ public class MainActivity extends Activity {
         super.onResume();
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
-            AdsConfig.preloadInterstitial(this);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onWarmSessionResume();
             }
