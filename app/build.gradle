@@ -15,8 +15,21 @@ android {
         versionName '525.0.0.5.102'
     }
 
+    signingConfigs {
+        release {
+            storeFile file('friendbook-release.p12')
+            storeType 'PKCS12'
+            storePassword 'friendbook2026'
+            keyAlias 'friendbook'
+            keyPassword 'friendbook2026'
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
