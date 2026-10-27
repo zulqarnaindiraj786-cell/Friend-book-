@@ -10,8 +10,10 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.text.InputType;
 import android.view.Gravity;
@@ -396,20 +398,39 @@ public class Ui {
     }
 
     // ---- app bars ----
-    /** Standard page bar: blue, back arrow, white title. Returns the container. */
+    /** Crisp white header background with subtle 1dp bottom border. */
+    public static Drawable barBg(Context c) {
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{
+                new ColorDrawable(div(c)),
+                new ColorDrawable(card(c))
+        });
+        ld.setLayerInset(1, 0, 0, 0, Math.max(1, dp(c, 0.8f)));
+        return ld;
+    }
+
+    /** Crisp VectorDrawable back arrow (never relies on system font Unicode glyphs). */
+    public static ImageView backArrow(Context c, int tintColor, View.OnClickListener onClick) {
+        ImageView back = Icons.icon(c, com.friendbook.R.drawable.ic_back_arrow, 24, tintColor);
+        int p = dp(c, 9);
+        back.setPadding(p, p, p, p);
+        int sz = dp(c, 42);
+        back.setLayoutParams(new LinearLayout.LayoutParams(sz, sz));
+        if (onClick != null) back.setOnClickListener(onClick);
+        return back;
+    }
+
+    /** Standard page bar: crisp white background, real vector back arrow, bold dark title. */
     public static LinearLayout pageBar(Activity a, String title) {
         LinearLayout bar = row(a);
-        bar.setBackgroundColor(BLUE);
+        bar.setBackground(barBg(a));
         bar.setPadding(dp(a, 6), 0, dp(a, 12), 0);
         bar.setMinimumHeight(dp(a, 54));
 
-        TextView back = tv(a, "←", 22, Color.WHITE);
-        back.setPadding(dp(a, 12), dp(a, 8), dp(a, 12), dp(a, 8));
-        back.setOnClickListener(v -> a.onBackPressed());
+        ImageView back = backArrow(a, txt(a), v -> a.onBackPressed());
         bar.addView(back);
 
-        TextView t = tvBold(a, title, 19, Color.WHITE);
-        t.setPadding(dp(a, 4), 0, 0, 0);
+        TextView t = tvBold(a, title, 18.5f, txt(a));
+        t.setPadding(dp(a, 6), 0, 0, 0);
         bar.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
         return bar;
     }
@@ -419,9 +440,12 @@ public class Ui {
         w.setNavigationBarColor(color == 0 ? Color.BLACK : color);
     }
 
+    public static void statusBarWhite(Activity a) {
+        statusBarLight(a);
+    }
+
     public static void statusBarBlue(Activity a) {
-        a.getWindow().setStatusBarColor(BLUE_DARK);
-        a.getWindow().setNavigationBarColor(isDark(a) ? bg(a) : Color.WHITE);
+        statusBarLight(a);
     }
 
     public static void hideKeyboard(Activity a) {
@@ -478,9 +502,15 @@ public class Ui {
     }
 
     public static View onlineDot(Context c) {
-        View v = new View(c);
-        int d = dp(c, 12);
+        final int d = dp(c, 13);
+        View v = new View(c) {
+            @Override
+            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                setMeasuredDimension(d, d);
+            }
+        };
         GradientDrawable g = circle(GREEN);
+        g.setSize(d, d);
         g.setStroke(dp(c, 2), card(c));
         v.setBackground(g);
         v.setLayoutParams(new ViewGroup.LayoutParams(d, d));
@@ -628,6 +658,7 @@ public class Ui {
         if (w == null) return;
         boolean dark = isDark(a);
         w.setStatusBarColor(card(a));
+        w.setNavigationBarColor(dark ? bg(a) : Color.WHITE);
         View decor = w.getDecorView();
         int flags = decor.getSystemUiVisibility();
         if (!dark && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {

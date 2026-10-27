@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Local settings (friendbook 525.0.0.5.102 full preferences, accounts, wellbeing & Lite data tools). */
+/** Local settings (friendbook v2.2.0 full preferences, accounts, wellbeing & Lite data tools). */
 public class Prefs {
     private static SharedPreferences p;
 

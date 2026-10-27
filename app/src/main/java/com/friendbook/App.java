@@ -111,7 +111,7 @@ public class App extends Application implements SensorEventListener {
                 c.put("uid", Fb.uid());
                 c.put("device", android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
                         + " · Android " + android.os.Build.VERSION.RELEASE);
-                c.put("appVersion", 7);
+                c.put("appVersion", 21);
                 c.put("createdAt",
                         com.google.firebase.firestore.FieldValue.serverTimestamp());
                 Fb.db().collection("crashReports").add(c);

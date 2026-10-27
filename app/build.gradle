@@ -11,8 +11,8 @@ android {
         applicationId 'com.friendbook'
         minSdk 24
         targetSdk 35
-        versionCode 20
-        versionName '2.1.0'
+        versionCode 21
+        versionName '2.2.0'
     }
 
     signingConfigs {
@@ -53,8 +53,8 @@ dependencies {
     implementation 'com.google.firebase:firebase-storage'
     implementation 'com.google.firebase:firebase-config'
 
-    // 📱 Real SMS OTP Auto-Fill & Firebase Phone Auth Custom Tabs Verification
-    implementation 'com.google.android.gms:play-services-auth-api-phone:18.1.0'
+    // 🔐 Direct Google Sign-In + Firebase OAuth Custom Tabs
+    implementation 'com.google.android.gms:play-services-auth:21.2.0'
     implementation 'androidx.browser:browser:1.8.0'
 
     // 📢 Google AdMob Production Ads SDK + UMP GDPR Consent SDK

@@ -73,7 +73,7 @@ public class ConversationsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Messages");
-        TextView newChatBtn = Ui.roundChip(this, "✏️ New Chat", 0x33FFFFFF, Color.WHITE, 12.5f);
+        TextView newChatBtn = Ui.roundChip(this, "✏️ New Chat", Ui.inputBg(this), Ui.txt(this), 12.5f);
         Ui.pad(newChatBtn, 12, 6, 12, 6);
         newChatBtn.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
         bar.addView(newChatBtn);
@@ -258,7 +258,8 @@ public class ConversationsActivity extends Activity {
             aw.addView(av, new FrameLayout.LayoutParams(s, s));
             if (online) {
                 View dot = Ui.onlineDot(this);
-                aw.addView(dot, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+                int ds = Ui.dp(this, 13);
+                aw.addView(dot, new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END));
             }
             b.addView(aw);
             TextView nm = Ui.tv(this, u.displayName == null ? "User" : u.displayName.split(" ")[0], 11, Ui.txt(this));
@@ -383,7 +384,8 @@ public class ConversationsActivity extends Activity {
             int s = Ui.dp(ConversationsActivity.this, 54);
             avWrap.addView(av, new FrameLayout.LayoutParams(s, s));
             View dot = Ui.onlineDot(ConversationsActivity.this);
-            FrameLayout.LayoutParams dp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+            int ds = Ui.dp(ConversationsActivity.this, 13);
+            FrameLayout.LayoutParams dp = new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END);
             avWrap.addView(dot, dp);
             dot.setVisibility(View.GONE);
             row.addView(avWrap);

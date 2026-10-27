@@ -51,8 +51,8 @@ public class BirthdaysActivity extends Activity {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
         LinearLayout bar = Ui.pageBar(this, "🎂 Birthdays");
-        TextView setMine = Ui.tvBold(this, "＋ My Birthday", 12, 0xFFFFFFFF);
-        setMine.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        TextView setMine = Ui.roundChip(this, "＋ My Birthday", Ui.inputBg(this), Ui.txt(this), 12);
+        Ui.pad(setMine, 10, 6, 10, 6);
         setMine.setOnClickListener(v ->
                 startActivity(new Intent(this, com.friendbook.profile.EditProfileActivity.class)));
         bar.addView(setMine);

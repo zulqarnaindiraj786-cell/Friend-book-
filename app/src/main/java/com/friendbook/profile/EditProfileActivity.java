@@ -43,8 +43,8 @@ public class EditProfileActivity extends Activity {
 
     private ImageView cover, avatar;
     private EditText name, pronouns, bio, work, education, currentCity, hometown, website, hobbies;
-    private TextView save, birthdayBtn, relBtn;
-    private String birthday = "", relationship = "";
+    private TextView save, birthdayBtn, relBtn, emailPrivacyBtn;
+    private String birthday = "", relationship = "", emailPrivacy = "Only me";
     private ListenerRegistration userReg;
     private String avatarUrl = "", coverUrl = "";
     private boolean busy, loadedOnce;
@@ -130,6 +130,20 @@ public class EditProfileActivity extends Activity {
         website = addField(form, "🌐 Website or social link", "https://yourportfolio.com");
         hobbies = addField(form, "🎯 Hobbies (comma separated)", "e.g. Cricket, Photography, Coding, Travel");
 
+        form.addView(label("📧 Email visibility on your profile"));
+        emailPrivacyBtn = Ui.btnGrey(this, "🔒 Only me  (tap to change)");
+        emailPrivacyBtn.setMinHeight(Ui.dp(this, 44));
+        emailPrivacyBtn.setOnClickListener(v -> {
+            String[] labels = {"🔒 Only me (default)", "👥 Friends", "🌍 Public"};
+            String[] vals = {"Only me", "Friends", "Public"};
+            Ui.choose(this, "Who can see your email?", labels, w -> {
+                emailPrivacy = vals[w];
+                emailPrivacyBtn.setText(emailPrivacyLabel(emailPrivacy));
+            });
+        });
+        form.addView(emailPrivacyBtn, lpm());
+        form.addView(sp(10));
+
         body.addView(form);
 
         save = Ui.btn(this, "Save changes");
@@ -199,7 +213,15 @@ public class EditProfileActivity extends Activity {
                     birthday = u.birthday == null ? "" : u.birthday;
                     birthdayBtn.setText(birthday.isEmpty() ? "Set your birthday"
                             : "🎂 " + birthday + "  (tap to change)");
+                    emailPrivacy = (u.emailPrivacy == null || u.emailPrivacy.isEmpty()) ? "Only me" : u.emailPrivacy;
+                    if (emailPrivacyBtn != null) emailPrivacyBtn.setText(emailPrivacyLabel(emailPrivacy));
                 });
+    }
+
+    private String emailPrivacyLabel(String p) {
+        if ("Public".equalsIgnoreCase(p)) return "🌍 Public  (tap to change)";
+        if ("Friends".equalsIgnoreCase(p)) return "👥 Friends  (tap to change)";
+        return "🔒 Only me  (tap to change)";
     }
 
     @Override
@@ -278,6 +300,10 @@ public class EditProfileActivity extends Activity {
         m.put("website", website.getText().toString().trim());
         m.put("hobbies", hobbyList);
         m.put("birthday", birthday == null ? "" : birthday);
+        String ep = (emailPrivacy == null || emailPrivacy.isEmpty()) ? "Only me" : emailPrivacy;
+        m.put("emailPrivacy", ep);
+        m.put("contactPrivacy", ep);
+        m.put("contactInfoPrivacy", ep);
 
         Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge())
                 .addOnSuccessListener(x -> {

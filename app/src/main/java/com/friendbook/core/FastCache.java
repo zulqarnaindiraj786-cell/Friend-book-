@@ -595,6 +595,9 @@ public final class FastCache {
         o.put("statusNote", u.statusNote == null ? "" : u.statusNote);
         o.put("statusNoteAt", u.statusNoteAt);
         o.put("hideReactionCounts", u.hideReactionCounts);
+        o.put("emailPrivacy", u.emailPrivacy == null || u.emailPrivacy.isEmpty() ? "Only me" : u.emailPrivacy);
+        o.put("contactPrivacy", u.contactPrivacy == null || u.contactPrivacy.isEmpty() ? "Only me" : u.contactPrivacy);
+        o.put("contactInfoPrivacy", u.contactInfoPrivacy == null || u.contactInfoPrivacy.isEmpty() ? "Only me" : u.contactInfoPrivacy);
         return o;
     }
 
@@ -615,6 +618,9 @@ public final class FastCache {
         u.statusNote = o.optString("statusNote", "");
         u.statusNoteAt = o.optLong("statusNoteAt", 0L);
         u.hideReactionCounts = o.optBoolean("hideReactionCounts", false);
+        u.emailPrivacy = o.optString("emailPrivacy", "Only me");
+        u.contactPrivacy = o.optString("contactPrivacy", u.emailPrivacy);
+        u.contactInfoPrivacy = o.optString("contactInfoPrivacy", u.emailPrivacy);
         return u;
     }
 

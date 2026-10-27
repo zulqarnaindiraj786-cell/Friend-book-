@@ -37,8 +37,8 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
         LinearLayout bar = Ui.pageBar(this, "📅 On this day");
-        TextView shareNew = Ui.tvBold(this, "＋ Post Memory", 12, 0xFFFFFFFF);
-        shareNew.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        TextView shareNew = Ui.roundChip(this, "＋ Post Memory", Ui.inputBg(this), Ui.txt(this), 12);
+        Ui.pad(shareNew, 10, 6, 10, 6);
         shareNew.setOnClickListener(v -> {
             android.content.Intent ci = new android.content.Intent(this, CreatePostActivity.class);
             startActivity(ci);

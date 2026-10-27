@@ -146,14 +146,12 @@ public class FullscreenMediaActivity extends Activity {
             });
         }
 
-        // Top friendbook Action Bar: ‹ Back · Title · ⬇ Save · 📤 Share · •••
+        // Top friendbook Action Bar: ← Back · Title · ⬇ Save · 📤 Share · •••
         topOverlay.setBackgroundColor(0x99000000);
         topOverlay.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(topOverlay, 8, 28, 12, 10);
+        Ui.pad(topOverlay, 6, 28, 12, 8);
 
-        TextView back = Ui.tvBold(this, "‹", 30, Color.WHITE);
-        Ui.pad(back, 10, 0, 14, 2);
-        back.setOnClickListener(v -> finish());
+        ImageView back = Ui.backArrow(this, Color.WHITE, v -> finish());
         topOverlay.addView(back);
 
         String barLabel = (title != null && !title.isEmpty()) ? title : "Full Photo";

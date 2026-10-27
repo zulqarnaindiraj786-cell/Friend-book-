@@ -82,21 +82,21 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        // custom bar with presence
+        // custom crisp white bar with presence & real vector back arrow
         LinearLayout bar = Ui.row(this);
-        bar.setBackgroundColor(Ui.BLUE);
+        bar.setBackground(Ui.barBg(this));
         bar.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
-        TextView back = Ui.tv(this, "←", 22, Color.WHITE);
-        back.setPadding(Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10), Ui.dp(this, 6));
-        back.setOnClickListener(v -> finish());
+        ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
         bar.addView(back);
         barAvatar = new ImageView(this);
         int s = Ui.dp(this, 40);
-        bar.addView(barAvatar, new LinearLayout.LayoutParams(s, s));
+        LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+        avp.leftMargin = Ui.dp(this, 2);
+        bar.addView(barAvatar, avp);
         LinearLayout nameCol = Ui.col(this);
         LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
         ncp.leftMargin = Ui.dp(this, 10);
-        nameTv = Ui.tvBold(this, peerName, 16, Color.WHITE);
+        nameTv = Ui.tvBold(this, peerName, 16, Ui.txt(this));
         barTick = new ImageView(this);
         int ts = Ui.dp(this, 17);
         LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
@@ -105,11 +105,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout nameRow = new LinearLayout(this);
         nameRow.addView(nameTv);
         nameRow.addView(barTick, tickp);
-        presenceTv = Ui.tv(this, "…", 12, 0xCCFFFFFF);
+        presenceTv = Ui.tv(this, "…", 12, Ui.sub(this));
         nameCol.addView(nameRow);
         nameCol.addView(presenceTv);
         bar.addView(nameCol, ncp);
-        TextView menu = Ui.tv(this, "⋮", 22, Color.WHITE);
+        TextView menu = Ui.tv(this, "⋮", 22, Ui.txt(this));
         menu.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 8), 0);
         bar.addView(menu);
         root.addView(bar);
