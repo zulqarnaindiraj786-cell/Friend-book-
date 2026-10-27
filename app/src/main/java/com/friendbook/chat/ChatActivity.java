@@ -45,13 +45,18 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private static final int PICK_IMG = 51;
 
     private String peerId, peerName = "", peerPhoto = "", chatId;
+    private boolean isGroupChat = false;
+    private boolean isTeamChat = false;
+    private Models.ChatRoom groupRoom;
     private TextView presenceTv, nameTv;
+    private View composerRoot;
+    private TextView readOnlyBanner;
     private ImageView barTick;
     private ImageView barAvatar;
     private EditText input;
     private MessagesAdapter adapter;
     private RecyclerView rv;
-    private ListenerRegistration msgReg, userReg;
+    private ListenerRegistration msgReg, userReg, roomReg;
     private Presence.Handle presence, typingH;
     private boolean typingSent;
     private long lastTypingPush;
@@ -74,9 +79,25 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Ui.statusBarBlue(this);
         peerId = getIntent().getStringExtra("uid");
         peerName = getIntent().getStringExtra("name");
-        if (peerId == null || Fb.uid() == null) { finish(); return; }
-        if (peerName == null) peerName = "Chat";
-        chatId = Fb.chatId(Fb.uid(), peerId);
+        String passedChatId = getIntent().getStringExtra("chat_id");
+        isGroupChat = getIntent().getBooleanExtra("is_group", false);
+        if (Fb.uid() == null) { finish(); return; }
+        if (isGroupChat) {
+            if (passedChatId == null || passedChatId.isEmpty()) { finish(); return; }
+            chatId = passedChatId;
+            if (peerName == null) peerName = "Group Chat";
+        } else {
+            if (peerId == null) { finish(); return; }
+            isTeamChat = Ui.TEAM_USER_ID.equals(peerId);
+            if (isTeamChat) {
+                peerName = "friendbook Team";
+                peerPhoto = Ui.TEAM_AVATAR_TOKEN;
+                chatId = "team_" + Fb.uid();
+            } else {
+                if (peerName == null) peerName = "Chat";
+                chatId = Fb.chatId(Fb.uid(), peerId);
+            }
+        }
         String prefill = getIntent().getStringExtra("prefill");
 
         LinearLayout root = Ui.col(this);
@@ -115,26 +136,36 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         root.addView(bar);
 
         View.OnClickListener prof = v -> {
-            Intent i = new Intent(this, ProfileActivity.class);
-            i.putExtra("uid", peerId);
-            startActivity(i);
+            if (isGroupChat) {
+                startActivity(new Intent(this, GroupChatInfoActivity.class).putExtra("chat_id", chatId));
+            } else if (!isTeamChat) {
+                Intent i = new Intent(this, ProfileActivity.class);
+                i.putExtra("uid", peerId);
+                startActivity(i);
+            }
         };
         barAvatar.setOnClickListener(prof);
         nameTv.setOnClickListener(prof);
         menu.setOnClickListener(v -> {
             PopupMenu pm = new PopupMenu(this, v);
-            pm.getMenu().add("👤 View profile");
-            pm.getMenu().add("✏️ Set nickname");
+            if (isGroupChat) {
+                pm.getMenu().add("👥 Group Info & Admin Controls");
+            } else if (!isTeamChat) {
+                pm.getMenu().add("👤 View profile");
+                pm.getMenu().add("✏️ Set nickname");
+            }
             pm.getMenu().add("🎨 Chat theme");
             boolean muted = Prefs.isChatMuted(this, chatId);
             pm.getMenu().add(muted ? "🔔 Unmute notifications" : "🔕 Mute notifications");
             boolean archived = Prefs.isChatArchived(this, chatId);
             pm.getMenu().add(archived ? "📥 Unarchive chat" : "📦 Archive chat");
             pm.getMenu().add("✔ Mark all as read");
-            pm.getMenu().add("🚫 Block user");
+            if (!isGroupChat && !isTeamChat) pm.getMenu().add("🚫 Block user");
             pm.setOnMenuItemClickListener(item -> {
                 String t = item.getTitle().toString();
-                if (t.contains("profile")) prof.onClick(v);
+                if (t.contains("Group Info")) {
+                    startActivity(new Intent(this, GroupChatInfoActivity.class).putExtra("chat_id", chatId));
+                } else if (t.contains("profile")) prof.onClick(v);
                 else if (t.contains("nickname")) nicknameDialog();
                 else if (t.contains("theme")) themePicker();
                 else if (t.contains("Mute") || t.contains("Unmute")) {
@@ -144,7 +175,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     Prefs.archiveChat(this, chatId, !archived);
                     Ui.toast(this, !archived ? "Chat archived 📦" : "Moved to Inbox");
                 } else if (t.contains("read")) resetUnread();
-                else blockPeer();
+                else if (t.contains("Block")) blockPeer();
                 return true;
             });
             pm.show();
@@ -163,7 +194,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             }
         });
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(buildComposer());
+
+        readOnlyBanner = Ui.tvBold(this, "🛡 Official updates from friendbook Team", 13, Ui.sub(this));
+        readOnlyBanner.setGravity(Gravity.CENTER);
+        readOnlyBanner.setBackgroundColor(Ui.card(this));
+        Ui.pad(readOnlyBanner, 14, 12, 14, 12);
+        readOnlyBanner.setVisibility(View.GONE);
+        root.addView(readOnlyBanner);
+
+        composerRoot = buildComposer();
+        root.addView(composerRoot);
+        if (isTeamChat && !com.friendbook.core.Admin.isAdmin()) {
+            composerRoot.setVisibility(View.GONE);
+            readOnlyBanner.setVisibility(View.VISIBLE);
+        }
         if (prefill != null && !prefill.isEmpty()) input.setText(prefill);
         setContentView(root);
     }
@@ -293,35 +337,83 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     protected void onStart() {
         super.onStart();
 
-        // peer profile (live)
-        userReg = Fb.db().collection("users").document(peerId)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    Models.User u = Models.User.fromDoc(d);
-                    com.friendbook.core.FastCache.putUser(u);
-                    if (u.displayName != null && !u.displayName.isEmpty()) peerName = u.displayName;
-                    peerPhoto = u.photoUrl == null ? "" : u.photoUrl;
-                    String nick = Prefs.chatNickname(this, chatId);
-                    nameTv.setText(!nick.isEmpty() ? nick : peerName);
-                    com.friendbook.core.Icons.setTickBadge(barTick, u.tickLevel, false);
-                    Ui.avatar(this, barAvatar, peerPhoto);
-                    adapter.setPeerPhoto(peerPhoto);
-                });
+        if (isGroupChat) {
+            roomReg = Fb.db().collection("chats").document(chatId)
+                    .addSnapshotListener((d, err) -> {
+                        if (d == null || !d.exists()) { finish(); return; }
+                        groupRoom = Models.ChatRoom.fromDoc(d);
+                        peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())
+                                ? "Group Chat" : groupRoom.groupName;
+                        peerPhoto = groupRoom.groupPhoto == null ? "" : groupRoom.groupPhoto;
+                        nameTv.setText(peerName);
+                        barTick.setVisibility(View.GONE);
+                        presenceTv.setText("👥 " + groupRoom.participants.size() + " members · Tap for Group Info");
+                        if (!peerPhoto.isEmpty()) {
+                            barAvatar.setPadding(0, 0, 0, 0);
+                            Ui.avatar(this, barAvatar, peerPhoto);
+                        } else {
+                            barAvatar.setBackground(Ui.circle(Ui.BLUE));
+                            int p = Ui.dp(this, 8);
+                            barAvatar.setPadding(p, p, p, p);
+                            barAvatar.setImageDrawable(com.friendbook.core.Icons.tinted(
+                                    this, com.friendbook.core.Icons.GROUPS, Color.WHITE));
+                        }
+                        adapter.setGroupMeta(true, groupRoom.adminIds,
+                                groupRoom.participantNames, groupRoom.participantPhotos);
 
-        // presence (RTDB + Firestore fallback)
-        presence = Presence.watch(peerId, (online, lastSeen) -> {
-            if (typingOn) return;
-            if (online) {
-                presenceTv.setText("🟢 Active now");
-            } else if (lastSeen > 0) {
-                presenceTv.setText("Active " + Format.ago(lastSeen) + " ago");
-            } else presenceTv.setText("");
-        });
-        typingH = Presence.watchTyping(chatId, Fb.uid(), t -> {
-            typingOn = t;
-            if (t) presenceTv.setText("typing…");
-            else presenceTv.setText("");
-        });
+                        String me = Fb.uid();
+                        boolean inGroup = me != null && groupRoom.participants.contains(me);
+                        boolean canSend = inGroup && (!groupRoom.onlyAdminsCanSend || groupRoom.isGroupAdmin(me));
+                        if (!inGroup) {
+                            composerRoot.setVisibility(View.GONE);
+                            readOnlyBanner.setText("🚫 You are no longer a member of this group");
+                            readOnlyBanner.setVisibility(View.VISIBLE);
+                        } else if (!canSend) {
+                            composerRoot.setVisibility(View.GONE);
+                            readOnlyBanner.setText("🔒 Only group admins can send messages");
+                            readOnlyBanner.setVisibility(View.VISIBLE);
+                        } else {
+                            composerRoot.setVisibility(View.VISIBLE);
+                            readOnlyBanner.setVisibility(View.GONE);
+                        }
+                    });
+        } else if (isTeamChat) {
+            nameTv.setText("friendbook Team");
+            com.friendbook.core.Icons.setTickBadge(barTick, "gold", false);
+            Ui.avatar(this, barAvatar, Ui.TEAM_AVATAR_TOKEN);
+            adapter.setPeerPhoto(Ui.TEAM_AVATAR_TOKEN);
+            presenceTv.setText("Official friendbook Team");
+        } else {
+            // peer profile (live)
+            userReg = Fb.db().collection("users").document(peerId)
+                    .addSnapshotListener((d, err) -> {
+                        if (d == null || !d.exists()) return;
+                        Models.User u = Models.User.fromDoc(d);
+                        com.friendbook.core.FastCache.putUser(u);
+                        if (u.displayName != null && !u.displayName.isEmpty()) peerName = u.displayName;
+                        peerPhoto = u.photoUrl == null ? "" : u.photoUrl;
+                        String nick = Prefs.chatNickname(this, chatId);
+                        nameTv.setText(!nick.isEmpty() ? nick : peerName);
+                        com.friendbook.core.Icons.setTickBadge(barTick, u.tickLevel, false);
+                        Ui.avatar(this, barAvatar, peerPhoto);
+                        adapter.setPeerPhoto(peerPhoto);
+                    });
+
+            // presence (RTDB + Firestore fallback)
+            presence = Presence.watch(peerId, (online, lastSeen) -> {
+                if (typingOn) return;
+                if (online) {
+                    presenceTv.setText("🟢 Active now");
+                } else if (lastSeen > 0) {
+                    presenceTv.setText("Active " + Format.ago(lastSeen) + " ago");
+                } else presenceTv.setText("");
+            });
+            typingH = Presence.watchTyping(chatId, Fb.uid(), t -> {
+                typingOn = t;
+                if (t) presenceTv.setText("typing…");
+                else presenceTv.setText("");
+            });
+        }
 
         // messages (realtime via onSnapshot)
         msgReg = Fb.db().collection("chats").document(chatId)
@@ -380,6 +472,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         super.onStop();
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
+        if (roomReg != null) roomReg.remove();
         if (presence != null) presence.close();
         if (typingH != null) typingH.close();
         if (typingSent) Presence.setTyping(chatId, false);
@@ -444,6 +537,25 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private Map<String, Object> buildChatRoomDoc(String me, String lastMsg) {
+        if (isGroupChat && groupRoom != null) {
+            Map<String, Object> unread = new HashMap<>();
+            unread.put(me, 0);
+            for (String p : groupRoom.participants) {
+                if (!p.equals(me)) unread.put(p, FieldValue.increment(1));
+            }
+            Map<String, String> names = new HashMap<>(groupRoom.participantNames);
+            names.put(me, Fb.myName());
+            Map<String, String> photos = new HashMap<>(groupRoom.participantPhotos);
+            photos.put(me, Fb.myPhoto());
+            String summary = Fb.myName() + ": " + (lastMsg == null ? "" : lastMsg);
+            return Fb.map(
+                    "participantNames", names,
+                    "participantPhotos", photos,
+                    "lastMessage", summary,
+                    "lastMessageTime", FieldValue.serverTimestamp(),
+                    "lastMessageTimeMs", System.currentTimeMillis(),
+                    "unreadCount", unread);
+        }
         Map<String, Object> unread = new HashMap<>();
         unread.put(peerId, FieldValue.increment(1));
         unread.put(me, 0);
@@ -474,7 +586,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
-                "receiverId", peerId,
+                "senderName", Fb.myName(),
+                "senderPhoto", Fb.myPhoto(),
+                "receiverId", isGroupChat ? "" : peerId,
                 "text", "",
                 "type", "voice",
                 "voiceUrl", url,
@@ -567,7 +681,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
-                "receiverId", peerId,
+                "senderName", Fb.myName(),
+                "senderPhoto", Fb.myPhoto(),
+                "receiverId", isGroupChat ? "" : peerId,
                 "text", emoji,
                 "imageUrl", null,
                 "type", "sticker",
@@ -621,7 +737,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
-                "receiverId", peerId,
+                "senderName", Fb.myName(),
+                "senderPhoto", Fb.myPhoto(),
+                "receiverId", isGroupChat ? "" : peerId,
                 "text", finalText != null ? finalText : "",
                 "imageUrl", imageUrl,
                 "type", type,
@@ -682,12 +800,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     public void longPress(Models.Message m) {
         boolean mine = Fb.uid() != null && Fb.uid().equals(m.senderId);
+        boolean groupAdmin = isGroupChat && groupRoom != null && groupRoom.isGroupAdmin(Fb.uid());
         List<String> opts = new ArrayList<>();
         opts.add("↩ Reply to message");
         opts.add("😍 React to message");
         opts.add("↪ Forward message");
         opts.add("📋 Copy text");
-        if (mine) {
+        if (mine || groupAdmin) {
             opts.add("🗑 Delete for everyone");
             opts.add("👤 Delete for me");
         } else {

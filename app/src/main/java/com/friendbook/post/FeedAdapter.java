@@ -151,27 +151,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (showHeader) notifyItemChanged(0);
     }
 
-    // ---- boosts + live + PYMK rows for the header ----
-    private final java.util.List<Models.User> boostedUsers = new ArrayList<>();
+    // ---- live + PYMK rows for the header ----
     private final java.util.List<Models.User> pymkUsers = new ArrayList<>();
     private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
-    public final java.util.Set<String> boostedPostIds = new HashSet<>();
     private android.speech.tts.TextToSpeech tts;
 
     public void setPymk(java.util.List<Models.User> users) {
         pymkUsers.clear();
         if (users != null) pymkUsers.addAll(users);
         if (showHeader) notifyItemChanged(0);
-    }
-
-    public void setBoosted(java.util.List<Models.User> users, java.util.Set<String> postIds) {
-        boolean boostChanged = !boostedPostIds.equals(postIds != null ? postIds : java.util.Collections.emptySet());
-        boostedUsers.clear();
-        if (users != null) boostedUsers.addAll(users);
-        boostedPostIds.clear();
-        if (postIds != null) boostedPostIds.addAll(postIds);
-        if (showHeader) notifyItemChanged(0);
-        if (boostChanged) notifyDataSetChanged();
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
@@ -312,48 +300,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             hh.composeHint.setText(first.isEmpty() || "FriendBook".equalsIgnoreCase(first)
                     ? "What's on your mind?"
                     : "What's on your mind, " + first + "?");
-            // 🚀 boosted profiles cards
-            hh.boostBox.setVisibility(boostedUsers.isEmpty() ? View.GONE : View.VISIBLE);
-            hh.boostCards.removeAllViews();
-            for (final Models.User u : boostedUsers) {
-                LinearLayout card = Ui.col(activity);
-                card.setGravity(android.view.Gravity.CENTER);
-                card.setBackground(Ui.roundStroke(activity, Ui.card(activity), 14, Ui.BLUE, 1));
-                Ui.pad(card, 12, 10, 12, 10);
-                ImageView av = new ImageView(activity);
-                Ui.avatar(activity, av, u.photoUrl);
-                int s = Ui.dp(activity, 54);
-                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
-                avp.gravity = Gravity.CENTER;
-                card.addView(av, avp);
-                TextView nm = Ui.tvBold(activity, u.displayName, 12, Ui.txt(activity));
-                nm.setMaxWidth(Ui.dp(activity, 90));
-                nm.setSingleLine(true);
-                card.addView(nm);
-                ImageView tk = new ImageView(activity);
-                Icons.setTickBadge(tk, u.tickLevel, false);
-                int ts2 = Ui.dp(activity, 14);
-                card.addView(tk, new LinearLayout.LayoutParams(ts2, ts2));
-                TextView tag = Ui.roundChip(activity, "BOOSTED", 0x22E41E3F, 0xFFE41E3F, 9);
-                card.addView(tag);
-                card.setOnClickListener(v -> { if (host != null) host.openProfile(u.uid); });
-                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
-                cp.setMargins(Ui.dp(activity, 4), Ui.dp(activity, 2), Ui.dp(activity, 4), Ui.dp(activity, 4));
-                hh.boostCards.addView(card, cp);
-            }
-            // 🔴 live rooms + go-live button
+            // 🔴 live rooms + go-live button (opens Pro Live Pre-Broadcast Camera Studio!)
             hh.goLiveBtn.setOnClickListener(v -> {
-                android.widget.EditText in = Ui.input(activity, "Live title (optional)");
-                new android.app.AlertDialog.Builder(activity)
-                        .setTitle("🔴 Go Live")
-                        .setView(in)
-                        .setPositiveButton("Start", (d, w) -> {
-                            Intent li = new Intent(activity, com.friendbook.live.LiveActivity.class);
-                            li.putExtra("title", in.getText().toString().trim());
-                            activity.startActivity(li);
-                        })
-                        .setNegativeButton("Cancel", null)
-                        .show();
+                Intent li = new Intent(activity, com.friendbook.live.LiveActivity.class);
+                li.putExtra("host", true);
+                activity.startActivity(li);
             });
             hh.liveBox.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
             hh.liveCards.removeAllViews();
@@ -588,8 +539,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
             if (p.authorVerified) vh.tick.setImageResource(com.friendbook.R.drawable.ic_verified);
         }
-        if (vh.boostTag != null)
-            vh.boostTag.setVisibility(boostedPostIds.contains(p.id) ? View.VISIBLE : View.GONE);
 
         String icon = "🌐";
         if ("Friends".equalsIgnoreCase(p.privacy)) icon = "👥";
@@ -1133,12 +1082,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean mine = p.authorId != null && p.authorId.equals(Fb.uid());
         boolean saved = p.savedBy != null && p.savedBy.contains(Fb.uid());
         boolean isAdmin = com.friendbook.core.Admin.isAdmin();
+        boolean isModerator = !isAdmin && com.friendbook.core.Admin.isModerator();
         PopupMenu menu = new PopupMenu(c, anchor);
         menu.getMenu().add(saved ? "🔖 Unsave post" : "🔖 Save post");
         boolean subscribed = p.subscribedBy != null && Fb.uid() != null && p.subscribedBy.contains(Fb.uid());
         menu.getMenu().add(subscribed ? "🔕 Turn off notifications for this post" : "🔔 Turn on notifications for this post");
-        if (!boostedPostIds.contains(p.id))
-            menu.getMenu().add("🚀 Boost Post (Free 24h community reach)");
         if (mine) {
             boolean pinned = Fb.me != null && p.id != null && p.id.equals(Fb.me.pinnedPostId);
             menu.getMenu().add(pinned ? "📌 Unpin from profile" : "📌 Pin to profile");
@@ -1153,7 +1101,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             menu.getMenu().add("😴 Snooze " + p.authorName + " for 30 days");
             menu.getMenu().add("🚫 Block " + p.authorName);
         }
-        if (isAdmin && !mine) menu.getMenu().add("🛡 🗑 Delete post (admin)");
+        if (isAdmin && !mine) {
+            menu.getMenu().add("🛡 🗑 Delete post (admin)");
+        } else if (isModerator && !mine) {
+            menu.getMenu().add("🛡 🗑 Delete post (moderator)");
+            menu.getMenu().add("🛡 🚫 Ban user (moderator)");
+        }
         if (p.content != null && !p.content.isEmpty()) {
             menu.getMenu().add("🔊 Read post aloud");
             menu.getMenu().add("🌐 Translate post");
@@ -1228,21 +1181,32 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
             }
             else if (t.contains("Save post")) toggleSave(p, false);
-            else if (t.contains("Boost Post")) {
-                String myUid = Fb.uid();
-                if (myUid != null && p.id != null) {
-                    Map<String, Object> bm = new HashMap<>();
-                    bm.put("userId", myUid);
-                    bm.put("type", "post");
-                    bm.put("postId", p.id);
-                    bm.put("status", "active");
-                    bm.put("createdAt", FieldValue.serverTimestamp());
-                    bm.put("expiry", new com.google.firebase.Timestamp(
-                            new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                    Fb.db().collection("boosts").document("post_" + p.id).set(bm)
-                            .addOnSuccessListener(x -> Ui.toast(activity, "🚀 Post boosted FREE for 24 hours!"))
-                            .addOnFailureListener(e -> Ui.toast(activity, "Couldn't boost post right now"));
-                }
+            else if (t.contains("Delete post (moderator)")) {
+                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
+                    if (com.friendbook.core.Admin.isProtectedStaff(u)) {
+                        Ui.toast(activity, "Admin posts cannot be removed by a moderator");
+                        return;
+                    }
+                    deletePost(p);
+                });
+            }
+            else if (t.contains("Ban user (moderator)")) {
+                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
+                    if (com.friendbook.core.Admin.isProtectedStaff(u)) {
+                        Ui.toast(activity, "Admin accounts cannot be banned");
+                        return;
+                    }
+                    Ui.confirm(activity, "🛡 Ban " + p.authorName + "?",
+                            "This user will be banned from using friendbook.",
+                            "Ban User", () -> Fb.db().collection("users").document(p.authorId)
+                                    .set(Fb.map("banned", true), com.google.firebase.firestore.SetOptions.merge())
+                                    .addOnSuccessListener(x -> {
+                                        Notify.sendOfficialTeamMessage(p.authorId, "ban",
+                                                "Your account was suspended by a friendbook Moderator.", false);
+                                        Ui.toast(activity, "Banned " + p.authorName + " 🚫");
+                                    })
+                                    .addOnFailureListener(e -> Ui.toast(activity, e.getMessage())));
+                });
             }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
             else if (t.contains("Who can see")) changePrivacyDialog(p);
@@ -1494,7 +1458,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final StoriesAdapter storiesAdapter;
         final ImageView composeAvatar;
         final TextView composeHint;
-        final LinearLayout boostBox, liveBox, pymkBox, boostCards, liveCards, pymkCards;
+        final LinearLayout liveBox, pymkBox, liveCards, pymkCards;
         final TextView goLiveBtn;
 
         HeaderVH(Context c) {
@@ -1588,21 +1552,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             lsv.addView(liveCards);
             liveBox.addView(lsv);
             col.addView(liveBox);
-
-            // 🚀 boosted profiles strip (paid — pinned on top of Home)
-            boostBox = Ui.col(c);
-            boostBox.setBackgroundColor(Ui.card(c));
-            boostBox.setVisibility(View.GONE);
-            TextView boostTitle = Ui.tvBold(c, "🚀 Boosted creators", 14, Ui.txt(c));
-            Ui.pad(boostTitle, 12, 10, 12, 2);
-            boostBox.addView(boostTitle);
-            android.widget.HorizontalScrollView bsv = new android.widget.HorizontalScrollView(c);
-            bsv.setHorizontalScrollBarEnabled(false);
-            boostCards = Ui.row(c);
-            Ui.pad(boostCards, 8, 0, 8, 8);
-            bsv.addView(boostCards);
-            boostBox.addView(bsv);
-            col.addView(boostBox);
 
             // 👥 People You May Know strip (friendbook Home suggestion rail)
             pymkBox = Ui.col(c);
@@ -1944,7 +1893,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static class PostVH extends RecyclerView.ViewHolder {
         ImageView avatar, image, tick;
         TextView name, meta, more, closeBtn, content, like, comment, share;
-        TextView boostTag, tagSummary, commentsSummary;
+        TextView tagSummary, commentsSummary;
         TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout specialBox, sharedBox, pollBox, summaryRow, inlineCommentsBox;
         FrameLayout mediaWrap;
@@ -1975,11 +1924,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             tll.leftMargin = Ui.dp(c, 5);
             nameRow.addView(name);
             nameRow.addView(tick, tll);
-            boostTag = Ui.roundChip(c, "🚀 BOOSTED", 0xFFE41E3F, 0xFFFFFFFF, 10);
-            boostTag.setVisibility(View.GONE);
-            LinearLayout.LayoutParams btl = new LinearLayout.LayoutParams(-2, -2);
-            btl.leftMargin = Ui.dp(c, 6);
-            nameRow.addView(boostTag, btl);
             meta = Ui.tv(c, "", 12, Ui.sub(c));
             nameCol.addView(nameRow);
             nameCol.addView(meta);

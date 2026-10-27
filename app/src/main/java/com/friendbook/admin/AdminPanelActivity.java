@@ -13,7 +13,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.friendbook.admin.frag.AdminBoostsFragment;
+import com.friendbook.admin.frag.AdminModeratorsFragment;
 import com.friendbook.admin.frag.AdminEarningsFragment;
 import com.friendbook.admin.frag.AdminLiveFragment;
 import com.friendbook.admin.frag.AdminPaymentsFragment;
@@ -45,9 +45,9 @@ public class AdminPanelActivity extends Activity {
     private final TextView[] tabLabels = new TextView[6];
     private int active = -1;
 
-    private static final String[] TAB_NAMES = {"Users", "Referrals", "Requests", "Boosts", "Live", "Analytics"};
+    private static final String[] TAB_NAMES = {"Users", "Moderators", "Referrals", "Requests", "Live", "Analytics"};
     private static final int[] TAB_ICONS = {
-            Icons.FRIENDS, Icons.USER_PLUS, Icons.BANKNOTE, Icons.BOOST, Icons.LIVE, Icons.CHART};
+            Icons.FRIENDS, Icons.SHIELD, Icons.USER_PLUS, Icons.BANKNOTE, Icons.LIVE, Icons.CHART};
 
     @Override
     protected void onCreate(Bundle b) {
@@ -96,9 +96,9 @@ public class AdminPanelActivity extends Activity {
         active = tab;
         Fragment f;
         switch (tab) {
-            case 1: f = new AdminReferralsFragment(); break;
-            case 2: f = new AdminPaymentsFragment(); break;
-            case 3: f = new AdminBoostsFragment(); break;
+            case 1: f = new AdminModeratorsFragment(); break;
+            case 2: f = new AdminReferralsFragment(); break;
+            case 3: f = new AdminPaymentsFragment(); break;
             case 4: f = new AdminLiveFragment(); break;
             case 5: f = new AdminEarningsFragment(); break;
             default: f = new AdminUsersFragment(); break;
@@ -132,29 +132,15 @@ public class AdminPanelActivity extends Activity {
     }
 
     private void sendBroadcast(String text) {
-        Ui.toast(this, "Sending broadcast…");
+        Ui.toast(this, "Sending broadcast from friendbook Team…");
         Fb.db().collection("users").limit(400).get().addOnSuccessListener(snap -> {
             List<com.google.firebase.firestore.DocumentSnapshot> docs = snap.getDocuments();
             int total = docs.size();
-            java.util.List<java.util.List<com.google.firebase.firestore.DocumentSnapshot>> chunks =
-                    Ui.chunks(docs, 400);
-            for (java.util.List<com.google.firebase.firestore.DocumentSnapshot> chunk : chunks) {
-                WriteBatch batch = Fb.db().batch();
-                for (com.google.firebase.firestore.DocumentSnapshot u : chunk) {
-                    java.util.Map<String, Object> n = Fb.map(
-                            "toUserId", u.getId(),
-                            "fromUserId", Fb.uid(),
-                            "fromUserName", "friendbook Team",
-                            "fromUserPhotoUrl", "",
-                            "type", "announcement",
-                            "text", "📣 " + text,
-                            "isRead", false,
-                            "createdAt", FieldValue.serverTimestamp());
-                    batch.set(Fb.db().collection("notifications").document(), n);
-                }
-                batch.commit();
+            for (com.google.firebase.firestore.DocumentSnapshot u : docs) {
+                com.friendbook.core.Notify.sendOfficialTeamMessage(
+                        u.getId(), "announcement", "📣 " + text, true);
             }
-            Ui.toast(this, "Broadcast sent to " + total + " users ✓");
+            Ui.toast(this, "Broadcast sent to " + total + " users from friendbook Team ✓");
         }).addOnFailureListener(e -> Ui.toast(this, "Failed: " + e.getMessage()));
     }
 }

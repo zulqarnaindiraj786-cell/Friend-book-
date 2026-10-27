@@ -52,6 +52,31 @@ public class NewChatActivity extends Activity {
         String fw = getIntent().getStringExtra("forward_text");
         root.addView(Ui.pageBar(this, fw != null ? "Forward message to…" : "New message"));
 
+        if (fw == null) {
+            LinearLayout createGrp = Ui.row(this);
+            createGrp.setGravity(Gravity.CENTER_VERTICAL);
+            createGrp.setBackgroundColor(Ui.card(this));
+            Ui.pad(createGrp, 14, 12, 14, 12);
+            android.widget.ImageView gIc = new android.widget.ImageView(this);
+            gIc.setBackground(Ui.circle(Ui.BLUE));
+            int s = Ui.dp(this, 42);
+            int p = Ui.dp(this, 10);
+            gIc.setPadding(p, p, p, p);
+            gIc.setImageDrawable(com.friendbook.core.Icons.tinted(this, com.friendbook.core.Icons.GROUPS, 0xFFFFFFFF));
+            createGrp.addView(gIc, new LinearLayout.LayoutParams(s, s));
+            LinearLayout gCol = Ui.col(this);
+            gCol.setPadding(Ui.dp(this, 12), 0, 0, 0);
+            gCol.addView(Ui.tvBold(this, "👥 Create a New Group Chat", 15, Ui.BLUE));
+            gCol.addView(Ui.tv(this, "Add friends, remove members & manage group admins", 12, Ui.sub(this)));
+            createGrp.addView(gCol, new LinearLayout.LayoutParams(0, -2, 1));
+            createGrp.setOnClickListener(v -> {
+                startActivity(new Intent(this, CreateGroupChatActivity.class));
+                finish();
+            });
+            root.addView(createGrp);
+            root.addView(Ui.divider(this));
+        }
+
         EditText search = Ui.input(this, "🔍 Search friends or people on friendbook…");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 44));
         sp.setMargins(Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12), 4);

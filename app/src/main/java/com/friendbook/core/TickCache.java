@@ -65,5 +65,14 @@ public final class TickCache {
         if (uid != null) CACHE.put(uid, level == null ? "none" : level);
     }
 
+    public static String peek(String uid) {
+        if (uid == null || uid.isEmpty()) return "none";
+        String level = CACHE.get(uid);
+        if (level != null) return level;
+        Models.User u = FastCache.getUser(uid);
+        if (u != null && u.tickLevel != null) return u.tickLevel;
+        return "none";
+    }
+
     public static void clear() { CACHE.clear(); }
 }

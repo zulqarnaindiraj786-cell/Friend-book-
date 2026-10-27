@@ -589,6 +589,7 @@ public final class FastCache {
         o.put("bio", u.bio == null ? "" : u.bio);
         o.put("tickLevel", u.tickLevel == null ? "none" : u.tickLevel);
         o.put("isAdmin", u.isAdmin);
+        o.put("isModerator", u.isModerator);
         o.put("isVerified", u.isVerified);
         o.put("stars", u.stars);
         o.put("friendsCount", u.friendsCount);
@@ -612,6 +613,7 @@ public final class FastCache {
         u.bio = o.optString("bio", "");
         u.tickLevel = o.optString("tickLevel", "none");
         u.isAdmin = o.optBoolean("isAdmin", false);
+        u.isModerator = o.optBoolean("isModerator", false);
         u.isVerified = o.optBoolean("isVerified", false);
         u.stars = o.optInt("stars", 0);
         u.friendsCount = o.optInt("friendsCount", 0);

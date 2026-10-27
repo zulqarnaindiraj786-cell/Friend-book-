@@ -36,6 +36,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final Actions actions;
     private final List<Models.Message> data = new ArrayList<>();
     private String peerPhoto = "";
+    private boolean isGroup = false;
+    private final List<String> groupAdminIds = new ArrayList<>();
+    private Map<String, String> groupNames = new HashMap<>();
+    private Map<String, String> groupPhotos = new HashMap<>();
 
     /** one MediaPlayer at a time for voice notes + 1x / 1.5x / 2x speed (friendbook Messenger feature) */
     private static MediaPlayer voicePlayer;
@@ -48,6 +52,15 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     }
 
     public void setPeerPhoto(String url) { peerPhoto = url == null ? "" : url; }
+
+    public void setGroupMeta(boolean group, List<String> admins, Map<String, String> names, Map<String, String> photos) {
+        this.isGroup = group;
+        this.groupAdminIds.clear();
+        if (admins != null) this.groupAdminIds.addAll(admins);
+        this.groupNames = names != null ? names : new HashMap<>();
+        this.groupPhotos = photos != null ? photos : new HashMap<>();
+        notifyDataSetChanged();
+    }
 
     public void setData(List<Models.Message> list) {
         data.clear();
@@ -94,6 +107,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         LinearLayout bubble = Ui.col(c);
         Ui.pad(bubble, 10, 8, 10, 8);
 
+        TextView senderHeader = Ui.tvBold(c, "", 11.5f, Ui.BLUE);
+        senderHeader.setVisibility(View.GONE);
+        senderHeader.setPadding(0, 0, 0, Ui.dp(c, 3));
+
         TextView quote = Ui.tv(c, "", 11, 0);
         Ui.pad(quote, 8, 4, 8, 4);
         quote.setMaxLines(2);
@@ -117,6 +134,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         voiceRow.addView(play);
         voiceRow.addView(dur, new LinearLayout.LayoutParams(0, -2, 1));
         voiceRow.addView(speed);
+        bubble.addView(senderHeader);
         bubble.addView(quote, qlp);
         bubble.addView(text);
         bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 210), -2));
@@ -145,7 +163,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         } else {
             row.setGravity(Gravity.START);
         }
-        VH vh = new VH(row, av, bubble, quote, text, img, ticks, voiceRow, play, dur, speed, react);
+        VH vh = new VH(row, av, bubble, senderHeader, quote, text, img, ticks, voiceRow, play, dur, speed, react);
         vh.mine = viewType == 1;
         return vh;
     }
@@ -155,9 +173,61 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         Models.Message m = data.get(position);
         Activity c = activity;
 
+        // Centered system event pill in Group Chats ("👑 created group", "🛡 made Admin", etc.)
+        if ("system".equals(m.type)) {
+            h.av.setVisibility(View.GONE);
+            h.senderHeader.setVisibility(View.GONE);
+            h.quote.setVisibility(View.GONE);
+            h.img.setVisibility(View.GONE);
+            h.voiceRow.setVisibility(View.GONE);
+            h.react.setVisibility(View.GONE);
+            h.ticks.setVisibility(View.GONE);
+            ((LinearLayout) h.itemView).setGravity(Gravity.CENTER);
+            h.bubble.setBackground(Ui.round(c, Ui.inputBg(c), 12));
+            h.text.setVisibility(View.VISIBLE);
+            h.text.setTextSize(12);
+            h.text.setTextColor(Ui.sub(c));
+            h.text.setText(m.text == null ? "" : m.text);
+            h.itemView.setOnLongClickListener(null);
+            return;
+        }
+        ((LinearLayout) h.itemView).setGravity(h.mine ? Gravity.END : Gravity.START);
+
         if (!h.mine) {
-            Ui.avatar(c, h.av, peerPhoto);
+            boolean isTeamMsg = Ui.TEAM_USER_ID.equals(m.senderId)
+                    || Ui.isTeamIdentity(m.senderPhoto, m.senderName);
+            if (isTeamMsg) {
+                Ui.avatar(c, h.av, Ui.TEAM_AVATAR_TOKEN);
+            } else if (isGroup) {
+                String sp = (m.senderPhoto != null && !m.senderPhoto.isEmpty())
+                        ? m.senderPhoto : groupPhotos.get(m.senderId);
+                if (sp == null || sp.isEmpty()) {
+                    Models.User cu = com.friendbook.core.FastCache.getUser(m.senderId);
+                    if (cu != null) sp = cu.photoUrl;
+                }
+                Ui.avatar(c, h.av, sp);
+            } else {
+                Ui.avatar(c, h.av, peerPhoto);
+            }
             h.av.setVisibility(View.VISIBLE);
+            if (isGroup && !isTeamMsg) {
+                String sn = (m.senderName != null && !m.senderName.isEmpty())
+                        ? m.senderName : groupNames.get(m.senderId);
+                if (sn == null || sn.isEmpty()) {
+                    Models.User cu = com.friendbook.core.FastCache.getUser(m.senderId);
+                    sn = cu != null ? cu.displayName : "Member";
+                }
+                boolean senderAdmin = m.senderId != null && groupAdminIds.contains(m.senderId);
+                h.senderHeader.setText(sn + (senderAdmin ? " · 👑 Admin" : ""));
+                h.senderHeader.setVisibility(View.VISIBLE);
+                h.av.setOnClickListener(v -> c.startActivity(
+                        new Intent(c, com.friendbook.profile.ProfileActivity.class).putExtra("uid", m.senderId)));
+            } else {
+                h.senderHeader.setVisibility(View.GONE);
+            }
+        } else {
+            h.av.setVisibility(View.GONE);
+            h.senderHeader.setVisibility(View.GONE);
         }
         int mineBg = Prefs.chatBg(c);
         int mineTxt = Prefs.chatTxt(c);
@@ -338,12 +408,12 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     static class VH extends RecyclerView.ViewHolder {
         ImageView av, img;
         LinearLayout bubble, voiceRow;
-        TextView quote, text, ticks, play, dur, speed, react;
+        TextView senderHeader, quote, text, ticks, play, dur, speed, react;
         boolean mine;
-        VH(View v, ImageView a, LinearLayout b, TextView q, TextView t, ImageView i, TextView tk,
+        VH(View v, ImageView a, LinearLayout b, TextView sh, TextView q, TextView t, ImageView i, TextView tk,
            LinearLayout vr, TextView pl, TextView du, TextView sp, TextView re) {
             super(v);
-            av = a; bubble = b; quote = q; text = t; img = i; ticks = tk;
+            av = a; bubble = b; senderHeader = sh; quote = q; text = t; img = i; ticks = tk;
             voiceRow = vr; play = pl; dur = du; speed = sp; react = re;
         }
     }

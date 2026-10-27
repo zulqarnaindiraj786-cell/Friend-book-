@@ -64,6 +64,8 @@ public class ReelsFragment extends Fragment {
     private ViewPager2 pager;
     private ReelAdapter adapter;
     private LinearLayout emptyState;
+    private TextView forYouPill, followingPill;
+    private boolean followingOnlyMode = false;
     private ListenerRegistration reelsReg, videoPostsReg;
     private final List<Models.Reel> fromReels = new ArrayList<>();
     private final List<Models.Reel> fromPosts = new ArrayList<>();
@@ -120,9 +122,32 @@ public class ReelsFragment extends Fragment {
             bar.addView(backBtn);
         }
 
-        TextView title = Ui.tvBold(a, "Reels", 22, Color.WHITE);
+        TextView title = Ui.tvBold(a, "Reels", 20, Color.WHITE);
         title.setShadowLayer(4f, 0f, 1f, 0xCC000000);
-        bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        bar.addView(title);
+
+        forYouPill = Ui.roundChip(a, "✨ For You", Ui.BLUE, Color.WHITE, 12);
+        Ui.pad(forYouPill, 9, 5, 9, 5);
+        LinearLayout.LayoutParams fyp = new LinearLayout.LayoutParams(-2, -2);
+        fyp.leftMargin = Ui.dp(a, 8);
+        forYouPill.setOnClickListener(v -> {
+            followingOnlyMode = false;
+            updateFilterPills(a);
+            rebuildMergedFeed();
+        });
+        bar.addView(forYouPill, fyp);
+
+        followingPill = Ui.roundChip(a, "👥 Following", 0x55000000, Color.WHITE, 12);
+        Ui.pad(followingPill, 9, 5, 9, 5);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-2, -2);
+        flp.leftMargin = Ui.dp(a, 5);
+        followingPill.setOnClickListener(v -> {
+            followingOnlyMode = true;
+            updateFilterPills(a);
+            rebuildMergedFeed();
+        });
+        bar.addView(followingPill, flp);
+        bar.addView(new View(a), new LinearLayout.LayoutParams(0, 1, 1));
 
         TextView refreshPill = Ui.roundChip(a, "↻ Fresh", 0x55000000, Color.WHITE, 13);
         Ui.pad(refreshPill, 11, 6, 11, 6);
@@ -163,6 +188,12 @@ public class ReelsFragment extends Fragment {
         if (pager != null) pager.setCurrentItem(0, false);
     }
 
+    private void updateFilterPills(Context a) {
+        if (forYouPill == null || followingPill == null) return;
+        forYouPill.setBackground(Ui.round(a, !followingOnlyMode ? Ui.BLUE : 0x55000000, 16));
+        followingPill.setBackground(Ui.round(a, followingOnlyMode ? Ui.BLUE : 0x55000000, 16));
+    }
+
     private void rebuildMergedFeed() {
         Map<String, Models.Reel> map = new LinkedHashMap<>();
         for (Models.Reel r : fromReels) {
@@ -173,8 +204,20 @@ public class ReelsFragment extends Fragment {
                 map.put(r.id, r);
             }
         }
+        List<Models.Reel> candidates = new ArrayList<>(map.values());
+        if (followingOnlyMode && Fb.me != null) {
+            java.util.Set<String> circle = new java.util.HashSet<>();
+            if (Fb.me.following != null) circle.addAll(Fb.me.following);
+            if (Fb.me.favoriteUids != null) circle.addAll(Fb.me.favoriteUids);
+            if (Fb.uid() != null) circle.add(Fb.uid());
+            List<Models.Reel> filtered = new ArrayList<>();
+            for (Models.Reel r : candidates) {
+                if (r.authorId != null && circle.contains(r.authorId)) filtered.add(r);
+            }
+            if (!filtered.isEmpty()) candidates = filtered;
+        }
         List<Models.Reel> merged = FeedAlgorithm.rankReels(
-                getActivity(), new ArrayList<>(map.values()), initialReelId);
+                getActivity(), candidates, initialReelId);
 
         if (emptyState != null) {
             emptyState.setVisibility(merged.isEmpty() ? View.VISIBLE : View.GONE);
@@ -688,6 +731,7 @@ public class ReelsFragment extends Fragment {
                 Fb.db().collection(col).document(reel.id).set(up, SetOptions.merge());
 
                 if (type != null && prev == null && !me.equals(reel.authorId)) {
+                    com.friendbook.core.FeedAlgorithm.recordCreatorAffinity(itemView.getContext(), reel.authorId, 6);
                     Notify.send(reel.authorId, "reel_like",
                             Fb.myName() + " reacted " + Reactions.emojiFor(type) + " to your reel", reel.id);
                 }
@@ -704,6 +748,9 @@ public class ReelsFragment extends Fragment {
                         .set(Fb.map("savedBy", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)), SetOptions.merge());
                 Fb.db().collection("users").document(me)
                         .set(Fb.map("savedReelIds", already ? FieldValue.arrayRemove(reel.id) : FieldValue.arrayUnion(reel.id)), SetOptions.merge());
+                if (!already) {
+                    com.friendbook.core.FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
+                }
                 Ui.toast(a, already ? "Removed from Saved Reels" : "Saved Reel 🔖");
             }
 
@@ -790,9 +837,25 @@ public class ReelsFragment extends Fragment {
                 m.getMenu().add(0, 6, 0, "🚩 Report Reel");
                 if (reel.authorId != null && !reel.authorId.equals(Fb.uid())) {
                     m.getMenu().add(0, 7, 0, "🚫 Block " + (reel.authorName == null ? "creator" : reel.authorName));
+                    if (com.friendbook.core.Admin.canModerate()) {
+                        m.getMenu().add(0, 8, 0, com.friendbook.core.Admin.isAdmin()
+                                ? "🛡 🗑 Delete Reel (Admin)" : "🛡 🗑 Delete Reel (Moderator)");
+                    }
                 }
                 m.setOnMenuItemClickListener(it -> {
                     int id = it.getItemId();
+                    if (id == 8) {
+                        Fb.getUser(reel.authorId).addOnSuccessListener(u -> {
+                            if (!com.friendbook.core.Admin.isAdmin() && com.friendbook.core.Admin.isProtectedStaff(u)) {
+                                Ui.toast(a, "Admin reels cannot be removed by a moderator");
+                                return;
+                            }
+                            Ui.confirm(a, "Delete Reel?", "Remove this reel permanently?", "Delete", () ->
+                                    Fb.db().collection(reel.collectionName()).document(reel.id).delete()
+                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted 🗑")));
+                        });
+                        return true;
+                    }
                     if (id == 1) {
                         Reactions.showReelReactors(a, reel);
                     } else if (id == 2) {

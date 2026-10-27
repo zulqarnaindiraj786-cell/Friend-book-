@@ -18,29 +18,44 @@ service cloud.firestore {
                 && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true));
     }
 
+    // Global App Moderator: ONLY allowed to delete non-admin posts/reels & ban/unban non-admin users!
+    function isModerator() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isModerator', false) == true;
+    }
+
     // ---- users ----
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if isMe(uid);
       allow update: if isMe(uid)
-          // normal users can never change their own admin/ban state
+          // normal users can never change their own admin/moderator/ban state
           && !request.resource.data.diff(resource.data).affectedKeys()
-                .hasAny(['isAdmin', 'banned'])
+                .hasAny(['isAdmin', 'isModerator', 'banned'])
         // friends/followers/blocked updates from other signed-in users
         || (signedIn() && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['followers', 'following', 'friendsCount']))
-        // admins manage everything (ban, promote, edit)
+        // Global Moderator can ONLY toggle `banned` on non-admin, non-owner users!
+        || (isModerator()
+            && resource.data.get('isAdmin', false) != true
+            && resource.data.get('email', '') != 'zulqarnaindiraj786@gmail.com'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned']))
+        // Full Admins manage everything (ban, promote, moderators, ticks)
         || isAdmin();
       allow delete: if isMe(uid) || isAdmin();
     }
 
-    // ---- posts (incl. polls, multi-photo, backgrounds, group posts, automated safety moderation) ----
+    // ---- posts (incl. polls, multi-photo, backgrounds, group posts, moderator & safety moderation) ----
     match /posts/{postId} {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn();  // reactions/votes/saves/counters/safetyFlagged are collaborative
       allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
-                                       || resource.data.get('safetyFlagged', false) == true))
+                                       || resource.data.get('safetyFlagged', false) == true
+                                       || (resource.data.get('groupId', '') != ''
+                                           && exists(/databases/$(database)/documents/groups/$(resource.data.groupId)))))
+                    || isModerator()
                     || isAdmin();
 
       match /reactions/{rid} {
@@ -80,6 +95,7 @@ service cloud.firestore {
       allow update: if signedIn(); // likes/comments counters
       allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
                                        || resource.data.get('safetyFlagged', false) == true))
+                    || isModerator()
                     || isAdmin();
 
       match /comments/{cid} {
@@ -147,7 +163,7 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // ---- unified payments: ticks / boosts / subscriptions — user uploads, admin approves ----
+    // ---- unified payments: ticks / subscriptions — user uploads, admin approves ----
     match /payments/{pid} {
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
@@ -155,14 +171,6 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
       allow update, delete: if isAdmin();
-    }
-
-    // ---- Profile/Post boosts: 100% free community boosts ----
-    match /boosts/{bid} {
-      allow create: if signedIn()
-        && request.resource.data.userId == request.auth.uid;
-      allow read: if signedIn();
-      allow update, delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
     }
 
     // ---- Free VIP Fan Club subscriptions ----

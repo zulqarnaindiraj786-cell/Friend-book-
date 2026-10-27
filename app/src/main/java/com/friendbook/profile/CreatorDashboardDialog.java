@@ -166,21 +166,6 @@ public final class CreatorDashboardDialog {
                     dlg.dismiss();
                     a.startActivity(new Intent(a, BlueTickActivity.class));
                 });
-        addToolRow(a, toolsCard, "🚀 Boost Profile on Home Feed (Free 24h)",
-                "Highlight your creator profile on Home for 24 hours — 100% Free", () -> {
-                    dlg.dismiss();
-                    if (me != null) {
-                        java.util.Map<String, Object> bm = new java.util.HashMap<>();
-                        bm.put("userId", me);
-                        bm.put("type", "profile");
-                        bm.put("status", "active");
-                        bm.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                        bm.put("expiry", new com.google.firebase.Timestamp(
-                                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                        Fb.db().collection("boosts").document("profile_" + me).set(bm)
-                                .addOnSuccessListener(x -> Ui.toast(a, "🚀 Profile boosted FREE for 24 hours!"));
-                    }
-                });
         addToolRow(a, toolsCard, "🎬 Upload a Reel",
                 "Reach new followers across Reels & Watch", () -> {
                     dlg.dismiss();
