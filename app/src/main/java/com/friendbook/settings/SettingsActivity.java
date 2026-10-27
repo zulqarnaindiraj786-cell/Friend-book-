@@ -463,7 +463,7 @@ public class SettingsActivity extends Activity {
                                                 "category", "csae",
                                                 "reason", txt,
                                                 "reportedBy", Fb.uid(),
-                                                "createdAt", FieldValue.serverTimestamp()));
+                                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp()));
                                         Ui.info(this, "Priority Report Submitted",
                                                 "Thank you. Our safety team prioritizes child safety reports immediately.");
                                     })
