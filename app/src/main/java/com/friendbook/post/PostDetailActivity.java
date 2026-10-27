@@ -37,7 +37,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Facebook Lite Pro Post Detail + Full Comments Thread:
+ * friendbook Pro Post Detail + Full Comments Thread:
  * - Single native RecyclerView (Header = Post + Reactions Summary + Sort Bar; Rows = ALL Comments & Replies)
  * - Fixes 100% of ScrollView height-clipping so every single comment & reply renders smoothly!
  * - Instant 0ms optimistic comment send + photo comment support + @mention notifications.
@@ -73,7 +73,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.card(this));
 
-        // Crisp white Facebook Lite top bar
+        // Crisp white friendbook top bar
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -164,7 +164,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         composerWrap.setBackgroundColor(Ui.card(this));
         composerWrap.addView(Ui.divider(this));
 
-        // Quick Emoji Reaction Bar (Facebook Lite quick comment strip)
+        // Quick Emoji Reaction Bar (friendbook quick comment strip)
         LinearLayout emojiStrip = Ui.row(this);
         Ui.pad(emojiStrip, 10, 5, 10, 2);
         String[] quickEmojis = {"❤️", "🙌", "🔥", "😂", "😍", "😢", "👏", "💯"};

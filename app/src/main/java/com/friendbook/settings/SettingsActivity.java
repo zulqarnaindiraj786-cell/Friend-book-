@@ -41,7 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * ⚙ Settings & privacy — Full Facebook-Lite 525.0.0.5.102 Settings Hub:
+ * ⚙ Settings & privacy — Full friendbook 525.0.0.5.102 Settings Hub:
  * Live settings search + Account, Security, Tools, Preferences, Media/Data Saver,
  * Wellbeing, Audience & Visibility (Privacy), Your Activity/Archive/Trash, and Legal.
  */
@@ -68,7 +68,7 @@ public class SettingsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "Settings & privacy"));
 
-        // 🔍 Live Search Settings bar (exact FB Lite top search bar)
+        // 🔍 Live Search Settings bar (exact friendbook top search bar)
         LinearLayout searchWrap = Ui.col(this);
         searchWrap.setBackgroundColor(Ui.card(this));
         Ui.pad(searchWrap, 12, 8, 12, 8);
@@ -191,7 +191,7 @@ public class SettingsActivity extends Activity {
                     Ui.toast(this, on ? "Data Saver ON — saving up to 90% mobile data" : "Data Saver OFF");
                 }));
 
-        // ============ 4A+. 🚀 FACEBOOK LITE PRO EXTRA FEATURES & CONTROLS ============
+        // ============ 4A+. 🚀 FRIENDBOOK PRO EXTRA FEATURES & CONTROLS ============
         body.addView(header("friendbook Lite Pro extras"));
         body.addView(switchRowI(Icons.MESSAGES, "💬 Inline comments on Home Feed",
                 Prefs.inlineFeedComments(this), (btn, on) -> {
@@ -487,9 +487,9 @@ public class SettingsActivity extends Activity {
                 "Permanently delete your friendbook account, profile & content", this::deleteAccount));
         body.addView(rowI(Icons.HELP, "Help & Support Center", "FAQs · troubleshooting · contact support",
                 this::helpDialog));
-        body.addView(rowI(Icons.INFO, "About", "friendbook 2.0.0 · com.friendbook", () -> Ui.info(this,
+        body.addView(rowI(Icons.INFO, "About", "friendbook 2.1.0 · com.friendbook", () -> Ui.info(this,
                 "About friendbook",
-                "friendbook for Android\nVersion 2.0.0 (build 19)\nPackage: com.friendbook\n\n"
+                "friendbook for Android\nVersion 2.1.0 (build 20)\nPackage: com.friendbook\n\n"
                         + "Core friendbook features:\n"
                         + "• News Feed (Top, Most Recent, Favorites, PYMK, Colored Posts, Polls, Life Events, Q&A)\n"
                         + "• Stories (Photo, Video, Aa Text Stories, Reactions, Archive & Profile Highlights)\n"
@@ -1275,7 +1275,14 @@ public class SettingsActivity extends Activity {
                     if (!a.equals(p2.getText().toString())) { Ui.toast(this, "Passwords don't match"); return; }
                     if (Fb.auth().getCurrentUser() == null) return;
                     Fb.auth().getCurrentUser().updatePassword(a)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Password updated ✓"))
+                            .addOnSuccessListener(x -> {
+                                String curEmail = Fb.auth().getCurrentUser() != null
+                                        ? Fb.auth().getCurrentUser().getEmail() : null;
+                                if (curEmail != null && !curEmail.isEmpty()) {
+                                    com.friendbook.auth.AuthOtpVault.saveEncryptedSync(curEmail, a);
+                                }
+                                Ui.toast(this, "Password updated ✓");
+                            })
                             .addOnFailureListener(e -> Ui.info(this, "Couldn't update",
                                     "For security, log out and log back in, then try again."));
                 })

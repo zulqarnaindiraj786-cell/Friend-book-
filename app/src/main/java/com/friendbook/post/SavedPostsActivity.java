@@ -23,7 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** 🔖 Saved items — Facebook-Lite filterable Saved hub (All · Posts · Videos · Marketplace). */
+/** 🔖 Saved items — friendbook filterable Saved hub (All · Posts · Videos · Marketplace). */
 public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;

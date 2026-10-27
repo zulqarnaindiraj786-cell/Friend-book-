@@ -50,10 +50,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * ⚡ Zero-Loading Facebook-Lite 525 Home Tab:
+ * ⚡ Zero-Loading friendbook 525 Home Tab:
  * - Renders cached feed & stories in 0.0ms on Frame #1 (even on 2G or Offline!).
  * - 60/120 FPS RecyclerView (`setItemAnimator(null)` + `setItemViewCacheSize(24)`).
- * - Includes Facebook Lite 24h **Notes ("Share a thought")** bubbles + Feed Filter Chips.
+ * - Includes friendbook 24h **Notes ("Share a thought")** bubbles + Feed Filter Chips.
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
@@ -126,21 +126,21 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
-            refreshWithFacebookAlgorithm(true);
+            refreshWithFriendbookAlgorithm(true);
             swipe.postDelayed(() -> { if (swipe != null) swipe.setRefreshing(false); }, 420);
         });
 
         android.widget.FrameLayout feedWrap = new android.widget.FrameLayout(a);
         feedWrap.addView(swipe, new android.widget.FrameLayout.LayoutParams(-1, -1));
 
-        // Signature Facebook floating "↑ New posts" pill on background-resume discovery
+        // Signature friendbook floating "↑ New posts" pill on background-resume discovery
         freshPill = Ui.roundChip(a, "↑  New posts & videos", Ui.BLUE, 0xFFFFFFFF, 13);
         Ui.pad(freshPill, 16, 8, 16, 8);
         freshPill.setElevation(Ui.dp(a, 6));
         freshPill.setVisibility(View.GONE);
         freshPill.setOnClickListener(v -> {
             freshPill.setVisibility(View.GONE);
-            refreshWithFacebookAlgorithm(true);
+            refreshWithFriendbookAlgorithm(true);
         });
         android.widget.FrameLayout.LayoutParams pp = new android.widget.FrameLayout.LayoutParams(
                 -2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
@@ -152,11 +152,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     /**
-     * 🔄 Full Facebook Refresh:
+     * 🔄 Full friendbook Refresh:
      * Advances FeedAlgorithm epoch -> rotates top posts, promotes unseen videos, shuffles PYMK/Stories,
      * and requests fresh live AdMob creatives in both in-feed Sponsored slots & bottom banner!
      */
-    public void refreshWithFacebookAlgorithm(boolean scrollTop) {
+    public void refreshWithFriendbookAlgorithm(boolean scrollTop) {
         android.app.Activity a = getActivity();
         if (a == null) return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
@@ -182,7 +182,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             restartPostsListener();
             loadPymk();
         } else if (freshPill != null) {
-            // User was reading mid-scroll -> show Facebook's non-intrusive blue "↑ New posts & videos" pill!
+            // User was reading mid-scroll -> show friendbook's non-intrusive blue "↑ New posts & videos" pill!
             freshPill.setVisibility(View.VISIBLE);
         }
     }
@@ -207,8 +207,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
             int pos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
             if (pos <= 1) {
-                // Just like Facebook: tapping Home while already at top triggers a fresh algorithm refresh!
-                refreshWithFacebookAlgorithm(true);
+                // Tapping Home while already at top triggers a fresh algorithm refresh!
+                refreshWithFriendbookAlgorithm(true);
             } else {
                 rv.scrollToPosition(0);
             }
@@ -224,7 +224,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
     }
 
-    /** 💭 Facebook Lite 525 24-hour "Notes" strip ("Share a thought" bubble). */
+    /** 💭 friendbook 525 24-hour "Notes" strip ("Share a thought" bubble). */
     private View buildNotesStrip(android.app.Activity a) {
         HorizontalScrollView sc = new HorizontalScrollView(a);
         sc.setHorizontalScrollBarEnabled(false);
@@ -379,7 +379,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
     }
 
-    /** Facebook-Lite 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
+    /** friendbook 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
     private View filterChips(android.app.Activity a) {
         HorizontalScrollView sc = new HorizontalScrollView(a);
         sc.setHorizontalScrollBarEnabled(false);

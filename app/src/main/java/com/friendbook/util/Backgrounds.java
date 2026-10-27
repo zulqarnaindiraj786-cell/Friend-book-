@@ -1,6 +1,6 @@
 package com.friendbook.util;
 
-/** Background gradient pairs (From, To) for text posts — like Facebook's colored posts. Index 0 = none. */
+/** Background gradient pairs (From, To) for text posts — like friendbook's colored posts. Index 0 = none. */
 public class Backgrounds {
 
     /** [ [0]=[from,to] none, then gradient pairs ] */

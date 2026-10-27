@@ -45,7 +45,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 🛒 MarketplaceActivity — Full Facebook-Lite Marketplace:
+ * 🛒 MarketplaceActivity — Full friendbook Marketplace:
  * 2-Column Product Grid, Search, Category Chips, ＋ Sell Item Uploader,
  * Mark as Sold, Save Listing & 1-Tap "Is this still available?" Message Seller.
  */

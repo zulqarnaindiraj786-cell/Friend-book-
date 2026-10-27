@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * ⭐ Feed preferences — Full Facebook-Lite Feed Controls:
+ * ⭐ Feed preferences — Full friendbook Feed Controls:
  * 1) Default Feed Sort: Top (Favorites First) vs Most Recent (Chronological)
  * 2) Favorites manager (up to 30 friends prioritized at top of Home)
  * 3) Quick Snooze / Unsnooze per friend

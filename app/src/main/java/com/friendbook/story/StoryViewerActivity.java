@@ -42,7 +42,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 📖 StoryViewerActivity — Full Facebook-Lite Story Viewer:
+ * 📖 StoryViewerActivity — Full friendbook Story Viewer:
  * Supports Photo, Video & Aa Text Stories, Music/Mood badge, Quick Emoji Reactions
  * (❤️ 😂 😮 😢 🔥 👏), Highlight pinning, Story Archive mode & Mute author.
  */

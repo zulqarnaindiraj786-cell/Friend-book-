@@ -40,7 +40,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ⚡ Zero-Latency Facebook-Lite Pro Reactions: 👍 ❤️ 😂 😮 😢 😡
+ * ⚡ Zero-Latency friendbook Pro Reactions: 👍 ❤️ 😂 😮 😢 😡
  * - 0.0ms optimistic Like/Reaction updates via {@link FastCache}
  * - Self-healing reaction counts synced with posts/{postId}/reactions
  * - Full "People who reacted" ("Kis kis ne like kiya") viewer for both Posts & Comments!
@@ -80,7 +80,7 @@ public class Reactions {
         }
     }
 
-    /** Long-press popup with the 6 Facebook Lite reactions + Care/Emoji bounce. */
+    /** Long-press popup with the 6 friendbook reactions + Care/Emoji bounce. */
     public static void show(View anchor, OnPick cb) {
         Context c = anchor.getContext();
         LinearLayout row = Ui.row(c);
@@ -286,7 +286,7 @@ public class Reactions {
     }
 
     /**
-     * 👥 Facebook Lite Pro "People who reacted" ("Kis kis ne like kiya hai") Viewer for Posts!
+     * 👥 friendbook Pro "People who reacted" ("Kis kis ne like kiya hai") Viewer for Posts!
      */
     public static void showWhoReacted(final Activity activity, final String postId) {
         if (activity == null || activity.isFinishing() || postId == null || postId.isEmpty()) return;
@@ -388,7 +388,7 @@ public class Reactions {
     }
 
     /**
-     * 👥 Facebook Lite Pro "People who reacted to Reel" Viewer!
+     * 👥 friendbook Pro "People who reacted to Reel" Viewer!
      */
     public static void showReelReactors(final Activity activity, final Models.Reel reel) {
         if (activity == null || activity.isFinishing() || reel == null) return;
@@ -447,7 +447,7 @@ public class Reactions {
     }
 
     /**
-     * 👥 Facebook Lite Pro "People who reacted to comment" Viewer!
+     * 👥 friendbook Pro "People who reacted to comment" Viewer!
      */
     public static void showCommentReactors(final Activity activity, final Models.Comment comment) {
         if (activity == null || activity.isFinishing() || comment == null) return;

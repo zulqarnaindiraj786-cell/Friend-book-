@@ -35,7 +35,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * ⚡ Facebook Lite 525 Zero-Loading 2G Engine:
+ * ⚡ friendbook 525 Zero-Loading 2G Engine:
  * - Instant 0ms RAM + persistent disk snapshot for Feed, Me, Users, Stories, Chats, Notifications & Reactions.
  * - Live 2G / EDGE / 3G / 4G / Wi-Fi / Offline network tier detector.
  * - Text-Only 2G Basic Mode ("Tap to view photo") session unlock tracker.

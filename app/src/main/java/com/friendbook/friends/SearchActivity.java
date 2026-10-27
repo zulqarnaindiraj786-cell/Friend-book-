@@ -74,7 +74,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         Ui.pad(noResults, 24, 50, 24, 0);
         body.addView(noResults);
 
-        // 🔍 recent searches (FB Lite: chips when the box is empty)
+        // 🔍 recent searches (friendbook: chips when the box is empty)
         historyBox = Ui.col(this);
         body.addView(historyBox, 0);
         renderHistory();

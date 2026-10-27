@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 🧠 Facebook-Style Dynamic Feed, Video/Reels & Sponsored Ad Ranking Engine ("EdgeRank Pro"):
+ * 🧠 Friendbook-Style Dynamic Feed, Video/Reels & Sponsored Ad Ranking Engine ("EdgeRank Pro"):
  * - Guarantees fresh Posts, fresh Videos/Reels, fresh PYMK & fresh Sponsored Ad auctions on:
  *     1) Every App Cold Launch (closing & reopening the app)
  *     2) Every App Warm Resume after backgrounding (>= 15 seconds)
@@ -90,7 +90,7 @@ public final class FeedAlgorithm {
 
     /**
      * Called in MainActivity.onResume:
-     * Returns true if the user was away >= 15s and a fresh Facebook-style feed/video/ad epoch was triggered!
+     * Returns true if the user was away >= 15s and a fresh friendbook-style feed/video/ad epoch was triggered!
      */
     public static synchronized boolean onAppResumed(Context c) {
         ensureLoaded(c);
@@ -117,7 +117,7 @@ public final class FeedAlgorithm {
         return currentSeed;
     }
 
-    /** Dynamic first Sponsored Ad slot (after 2, 3, or 4 posts) + spacing per epoch like real Facebook. */
+    /** Dynamic first Sponsored Ad slot (after 2, 3, or 4 posts) + spacing per epoch like real friendbook. */
     public static synchronized int adFirstPostCount() {
         int mod = Math.abs(currentEpoch) % 3;
         return 2 + mod; // 2, 3, or 4 posts before first Sponsored card
@@ -223,7 +223,7 @@ public final class FeedAlgorithm {
 
         Collections.sort(scored, (a, b) -> Double.compare(b.score, a.score));
 
-        // Author diversity + Video discovery blender (just like real Facebook News Feed!)
+        // Author diversity + Video discovery blender (just like real friendbook News Feed!)
         List<Models.Post> blended = blendAuthorsAndPromoteFreshVideo(scored);
 
         // Guarantee slot #0 rotates away from previous epoch's #0 whenever >= 2 posts exist
@@ -289,7 +289,7 @@ public final class FeedAlgorithm {
         else if ("gold".equals(p.authorTickLevel)) score += 18.0;
         else if ("blue".equals(p.authorTickLevel) || p.authorVerified) score += 12.0;
 
-        // 5. Rich Media & Video Discovery Signal (Facebook prioritizes native video & visual posts)
+        // 5. Rich Media & Video Discovery Signal (friendbook prioritizes native video & visual posts)
         boolean isVid = "video".equals(p.mediaType);
         if (isVid) {
             score += (seen == 0 ? 52.0 : 28.0);
@@ -305,7 +305,7 @@ public final class FeedAlgorithm {
                 + Math.max(0, p.shares) * 6.5;
         score += Math.log1p(engagement) * 15.0;
 
-        // 7. Facebook Impression Cool-Down Penalty (rotates away posts seen in recent refreshes/sessions!)
+        // 7. friendbook Impression Cool-Down Penalty (rotates away posts seen in recent refreshes/sessions!)
         if (seen > 0) {
             int epochsAgo = Math.max(1, currentEpoch - lastEp);
             if (epochsAgo == 1) score -= 275.0;      // just seen right before refresh/close -> push down!

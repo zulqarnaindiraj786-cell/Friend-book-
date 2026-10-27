@@ -62,7 +62,7 @@ public class NotificationsFragment extends Fragment {
         markAll.setOnClickListener(v -> markAllReadReal());
         root.addView(head);
 
-        // filter chips: All / Unread (Facebook Lite)
+        // filter chips: All / Unread (friendbook)
         LinearLayout chips = Ui.row(a);
         Ui.pad(chips, 14, 0, 14, 6);
         chipAll = Ui.roundChip(a, "All", Ui.BLUE, 0xFFFFFFFF, 12);

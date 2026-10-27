@@ -357,7 +357,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
             hh.liveBox.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
             hh.liveCards.removeAllViews();
-            // 👥 People You May Know horizontal rail (Facebook Lite signature widget)
+            // 👥 People You May Know horizontal rail (friendbook signature widget)
             hh.pymkBox.setVisibility(pymkUsers.isEmpty() ? View.GONE : View.VISIBLE);
             hh.pymkCards.removeAllViews();
             for (final Models.User u : pymkUsers) {
@@ -486,7 +486,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * #hashtags aur @mentions ko Facebook jaisa blue+bold style karo.
+     * #hashtags aur @mentions ko friendbook jaisa blue+bold style karo.
      * CRITICAL: regex compile per-device fail ho sakta hai (older ICU regex engines
      * reject some script properties) — pattern is precompiled ONCE in a guard and
      * ANY failure falls back to plain text. A styling helper must never break a post.
@@ -653,7 +653,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
         }
 
-        // ---------- Special FB-Lite cards: Life Event / Q&A / Marketplace ----------
+        // ---------- Special friendbook cards: Life Event / Q&A / Marketplace ----------
         vh.specialBox.removeAllViews();
         vh.specialBox.setVisibility(View.GONE);
         if (p.isLifeEvent()) {
@@ -810,7 +810,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.mediaWrap.setVisibility((fImg != null || isVideo) ? View.VISIBLE : View.GONE);
 
         if (textOnlyPhotoHidden) {
-            // 📵 Facebook Lite Basic / Text-Only 2G Mode: 0 KB automatic photo load!
+            // 📵 friendbook Basic / Text-Only 2G Mode: 0 KB automatic photo load!
             vh.image.setVisibility(View.VISIBLE);
             vh.image.setImageDrawable(Ui.round(c, Ui.inputBg(c), 0));
             vh.playBadge.setVisibility(View.VISIBLE);
@@ -909,7 +909,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * 💬 Authentic Facebook Lite Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
+     * 💬 Authentic friendbook Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
      */
     private void bindInlineComments(Context c, PostVH vh, Models.Post p) {
         if (vh.inlineCommentsBox == null) return;
@@ -970,7 +970,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.inlineCommentsBox.addView(row);
         }
 
-        // Quick "Write a comment…" pill right below every post (Facebook Lite signature!)
+        // Quick "Write a comment…" pill right below every post (friendbook signature!)
         LinearLayout quickRow = Ui.row(c);
         quickRow.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(quickRow, 12, 6, 12, 9);
@@ -1502,7 +1502,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout col = (LinearLayout) itemView;
             col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
 
-            // 1. Authentic FB-Lite Composer Row FIRST (Avatar+Green Dot · "What's on your mind?" · Photo)
+            // 1. Authentic friendbook Composer Row FIRST (Avatar+Green Dot · "What's on your mind?" · Photo)
             LinearLayout row = Ui.row(c);
             row.setBackgroundColor(Ui.card(c));
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1532,7 +1532,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             hp.rightMargin = Ui.dp(c, 8);
             row.addView(composeHint, hp);
 
-            // Big, bold Facebook-style Stacked Photo/Video gallery button -> opens Photos + Videos!
+            // Big, bold friendbook-style Stacked Photo/Video gallery button -> opens Photos + Videos!
             LinearLayout photoCol = Ui.col(c);
             photoCol.setGravity(Gravity.CENTER);
             photoCol.setMinimumWidth(Ui.dp(c, 50));
@@ -1567,7 +1567,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
 
-            // 🔴 GO LIVE button + active lives strip (Facebook-Lite style)
+            // 🔴 GO LIVE button + active lives strip (friendbook style)
             liveBox = Ui.col(c);
             liveBox.setBackgroundColor(Ui.card(c));
             liveBox.setVisibility(View.GONE);
@@ -1604,7 +1604,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             boostBox.addView(bsv);
             col.addView(boostBox);
 
-            // 👥 People You May Know strip (Facebook-Lite Home suggestion rail)
+            // 👥 People You May Know strip (friendbook Home suggestion rail)
             pymkBox = Ui.col(c);
             pymkBox.setBackgroundColor(Ui.card(c));
             pymkBox.setVisibility(View.GONE);
@@ -1992,7 +1992,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             head.addView(closeBtn);
             card.addView(head);
 
-            // ---- special FB-Lite banner (Life Event / Q&A / Marketplace) ----
+            // ---- special friendbook banner (Life Event / Q&A / Marketplace) ----
             specialBox = Ui.col(c);
             Ui.pad(specialBox, 12, 2, 12, 6);
             specialBox.setVisibility(View.GONE);
@@ -2043,7 +2043,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
             mediaWrap.addView(pageBadge, blp);
 
-            // ---- FB-Lite Pro Clickable Summary Row: Left="👍❤️ 24" (Who liked!) | Right="8 comments · 2 shares" ----
+            // ---- friendbook Pro Clickable Summary Row: Left="👍❤️ 24" (Who liked!) | Right="8 comments · 2 shares" ----
             summaryRow = Ui.row(c);
             summaryRow.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(summaryRow, 12, 8, 12, 4);
@@ -2058,7 +2058,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             summaryRow.addView(commentsSummary);
             card.addView(summaryRow);
 
-            // ---- 3 Rounded Facebook Lite v525 Pill Capsule Buttons (Like · Comment · Share) ----
+            // ---- 3 Rounded friendbook v525 Pill Capsule Buttons (Like · Comment · Share) ----
             LinearLayout actions = Ui.row(c);
             Ui.pad(actions, 10, 6, 10, 10);
             like = actionBtn(c, "👍 Like");
@@ -2074,13 +2074,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             actions.addView(share, a3);
             card.addView(actions);
 
-            // ---- Inline Multi-User Comments Preview + Quick Comment Bar (Facebook Lite Pro!) ----
+            // ---- Inline Multi-User Comments Preview + Quick Comment Bar (friendbook Pro!) ----
             inlineCommentsBox = Ui.col(c);
             inlineCommentsBox.setBackgroundColor(Ui.card(c));
             inlineCommentsBox.setVisibility(View.GONE);
             card.addView(inlineCommentsBox, new LinearLayout.LayoutParams(-1, -2));
 
-            // FB-Lite gap between posts
+            // friendbook gap between posts
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             card.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));

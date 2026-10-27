@@ -41,7 +41,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 💬 ConversationsActivity — Full Facebook-Lite Messenger Home:
+ * 💬 ConversationsActivity — Full friendbook Messenger Home:
  * Search bar, 🟢 Active Now horizontal strip, Inbox / Archived tabs,
  * Pin, Mute, Nicknames, Archive & Unread badges.
  */

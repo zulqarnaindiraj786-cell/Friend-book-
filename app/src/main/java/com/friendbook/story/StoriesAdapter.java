@@ -25,7 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Authentic Facebook Lite v525 Tall Vertical Story Cards Rail:
+ * Authentic friendbook v525 Tall Vertical Story Cards Rail:
  * - Card 0: Split "Add to story" card (User photo top + blue '+' circle + white bottom label)
  * - Cards 1..N: Full-bleed vertical story cards with top-left blue count badge ("2") or ring avatar + bottom name
  * - Final Card: Vibrant Blue "Find friends" discovery card!
@@ -179,7 +179,7 @@ public class StoriesAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         avRing.addView(av, new FrameLayout.LayoutParams(as, as, Gravity.CENTER));
         frame.addView(avRing, avp);
 
-        // Top-left blue count badge (e.g. "2" when multiple stories — exact FB Lite look!)
+        // Top-left blue count badge (e.g. "2" when multiple stories — exact friendbook look!)
         TextView countBadge = Ui.tvBold(c, "", 12, Color.WHITE);
         countBadge.setGravity(Gravity.CENTER);
         countBadge.setBackground(Ui.round(c, Ui.BLUE, 7));

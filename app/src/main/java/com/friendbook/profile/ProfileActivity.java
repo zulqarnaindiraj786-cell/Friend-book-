@@ -64,7 +64,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Authentic Facebook Lite v525 Pro Profile & Creator Hub:
+ * Authentic friendbook v525 Pro Profile & Creator Hub:
  * - Top "Data mode" strip + Crisp White Header: [ ‹ ]  User Name  [ ✏️ ] [ 🔍 ] [ ••• ]
  * - Cover photo + bottom-right 📷 camera circle
  * - Left-aligned overlapping 106dp circular Avatar + 📷 camera circle + Right-side Name, Verified Tick & Bold Stats
@@ -134,10 +134,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Optional Facebook Lite "Data mode / Buy data" top strip
+        // 1. Optional friendbook "Data mode / Buy data" top strip
         root.addView(Ui.dataModeStrip(this, null));
 
-        // 2. Crisp White Facebook Lite Profile Header: [ ‹ ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
+        // 2. Crisp White friendbook Profile Header: [ ‹ ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -670,7 +670,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         else user.coverUrl = url;
                         bindUser();
                     }
-                    // Facebook Lite signature feature: Share full DP / Cover update onto News Feed!
+                    // friendbook signature feature: Share full DP / Cover update onto News Feed!
                     if (com.friendbook.core.Prefs.shareDpToFeed(ProfileActivity.this)) {
                         Map<String, Object> dpPost = Fb.map(
                                 "authorId", uid,
@@ -1011,7 +1011,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     /**
-     * Exact Facebook Lite Screenshot 1 "Personal details" section inside the All tab:
+     * Exact friendbook Screenshot 1 "Personal details" section inside the All tab:
      * Bold "Personal details" + ✏️ edit icon, 📍 City 🔒, 🎂 Formatted Birthday, 💞 Relationship, "See more details".
      */
     private void renderPersonalDetailsAndHighlights(boolean locked) {
@@ -1075,7 +1075,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             rows++;
         }
 
-        // "See more details" link (exact FB Lite Screenshot 1!)
+        // "See more details" link (exact friendbook Screenshot 1!)
         TextView seeMore = Ui.tv(this, "See more details", 14.5f, Ui.sub(this));
         seeMore.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 2));
         seeMore.setOnClickListener(v -> showTab(4));

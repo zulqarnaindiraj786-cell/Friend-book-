@@ -34,7 +34,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 🚩 PagesActivity — Full Facebook-Lite Pages Directory:
+ * 🚩 PagesActivity — Full friendbook Pages Directory:
  * Tabs (Discover · Following · My Pages), Search, Create Page, Follow/Unfollow &
  * tap any Page to open PageDetailActivity (cover, Post-as-Page & Page Feed).
  */

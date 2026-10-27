@@ -57,7 +57,7 @@ public class App extends Application implements SensorEventListener {
             return false;
         });
 
-        // Track real foreground time + apply Facebook-Lite zero-lag screen transitions
+        // Track real foreground time + apply friendbook zero-lag screen transitions
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override public void onActivityResumed(Activity a) {
                 if (Prefs.instantTransitions(App.this)) {

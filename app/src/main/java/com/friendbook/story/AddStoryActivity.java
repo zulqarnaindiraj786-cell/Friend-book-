@@ -27,7 +27,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 📖 AddStoryActivity — Full Facebook-Lite Story Creator:
+ * 📖 AddStoryActivity — Full friendbook Story Creator:
  * Supports 🖼️ Photo, 🎥 Video, AND 🎨 Aa Text Story (10 vibrant gradients, font styles,
  * 🎵 Music/Mood badge & Story Privacy selector).
  */

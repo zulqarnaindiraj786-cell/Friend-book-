@@ -20,7 +20,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 🔐 Where you're logged in — Facebook Lite security page:
+ * 🔐 Where you're logged in — friendbook security page:
  * list of devices/sessions (recorded at login) + "Log out of all sessions".
  * Firestore: users/{uid}/sessions/{auto} {device, model, at, appVersion}.
  */

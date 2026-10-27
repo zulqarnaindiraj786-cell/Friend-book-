@@ -44,8 +44,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * ⚡ Authentic Facebook-Lite v525 Pro Home Shell:
- * - Top "Data mode" + "📡 Buy data" strip (exact FB Lite top bar!)
+ * ⚡ Authentic friendbook v525 Pro Home Shell:
+ * - Top "Data mode" + "📡 Buy data" strip (exact friendbook top bar!)
  * - Bold blue "friendbook" wordmark + 3 circular gray buttons: [ ＋ ] [ 🔍 ] [ ☰ ]
  * - 6-Icon Top Navigation Bar directly below header:
  *     🏠 Home | 👥 Friends | 💬 Messages | 🎬 Reels | 🔔 Notifications | 📊 Creator Dashboard
@@ -83,7 +83,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         if (!Fb.signedIn()) { finish(); return; }
-        // Advance Facebook discovery epoch on every app open so user greets fresh posts, videos & ads!
+        // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
         FeedAlgorithm.onColdAppLaunch(this);
         Ui.statusBarLight(this);
         setContentView(R.layout.activity_main);
@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
         LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Authentic Facebook Lite Top "Data mode" + "[ 📡 Buy data ]" Strip
+        // 1. Authentic friendbook Top "Data mode" + "[ 📡 Buy data ]" Strip
         dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
         root.addView(dataStripWrap);
 
@@ -139,7 +139,7 @@ public class MainActivity extends Activity {
         brandBar.addView(menuBtnCircle);
         root.addView(brandBar);
 
-        // 3. Signature 6-Icon Facebook Lite Top Navigation Bar directly below Header!
+        // 3. Signature 6-Icon friendbook Top Navigation Bar directly below Header!
         navRow = Ui.row(this);
         navRow.setBackgroundColor(Ui.card(this));
         navRow.setPadding(0, Ui.dp(this, 2), 0, 0);
@@ -278,7 +278,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Pro Facebook Lite '+' Universal Create Menu. */
+    /** Pro friendbook '+' Universal Create Menu. */
     private void showUniversalCreateSheet() {
         String[] opts = {
                 "📝 Create Post — text, photos, poll, feeling or check-in",

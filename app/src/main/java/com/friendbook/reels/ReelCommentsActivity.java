@@ -28,7 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 🎬 Facebook Lite Pro Reel Comments Sheet:
+ * 🎬 friendbook Pro Reel Comments Sheet:
  * Powered by {@link CommentsEngine} so ALL users' comments & replies sync in real time
  * across both `reels/{id}.commentsMap` (or `posts/{id}.commentsMap` for video posts) + `comments`.
  */
@@ -58,7 +58,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.card(this));
 
-        // Crisp Facebook Lite Top Header
+        // Crisp friendbook Top Header
         LinearLayout bar = Ui.row(this);
         bar.setBackgroundColor(Ui.card(this));
         bar.setGravity(Gravity.CENTER_VERTICAL);

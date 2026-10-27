@@ -38,7 +38,7 @@ public class CreatePostActivity extends Activity {
     private static final int PICK_IMAGE = 11, PICK_VIDEO = 12, CAPTURE_IMAGE = 13, PICK_PHOTO_OR_VIDEO = 14;
     private boolean openedInQuickMediaMode = false;
 
-    /** Facebook-style background colors for text posts. */
+    /** friendbook-style background colors for text posts. */
     private static final int[] BG_COLORS = {
             0xFFF02849, // red
             0xFF9360F7, // purple

@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 💬 Universal Multi-User Real-Time Comments Engine (Facebook Lite Pro):
+ * 💬 Universal Multi-User Real-Time Comments Engine (friendbook Pro):
  * Guarantees 100% of ALL users' comments & replies sync across EVERY device by storing
  * comments atomically inside the parent document's `commentsMap.<commentId>` (posts/{id} or reels/{id})
  * IN ADDITION TO `posts/{id}/comments` and `comments` collections — eliminating any

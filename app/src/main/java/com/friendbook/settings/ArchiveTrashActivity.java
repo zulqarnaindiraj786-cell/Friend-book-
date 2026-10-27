@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 📦 Archive & Trash — Facebook-Lite 525 full content lifecycle manager:
+ * 📦 Archive & Trash — friendbook 525 full content lifecycle manager:
  * Tab 0: 📖 Story Archive (all past stories, even >24h, + Feature on Profile Highlights + Re-share)
  * Tab 1: 🗂 Post Archive (posts hidden from profile/feed, restorable anytime)
  * Tab 2: 🗑 Recycle Bin / Trash (30-day soft delete — Restore or Delete Forever)
@@ -62,7 +62,7 @@ public class ArchiveTrashActivity extends Activity {
         bar.addView(emptyAllBtn);
         root.addView(bar);
 
-        // 3 FB-Lite style pill tabs
+        // 3 friendbook style pill tabs
         String[] labels = {"📖 Story Archive", "🗂 Post Archive", "🗑 Trash"};
         LinearLayout tabs = Ui.row(this);
         tabs.setBackgroundColor(Ui.card(this));
