@@ -465,7 +465,7 @@ public class Models {
         @SuppressWarnings("unchecked")
         public static Message fromDoc(DocumentSnapshot d) {
             Message m0 = new Message();
-            Map<String, Object> m = d.getData();
+            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
             m0.id = d.getId();
             m0.senderId = Format.str(m, "senderId");
             m0.receiverId = Format.str(m, "receiverId");
@@ -480,7 +480,11 @@ public class Models {
             m0.isSeen = Format.boolOf(m, "isSeen");
             m0.isDelivered = Format.boolOf(m, "isDelivered");
             m0.isDeleted = Format.boolOf(m, "isDeleted");
-            m0.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
+            long ts = Format.ts(m == null ? null : m.get("createdAt"));
+            if (ts <= 0 && m != null && m.get("createdAtMs") instanceof Number) {
+                ts = ((Number) m.get("createdAtMs")).longValue();
+            }
+            m0.createdAt = ts > 0 ? ts : System.currentTimeMillis();
             m0.reactions = new HashMap<>();
             Object r = m == null ? null : m.get("reactions");
             if (r instanceof Map) {
@@ -517,24 +521,44 @@ public class Models {
         public long lastMessageTime;
         public List<String> participants = new ArrayList<>();
         public Map<String, Boolean> typing = new HashMap<>();
+        public Map<String, String> participantNames = new HashMap<>();
+        public Map<String, String> participantPhotos = new HashMap<>();
 
         public String otherUid(String me) {
-            for (String p : participants) if (!p.equals(me)) return p;
+            for (String p : participants) if (p != null && !p.equals(me)) return p;
             return participants.isEmpty() ? "" : participants.get(0);
         }
 
         public static ChatRoom fromDoc(DocumentSnapshot d) {
             ChatRoom c = new ChatRoom();
-            Map<String, Object> m = d.getData();
+            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
             c.id = d.getId();
             c.participants = Format.listOf(m, "participants");
             c.lastMessage = Format.str(m, "lastMessage");
-            c.lastMessageTime = Format.ts(m == null ? null : m.get("lastMessageTime"));
+            long ts = Format.ts(m == null ? null : m.get("lastMessageTime"));
+            if (ts <= 0 && m != null && m.get("lastMessageTimeMs") instanceof Number) {
+                ts = ((Number) m.get("lastMessageTimeMs")).longValue();
+            }
+            c.lastMessageTime = ts;
             Object t = m == null ? null : m.get("typing");
             if (t instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
                     if (e.getValue() instanceof Boolean)
                         c.typing.put(String.valueOf(e.getKey()), (Boolean) e.getValue());
+                }
+            }
+            Object pn = m == null ? null : m.get("participantNames");
+            if (pn instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) pn).entrySet()) {
+                    if (e.getKey() != null && e.getValue() != null)
+                        c.participantNames.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                }
+            }
+            Object pp = m == null ? null : m.get("participantPhotos");
+            if (pp instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) pp).entrySet()) {
+                    if (e.getKey() != null && e.getValue() != null)
+                        c.participantPhotos.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
                 }
             }
             return c;

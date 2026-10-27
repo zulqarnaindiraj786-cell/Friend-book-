@@ -446,7 +446,7 @@ public class CreatePostActivity extends Activity {
     private void pickBackground() {
         LinearLayout grid = Ui.col(this);
         Ui.pad(grid, 16, 12, 16, 16);
-        TextView title = Ui.tvBold(this, "Tap a color — same as Facebook backgrounds", 14, Ui.txt(this));
+        TextView title = Ui.tvBold(this, "Tap a color for your post background", 14, Ui.txt(this));
         grid.addView(title);
         LinearLayout row = Ui.row(this);
         row.setPadding(0, Ui.dp(this, 10), 0, 0);
@@ -690,7 +690,7 @@ public class CreatePostActivity extends Activity {
             videoPreview.setVisibility(View.VISIBLE);
             videoPreview.setVideoURI(mediaUris.get(0));
             videoPreview.setOnPreparedListener(mp -> { mp.setLooping(true); videoPreview.start(); });
-            mediaLabel.setText("🎥 Video attached");
+            mediaLabel.setText("🎥 Video attached · 🛡 Safety verified");
         } else {
             videoPreview.setVisibility(View.GONE);
             preview.setVisibility(View.VISIBLE);
@@ -710,9 +710,17 @@ public class CreatePostActivity extends Activity {
                 mediaLabel.setText("🖼️ " + mediaUris.size() + " photos selected (swipe album in feed)");
             } else {
                 ((View) multiThumbs.getParent()).setVisibility(View.GONE);
-                mediaLabel.setText("🖼️ Photo attached");
+                mediaLabel.setText("🖼️ Photo attached · 🛡 Safety verified");
             }
         }
+        // 🛡 Instant on-device safety scan on picked photo/video
+        com.friendbook.core.ContentSafetyEngine.scanMediaAsync(
+                this, new ArrayList<>(mediaUris), "video".equals(mediaType), "",
+                verdict -> {
+                    if (isFinishing() || !verdict.unsafe) return;
+                    clearMedia();
+                    Ui.info(this, "🛡 Content Automatically Removed", verdict.message);
+                });
     }
 
     private void clearMedia() {
@@ -762,14 +770,32 @@ public class CreatePostActivity extends Activity {
             Ui.toast(this, "Say something first");
             return;
         }
+        com.friendbook.core.ContentSafetyEngine.Verdict textVerdict =
+                com.friendbook.core.ContentSafetyEngine.checkText(content, marketTitle, lifeEventTitle);
+        if (textVerdict.unsafe) {
+            Ui.info(this, "🛡 Post Automatically Blocked", textVerdict.message);
+            return;
+        }
         busy = true;
-        postBtn.setText("Posting…");
+        postBtn.setText("Checking safety…");
         postBtn.setEnabled(false);
         Ui.hideKeyboard(this);
 
         if (!mediaUris.isEmpty()) {
-            uploadAll(content, new ArrayList<>());
+            com.friendbook.core.ContentSafetyEngine.scanMediaAsync(
+                    this, new ArrayList<>(mediaUris), "video".equals(mediaType), content,
+                    verdict -> {
+                        if (isFinishing()) return;
+                        if (verdict.unsafe) {
+                            clearMedia();
+                            fail("Blocked by friendbook Safety");
+                            Ui.info(this, "🛡 Unsafe Media Auto-Deleted", verdict.message);
+                            return;
+                        }
+                        uploadAll(content, new ArrayList<>());
+                    });
         } else {
+            postBtn.setText("Posting…");
             save(content, null, null);
         }
     }

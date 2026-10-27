@@ -19,12 +19,13 @@ import com.friendbook.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
 /**
- * 📢 Real Production AdMob Native Advanced Dashboard (Direct APK Distribution):
+ * 📢 Real Production AdMob Native Advanced Dashboard (Google Play Store Ready):
  * - App ID:                    ca-app-pub-3387480177023669~5696528190
  * - Native Advanced Unit ID:   ca-app-pub-3387480177023669/5657602381 (friendbook native)
- * - Official Website URL:      https://friendbook-official-app-2026.blogspot.com
+ * - Google Play Store URL:     https://play.google.com/store/apps/details?id=com.friendbook
+ * - Official Website URL:      https://zulqarnaindiraj786-cell.github.io/Friend-book-
  * - Placement:                 After every 5 posts in RecyclerView (`native_ad_layout.xml`)
- * - app-ads.txt:               https://friendbook-official-app-2026.blogspot.com/app-ads.txt
+ * - app-ads.txt:               https://zulqarnaindiraj786-cell.github.io/Friend-book-/app-ads.txt
  *                              -> google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
  * - Live Telemetry:            Requests, Impressions, Match Rate %, Error Code 3 count & Est. eCPM ($0.17+)
  */
@@ -62,7 +63,7 @@ public class AdMobSettingsActivity extends Activity {
         statsT.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 4));
         statsCard.addView(statsT);
         statsCard.addView(Ui.tv(this,
-                "Direct APK distribution mode active with real-device guard, 1-req/30s rate limiter, 60s No-Fill backoff & Blogger app-ads.txt.",
+                "Google Play Store ready with real-device guard, 1-req/30s rate limiter, 60s No-Fill backoff & verified app-ads.txt.",
                 11, Ui.sub(this)));
         body.addView(statsCard, Ui.lpw(-2));
 
@@ -85,16 +86,16 @@ public class AdMobSettingsActivity extends Activity {
         cp1.topMargin = Ui.dp(this, 10);
         body.addView(card1, cp1);
 
-        // 3. Verified app-ads.txt Card (Blogger Hosting: friendbook-official-app-2026.blogspot.com)
+        // 3. Verified app-ads.txt Card
         LinearLayout adsTxtCard = Ui.col(this);
         adsTxtCard.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(adsTxtCard, 14, 12, 14, 12);
-        adsTxtCard.addView(Ui.tvBold(this, "📄 Blogger app-ads.txt (" + AdsConfig.APP_ADS_TXT_URL + ")", 13, Ui.sub(this)));
+        adsTxtCard.addView(Ui.tvBold(this, "📄 Official app-ads.txt (" + AdsConfig.APP_ADS_TXT_URL + ")", 13, Ui.sub(this)));
         final String bundledLine = AdsConfig.readBundledAppAdsTxt(this);
         TextView adsTxtLine = Ui.tvBold(this, bundledLine, 12, Ui.txt(this));
         adsTxtLine.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
         adsTxtCard.addView(adsTxtLine);
-        TextView copyAdsTxt = Ui.btnGrey(this, "📋 Copy app-ads.txt Line for Blogger");
+        TextView copyAdsTxt = Ui.btnGrey(this, "📋 Copy app-ads.txt Line");
         copyAdsTxt.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("app-ads.txt", bundledLine));

@@ -62,7 +62,7 @@ public class ForgotPasswordActivity extends Activity {
         body.addView(stepT);
 
         TextView sub = Ui.tv(this,
-                "Hum aapki Gmail pe 6-digit code bhejein ge — jaise Facebook Lite me hota hai.", 13, Ui.sub(this));
+                "Hum aapki Gmail pe 6-digit verification code bhejein ge.", 13, Ui.sub(this));
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, Ui.dp(this, 6), 0, 0);
         body.addView(sub);

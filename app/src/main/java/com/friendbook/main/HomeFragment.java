@@ -71,6 +71,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final Set<String> friendIds = new HashSet<>();
     private final Map<String, StoriesAdapter.Group> storyGroups = new HashMap<>();
     private final List<Models.User> noteUsers = new ArrayList<>();
+    /** Locks post ordering during active browsing so clicking Like/Comment NEVER jumps posts up or down! */
+    private final List<String> sessionOrderIds = new ArrayList<>();
+    private boolean forceReRank = true;
+    private String lastAppliedFilter = null;
 
     private final FastCache.ReactionObserver reactionObserver = (postId, mine, total) -> {
         if (adapter != null) adapter.onFastReactionUpdate(postId, mine, total);
@@ -102,10 +106,17 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setAdapter(adapter);
         rv.setBackgroundColor(Ui.bg(a));
 
-        // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via Facebook FeedAlgorithm!)
+        // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via friendbook FeedAlgorithm!)
         List<Models.Post> cachedFeed = FastCache.getFeed();
         if (!cachedFeed.isEmpty()) {
-            adapter.setPosts(rankAccordingToMode(a, cachedFeed));
+            List<Models.Post> initialRanked = rankAccordingToMode(a, cachedFeed);
+            sessionOrderIds.clear();
+            for (Models.Post p : initialRanked) {
+                if (p != null && p.id != null) sessionOrderIds.add(p.id);
+            }
+            lastAppliedFilter = a == null ? "all" : Prefs.feedFilter(a);
+            forceReRank = false;
+            adapter.setPosts(initialRanked);
         }
         List<StoriesAdapter.Group> cachedStories = new ArrayList<>(FastCache.getStories());
         if (!cachedStories.isEmpty()) {
@@ -149,6 +160,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         android.app.Activity a = getActivity();
         if (a == null) return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
+        forceReRank = true;
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
@@ -295,7 +307,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (a == null) return;
         LinearLayout box = Ui.col(a);
         Ui.pad(box, 18, 12, 18, 4);
-        box.addView(Ui.tv(a, "Share a short 60-character status bubble visible for 24 hours (just like Facebook Lite Notes).",
+        box.addView(Ui.tv(a, "Share a short 60-character status bubble visible for 24 hours (just like friendbook Lite Notes).",
                 12, Ui.sub(a)));
         EditText in = Ui.input(a, "What's on your mind? (e.g. ☕ Coding all night)");
         in.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});
@@ -409,11 +421,19 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         android.app.Activity a = getActivity();
         if (a == null || adapter == null) return;
         String filter = Prefs.feedFilter(a);
+        forceReRank = true;
+        lastAppliedFilter = filter;
         List<Models.Post> filtered = new ArrayList<>();
         for (Models.Post p : FastCache.getFeed()) {
             if (visible(p) && matchesFilter(p, filter)) filtered.add(p);
         }
-        adapter.setPosts(rankAccordingToMode(a, filtered));
+        List<Models.Post> ranked = rankAccordingToMode(a, filtered);
+        sessionOrderIds.clear();
+        for (Models.Post p : ranked) {
+            if (p != null && p.id != null) sessionOrderIds.add(p.id);
+        }
+        forceReRank = false;
+        adapter.setPosts(ranked);
     }
 
     @Override
@@ -588,7 +608,19 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         List<Models.Post> allVisible = new ArrayList<>();
         List<Models.Post> filtered = new ArrayList<>();
         for (DocumentSnapshot d : docs) {
+            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
+                com.friendbook.core.ContentSafetyEngine.autoDeleteContent(
+                        a2, "posts", d.getId(), d.getString("authorId"),
+                        "policy_violation", "Safety flagged post", null);
+                continue;
+            }
             Models.Post p = Models.Post.fromDoc(d);
+            String mediaCheck = (p.mediaUrls != null && !p.mediaUrls.isEmpty())
+                    ? p.mediaUrls.get(0) : p.mediaUrl;
+            if (com.friendbook.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                    a2, "posts", p.id, p.authorId, p.content, mediaCheck, null)) {
+                continue;
+            }
             if (!visible(p)) continue;
             allVisible.add(p);
             if (matchesFilter(p, filter)) filtered.add(p);
@@ -596,8 +628,59 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (persistCache && !allVisible.isEmpty()) {
             FastCache.saveFeed(a2, allVisible);
         }
-        List<Models.Post> ranked = rankAccordingToMode(a2, filtered);
-        if (adapter != null) adapter.setPosts(ranked);
+
+        // ⚡ Anti-Jump Session Order Lock:
+        // When live snapshot fires because someone tapped Like/Comment/Share, keep exact current order!
+        boolean filterChanged = lastAppliedFilter == null || !lastAppliedFilter.equals(filter);
+        List<Models.Post> finalFeed;
+        if (!forceReRank && !filterChanged && !sessionOrderIds.isEmpty()) {
+            Map<String, Models.Post> byId = new HashMap<>();
+            for (Models.Post p : filtered) {
+                if (p != null && p.id != null) byId.put(p.id, p);
+            }
+            finalFeed = new ArrayList<>(filtered.size());
+            String myUid = Fb.uid();
+            long now = System.currentTimeMillis();
+            // Prepend only brand-new posts just published by ME right now
+            List<String> newTopIds = new ArrayList<>();
+            for (Models.Post p : filtered) {
+                if (p != null && p.id != null && !sessionOrderIds.contains(p.id)
+                        && myUid != null && myUid.equals(p.authorId)
+                        && (now - p.createdAt) < 30_000L) {
+                    finalFeed.add(p);
+                    newTopIds.add(p.id);
+                    byId.remove(p.id);
+                }
+            }
+            // Keep all existing session posts in their exact frozen order!
+            List<String> updatedOrder = new ArrayList<>(newTopIds);
+            for (String existingId : sessionOrderIds) {
+                Models.Post p = byId.remove(existingId);
+                if (p != null) {
+                    finalFeed.add(p);
+                    updatedOrder.add(p.id);
+                }
+            }
+            // Append any remaining newly arrived posts at the bottom without shifting current scroll!
+            for (Models.Post leftover : filtered) {
+                if (leftover != null && leftover.id != null && byId.containsKey(leftover.id)) {
+                    finalFeed.add(leftover);
+                    updatedOrder.add(leftover.id);
+                    byId.remove(leftover.id);
+                }
+            }
+            sessionOrderIds.clear();
+            sessionOrderIds.addAll(updatedOrder);
+        } else {
+            finalFeed = rankAccordingToMode(a2, filtered);
+            sessionOrderIds.clear();
+            for (Models.Post p : finalFeed) {
+                if (p != null && p.id != null) sessionOrderIds.add(p.id);
+            }
+            lastAppliedFilter = filter;
+            forceReRank = false;
+        }
+        if (adapter != null) adapter.setPosts(finalFeed);
     }
 
     private boolean matchesFilter(Models.Post p, String filter) {

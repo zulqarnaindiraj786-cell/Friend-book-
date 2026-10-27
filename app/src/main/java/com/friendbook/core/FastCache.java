@@ -220,6 +220,21 @@ public final class FastCache {
         saveFeed(ctx, next);
     }
 
+    public static void removeFeedPost(Context ctx, String postId) {
+        if (postId == null || postId.isEmpty()) return;
+        List<Models.Post> next = new ArrayList<>();
+        boolean changed = false;
+        for (Models.Post old : FEED) {
+            if (old == null) continue;
+            if (postId.equals(old.id)) {
+                changed = true;
+            } else {
+                next.add(old);
+            }
+        }
+        if (changed) saveFeed(ctx, next);
+    }
+
     public static List<StoriesAdapter.Group> getStories() {
         return new ArrayList<>(STORIES);
     }
@@ -519,7 +534,7 @@ public final class FastCache {
 
         box.addView(modeOption(a,
                 (curMode == 2 ? "🔘 " : "⚪ ") + "📵 Text-Only Basic 2G Mode (0 KB Photos)",
-                "Classic Facebook Lite Free/Basic mode! Loads text in 0ms on weak 2G/EDGE — tap 'See Photo' only when you want.",
+                "Classic friendbook Lite Free/Basic mode! Loads text in 0ms on weak 2G/EDGE — tap 'See Photo' only when you want.",
                 curMode == 2, () -> {
                     Prefs.setTextOnlyMode(a, true);
                     Prefs.setDataSaver(a, true);

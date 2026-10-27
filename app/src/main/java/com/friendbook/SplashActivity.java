@@ -12,7 +12,7 @@ import com.friendbook.core.Presence;
 import com.friendbook.main.MainActivity;
 
 /**
- * ⚡ Zero-delay Facebook Lite launcher:
+ * ⚡ Zero-delay friendbook launcher:
  * Routes immediately in onCreate (0ms wait — NO artificial splash sleep!)
  * with crisp zero-lag transition.
  */
@@ -26,12 +26,11 @@ public class SplashActivity extends Activity {
     }
 
     private void route() {
-        // 🔵 Capture referral & group invite links from official Blogger website
+        // 🔵 Capture referral & group invite deep links (friendbook:// or official GitHub Pages)
         android.net.Uri data = getIntent() != null ? getIntent().getData() : null;
-        if (data != null && "friendbook-official-app-2026.blogspot.com".equals(data.getHost())) {
+        if (data != null) {
             String ref = data.getQueryParameter("ref");
             if (ref != null && !ref.isEmpty()) Prefs.setPendingReferral(this, ref);
-            // 🔗 group invite links: https://friendbook-official-app-2026.blogspot.com/?id=GROUP_ID
             String gid = data.getQueryParameter("id");
             if (gid != null && !gid.isEmpty() && Fb.signedIn()) {
                 Intent g = new Intent(this, com.friendbook.groups.GroupDetailActivity.class);

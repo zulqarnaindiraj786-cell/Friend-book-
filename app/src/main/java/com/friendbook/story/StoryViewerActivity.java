@@ -300,7 +300,10 @@ public class StoryViewerActivity extends Activity {
             img.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            Ui.imgFit(this, img, s.mediaUrl);
+            Ui.imgFeedModerated(this, img, s.mediaUrl, "stories", s.id, s.authorId, s.caption, () -> {
+                Ui.toast(this, "🛡 Unsafe story automatically deleted");
+                finish();
+            });
         }
 
         String me = Fb.uid();
@@ -331,6 +334,7 @@ public class StoryViewerActivity extends Activity {
             pm.getMenu().add("👤 View " + s.authorName + "'s profile");
             pm.getMenu().add("🔇 Mute " + s.authorName + "'s stories");
             pm.getMenu().add("🚩 Report story");
+            pm.getMenu().add("🚫 Block " + s.authorName);
         }
         pm.setOnMenuItemClickListener(it -> {
             String t = it.getTitle().toString();
@@ -342,14 +346,49 @@ public class StoryViewerActivity extends Activity {
                 Prefs.muteStoryAuthor(this, s.authorId, true);
                 Ui.toast(this, "Muted " + s.authorName + "'s stories");
                 finish();
+            } else if (t.contains("Block")) {
+                String myUid = Fb.uid();
+                if (myUid != null && s.authorId != null) {
+                    Ui.confirm(this, "Block " + s.authorName + "?",
+                            "You won't see their stories, posts, or messages anymore.", "Block", () -> {
+                                Fb.db().collection("users").document(myUid)
+                                        .set(Fb.map("blockedUsers", FieldValue.arrayUnion(s.authorId)), SetOptions.merge());
+                                if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(s.authorId)) {
+                                    Fb.me.blocked.add(s.authorId);
+                                }
+                                Ui.toast(this, "Blocked " + s.authorName + " 🚫");
+                                finish();
+                            });
+                }
             } else if (t.contains("Report")) {
-                Map<String, Object> rep = new HashMap<>();
-                rep.put("targetId", s.id);
-                rep.put("type", "story");
-                rep.put("reporterId", Fb.uid());
-                rep.put("createdAt", FieldValue.serverTimestamp());
-                Fb.db().collection("reports").add(rep);
-                Ui.toast(this, "Story reported to admins ✓");
+                final String[] reasons = {
+                        "🔞 Nudity or explicit sexual content",
+                        "🚨 Child safety / CSAE violation (Zero Tolerance)",
+                        "🩸 Graphic violence or self-harm",
+                        "😡 Harassment or hate speech",
+                        "🎭 Spam or scam"
+                };
+                Ui.choose(this, "🚩 Report story", reasons, w -> {
+                    Map<String, Object> rep = new HashMap<>();
+                    rep.put("targetId", s.id);
+                    rep.put("authorId", s.authorId);
+                    rep.put("type", "story");
+                    rep.put("reason", reasons[w]);
+                    rep.put("reporterId", Fb.uid());
+                    rep.put("createdAt", FieldValue.serverTimestamp());
+                    Fb.db().collection("reports").add(rep);
+                    if (w == 0 || w == 1 || w == 2) {
+                        com.friendbook.core.ContentSafetyEngine.autoDeleteContent(
+                                this, "stories", s.id, s.authorId,
+                                w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
+                                reasons[w], this::finish);
+                        Ui.toast(this, "🛡 Violating story removed & reported ✓");
+                    } else {
+                        Prefs.muteStoryAuthor(this, s.authorId, true);
+                        Ui.toast(this, "Story reported & hidden ✓");
+                        finish();
+                    }
+                });
             }
             return true;
         });
@@ -454,6 +493,7 @@ public class StoryViewerActivity extends Activity {
         if (me == null) return;
         Models.Story s = stories.get(index);
         String chatId = Fb.chatId(me, s.authorId);
+        long now = System.currentTimeMillis();
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
                 "receiverId", s.authorId,
@@ -462,12 +502,14 @@ public class StoryViewerActivity extends Activity {
                 "type", "text",
                 "isSeen", false,
                 "isDelivered", false,
+                "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,
+                "lastMessageTimeMs", now,
                 "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
         batch.commit().addOnSuccessListener(x -> {
             replyInput.setText("");

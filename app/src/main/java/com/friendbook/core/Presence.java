@@ -130,11 +130,9 @@ public class Presence {
     public static void setTyping(String chatId, boolean typing) {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
-        Map<String, Object> inner = new HashMap<>();
-        inner.put(uid, typing);
-        Map<String, Object> m = new HashMap<>();
-        m.put("typing", inner);
-        Fb.db().collection("chats").document(chatId).set(m, SetOptions.merge());
+        // Use update() rather than set() so typing before sending a first message
+        // never creates an incomplete chat room document without `participants`!
+        Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
 
         // Fast path through RTDB too (auto-expires after 4s unless refreshed).
         if (Fb.rtdb() != null) {
@@ -145,11 +143,7 @@ public class Presence {
             if (typing) {
                 Runnable clear = () -> {
                     ref.setValue(false);
-                    Map<String, Object> off = new HashMap<>();
-                    off.put(uid, false);
-                    Map<String, Object> wrap = new HashMap<>();
-                    wrap.put("typing", off);
-                    Fb.db().collection("chats").document(chatId).set(wrap, SetOptions.merge());
+                    Fb.db().collection("chats").document(chatId).update("typing." + uid, false);
                 };
                 typingClear.put(chatId, clear);
                 H.postDelayed(clear, 4000);

@@ -73,10 +73,10 @@ public class ConversationsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Messages");
-        ImageView newChat = Icons.icon(this, Icons.MESSAGES, 23, Color.WHITE);
-        newChat.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 4));
-        newChat.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
-        bar.addView(newChat);
+        TextView newChatBtn = Ui.roundChip(this, "✏️ New Chat", 0x33FFFFFF, Color.WHITE, 12.5f);
+        Ui.pad(newChatBtn, 12, 6, 12, 6);
+        newChatBtn.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
+        bar.addView(newChatBtn);
         root.addView(bar);
 
         // Search + Inbox/Archived tabs
@@ -136,10 +136,11 @@ public class ConversationsActivity extends Activity {
         root.addView(activeWrap);
         root.addView(Ui.divider(this));
 
-        empty = Ui.tv(this, "No conversations here yet.", 14, Ui.sub(this));
+        empty = Ui.tvBold(this, "No conversations yet.\nTap ✏️ New Chat or tap here to message anyone on friendbook 💬", 14, Ui.BLUE);
         empty.setGravity(Gravity.CENTER);
-        Ui.pad(empty, 24, 50, 24, 0);
+        Ui.pad(empty, 24, 50, 24, 16);
         empty.setVisibility(View.GONE);
+        empty.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
         root.addView(empty);
 
         rv = new RecyclerView(this);
@@ -186,6 +187,19 @@ public class ConversationsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
+        // Hydrate active/recent friendbook users so Active Now strip always shows people to chat with!
+        Fb.db().collection("users").limit(35).get().addOnSuccessListener(usnap -> {
+            if (isFinishing() || usnap == null) return;
+            for (DocumentSnapshot ud : usnap) {
+                Models.User u = Models.User.fromDoc(ud);
+                if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
+                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
+                com.friendbook.core.FastCache.putUser(u);
+                userCache.put(u.uid, u);
+            }
+            renderActiveNow();
+            applyFilter();
+        });
         reg = Fb.db().collection("chats").whereArrayContains("participants", me)
                 .addSnapshotListener((snap, err) -> {
                     allRooms.clear();
@@ -198,6 +212,7 @@ public class ConversationsActivity extends Activity {
                             r.room = Models.ChatRoom.fromDoc(d);
                             r.other = r.room.otherUid(me);
                             if (r.other.isEmpty()) continue;
+                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.other)) continue;
                             Object u = d.get("unreadCount");
                             if (u instanceof Map) {
                                 Object n = ((Map<?, ?>) u).get(me);
@@ -207,6 +222,7 @@ public class ConversationsActivity extends Activity {
                             if (!userCache.containsKey(r.other)) {
                                 Fb.getUser(r.other).addOnSuccessListener(us -> {
                                     if (us != null) {
+                                        com.friendbook.core.FastCache.putUser(us);
                                         userCache.put(r.other, us);
                                         renderActiveNow();
                                         applyFilter();
@@ -225,9 +241,14 @@ public class ConversationsActivity extends Activity {
 
     private void renderActiveNow() {
         activeRow.removeAllViews();
+        String me = Fb.uid();
+        List<Models.User> stripUsers = new ArrayList<>(userCache.values());
+        stripUsers.sort((a, b2) -> Boolean.compare(b2 != null && b2.isOnline, a != null && a.isOnline));
         int count = 0;
-        for (Models.User u : userCache.values()) {
-            if (u == null || !u.isOnline || !u.showActiveStatus) continue;
+        for (Models.User u : stripUsers) {
+            if (u == null || u.uid == null || u.uid.equals(me)) continue;
+            if (count >= 18) break;
+            boolean online = u.isOnline && u.showActiveStatus;
             LinearLayout b = Ui.col(this);
             b.setGravity(Gravity.CENTER);
             FrameLayout aw = new FrameLayout(this);
@@ -235,8 +256,10 @@ public class ConversationsActivity extends Activity {
             Ui.avatar(this, av, u.photoUrl);
             int s = Ui.dp(this, 48);
             aw.addView(av, new FrameLayout.LayoutParams(s, s));
-            View dot = Ui.onlineDot(this);
-            aw.addView(dot, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+            if (online) {
+                View dot = Ui.onlineDot(this);
+                aw.addView(dot, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+            }
             b.addView(aw);
             TextView nm = Ui.tv(this, u.displayName == null ? "User" : u.displayName.split(" ")[0], 11, Ui.txt(this));
             nm.setSingleLine(true);
@@ -279,7 +302,9 @@ public class ConversationsActivity extends Activity {
             return Long.compare(b2.room.lastMessageTime, a.room.lastMessageTime);
         });
         adapter.notifyDataSetChanged();
-        empty.setText(showArchived ? "No archived conversations 📦" : "No conversations match.");
+        empty.setText(showArchived
+                ? "No archived conversations 📦"
+                : "No conversations yet.\nTap ✏️ New Chat or tap any person above to start chatting 💬");
         empty.setVisibility(rooms.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
@@ -403,16 +428,23 @@ public class ConversationsActivity extends Activity {
             }
             final Models.User u = tmpU;
             String nick = Prefs.chatNickname(ConversationsActivity.this, r.room.id);
-            h.name.setText(!nick.isEmpty() ? nick : (u != null ? u.displayName : "friendbook user"));
+            String fallbackName = r.room.participantNames != null ? r.room.participantNames.get(r.other) : null;
+            String fallbackPhoto = r.room.participantPhotos != null ? r.room.participantPhotos.get(r.other) : null;
+            final String resolvedName = !nick.isEmpty() ? nick
+                    : (u != null && u.displayName != null && !u.displayName.isEmpty() ? u.displayName
+                    : (fallbackName != null && !fallbackName.isEmpty() ? fallbackName : "friendbook user"));
+            final String resolvedPhoto = u != null && u.photoUrl != null && !u.photoUrl.isEmpty()
+                    ? u.photoUrl : (fallbackPhoto == null ? "" : fallbackPhoto);
+            h.name.setText(resolvedName);
             Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
-            Ui.avatar(ConversationsActivity.this, h.av, u != null ? u.photoUrl : "");
+            Ui.avatar(ConversationsActivity.this, h.av, resolvedPhoto);
 
             boolean unread = r.unread > 0;
             h.last.setText(r.room.lastMessage == null || r.room.lastMessage.isEmpty()
                     ? "Say hi 👋" : r.room.lastMessage);
             h.last.setTypeface(null, unread ? Typeface.BOLD : Typeface.NORMAL);
             h.last.setTextColor(unread ? Ui.txt(ConversationsActivity.this) : Ui.sub(ConversationsActivity.this));
-            h.time.setText(Format.ago(r.room.lastMessageTime));
+            h.time.setText(r.room.lastMessageTime > 0 ? Format.ago(r.room.lastMessageTime) : "now");
             Ui.setBadge(h.badge, r.unread);
 
             String flags = (Prefs.pinnedChats(ConversationsActivity.this).contains(r.room.id) ? "📌" : "")
@@ -426,7 +458,7 @@ public class ConversationsActivity extends Activity {
             h.itemView.setOnClickListener(v -> {
                 Intent i = new Intent(ConversationsActivity.this, ChatActivity.class);
                 i.putExtra("uid", r.other);
-                if (u != null) i.putExtra("name", u.displayName);
+                i.putExtra("name", resolvedName);
                 startActivity(i);
             });
             h.itemView.setOnLongClickListener(v -> { roomMenu(r); return true; });

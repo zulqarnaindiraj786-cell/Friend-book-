@@ -278,6 +278,59 @@ public class Ui {
         }
     }
 
+    /**
+     * Feed photo loader with automatic background on-device visual safety moderation:
+     * If explicit/violating visual content is detected, automatically deletes the post from Firestore & FastCache!
+     */
+    public static void imgFeedModerated(final Context c, ImageView iv, String url,
+                                        final String collection, final String docId,
+                                        final String authorId, final String caption,
+                                        final Runnable onUnsafeDeleted) {
+        Drawable ph = round(c, inputBg(c), 0);
+        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
+        String fastUrl = optimizeImageUrl(c, url, false);
+        Prefs.recordBytes(c, 38_000L, 162_000L);
+        com.bumptech.glide.request.RequestListener<Drawable> safetyListener =
+                new com.bumptech.glide.request.RequestListener<Drawable>() {
+                    @Override
+                    public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e,
+                                                Object model,
+                                                com.bumptech.glide.request.target.Target<Drawable> target,
+                                                boolean isFirstResource) {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean onResourceReady(Drawable resource, Object model,
+                                                   com.bumptech.glide.request.target.Target<Drawable> target,
+                                                   com.bumptech.glide.load.DataSource dataSource,
+                                                   boolean isFirstResource) {
+                        if (resource instanceof android.graphics.drawable.BitmapDrawable) {
+                            android.graphics.Bitmap bmp =
+                                    ((android.graphics.drawable.BitmapDrawable) resource).getBitmap();
+                            ContentSafetyEngine.inspectLoadedBitmapAsync(
+                                    c, bmp, collection, docId, authorId, caption, onUnsafeDeleted);
+                        }
+                        return false;
+                    }
+                };
+        if (Prefs.fullPhotoDisplay(c)) {
+            Glide.with(c.getApplicationContext()).load(fastUrl)
+                    .fitCenter()
+                    .dontAnimate()
+                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .listener(safetyListener)
+                    .placeholder(ph).error(ph).into(iv);
+        } else {
+            Glide.with(c.getApplicationContext()).load(fastUrl)
+                    .centerCrop()
+                    .dontAnimate()
+                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .listener(safetyListener)
+                    .placeholder(ph).error(ph).into(iv);
+        }
+    }
+
     public static void img(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }

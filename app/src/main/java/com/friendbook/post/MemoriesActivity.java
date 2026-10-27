@@ -60,7 +60,7 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
         Ui.pad(countT, 14, 10, 14, 6);
         wrap.addView(countT);
         TextView hint = Ui.tv(this,
-                "Aapki purani posts jo aaj ke din pichle saalon me likhi gayi — Facebook 'Memories' jaisa.",
+                "Aapki purani posts jo aaj ke din pichle saalon me share ki gayi thi.",
                 12, Ui.sub(this));
         Ui.pad(hint, 14, 0, 14, 6);
         wrap.addView(hint);

@@ -197,9 +197,21 @@ public class ReelsFragment extends Fragment {
                 .addSnapshotListener((snap, err) -> {
                     fromReels.clear();
                     if (snap != null) {
+                        Activity act = getActivity();
                         for (DocumentSnapshot d : snap) {
+                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
+                                com.friendbook.core.ContentSafetyEngine.autoDeleteContent(
+                                        act, "reels", d.getId(), d.getString("authorId"),
+                                        "policy_violation", "Safety flagged reel", null);
+                                continue;
+                            }
                             Models.Reel r = Models.Reel.fromDoc(d);
                             if (r.videoUrl == null || r.videoUrl.isEmpty()) continue;
+                            if (com.friendbook.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                                    act, "reels", r.id, r.authorId, r.caption, r.videoUrl, null)) {
+                                continue;
+                            }
+                            if (act != null && Prefs.isPostHidden(act, r.id)) continue;
                             if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.authorId)) continue;
                             fromReels.add(r);
                         }
@@ -214,9 +226,16 @@ public class ReelsFragment extends Fragment {
                 .addSnapshotListener((snap, err) -> {
                     fromPosts.clear();
                     if (snap != null) {
+                        Activity act = getActivity();
                         for (DocumentSnapshot d : snap) {
+                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
                             Models.Post p = Models.Post.fromDoc(d);
                             if (p.mediaUrl == null || p.mediaUrl.isEmpty()) continue;
+                            if (com.friendbook.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                                    act, "posts", p.id, p.authorId, p.content, p.mediaUrl, null)) {
+                                continue;
+                            }
+                            if (act != null && Prefs.isPostHidden(act, p.id)) continue;
                             if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(p.authorId)) continue;
                             fromPosts.add(Models.Reel.fromVideoPost(p));
                         }
@@ -770,6 +789,9 @@ public class ReelsFragment extends Fragment {
                     m.getMenu().add(0, 5, 0, "👁 View creator's full DP");
                 }
                 m.getMenu().add(0, 6, 0, "🚩 Report Reel");
+                if (reel.authorId != null && !reel.authorId.equals(Fb.uid())) {
+                    m.getMenu().add(0, 7, 0, "🚫 Block " + (reel.authorName == null ? "creator" : reel.authorName));
+                }
                 m.setOnMenuItemClickListener(it -> {
                     int id = it.getItemId();
                     if (id == 1) {
@@ -806,10 +828,47 @@ public class ReelsFragment extends Fragment {
                         dp.putExtra("title", reel.authorName + "'s Profile Picture");
                         a.startActivity(dp);
                     } else if (id == 6) {
-                        Fb.db().collection("reports").add(Fb.map("reelId", reel.id,
-                                "reportedBy", Fb.uid(), "type", "reel",
-                                "createdAt", FieldValue.serverTimestamp()));
-                        Ui.toast(a, "Reel reported ✓");
+                        final String[] reasons = {
+                                "🔞 Nudity or explicit sexual video",
+                                "🚨 Child safety / CSAE violation (Zero Tolerance)",
+                                "🩸 Graphic violence or dangerous acts",
+                                "😡 Harassment, hate speech or bullying",
+                                "🎭 Spam or misleading content"
+                        };
+                        Ui.choose(a, "🚩 Report Reel", reasons, w -> {
+                            String reason = reasons[w];
+                            Fb.db().collection("reports").add(Fb.map(
+                                    "reelId", reel.id,
+                                    "authorId", reel.authorId,
+                                    "reason", reason,
+                                    "reportedBy", Fb.uid(),
+                                    "type", "reel",
+                                    "createdAt", FieldValue.serverTimestamp()));
+                            Prefs.hidePost(a, reel.id);
+                            if (w == 0 || w == 1 || w == 2) {
+                                com.friendbook.core.ContentSafetyEngine.autoDeleteContent(
+                                        a, reel.collectionName(), reel.id, reel.authorId,
+                                        w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
+                                        reason, null);
+                                Ui.toast(a, "🛡 Violating Reel removed & reported ✓");
+                            } else {
+                                Ui.toast(a, "Reel hidden & reported ✓");
+                            }
+                        });
+                    } else if (id == 7) {
+                        String myUid = Fb.uid();
+                        if (myUid != null && reel.authorId != null) {
+                            Ui.confirm(a, "Block " + reel.authorName + "?",
+                                    "You won't see their reels, posts, stories, or messages anymore.",
+                                    "Block", () -> {
+                                        Fb.db().collection("users").document(myUid)
+                                                .set(Fb.map("blockedUsers", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge());
+                                        if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(reel.authorId)) {
+                                            Fb.me.blocked.add(reel.authorId);
+                                        }
+                                        Ui.toast(a, "Blocked " + reel.authorName + " 🚫");
+                                    });
+                        }
                     }
                     return true;
                 });

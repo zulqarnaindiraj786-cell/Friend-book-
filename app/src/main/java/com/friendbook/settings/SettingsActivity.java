@@ -192,7 +192,7 @@ public class SettingsActivity extends Activity {
                 }));
 
         // ============ 4A+. 🚀 FACEBOOK LITE PRO EXTRA FEATURES & CONTROLS ============
-        body.addView(header("Facebook Lite Pro extras"));
+        body.addView(header("friendbook Lite Pro extras"));
         body.addView(switchRowI(Icons.MESSAGES, "💬 Inline comments on Home Feed",
                 Prefs.inlineFeedComments(this), (btn, on) -> {
                     Prefs.setInlineFeedComments(this, on);
@@ -407,41 +407,95 @@ public class SettingsActivity extends Activity {
                         + " ·Saved: " + Ui.formatBytes(Prefs.dataBytesSaved(this)),
                 this::storageDialog));
 
-        // ============ 7. COMMUNITY STANDARDS & LEGAL ============
-        body.addView(header("Community standards and legal"));
+        // ============ 7. COMMUNITY STANDARDS, CHILD SAFETY & LEGAL ============
+        body.addView(header("Community standards, child safety & legal"));
         body.addView(rowI(Icons.TERMS, "Terms of Service", "Rules for using friendbook", () -> Ui.info(this,
                 "Terms of Service",
-                "1. You must use your authentic identity or respectful alias.\n"
+                "1. You must be at least 13 years old and use your authentic identity or respectful alias.\n"
                         + "2. You own the content you share and grant friendbook permission to display it to the audience you select.\n"
-                        + "3. Spam, impersonation, fraud or illegal content leads to account suspension.\n"
-                        + "4.Creator monetization & tick verifications follow transparent platform guidelines.")));
+                        + "3. Explicit nudity, sexual content, graphic violence, hate speech, spam, fraud or CSAE leads to automatic content deletion & permanent account ban.\n"
+                        + "4. Community badges & creator milestones are earned 100% free via platform guidelines.")));
         body.addView(rowI(Icons.SHIELD, "Privacy Policy (Data & Ads Policy)",
-                "Firebase, Cloudinary & Google AdMob / GDPR disclosure", () -> Ui.info(this,
-                "Privacy Policy",
-                "• Account & posts are stored securely in Firebase Authentication & Cloud Firestore.\n"
-                        + "• Photos, videos & voice notes are stored on Cloudinary / Firebase Storage.\n"
-                        + "• friendbook displays Sponsored Native Ads powered by Google AdMob (Publisher pub-3387480177023669), which may use the Android Advertising ID in accordance with your GDPR / UMP privacy choices.\n"
-                        + "• EU/UK/EEA & eligible users can review or withdraw ad personalization consent anytime via Settings → Ad Privacy & GDPR Consent.\n"
-                        + "• You can export or permanently delete your account anytime from Settings.")));
+                "Firebase, Cloudinary & Google AdMob / GDPR disclosure", () -> {
+                    Ui.choose(this, "Privacy Policy", new String[]{
+                            "📖 Read in-app Privacy Summary",
+                            "🌐 Open Full Web Privacy Policy"
+                    }, w -> {
+                        if (w == 1) {
+                            Ui.openUrl(this, com.friendbook.core.AdsConfig.PRIVACY_POLICY_URL);
+                        } else {
+                            Ui.info(this, "Privacy Policy",
+                                    "• Account & posts are stored securely in Firebase Authentication & Cloud Firestore.\n"
+                                            + "• Photos, videos & voice notes are stored over encrypted HTTPS on Cloudinary / Firebase Storage.\n"
+                                            + "• friendbook displays Sponsored Native Ads powered by Google AdMob (Publisher pub-3387480177023669), which may use the Android Advertising ID in accordance with your GDPR / UMP privacy choices.\n"
+                                            + "• EU/UK/EEA & eligible users can review or withdraw ad personalization consent anytime via Settings → Ad Privacy & GDPR Consent.\n"
+                                            + "• You can export or permanently delete your account & all personal data anytime from Settings → Delete Account.");
+                        }
+                    });
+                }));
+        body.addView(rowI(Icons.SHIELD, "Child Safety Standards (Zero-Tolerance CSAE)",
+                "Google Play CSAE declaration & 1-tap emergency report", () -> {
+                    Ui.choose(this, "🛡 Child Safety Standards (CSAE Policy)", new String[]{
+                            "📜 View Zero-Tolerance CSAE Policy",
+                            "🚨 Report Child Safety / CSAE Concern Immediately",
+                            "🌐 Open Published Child Safety Web Standards"
+                    }, w -> {
+                        if (w == 0) {
+                            Ui.info(this, "Zero-Tolerance Child Safety Standards",
+                                    "friendbook maintains an absolute ZERO-TOLERANCE policy against Child Sexual Abuse and Exploitation (CSAE) and Child Sexual Abuse Material (CSAM).\n\n"
+                                            + "• On-device automated media & text screening blocks and deletes unsafe content immediately.\n"
+                                            + "• Every post, reel, story, profile, and message provides instant in-app reporting.\n"
+                                            + "• Confirmed CSAE violations result in immediate content deletion, permanent account termination, and reporting to NCMEC / law enforcement.\n"
+                                            + "• Child Safety Point of Contact: zulqarnaindiraj786@gmail.com");
+                        } else if (w == 1) {
+                            EditText details = Ui.multi(this, "Describe the account, post, or safety concern…", 3);
+                            LinearLayout box = Ui.col(this);
+                            Ui.pad(box, 18, 10, 18, 0);
+                            box.addView(details, new LinearLayout.LayoutParams(-1, -2));
+                            new android.app.AlertDialog.Builder(this)
+                                    .setTitle("🚨 Priority Child Safety Report")
+                                    .setView(box)
+                                    .setPositiveButton("Submit Priority Report", (d, which) -> {
+                                        String txt = details.getText().toString().trim();
+                                        if (txt.isEmpty()) { Ui.toast(this, "Please enter report details"); return; }
+                                        Fb.db().collection("reports").add(Fb.map(
+                                                "type", "csae_priority_report",
+                                                "category", "csae",
+                                                "reason", txt,
+                                                "reportedBy", Fb.uid(),
+                                                "createdAt", FieldValue.serverTimestamp()));
+                                        Ui.info(this, "Priority Report Submitted",
+                                                "Thank you. Our safety team prioritizes child safety reports immediately.");
+                                    })
+                                    .setNegativeButton("Cancel", null)
+                                    .show();
+                        } else {
+                            Ui.openUrl(this, com.friendbook.core.AdsConfig.CHILD_SAFETY_URL);
+                        }
+                    });
+                }));
         body.addView(rowI(Icons.LOCK, "Ad Privacy & GDPR Consent (UMP)",
                 "Manage Google AdMob personalized ad consent",
                 () -> com.friendbook.core.ConsentManager.showPrivacyOptionsForm(this)));
-        body.addView(rowI(Icons.FLAG, "Community Standards", "Safety, respect & moderation", () -> Ui.info(this,
+        body.addView(rowI(Icons.FLAG, "Community Standards & Auto-Moderation",
+                "Zero tolerance for nudity, violence, harassment & hate speech", () -> Ui.info(this,
                 "Community Standards",
-                "• Be respectful — zero tolerance for harassment, hate speech or bullying.\n"
-                        + "• Respect intellectual property and personal privacy.\n"
-                        + "• Report violating posts or profiles via ••• → Report — our moderation dashboard reviews every report.")));
+                "• Automated Safety Engine: Explicit/nude photos & videos are automatically blocked and deleted.\n"
+                        + "• Zero tolerance for harassment, hate speech, gore, or bullying.\n"
+                        + "• Report violating posts, reels, stories, or profiles via ••• → Report or block users anytime.")));
+        body.addView(rowI(Icons.TRASH, "Delete Account & Personal Data",
+                "Permanently delete your friendbook account, profile & content", this::deleteAccount));
         body.addView(rowI(Icons.HELP, "Help & Support Center", "FAQs · troubleshooting · contact support",
                 this::helpDialog));
-        body.addView(rowI(Icons.INFO, "About", "friendbook 525.0.0.5.102 · com.friendbook", () -> Ui.info(this,
+        body.addView(rowI(Icons.INFO, "About", "friendbook 2.0.0 · com.friendbook", () -> Ui.info(this,
                 "About friendbook",
-                "friendbook for Android\nVersion 525.0.0.5.102 (build 7)\nPackage: com.friendbook\n\n"
-                        + "Full Facebook-Lite 525 parity:\n"
+                "friendbook for Android\nVersion 2.0.0 (build 19)\nPackage: com.friendbook\n\n"
+                        + "Core friendbook features:\n"
                         + "• News Feed (Top, Most Recent, Favorites, PYMK, Colored Posts, Polls, Life Events, Q&A)\n"
                         + "• Stories (Photo, Video, Aa Text Stories, Reactions, Archive & Profile Highlights)\n"
                         + "• Reels, Watch, Groups, Pages (Post as Page), Events & 2-Column Marketplace\n"
                         + "• Messenger (Active Now bar, Voice Notes, Stickers, Quoted Replies, Forwarding, Themes)\n"
-                        + "• Wellbeing Time Tracker, Lite In-App Browser, Multi-Account Switcher & 30-Day Recycle Bin.")));
+                        + "• On-Device Automated Content Safety Moderation, GDPR/UMP Privacy & 2G Data Saver.")));
 
         // ============ LOG OUT ============
         TextView logout = Ui.btn(this, "🚪 Log out");
@@ -1162,7 +1216,7 @@ public class SettingsActivity extends Activity {
             else if (w == 1) Ui.info(this, "📮 Archive & Recycle Bin",
                     "• Tap ••• on any of your posts → Move to Archive (hides without deleting) or Move to Trash (kept 30 days).\n"
                             + "• Past stories are saved in Settings → Archive & Recycle Bin → Story Archive, and can be added to Profile Highlights!");
-            else if (w == 2) Ui.info(this, "📶 Facebook-Lite Data Tools",
+            else if (w == 2) Ui.info(this, "📶 friendbook Lite Data Tools",
                     "• Data Saver compresses images up to 80% and pauses video autoplay.\n"
                             + "• External links open inside the fast built-in friendbook Lite Browser unless changed in Settings.");
             else if (w == 3) Ui.info(this, "⭐ Stars & Verification",
@@ -1276,16 +1330,26 @@ public class SettingsActivity extends Activity {
     }
 
     private void deleteAccount() {
-        Ui.confirm(this, "Delete account permanently?",
-                "Your profile will be removed. Posts, comments and messages may remain visible to others until cleaned up. This cannot be undone.",
+        Ui.confirm(this, "Delete account & personal data permanently?",
+                "Your friendbook profile, posts, reels, and stories will be permanently deleted. This cannot be undone.",
                 "Delete forever", () -> {
                     if (Fb.auth().getCurrentUser() == null) return;
-                    String uid = Fb.uid();
-                    String em = Fb.auth().getCurrentUser().getEmail();
-                    Fb.db().collection("users").document(uid).delete();
+                    final String uid = Fb.uid();
+                    final String em = Fb.auth().getCurrentUser().getEmail();
+                    if (uid != null) {
+                        String[] cols = {"posts", "reels", "stories", "comments"};
+                        for (String col : cols) {
+                            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(200).get()
+                                    .addOnSuccessListener(snap -> {
+                                        for (DocumentSnapshot d : snap) d.getReference().delete();
+                                    });
+                        }
+                        Fb.db().collection("users").document(uid).delete();
+                    }
                     Fb.auth().getCurrentUser().delete()
                             .addOnSuccessListener(x -> {
                                 if (em != null) Prefs.removeSavedAccount(this, em);
+                                com.friendbook.core.FastCache.clearAll(this);
                                 Fb.me = null;
                                 Prefs.setUnlockedSession(this, false);
                                 Intent i = new Intent(this, LoginActivity.class);
@@ -1293,8 +1357,9 @@ public class SettingsActivity extends Activity {
                                 startActivity(i);
                                 finishAffinity();
                             })
-                            .addOnFailureListener(e -> Ui.info(this, "Couldn't delete",
-                                    "For security, log out, log back in, and try again."));
+                            .addOnFailureListener(e -> Ui.info(this, "Re-authentication needed",
+                                    "For security, log out, sign back in once, and tap Delete Account again — or submit a web deletion request at:\n"
+                                            + com.friendbook.core.AdsConfig.DELETE_ACCOUNT_URL));
                 });
     }
 }

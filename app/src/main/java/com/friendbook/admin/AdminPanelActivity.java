@@ -45,7 +45,7 @@ public class AdminPanelActivity extends Activity {
     private final TextView[] tabLabels = new TextView[6];
     private int active = -1;
 
-    private static final String[] TAB_NAMES = {"Users", "Referrals", "Payments", "Boosts", "Live", "Earnings"};
+    private static final String[] TAB_NAMES = {"Users", "Referrals", "Requests", "Boosts", "Live", "Analytics"};
     private static final int[] TAB_ICONS = {
             Icons.FRIENDS, Icons.USER_PLUS, Icons.BANKNOTE, Icons.BOOST, Icons.LIVE, Icons.CHART};
 

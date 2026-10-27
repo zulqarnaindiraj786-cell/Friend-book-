@@ -61,7 +61,7 @@ public class AdminBoostsFragment extends Fragment {
                     int n = snap == null ? 0 : snap.size();
                     countT.setText(n + " boost(s)");
                     if (n == 0) {
-                        TextView e = Ui.tv(a, "🚀 Boost requests will appear here (profile 24h = Rs 50, post = Rs 30).",
+                        TextView e = Ui.tv(a, "🚀 Free 24h community profile & post boosts will appear here.",
                                 13, Ui.sub(a));
                         Ui.pad(e, 4, 14, 4, 0);
                         list.addView(e);
@@ -101,7 +101,7 @@ public class AdminBoostsFragment extends Fragment {
         info.setPadding(Ui.dp(a, 12), 0, 0, 0);
         info.addView(Ui.tvBold(a, "profile".equals(type) ? "🚀 Profile Boost (24h)" : "🚀 Post Boost", 14, Ui.txt(a)));
         info.addView(Ui.tv(a, "uid: " + userId + (Format.str(m, "postId").isEmpty() ? "" : "\npost: " + Format.str(m, "postId")), 11, Ui.sub(a)));
-        info.addView(Ui.tv(a, "Rs " + Format.intOf(m, "amount") + " · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))), 11, Ui.sub(a)));
+        info.addView(Ui.tv(a, "Free 24h Boost · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))), 11, Ui.sub(a)));
         top.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
         card.addView(top);
 

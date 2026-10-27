@@ -398,20 +398,24 @@ public class MarketplaceActivity extends Activity {
         String text = "🛒 Hi " + p.authorName + "! Is \"" + title + "\" ("
                 + (p.marketPrice == null ? "" : p.marketPrice) + ") still available?";
         String chatId = Fb.chatId(me, p.authorId);
+        long now = System.currentTimeMillis();
         Map<String, Object> msg = Fb.map(
                 "senderId", me, "receiverId", p.authorId,
                 "text", text, "imageUrl", p.mediaUrl, "type", "text",
                 "isSeen", false, "isDelivered", false,
+                "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,
+                "lastMessageTimeMs", now,
                 "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
         batch.commit().addOnSuccessListener(x -> {
             Intent i = new Intent(this, ChatActivity.class);
             i.putExtra("uid", p.authorId);
+            i.putExtra("name", p.authorName);
             startActivity(i);
         });
     }
