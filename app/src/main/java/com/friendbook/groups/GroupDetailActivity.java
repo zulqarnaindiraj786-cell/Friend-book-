@@ -33,6 +33,7 @@ import com.friendbook.models.Models;
 import com.friendbook.post.CreatePostActivity;
 import com.friendbook.post.FeedAdapter;
 import com.friendbook.post.PostDetailActivity;
+import com.friendbook.post.StoriesAdapter;
 import com.friendbook.profile.ProfileActivity;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
@@ -215,7 +216,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         FrameLayout contentFrame = new FrameLayout(this);
         feedRv = new RecyclerView(this);
         feedRv.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new FeedAdapter(this, this, false);
+        adapter = new FeedAdapter(this, this);
+        adapter.showHeader = false;
+        adapter.showFooter = false;
         feedRv.setAdapter(adapter);
         contentFrame.addView(feedRv, new FrameLayout.LayoutParams(-1, -1));
 
@@ -1127,7 +1130,6 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
     }
 
-    @Override public void openComposer() { openGroupPostComposer(); }
     @Override public void openComments(Models.Post p) {
         startActivity(new Intent(this, PostDetailActivity.class).putExtra("post_id", p.id));
     }
@@ -1137,6 +1139,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     @Override public void editPost(Models.Post p) {
         startActivity(new Intent(this, CreatePostActivity.class).putExtra("edit_id", p.id));
     }
-    @Override public void openAddStory() {}
-    @Override public void viewStory(List<Models.Story> s) {}
+    @Override public void createStory() {}
+    @Override public void openStoryGroup(StoriesAdapter.Group g) {}
+    @Override public void loadMore() {}
+    @Override public boolean hasMore() { return false; }
 }

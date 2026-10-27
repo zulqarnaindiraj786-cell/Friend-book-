@@ -24,7 +24,9 @@ import com.friendbook.models.Models;
 import com.friendbook.post.FullscreenMediaActivity;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Chat bubbles: mine (theme color, right) / theirs (grey, left),
  *  text ✦ photos ✦ voice notes ✦ message reactions ✦ ticks ✦ deleted state. */
