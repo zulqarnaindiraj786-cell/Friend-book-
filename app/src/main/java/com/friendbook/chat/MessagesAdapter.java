@@ -55,10 +55,25 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         notifyDataSetChanged();
     }
 
+    public void appendOptimistic(Models.Message m) {
+        if (m == null || m.id == null) return;
+        for (int i = 0; i < data.size(); i++) {
+            if (m.id.equals(data.get(i).id)) {
+                data.set(i, m);
+                notifyItemChanged(i);
+                return;
+            }
+        }
+        data.add(m);
+        notifyItemInserted(data.size() - 1);
+    }
+
     public List<Models.Message> all() { return data; }
 
     @Override public int getItemViewType(int position) {
-        return data.get(position).senderId.equals(Fb.uid()) ? 1 : 0;
+        String me = Fb.uid();
+        Models.Message m = data.get(position);
+        return (me != null && m != null && me.equals(m.senderId)) ? 1 : 0;
     }
 
     @Override public int getItemCount() { return data.size(); }
@@ -257,7 +272,11 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     }
 
     private void toggleVoice(VH h, Models.Message m) {
-        if (m.id.equals(playingId)) {
+        if (m == null || m.voiceUrl == null || m.voiceUrl.isEmpty()) {
+            Ui.toast(activity, "Voice note unavailable");
+            return;
+        }
+        if (m.id != null && m.id.equals(playingId)) {
             stopVoice();
             notifyDataSetChanged();
             return;
@@ -265,12 +284,18 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         stopVoice();
         try {
             voicePlayer = new MediaPlayer();
+            voicePlayer.setAudioAttributes(new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
             voicePlayer.setDataSource(m.voiceUrl);
             voicePlayer.setOnPreparedListener(mp -> {
                 playingId = m.id;
-                try {
-                    mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(voiceSpeed));
-                } catch (Throwable ignored) { }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    try {
+                        mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(voiceSpeed));
+                    } catch (Throwable ignored) { }
+                }
                 voicePlayer.start();
                 notifyDataSetChanged();
             });
@@ -278,9 +303,16 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                 stopVoice();
                 notifyDataSetChanged();
             });
+            voicePlayer.setOnErrorListener((mp, what, extra) -> {
+                stopVoice();
+                Ui.toast(activity, "Couldn't play voice note");
+                notifyDataSetChanged();
+                return true;
+            });
             voicePlayer.prepareAsync();
             Ui.toast(activity, "▶ Playing voice note…");
         } catch (Exception e) {
+            stopVoice();
             Ui.toast(activity, "Couldn't play voice note");
         }
     }
@@ -295,8 +327,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
     private int lastMineIndex() {
         String me = Fb.uid();
+        if (me == null) return -1;
         for (int i = data.size() - 1; i >= 0; i--) {
-            if (data.get(i).senderId.equals(me)) return i;
+            Models.Message item = data.get(i);
+            if (item != null && me.equals(item.senderId)) return i;
         }
         return -1;
     }

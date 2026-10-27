@@ -73,20 +73,68 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void setPosts(List<Models.Post> list) {
+        if (list == null) list = new ArrayList<>();
+        // ⚡ Anti-Jump In-Place Diff: if post IDs & order are identical, NEVER call notifyDataSetChanged()!
+        if (!posts.isEmpty() && posts.size() == list.size()) {
+            boolean sameOrder = true;
+            for (int i = 0; i < posts.size(); i++) {
+                Models.Post oldP = posts.get(i);
+                Models.Post newP = list.get(i);
+                String oldId = oldP == null ? null : oldP.id;
+                String newId = newP == null ? null : newP.id;
+                if (oldId == null || !oldId.equals(newId)) {
+                    sameOrder = false;
+                    break;
+                }
+            }
+            if (sameOrder) {
+                for (int i = 0; i < list.size(); i++) {
+                    Models.Post oldP = posts.get(i);
+                    Models.Post newP = list.get(i);
+                    posts.set(i, newP);
+                    boolean metaChanged = oldP.likes != newP.likes
+                            || oldP.comments != newP.comments
+                            || oldP.shares != newP.shares
+                            || (oldP.inlineComments == null ? 0 : oldP.inlineComments.size())
+                            != (newP.inlineComments == null ? 0 : newP.inlineComments.size());
+                    if (metaChanged) {
+                        notifyItemChanged(offset() + slotForPostIndex(i), "META_ONLY");
+                    }
+                }
+                return;
+            }
+        }
         posts.clear();
         posts.addAll(list);
         notifyDataSetChanged();
     }
 
-    /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (no full list redraw!). */
+    /** Exact adapter slot (excluding header) for a post index, accounting for 1 Native Ad every 5 posts. */
+    private int slotForPostIndex(int postIdx) {
+        return adsActive() ? (postIdx + (postIdx / NATIVE_AD_EVERY_N_POSTS)) : postIdx;
+    }
+
+    /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (payload-only — ZERO height/scroll jump!). */
     public void onFastReactionUpdate(String postId, String mine, int total) {
         if (postId == null) return;
         for (int i = 0; i < posts.size(); i++) {
             Models.Post p = posts.get(i);
             if (p != null && postId.equals(p.id)) {
                 p.likes = total;
-                int slot = adsEnabled ? (i + (i / 3)) : i;
-                notifyItemChanged(offset() + slot);
+                notifyItemChanged(offset() + slotForPostIndex(i), "REACTION_ONLY");
+                return;
+            }
+        }
+    }
+
+    /** Removes a post immediately when auto-deleted by ContentSafetyEngine. */
+    public void removePostById(String postId) {
+        if (postId == null) return;
+        for (int i = 0; i < posts.size(); i++) {
+            Models.Post p = posts.get(i);
+            if (p != null && postId.equals(p.id)) {
+                posts.remove(i);
+                notifyDataSetChanged();
                 return;
             }
         }
@@ -117,11 +165,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void setBoosted(java.util.List<Models.User> users, java.util.Set<String> postIds) {
+        boolean boostChanged = !boostedPostIds.equals(postIds != null ? postIds : java.util.Collections.emptySet());
         boostedUsers.clear();
         if (users != null) boostedUsers.addAll(users);
         boostedPostIds.clear();
         if (postIds != null) boostedPostIds.addAll(postIds);
-        notifyDataSetChanged();
+        if (showHeader) notifyItemChanged(0);
+        if (boostChanged) notifyDataSetChanged();
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
@@ -146,6 +196,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public void setAdsConfig(String id, boolean enabled) {
         String cleanId = id == null ? "" : id.trim();
         boolean nextEnabled = enabled && !cleanId.isEmpty() && com.friendbook.core.AdsConfig.isRealDevice();
+        if (cleanId.equals(nativeAdUnitId) && nextEnabled == adsEnabled) {
+            return; // unchanged — avoid full RecyclerView redraw!
+        }
         if (!nextEnabled) {
             clearCachedNativeAds();
         }
@@ -219,6 +272,26 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
 
+
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position,
+                                 @NonNull List<Object> payloads) {
+        if (!payloads.isEmpty() && h instanceof PostVH) {
+            int idx = postIndexForSlot(position - offset());
+            if (idx >= 0 && idx < posts.size()) {
+                Models.Post p = posts.get(idx);
+                PostVH vh = (PostVH) h;
+                int totalLikes = com.friendbook.core.FastCache.getReactionTotal(p.id, p.likes);
+                String myReact = com.friendbook.core.FastCache.getMyReaction(p.id);
+                renderReactionBar(activity, vh, p, myReact, totalLikes);
+                if (payloads.contains("META_ONLY")) {
+                    bindInlineComments(activity, vh, p);
+                }
+                return;
+            }
+        }
+        super.onBindViewHolder(h, position, payloads);
+    }
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
@@ -766,7 +839,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if (fImg != null) {
             vh.image.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x99000000);
-            Ui.imgFeed(c, vh.image, fImg);
+            Ui.imgFeedModerated(c, vh.image, fImg, "posts", p.id, p.authorId, p.content, () -> {
+                removePostById(p.id);
+                Ui.toast(c, "🛡 Unsafe post automatically deleted");
+            });
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
@@ -1062,7 +1138,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean subscribed = p.subscribedBy != null && Fb.uid() != null && p.subscribedBy.contains(Fb.uid());
         menu.getMenu().add(subscribed ? "🔕 Turn off notifications for this post" : "🔔 Turn on notifications for this post");
         if (!boostedPostIds.contains(p.id))
-            menu.getMenu().add("🚀 Boost Post — Rs " + com.friendbook.core.Admin.PRICE_BOOST_POST + " · more reach");
+            menu.getMenu().add("🚀 Boost Post (Free 24h community reach)");
         if (mine) {
             boolean pinned = Fb.me != null && p.id != null && p.id.equals(Fb.me.pinnedPostId);
             menu.getMenu().add(pinned ? "📌 Unpin from profile" : "📌 Pin to profile");
@@ -1153,12 +1229,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             else if (t.contains("Save post")) toggleSave(p, false);
             else if (t.contains("Boost Post")) {
-                Intent bi = new Intent(activity, com.friendbook.pay.PayRequestActivity.class);
-                bi.putExtra("type", "boost_post");
-                bi.putExtra("target_id", p.id);
-                bi.putExtra("amount", com.friendbook.core.Admin.PRICE_BOOST_POST);
-                bi.putExtra("title", "Boost Post");
-                activity.startActivity(bi);
+                String myUid = Fb.uid();
+                if (myUid != null && p.id != null) {
+                    Map<String, Object> bm = new HashMap<>();
+                    bm.put("userId", myUid);
+                    bm.put("type", "post");
+                    bm.put("postId", p.id);
+                    bm.put("status", "active");
+                    bm.put("createdAt", FieldValue.serverTimestamp());
+                    bm.put("expiry", new com.google.firebase.Timestamp(
+                            new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
+                    Fb.db().collection("boosts").document("post_" + p.id).set(bm)
+                            .addOnSuccessListener(x -> Ui.toast(activity, "🚀 Post boosted FREE for 24 hours!"))
+                            .addOnFailureListener(e -> Ui.toast(activity, "Couldn't boost post right now"));
+                }
             }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
             else if (t.contains("Who can see")) changePrivacyDialog(p);
@@ -1268,11 +1352,37 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private void reportPost(Models.Post p) {
-        Map<String, Object> m = Fb.map(
-                "postId", p.id, "reportedBy", Fb.uid(), "authorId", p.authorId,
-                "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("reports").add(m);
-        Ui.toast(activity, "Reported. We'll review it.");
+        final String[] reasons = {
+                "🔞 Nudity or explicit sexual content",
+                "🚨 Child safety / CSAE violation (Zero Tolerance)",
+                "🩸 Graphic violence, gore or self-harm",
+                "😡 Hate speech, bullying or harassment",
+                "🎭 Spam, scam or impersonation"
+        };
+        Ui.choose(activity, "🚩 Report post", reasons, w -> {
+            String reason = reasons[w];
+            Map<String, Object> m = Fb.map(
+                    "postId", p.id,
+                    "type", "post",
+                    "reason", reason,
+                    "reportedBy", Fb.uid(),
+                    "authorId", p.authorId,
+                    "createdAt", FieldValue.serverTimestamp());
+            Fb.db().collection("reports").add(m);
+            Prefs.hidePost(activity, p.id);
+            removePostById(p.id);
+            com.friendbook.core.FastCache.removeFeedPost(activity, p.id);
+            if (w == 0 || w == 1 || w == 2) {
+                // Severe safety violation -> flag & auto-delete violating post
+                com.friendbook.core.ContentSafetyEngine.autoDeleteContent(
+                        activity, "posts", p.id, p.authorId,
+                        w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
+                        reason, null);
+                Ui.toast(activity, "🛡 Violating post removed & reported ✓");
+            } else {
+                Ui.toast(activity, "Post hidden & reported to moderation team ✓");
+            }
+        });
     }
 
     // ---------- share ----------

@@ -255,6 +255,12 @@ public class AddStoryActivity extends Activity {
         if ("text".equals(mediaType)) {
             String txt = textStoryInput.getText().toString().trim();
             if (txt.isEmpty()) { Ui.toast(this, "Write something for your text story"); return; }
+            com.friendbook.core.ContentSafetyEngine.Verdict tv =
+                    com.friendbook.core.ContentSafetyEngine.checkText(txt);
+            if (tv.unsafe) {
+                Ui.info(this, "🛡 Story Blocked", tv.message);
+                return;
+            }
             busy = true;
             share.setText("Sharing…");
             Map<String, Object> m = new HashMap<>();
@@ -277,29 +283,48 @@ public class AddStoryActivity extends Activity {
             return;
         }
         if (mediaUri == null) { Ui.toast(this, "Choose Aa Text, Photo or Video first"); return; }
+        String cap = caption.getText().toString().trim();
         busy = true;
-        share.setText("Sharing…");
-        String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
-        String path = "stories/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
-        com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, mediaUri)
-                .addOnSuccessListener(url -> {
-                    Map<String, Object> m = new HashMap<>();
-                    m.put("authorId", Fb.uid());
-                    m.put("authorName", Fb.myName());
-                    m.put("authorPhotoUrl", Fb.myPhoto());
-                    m.put("mediaUrl", url.toString());
-                    m.put("mediaType", mediaType);
-                    m.put("caption", caption.getText().toString().trim());
-                    m.put("musicMood", MOODS[moodIdx]);
-                    m.put("privacy", storyPrivacy);
-                    m.put("viewedBy", new ArrayList<String>());
-                    m.put("createdAt", FieldValue.serverTimestamp());
-                    m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                    Fb.db().collection("stories").add(m)
-                            .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
+        share.setText("Checking safety…");
+        java.util.List<Uri> single = new ArrayList<>();
+        single.add(mediaUri);
+        com.friendbook.core.ContentSafetyEngine.scanMediaAsync(
+                this, single, "video".equals(mediaType), cap, v -> {
+                    if (isFinishing()) return;
+                    if (v.unsafe) {
+                        video.stopPlayback();
+                        video.setVisibility(View.GONE);
+                        img.setVisibility(View.GONE);
+                        emptyBox.setVisibility(View.VISIBLE);
+                        mediaUri = null;
+                        busy = false;
+                        share.setText("Share story");
+                        Ui.info(this, "🛡 Unsafe Story Auto-Deleted", v.message);
+                        return;
+                    }
+                    share.setText("Sharing…");
+                    String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
+                    String path = "stories/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
+                    com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, mediaUri)
+                            .addOnSuccessListener(url -> {
+                                Map<String, Object> m = new HashMap<>();
+                                m.put("authorId", Fb.uid());
+                                m.put("authorName", Fb.myName());
+                                m.put("authorPhotoUrl", Fb.myPhoto());
+                                m.put("mediaUrl", url.toString());
+                                m.put("mediaType", mediaType);
+                                m.put("caption", cap);
+                                m.put("musicMood", MOODS[moodIdx]);
+                                m.put("privacy", storyPrivacy);
+                                m.put("viewedBy", new ArrayList<String>());
+                                m.put("createdAt", FieldValue.serverTimestamp());
+                                m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
+                                Fb.db().collection("stories").add(m)
+                                        .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
+                                        .addOnFailureListener(e -> fail());
+                            })
                             .addOnFailureListener(e -> fail());
-                })
-                .addOnFailureListener(e -> fail());
+                });
     }
 
     private void fail() {

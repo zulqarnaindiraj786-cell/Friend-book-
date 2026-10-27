@@ -34,12 +34,14 @@ service cloud.firestore {
       allow delete: if isMe(uid) || isAdmin();
     }
 
-    // ---- posts (incl. polls, multi-photo, backgrounds, group posts) ----
+    // ---- posts (incl. polls, multi-photo, backgrounds, group posts, automated safety moderation) ----
     match /posts/{postId} {
       allow read: if signedIn();
       allow create: if signedIn();
-      allow update: if signedIn();  // reactions/votes/saves/counters are collaborative
-      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      allow update: if signedIn();  // reactions/votes/saves/counters/safetyFlagged are collaborative
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin();
 
       match /reactions/{rid} {
         allow read: if signedIn();
@@ -56,7 +58,9 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // likes are collaborative
-      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin();
     }
 
     // ---- stories (24h) ----
@@ -64,7 +68,9 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // viewedBy marking
-      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin();
     }
 
     // ---- reels ----
@@ -72,7 +78,9 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update: if signedIn(); // likes/comments counters
-      allow delete: if (signedIn() && resource.data.authorId == request.auth.uid) || isAdmin();
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin();
 
       match /comments/{cid} {
         allow read: if signedIn();
@@ -149,24 +157,22 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    // ---- Profile/Post boosts: users create pending, everyone reads (Home shows active), admin activates ----
+    // ---- Profile/Post boosts: 100% free community boosts ----
     match /boosts/{bid} {
       allow create: if signedIn()
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.status == 'pending';
+        && request.resource.data.userId == request.auth.uid;
       allow read: if signedIn();
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
     }
 
-    // ---- fan subscriptions ----
+    // ---- Free VIP Fan Club subscriptions ----
     match /subscriptions/{sid} {
       allow create: if signedIn()
-        && request.resource.data.subscriberId == request.auth.uid
-        && request.resource.data.status == 'pending';
+        && request.resource.data.subscriberId == request.auth.uid;
       allow read: if isAdmin()
         || (signedIn() && (resource.data.subscriberId == request.auth.uid
                           || resource.data.creatorId == request.auth.uid));
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.subscriberId == request.auth.uid);
     }
 
     // ---- 🔴 LIVE rooms + chat + gifts ----

@@ -42,7 +42,6 @@ import com.friendbook.core.Ui;
 import com.friendbook.friends.FollowListActivity;
 import com.friendbook.friends.UsersAdapter;
 import com.friendbook.models.Models;
-import com.friendbook.pay.PayRequestActivity;
 import com.friendbook.post.CreatePostActivity;
 import com.friendbook.post.FeedAdapter;
 import com.friendbook.post.FullscreenMediaActivity;
@@ -352,7 +351,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         moneyRow.setGravity(Gravity.CENTER);
         moneyRow.setPadding(0, Ui.dp(this, 8), 0, 0);
         moneyRow.setVisibility(View.GONE);
-        boostBtn = Ui.btnOutline(this, "🚀 Boost · Rs " + Admin.PRICE_BOOST_PROFILE, Icons.BLUE);
+        boostBtn = Ui.btnOutline(this, "🚀 Free 24h Boost", Icons.BLUE);
         boostBtn.setOnClickListener(v -> boostProfile());
         tickBtn = Ui.btnGrey(this, "✓ Get a tick");
         tickBtn.setOnClickListener(v -> startActivity(new Intent(this, BlueTickActivity.class)));
@@ -1185,35 +1184,48 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void updateSubscribeButton() {
-        subscribeBtn.setText(subscribedActive ? "✓ Subscribed"
-                : "⭐ Subscribe $" + (user.subscriptionPrice > 0 ? user.subscriptionPrice : 5) + "/mo");
+        subscribeBtn.setText(subscribedActive ? "✓ VIP Fan" : "⭐ Join Fan Club (Free)");
     }
 
     private void subscribe() {
         if (subscribedActive) {
-            Ui.toast(this, "You're already subscribed to " + user.displayName);
+            Ui.toast(this, "You're already in " + user.displayName + "'s VIP Fan Club ⭐");
             return;
         }
-        int price = user.subscriptionPrice > 0 ? user.subscriptionPrice : 5;
-        Intent i = new Intent(this, PayRequestActivity.class);
-        i.putExtra("type", "subscription");
-        i.putExtra("target_id", uid);
-        i.putExtra("amount", price);
-        i.putExtra("currency", "USD");
-        i.putExtra("title", "Subscribe to " + user.displayName);
-        startActivity(i);
+        String me = Fb.uid();
+        if (me == null) return;
+        Map<String, Object> sub = new HashMap<>();
+        sub.put("creatorId", uid);
+        sub.put("subscriberId", me);
+        sub.put("status", "active");
+        sub.put("createdAt", FieldValue.serverTimestamp());
+        sub.put("expiry", new com.google.firebase.Timestamp(
+                new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L)));
+        Fb.db().collection("subscriptions").document(uid + "_" + me).set(sub)
+                .addOnSuccessListener(x -> {
+                    subscribedActive = true;
+                    updateSubscribeButton();
+                    Ui.toast(this, "Joined " + user.displayName + "'s VIP Fan Club ⭐");
+                })
+                .addOnFailureListener(e -> Ui.toast(this, "Couldn't join right now"));
     }
 
     private void boostProfile() {
-        Ui.confirm(this, "🚀 Boost Profile",
-                "Your profile will be pinned on TOP of the Home feed for 24 hours.\nCost: Rs "
-                        + Admin.PRICE_BOOST_PROFILE + " (JazzCash / Easypaisa).",
-                "Continue", () -> {
-                    Intent i = new Intent(this, PayRequestActivity.class);
-                    i.putExtra("type", "boost_profile");
-                    i.putExtra("amount", Admin.PRICE_BOOST_PROFILE);
-                    i.putExtra("title", "Boost Profile — 24h");
-                    startActivity(i);
+        Ui.confirm(this, "🚀 Free 24h Community Profile Boost",
+                "Highlight your creator profile at the top of the Home feed for 24 hours — 100% Free!",
+                "Boost Now", () -> {
+                    String me = Fb.uid();
+                    if (me == null) return;
+                    Map<String, Object> bm = new HashMap<>();
+                    bm.put("userId", me);
+                    bm.put("type", "profile");
+                    bm.put("status", "active");
+                    bm.put("createdAt", FieldValue.serverTimestamp());
+                    bm.put("expiry", new com.google.firebase.Timestamp(
+                            new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
+                    Fb.db().collection("boosts").document("profile_" + me).set(bm)
+                            .addOnSuccessListener(x -> Ui.toast(this, "🚀 Profile boosted FREE for 24 hours!"))
+                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't boost profile right now"));
                 });
     }
 

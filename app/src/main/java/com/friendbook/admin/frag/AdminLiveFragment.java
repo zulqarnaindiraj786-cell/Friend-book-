@@ -93,8 +93,7 @@ public class AdminLiveFragment extends Fragment {
         info.addView(Ui.tvBold(a, Format.strOr(m, "hostName", "Host"), 14, Ui.txt(a)));
         info.addView(Ui.tv(a, Format.str(m, "title"), 12, Ui.sub(a)));
         info.addView(Ui.tv(a, "👁 " + Format.count(Format.intOf(m, "viewers"))
-                + "  ·  ⭐ " + Format.count(Format.intOf(m, "stars"))
-                + " (≈ Rs " + Format.count(Format.intOf(m, "stars") * Admin.STAR_VALUE_PKR) + ")",
+                + "  ·  ⭐ " + Format.count(Format.intOf(m, "stars")) + " community stars",
                 11, Ui.sub(a)));
         card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 

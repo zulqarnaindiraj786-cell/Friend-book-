@@ -44,7 +44,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private static final int PICK_IMG = 51;
 
-    private String peerId, peerName = "", chatId;
+    private String peerId, peerName = "", peerPhoto = "", chatId;
     private TextView presenceTv, nameTv;
     private ImageView barTick;
     private ImageView barAvatar;
@@ -56,6 +56,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean typingSent;
     private long lastTypingPush;
     private boolean busy;
+    private boolean initialScrollDone = false;
+    private boolean forceScrollBottom = false;
+    private boolean unreadResetOnce = false;
     private ImageView mic;
     private android.media.MediaRecorder recorder;
     private String voicePath;
@@ -151,8 +154,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayoutManager lm = new LinearLayoutManager(this);
         lm.setStackFromEnd(true);
         rv.setLayoutManager(lm);
+        rv.setItemAnimator(null);
         adapter = new MessagesAdapter(this, this);
         rv.setAdapter(adapter);
+        rv.addOnLayoutChangeListener((v, l, t, r, bo, ol, ot, or2, obo) -> {
+            if (bo < obo && adapter.getItemCount() > 0) {
+                rv.post(() -> rv.scrollToPosition(adapter.getItemCount() - 1));
+            }
+        });
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(buildComposer());
         if (prefill != null && !prefill.isEmpty()) input.setText(prefill);
@@ -227,28 +236,44 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         input = Ui.input(this, "Message…");
         input.setBackground(Ui.round(this, Ui.inputBg(this), 22));
+        input.setMinHeight(Ui.dp(this, 40));
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                String txt = input.getText().toString().trim();
+                if (!txt.isEmpty()) send(txt, null, null);
+                return true;
+            }
+            return false;
+        });
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
+        ip.leftMargin = Ui.dp(this, 4);
+        ip.rightMargin = Ui.dp(this, 4);
         row.addView(input, ip);
 
-        ImageView send = com.friendbook.core.Icons.icon(
-                this, com.friendbook.core.Icons.SEND, 24,
+        final ImageView send = com.friendbook.core.Icons.icon(
+                this, com.friendbook.core.Icons.SEND, 25,
                 com.friendbook.core.Icons.BLUE);
-        send.setPadding(Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 2), Ui.dp(this, 4));
+        send.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        send.setVisibility(View.GONE);
         row.addView(send);
-        wrap.addView(row);
 
-        ImageView quick = com.friendbook.core.Icons.icon(
-                this, com.friendbook.core.Icons.LIKE, 24,
+        final ImageView quick = com.friendbook.core.Icons.icon(
+                this, com.friendbook.core.Icons.LIKE, 25,
                 com.friendbook.core.Icons.BLUE);
-        quick.setPadding(Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
+        quick.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
         quick.setOnClickListener(v -> send(null, null, "👍"));
         row.addView(quick, new LinearLayout.LayoutParams(-2, -2));
+
+        wrap.addView(row);
 
         send.setOnClickListener(v -> send(input.getText().toString().trim(), null, null));
         input.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
-                boolean has = s.length() > 0;
+                boolean has = s.toString().trim().length() > 0;
+                send.setVisibility(has ? View.VISIBLE : View.GONE);
+                quick.setVisibility(has ? View.GONE : View.VISIBLE);
                 long now = System.currentTimeMillis();
                 if (has && (!typingSent || now - lastTypingPush > 2000)) {
                     Presence.setTyping(chatId, true);
@@ -273,12 +298,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .addSnapshotListener((d, err) -> {
                     if (d == null || !d.exists()) return;
                     Models.User u = Models.User.fromDoc(d);
-                    peerName = u.displayName;
+                    com.friendbook.core.FastCache.putUser(u);
+                    if (u.displayName != null && !u.displayName.isEmpty()) peerName = u.displayName;
+                    peerPhoto = u.photoUrl == null ? "" : u.photoUrl;
                     String nick = Prefs.chatNickname(this, chatId);
                     nameTv.setText(!nick.isEmpty() ? nick : peerName);
                     com.friendbook.core.Icons.setTickBadge(barTick, u.tickLevel, false);
-                    Ui.avatar(this, barAvatar, u.photoUrl);
-                    adapter.setPeerPhoto(u.photoUrl);
+                    Ui.avatar(this, barAvatar, peerPhoto);
+                    adapter.setPeerPhoto(peerPhoto);
                 });
 
         // presence (RTDB + Firestore fallback)
@@ -303,6 +330,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .limitToLast(200)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null) return;
+                    LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
+                    int prevCount = adapter.getItemCount();
+                    int lastVis = lm != null ? lm.findLastVisibleItemPosition() : prevCount - 1;
+                    boolean nearBottom = !initialScrollDone || forceScrollBottom || (prevCount - lastVis <= 4);
+
                     List<Models.Message> list = new ArrayList<>();
                     Set<String> hidden = hiddenMsgs();
                     List<DocumentSnapshot> toMark = new ArrayList<>();
@@ -311,15 +343,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         Models.Message m = Models.Message.fromDoc(d);
                         if (hidden.contains(m.id)) continue;
                         list.add(m);
-                        if (m.receiverId.equals(me) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
+                        if (me != null && me.equals(m.receiverId) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
                             boolean needsSeen = !m.isSeen && Prefs.readReceipts(this);
                             boolean needsDeliv = !m.isDelivered;
                             if (needsSeen || needsDeliv) toMark.add(d);
                         }
                     }
+                    list.sort((a2, b2) -> Long.compare(a2.createdAt, b2.createdAt));
                     adapter.setData(list);
-                    if (rv.getAdapter() != null && rv.getAdapter().getItemCount() > 0)
-                        rv.scrollToPosition(rv.getAdapter().getItemCount() - 1);
+                    if (nearBottom && !list.isEmpty()) {
+                        initialScrollDone = true;
+                        forceScrollBottom = false;
+                        rv.scrollToPosition(list.size() - 1);
+                    }
                     if (!toMark.isEmpty()) {
                         WriteBatch batch = Fb.db().batch();
                         for (DocumentSnapshot d : toMark) {
@@ -329,8 +365,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             batch.set(d.getReference(), patch, SetOptions.merge());
                         }
                         batch.commit();
+                        resetUnread();
+                    } else if (!unreadResetOnce && !list.isEmpty()) {
+                        unreadResetOnce = true;
+                        resetUnread();
                     }
-                    resetUnread();
                 });
     }
 
@@ -404,8 +443,35 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
     }
 
+    private Map<String, Object> buildChatRoomDoc(String me, String lastMsg) {
+        Map<String, Object> unread = new HashMap<>();
+        unread.put(peerId, FieldValue.increment(1));
+        unread.put(me, 0);
+        Map<String, Object> typingOff = new HashMap<>();
+        typingOff.put(me, false);
+        Map<String, String> names = new HashMap<>();
+        names.put(me, Fb.myName());
+        if (peerName != null && !peerName.isEmpty()) names.put(peerId, peerName);
+        Map<String, String> photos = new HashMap<>();
+        photos.put(me, Fb.myPhoto());
+        if (peerPhoto != null && !peerPhoto.isEmpty()) photos.put(peerId, peerPhoto);
+        return Fb.map(
+                "participants", java.util.Arrays.asList(me, peerId),
+                "participantNames", names,
+                "participantPhotos", photos,
+                "lastMessage", lastMsg == null ? "" : lastMsg,
+                "lastMessageTime", FieldValue.serverTimestamp(),
+                "lastMessageTimeMs", System.currentTimeMillis(),
+                "typing", typingOff,
+                "unreadCount", unread);
+    }
+
     private void sendVoice(String url, int durSec) {
         String me = Fb.uid();
+        if (me == null) return;
+        long now = System.currentTimeMillis();
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
                 "receiverId", peerId,
@@ -416,24 +482,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isSeen", false,
                 "isDelivered", false,
                 "isDeleted", false,
+                "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        Map<String, Object> unread = new HashMap<>();
-        unread.put(peerId, FieldValue.increment(1));
-        Map<String, Object> chatDoc = Fb.map(
-                "participants", java.util.Arrays.asList(me, peerId),
-                "lastMessage", "🎤 Voice note · " + Format.duration(durSec),
-                "lastMessageTime", FieldValue.serverTimestamp(),
-                "unreadCount", unread);
+        Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
+        forceScrollBottom = true;
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         batch.commit().addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
 
     // ---------- chat theme ----------
     private void themePicker() {
-        String[] names = {"Facebook Blue", "Lover Red", "Kiwi Green", "Royal Purple",
+        String[] names = {"friendbook Blue", "Lover Red", "Kiwi Green", "Royal Purple",
                 "Sunset Orange", "Bubblegum Pink", "Ocean Teal", "Midnight"};
         int[] colors = {0xFF1877F2, 0xFFE41E3F, 0xFF31A24C, 0xFF9360F7,
                 0xFFF5650D, 0xFFFF66C4, 0xFF2ABBA7, 0xFF1B2440};
@@ -445,10 +506,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void resetUnread() {
-        Map<String, Object> inner = new HashMap<>();
-        inner.put(Fb.uid(), 0);
-        Fb.db().collection("chats").document(chatId)
-                .set(Fb.map("unreadCount", inner), SetOptions.merge());
+        String me = Fb.uid();
+        if (me == null || chatId == null) return;
+        // Use update() rather than set() so opening an empty chat never creates an incomplete room doc
+        Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
     }
 
     /** ✨ Sticker pack — big emoji stickers, Facebook-Messenger style. */
@@ -487,8 +548,23 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private void sendSticker(String emoji) {
         if (busy) return;
-        busy = true;
         String me = Fb.uid();
+        if (me == null) return;
+        busy = true;
+        long now = System.currentTimeMillis();
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        Models.Message opt = new Models.Message();
+        opt.id = msgRef.getId();
+        opt.senderId = me;
+        opt.receiverId = peerId;
+        opt.text = emoji;
+        opt.type = "sticker";
+        opt.createdAt = now;
+        forceScrollBottom = true;
+        adapter.appendOptimistic(opt);
+        rv.scrollToPosition(adapter.getItemCount() - 1);
+
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
                 "receiverId", peerId,
@@ -498,24 +574,15 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isSeen", false,
                 "isDelivered", false,
                 "isDeleted", false,
+                "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        Map<String, Object> unread = new HashMap<>();
-        unread.put(peerId, FieldValue.increment(1));
-        Map<String, Object> typingOff = new HashMap<>();
-        typingOff.put(me, false);
-        Map<String, Object> chatDoc = Fb.map(
-                "participants", java.util.Arrays.asList(me, peerId),
-                "lastMessage", "✨ " + emoji + " sticker",
-                "lastMessageTime", FieldValue.serverTimestamp(),
-                "typing", typingOff,
-                "unreadCount", unread);
+        Map<String, Object> chatDoc = buildChatRoomDoc(me, "✨ " + emoji + " sticker");
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         batch.commit()
                 .addOnSuccessListener(x -> busy = false)
-                .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Couldn't send — " + e.getMessage()); });
+                .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
@@ -524,13 +591,33 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (finalText == null && imageUrl == null) return;
         String me = Fb.uid();
         if (me == null) return;
+        if (finalText != null) {
+            com.friendbook.core.ContentSafetyEngine.Verdict tv =
+                    com.friendbook.core.ContentSafetyEngine.checkText(finalText);
+            if (tv.unsafe) {
+                Ui.info(this, "🛡 Message Blocked", tv.message);
+                return;
+            }
+        }
         String type = imageUrl != null ? "image" : "text";
+        long now = System.currentTimeMillis();
 
-        // ⚡ 0.0ms Optimistic UI: clear input immediately & keep keyboard open for rapid-fire 2G chat!
+        // ⚡ 0.0ms Optimistic UI: clear input & render bubble immediately!
         if (rawOverride == null && imageUrl == null && input != null) {
             input.setText("");
         }
         typingSent = false;
+
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        Models.Message opt = new Models.Message();
+        opt.id = msgRef.getId();
+        opt.senderId = me;
+        opt.receiverId = peerId;
+        opt.text = finalText != null ? finalText : "";
+        opt.imageUrl = imageUrl == null ? "" : imageUrl;
+        opt.type = type;
+        opt.createdAt = now;
 
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
@@ -541,30 +628,29 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isSeen", false,
                 "isDelivered", false,
                 "isDeleted", false,
+                "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         if (replyingMsg != null) {
+            String rText = replyingMsg.text != null && !replyingMsg.text.isEmpty()
+                    ? replyingMsg.text : ("voice".equals(replyingMsg.type) ? "🎤 Voice note" : "📷 Photo");
+            String rSender = me.equals(replyingMsg.senderId) ? Fb.myName() : peerName;
             msg.put("replyToId", replyingMsg.id);
-            msg.put("replyToText", replyingMsg.text != null && !replyingMsg.text.isEmpty()
-                    ? replyingMsg.text : ("voice".equals(replyingMsg.type) ? "🎤 Voice note" : "📷 Photo"));
-            msg.put("replyToSender", replyingMsg.senderId.equals(me) ? Fb.myName() : peerName);
+            msg.put("replyToText", rText);
+            msg.put("replyToSender", rSender);
+            opt.replyToText = rText;
+            opt.replyToSender = rSender;
             replyingMsg = null;
             if (replyBar != null) replyBar.setVisibility(View.GONE);
         }
 
-        Map<String, Object> unread = new HashMap<>();
-        unread.put(peerId, FieldValue.increment(1));
-        Map<String, Object> typingOff = new HashMap<>();
-        typingOff.put(me, false);
-        Map<String, Object> chatDoc = Fb.map(
-                "participants", java.util.Arrays.asList(me, peerId),
-                "lastMessage", "image".equals(type) ? "📷 Photo" : finalText,
-                "lastMessageTime", FieldValue.serverTimestamp(),
-                "typing", typingOff,
-                "unreadCount", unread);
+        forceScrollBottom = true;
+        adapter.appendOptimistic(opt);
+        rv.scrollToPosition(adapter.getItemCount() - 1);
+
+        Map<String, Object> chatDoc = buildChatRoomDoc(me, "image".equals(type) ? "📷 Photo" : finalText);
 
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         batch.commit().addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));
@@ -575,18 +661,27 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         super.onActivityResult(req, res, data);
         if (req == PICK_IMG && res == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
-            Ui.toast(this, "Uploading photo…");
-            String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
-            com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                    .addOnSuccessListener(url -> send(null, url.toString(), null))
-                    .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
+            java.util.List<Uri> single = new ArrayList<>();
+            single.add(uri);
+            com.friendbook.core.ContentSafetyEngine.scanMediaAsync(this, single, false, "", v -> {
+                if (isFinishing()) return;
+                if (v.unsafe) {
+                    Ui.info(this, "🛡 Unsafe Photo Blocked", v.message);
+                    return;
+                }
+                Ui.toast(this, "Uploading photo…");
+                String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
+                com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
+                        .addOnSuccessListener(url -> send(null, url.toString(), null))
+                        .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
+            });
         }
     }
 
     // ---------- message long-press ----------
     @Override
     public void longPress(Models.Message m) {
-        boolean mine = m.senderId.equals(Fb.uid());
+        boolean mine = Fb.uid() != null && Fb.uid().equals(m.senderId);
         List<String> opts = new ArrayList<>();
         opts.add("↩ Reply to message");
         opts.add("😍 React to message");

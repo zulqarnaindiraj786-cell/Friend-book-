@@ -56,18 +56,18 @@ public class AdminEarningsFragment extends Fragment {
         Ui.pad(body, 12, 10, 12, 24);
         sv.addView(body);
 
-        totalT = bigCard(body, "💰 Total income (approved)", "…", Ui.BLUE);
-        tickIncomeT = row(body, "✓ Tick income", "blue / gold / diamond sales", Ui.BLUE);
-        boostIncomeT = row(body, "🚀 Boost income", "profile + post boosts", Ui.ORANGE);
-        subsIncomeT = row(body, "⭐ Subscription income", "30% friendbook share shown below", Ui.GREEN);
-        liveIncomeT = row(body, "🔴 Live gifts income", "stars × Rs " + Admin.STAR_VALUE_PKR, Ui.RED);
+        totalT = bigCard(body, "📊 Community Milestones Approved", "…", Ui.BLUE);
+        tickIncomeT = row(body, "✓ Verified Badges Granted", "blue / gold / diamond reviews", Ui.BLUE);
+        boostIncomeT = row(body, "🚀 Community Boosts", "profile + post boosts", Ui.ORANGE);
+        subsIncomeT = row(body, "⭐ VIP Fan Club Memberships", "free creator fan club", Ui.GREEN);
+        liveIncomeT = row(body, "🔴 Live Community Stars", "total stars sent on live streams", Ui.RED);
 
         splitT = Ui.tv(a, "", 12, Ui.sub(a));
         Ui.pad(splitT, 4, 10, 4, 0);
         body.addView(splitT);
 
         // monthly chart
-        TextView ch = Ui.tvBold(a, "📊 Monthly total (last 6 months)", 14, Ui.txt(a));
+        TextView ch = Ui.tvBold(a, "📊 Monthly approvals (last 6 months)", 14, Ui.txt(a));
         Ui.pad(ch, 4, 16, 4, 6);
         body.addView(ch);
         LinearLayout chartCard = Ui.col(a);
@@ -85,7 +85,8 @@ public class AdminEarningsFragment extends Fragment {
         TextView tools = Ui.tvBold(a, "🛠 Tools", 13, Ui.txt(a));
         Ui.pad(tools, 4, 18, 4, 4);
         body.addView(tools);
-        toolsRow(body, "💳 Edit payment numbers (JazzCash / Easypaisa)", this::editPaymentNumbers);
+        toolsRow(body, "📢 AdMob Native Advanced Settings",
+                () -> a.startActivity(new android.content.Intent(a, com.friendbook.admin.AdMobSettingsActivity.class)));
         toolsRow(body, "📣 Broadcast to all users", () -> {
             android.app.Activity ac = getActivity();
             if (ac instanceof com.friendbook.admin.AdminPanelActivity)
@@ -204,52 +205,23 @@ public class AdminEarningsFragment extends Fragment {
     private void render() {
         if (totalT == null) return;
         long tickTotal = tickBlue + tickGold + tickDiamond;
-        long pkrTotal = tickTotal + boost + liveStars * Admin.STAR_VALUE_PKR;
-        long adminSubsShare = Math.round(subs * 0.30);
+        long totalMilestones = tickTotal + boost + subs + liveStars;
 
-        totalT.setText("Rs " + Format.count(pkrTotal) + "  +  $" + Format.count(subs) + " (subs)");
-        tickIncomeT.setText("Rs " + Format.count(tickTotal));
-        boostIncomeT.setText("Rs " + Format.count(boost));
-        subsIncomeT.setText("$" + Format.count(subs));
-        liveIncomeT.setText("Rs " + Format.count(liveStars * Admin.STAR_VALUE_PKR));
-        splitT.setText("Breakdown — Blue: Rs " + Format.count(tickBlue)
-                + " · Gold: Rs " + Format.count(tickGold)
-                + " · Diamond: Rs " + Format.count(tickDiamond)
-                + "\nSubscriptions: creators got $" + Format.count(Math.round(subs * 0.70))
-                + ", friendbook kept $" + Format.count(adminSubsShare) + " (30%)"
+        totalT.setText(Format.count(totalMilestones) + " milestones");
+        tickIncomeT.setText(Format.count(tickTotal) + " ✓");
+        boostIncomeT.setText(Format.count(boost) + " 🚀");
+        subsIncomeT.setText(Format.count(subs) + " ⭐");
+        liveIncomeT.setText("⭐ " + Format.count(liveStars));
+        splitT.setText("Badges — Blue: " + Format.count(tickBlue)
+                + " · Gold: " + Format.count(tickGold)
+                + " · Diamond: " + Format.count(tickDiamond)
                 + "\nLive stars sent: ⭐ " + Format.count(liveStars));
         long current = 0;
         String lastKey = null;
         for (Map.Entry<String, Long> e : monthly.entrySet()) { lastKey = e.getKey(); }
         if (lastKey != null) current = monthly.get(lastKey);
-        monthT.setText("This month so far: Rs " + Format.count(current));
+        monthT.setText("This month activity: " + Format.count(current));
         chart.setData(monthly);
-    }
-
-    private void editPaymentNumbers() {
-        android.app.Activity a = getActivity();
-        LinearLayout box = Ui.col(a);
-        Ui.pad(box, 20, 10, 20, 0);
-        EditText j = Ui.input(a, "JazzCash number");
-        EditText e = Ui.input(a, "Easypaisa number");
-        box.addView(j, new LinearLayout.LayoutParams(-1, Ui.dp(a, 46)));
-        box.addView(e, new LinearLayout.LayoutParams(-1, Ui.dp(a, 46)));
-        Fb.db().collection("config").document("payments").get().addOnSuccessListener(d -> {
-            if (d.exists()) {
-                j.setText(d.getString("jazzcash"));
-                e.setText(d.getString("easypaisa"));
-            }
-        });
-        new AlertDialog.Builder(a).setTitle("Payment numbers")
-                .setView(box)
-                .setPositiveButton("Save", (dd, w) -> Fb.db().collection("config").document("payments")
-                        .set(Fb.map("jazzcash", j.getText().toString().trim(),
-                                        "easypaisa", e.getText().toString().trim(),
-                                        "updatedAt", FieldValue.serverTimestamp()),
-                                com.google.firebase.firestore.SetOptions.merge())
-                        .addOnSuccessListener(x -> Ui.toast(a, "Numbers updated ✓")))
-                .setNegativeButton("Cancel", null)
-                .show();
     }
 
     /** Simple 6-month bar chart (no libraries). */

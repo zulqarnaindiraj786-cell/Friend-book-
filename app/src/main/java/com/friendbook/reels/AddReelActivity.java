@@ -80,31 +80,63 @@ public class AddReelActivity extends Activity {
             video.setVideoURI(videoUri);
             video.setOnPreparedListener(mp -> { mp.setLooping(true); video.start(); });
             pickBtn.setText("🎥  Change video");
+            java.util.List<Uri> single = new ArrayList<>();
+            single.add(videoUri);
+            com.friendbook.core.ContentSafetyEngine.scanMediaAsync(this, single, true, "", v -> {
+                if (isFinishing() || !v.unsafe) return;
+                video.stopPlayback();
+                ((LinearLayout) video.getParent()).setVisibility(android.view.View.GONE);
+                videoUri = null;
+                pickBtn.setText("🎥  Choose video");
+                Ui.info(this, "🛡 Unsafe Video Auto-Removed", v.message);
+            });
         }
     }
 
     private void upload() {
         if (busy) return;
         if (videoUri == null) { Ui.toast(this, "Choose a video first"); return; }
+        String cap = caption.getText().toString().trim();
+        com.friendbook.core.ContentSafetyEngine.Verdict tv =
+                com.friendbook.core.ContentSafetyEngine.checkText(cap);
+        if (tv.unsafe) {
+            Ui.info(this, "🛡 Reel Blocked", tv.message);
+            return;
+        }
         busy = true;
-        shareBtn.setText("Uploading…");
-        String path = "reels/" + Fb.uid() + "/" + System.currentTimeMillis() + ".mp4";
-        com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, videoUri)
-                .addOnSuccessListener(url -> {
-                    Map<String, Object> m = Fb.map(
-                            "authorId", Fb.uid(),
-                            "authorName", Fb.myName(),
-                            "authorPhotoUrl", Fb.myPhoto(),
-                            "videoUrl", url.toString(),
-                            "caption", caption.getText().toString().trim(),
-                            "likes", 0, "comments", 0, "shares", 0,
-                            "likedBy", new ArrayList<String>(),
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("reels").add(m)
-                            .addOnSuccessListener(x -> { Ui.toast(this, "Reel shared 🎉"); finish(); })
-                            .addOnFailureListener(e -> fail());
-                })
-                .addOnFailureListener(e -> fail());
+        shareBtn.setText("Checking safety…");
+        java.util.List<Uri> single = new ArrayList<>();
+        single.add(videoUri);
+        com.friendbook.core.ContentSafetyEngine.scanMediaAsync(this, single, true, cap, v -> {
+            if (isFinishing()) return;
+            if (v.unsafe) {
+                video.stopPlayback();
+                ((LinearLayout) video.getParent()).setVisibility(android.view.View.GONE);
+                videoUri = null;
+                busy = false;
+                shareBtn.setText("Share reel");
+                Ui.info(this, "🛡 Unsafe Reel Auto-Deleted", v.message);
+                return;
+            }
+            shareBtn.setText("Uploading…");
+            String path = "reels/" + Fb.uid() + "/" + System.currentTimeMillis() + ".mp4";
+            com.friendbook.core.Cloudinary.uploadOrFirebase(this, path, videoUri)
+                    .addOnSuccessListener(url -> {
+                        Map<String, Object> m = Fb.map(
+                                "authorId", Fb.uid(),
+                                "authorName", Fb.myName(),
+                                "authorPhotoUrl", Fb.myPhoto(),
+                                "videoUrl", url.toString(),
+                                "caption", cap,
+                                "likes", 0, "comments", 0, "shares", 0,
+                                "likedBy", new ArrayList<String>(),
+                                "createdAt", FieldValue.serverTimestamp());
+                        Fb.db().collection("reels").add(m)
+                                .addOnSuccessListener(x -> { Ui.toast(this, "Reel shared 🎉"); finish(); })
+                                .addOnFailureListener(e -> fail());
+                    })
+                    .addOnFailureListener(e -> fail());
+        });
     }
 
     private void fail() {

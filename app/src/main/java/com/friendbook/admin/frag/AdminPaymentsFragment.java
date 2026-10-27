@@ -53,7 +53,7 @@ public class AdminPaymentsFragment extends Fragment {
         Ui.pad(list, 12, 10, 12, 24);
         sv.addView(list);
 
-        countT = Ui.tv(a, "💵 Payments", 12, Ui.sub(a));
+        countT = Ui.tv(a, "✓ Badge & Verification Requests", 12, Ui.sub(a));
         Ui.pad(countT, 2, 0, 2, 8);
         list.addView(countT);
         return sv;
@@ -69,14 +69,14 @@ public class AdminPaymentsFragment extends Fragment {
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
                     if (snap == null || snap.isEmpty()) {
-                        countT.setText("0 payments yet");
-                        TextView empty = Ui.tv(a, "💵 Payments from users (ticks, boosts, subscriptions) will appear here with their screenshots.",
+                        countT.setText("0 requests yet");
+                        TextView empty = Ui.tv(a, "✓ Free creator badge & verification requests will appear here.",
                                 13, Ui.sub(a));
                         Ui.pad(empty, 4, 14, 4, 0);
                         list.addView(empty);
                         return;
                     }
-                    countT.setText(snap.size() + " payment(s) — newest first");
+                    countT.setText(snap.size() + " request(s) — newest first");
                     for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(a, d));
                 });
     }
@@ -122,7 +122,7 @@ public class AdminPaymentsFragment extends Fragment {
 
         LinearLayout info = Ui.col(a);
         info.setPadding(Ui.dp(a, 12), 0, 0, 0);
-        info.addView(Ui.tvBold(a, typeLabel(type) + "  ·  " + ("USD".equals(currency) ? "$" : "Rs ") + amount,
+        info.addView(Ui.tvBold(a, typeLabel(type) + "  ·  Free Community Review",
                 14, Ui.txt(a)));
         info.addView(Ui.tv(a, email, 12, Ui.sub(a)));
         info.addView(Ui.tv(a, "uid: " + userId, 10, Ui.sub(a)));

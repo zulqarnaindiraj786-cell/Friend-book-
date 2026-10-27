@@ -24,6 +24,7 @@ import java.util.Map;
 public class RegisterActivity extends Activity {
 
     private EditText name, email, pass, pass2, refCode;
+    private android.widget.CheckBox ugcTermsCheck;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -77,8 +78,36 @@ public class RegisterActivity extends Activity {
             refHint.setTextColor(Ui.BLUE);
         }
 
+        // 🛡 Google Play UGC & Child Safety Mandatory Consent Checkbox
+        LinearLayout termsBox = Ui.row(this);
+        termsBox.setGravity(Gravity.TOP);
+        termsBox.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 2));
+        ugcTermsCheck = new android.widget.CheckBox(this);
+        termsBox.addView(ugcTermsCheck);
+
+        LinearLayout termsCol = Ui.col(this);
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(0, -2, 1);
+        tclp.leftMargin = Ui.dp(this, 6);
+        TextView termsTv = Ui.tv(this,
+                "I am 13+ years old and agree to friendbook's Terms of Service, Privacy Policy & Zero-Tolerance Community Safety Rules (no nudity, explicit media, abuse, hate speech, or CSAE).",
+                12, Ui.txt(this));
+        termsTv.setOnClickListener(v -> ugcTermsCheck.setChecked(!ugcTermsCheck.isChecked()));
+        termsCol.addView(termsTv);
+        TextView readTermsLink = Ui.tvBold(this,
+                "📄 Read Full Terms, Privacy Policy & Child Safety Standards", 11.5f, Ui.BLUE);
+        readTermsLink.setPadding(0, Ui.dp(this, 4), 0, 0);
+        readTermsLink.setOnClickListener(v -> Ui.info(this,
+                "friendbook Terms, UGC & Child Safety Policy",
+                "1. Zero-Tolerance UGC Policy: Uploading sexually explicit photos/videos, nudity, graphic violence, hate speech, harassment, or illegal content is strictly prohibited. Violating posts are automatically deleted and offending accounts are permanently suspended.\n\n"
+                        + "2. Zero-Tolerance Child Safety (CSAE): friendbook enforces strict zero tolerance against Child Sexual Abuse & Exploitation (CSAE/CSAM). Any violation is immediately removed and reported to relevant authorities.\n\n"
+                        + "3. Reporting & Blocking: Every post, reel, story, and message includes 1-tap Report (🚩) and Block User (🚫) controls.\n\n"
+                        + "4. Privacy & Data Control: Account data is stored securely via Firebase & Cloudinary. You can export or permanently delete your account and personal data anytime in Settings → Delete Account."));
+        termsCol.addView(readTermsLink);
+        termsBox.addView(termsCol, tclp);
+        root.addView(termsBox);
+
         TextView create = Ui.btn(this, "Sign Up");
-        root.addView(create, lp(18));
+        root.addView(create, lp(14));
         create.setOnClickListener(v -> doRegister(create));
 
         TextView have = Ui.tvBold(this, "Already have an account?", 14, Ui.BLUE);
@@ -138,6 +167,10 @@ public class RegisterActivity extends Activity {
         if (e.isEmpty() || !e.contains("@")) { Ui.toast(this, "Enter a valid email"); return; }
         if (p.length() < 6) { Ui.toast(this, "Password must be 6+ characters"); return; }
         if (!p.equals(p2)) { Ui.toast(this, "Passwords don't match"); return; }
+        if (ugcTermsCheck == null || !ugcTermsCheck.isChecked()) {
+            Ui.toast(this, "Please accept the Terms, Privacy & Safety Policy to continue");
+            return;
+        }
 
         btn.setText("Creating…");
         btn.setEnabled(false);

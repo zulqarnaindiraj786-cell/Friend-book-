@@ -20,7 +20,6 @@ import com.friendbook.core.Icons;
 import com.friendbook.core.Ui;
 import com.friendbook.live.LiveActivity;
 import com.friendbook.models.Models;
-import com.friendbook.pay.PayRequestActivity;
 import com.friendbook.post.CreatePostActivity;
 import com.friendbook.reels.AddReelActivity;
 import com.google.firebase.firestore.DocumentSnapshot;
@@ -167,14 +166,20 @@ public final class CreatorDashboardDialog {
                     dlg.dismiss();
                     a.startActivity(new Intent(a, BlueTickActivity.class));
                 });
-        addToolRow(a, toolsCard, "🚀 Boost Profile on Home Feed (24h)",
-                "Pin your creator profile on top of Home · Rs " + Admin.PRICE_BOOST_PROFILE, () -> {
+        addToolRow(a, toolsCard, "🚀 Boost Profile on Home Feed (Free 24h)",
+                "Highlight your creator profile on Home for 24 hours — 100% Free", () -> {
                     dlg.dismiss();
-                    Intent i = new Intent(a, PayRequestActivity.class);
-                    i.putExtra("type", "boost_profile");
-                    i.putExtra("amount", Admin.PRICE_BOOST_PROFILE);
-                    i.putExtra("title", "Boost Profile — 24h");
-                    a.startActivity(i);
+                    if (me != null) {
+                        java.util.Map<String, Object> bm = new java.util.HashMap<>();
+                        bm.put("userId", me);
+                        bm.put("type", "profile");
+                        bm.put("status", "active");
+                        bm.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                        bm.put("expiry", new com.google.firebase.Timestamp(
+                                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
+                        Fb.db().collection("boosts").document("profile_" + me).set(bm)
+                                .addOnSuccessListener(x -> Ui.toast(a, "🚀 Profile boosted FREE for 24 hours!"));
+                    }
                 });
         addToolRow(a, toolsCard, "🎬 Upload a Reel",
                 "Reach new followers across Reels & Watch", () -> {

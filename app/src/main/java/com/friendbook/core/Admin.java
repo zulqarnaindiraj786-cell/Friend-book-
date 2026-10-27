@@ -163,9 +163,9 @@ public class Admin {
                 });
     }
 
-    /** Referral invite link for a user (official Blogger website). */
+    /** Referral invite link for a user (official Google Play Store URL). */
     public static String inviteLink(String uid) {
-        return AdsConfig.OFFICIAL_WEBSITE_URL + "/?ref=" + uid;
+        return AdsConfig.PLAY_STORE_URL + "&referrer=ref_" + uid;
     }
 
     /** Extract the referral code from an invite link or raw code. Returns null when empty. */
@@ -173,6 +173,13 @@ public class Admin {
         if (input == null) return null;
         input = input.trim();
         if (input.isEmpty()) return null;
+        int refIdx = input.indexOf("ref_");
+        if (refIdx >= 0) {
+            String code = input.substring(refIdx + 4);
+            int amp = code.indexOf('&');
+            if (amp > 0) code = code.substring(0, amp);
+            return code.trim().isEmpty() ? null : code.trim();
+        }
         int idx = input.indexOf("ref=");
         if (idx >= 0) {
             String code = input.substring(idx + 4);
