@@ -64,8 +64,7 @@ public class EventsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Events");
-        TextView add = Ui.tvBold(this, "＋ Create", 13, Color.WHITE);
-        add.setBackground(Ui.round(this, 0x33FFFFFF, 16));
+        TextView add = Ui.roundChip(this, "＋ Create", Ui.inputBg(this), Ui.txt(this), 13);
         Ui.pad(add, 12, 6, 12, 6);
         add.setOnClickListener(v -> createDialog());
         bar.addView(add);

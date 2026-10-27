@@ -120,15 +120,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v2.1.0"
+          TAG="v2.2.0"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-debug.apk friendbook-website.zip --clobber
-            gh release edit "$TAG" --latest --title "friendbook v2.1.0 (Google Play Signed AAB + Signed APK)"
+            gh release edit "$TAG" --latest --title "friendbook v2.2.0 (Google Play Signed AAB + Signed APK)"
           else
             gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-debug.apk friendbook-website.zip \
               --latest \
-              --title "friendbook v2.1.0 (Google Play Signed AAB + Signed APK)" \
-              --notes "Google Play Store ready signed Android App Bundle (\`friendbook-playstore.aab\`, \`versionCode 20\`, \`com.friendbook\` v2.1.0) + Official Signed APK (\`friendbook.apk\`) with Complete Dynamic Email OTP Forgot Password & Firebase Phone Auth Login/Signup."
+              --title "friendbook v2.2.0 (Google Play Signed AAB + Signed APK)" \
+              --notes "Google Play Store ready signed Android App Bundle (\`friendbook-playstore.aab\`, \`versionCode 21\`, \`com.friendbook\` v2.2.0) + Official Signed APK (\`friendbook.apk\`) with Direct Google Login, Password Reset Link, Default Only-Me Email Privacy, Crisp White Headers & Vector Back Arrows."
           fi
 
       - name: Upload Website Pages Artifact

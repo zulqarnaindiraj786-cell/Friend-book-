@@ -66,8 +66,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Page");
-        TextView qrBtn = Ui.tvBold(this, "QR", 13, Color.WHITE);
-        qrBtn.setBackground(Ui.round(this, 0x33FFFFFF, 10));
+        TextView qrBtn = Ui.roundChip(this, "QR", Ui.inputBg(this), Ui.txt(this), 13);
         Ui.pad(qrBtn, 10, 5, 10, 5);
         qrBtn.setOnClickListener(v -> Ui.showQrDialog(this, pageName, "Official Page on friendbook",
                 com.friendbook.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?page=" + pageId));

@@ -137,15 +137,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         // 1. Optional friendbook "Data mode / Buy data" top strip
         root.addView(Ui.dataModeStrip(this, null));
 
-        // 2. Crisp White friendbook Profile Header: [ ‹ ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
+        // 2. Crisp White friendbook Profile Header: [ ← ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(topBar, 8, 8, 10, 8);
+        Ui.pad(topBar, 6, 6, 10, 6);
 
-        TextView backBtn = Ui.tvBold(this, "‹", 30, Ui.txt(this));
-        Ui.pad(backBtn, 10, 0, 14, 2);
-        backBtn.setOnClickListener(v -> finish());
+        ImageView backBtn = Ui.backArrow(this, Ui.txt(this), v -> finish());
         topBar.addView(backBtn);
 
         topTitleTv = Ui.tvBold(this, "Profile", 18, Ui.txt(this));
@@ -1623,8 +1621,38 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (canSeeContact && user.birthday != null && !user.birthday.isEmpty())
             addAboutRow(card, "🎂", formatPrettyBirthday(user.birthday));
         if (user.isAdmin) addAboutRow(card, "🛡", "friendbook Team");
-        if (canSeeContact && user.email != null && !user.email.isEmpty())
-            addAboutRow(card, "📧", user.email);
+
+        String ep = (user.emailPrivacy != null && !user.emailPrivacy.isEmpty())
+                ? user.emailPrivacy : "Only me";
+        boolean canSeeEmail = (mine && !viewAsPublic)
+                || "Public".equalsIgnoreCase(ep)
+                || ("Friends".equalsIgnoreCase(ep) && "friends".equals(friendState) && !viewAsPublic);
+        if (canSeeEmail && user.email != null && !user.email.isEmpty()) {
+            String badge = "Public".equalsIgnoreCase(ep) ? "🌍 Public"
+                    : ("Friends".equalsIgnoreCase(ep) ? "👥 Friends" : "🔒 Only me");
+            String emailLabel = (mine && !viewAsPublic)
+                    ? (user.email + "  ·  " + badge) : user.email;
+            addAboutRow(card, "📧", emailLabel);
+            if (mine && !viewAsPublic && card.getChildCount() > 0) {
+                View emailRow = card.getChildAt(card.getChildCount() - 1);
+                emailRow.setOnClickListener(v -> {
+                    String[] opts = {"🔒 Only me", "👥 Friends", "🌍 Public"};
+                    String[] vals = {"Only me", "Friends", "Public"};
+                    Ui.choose(this, "Who can see your email?", opts, x -> {
+                        Map<String, Object> patch = new HashMap<>();
+                        patch.put("emailPrivacy", vals[x]);
+                        patch.put("contactPrivacy", vals[x]);
+                        patch.put("contactInfoPrivacy", vals[x]);
+                        Fb.patchMe(patch);
+                        user.emailPrivacy = vals[x];
+                        user.contactPrivacy = vals[x];
+                        user.contactInfoPrivacy = vals[x];
+                        renderAboutTab();
+                        Ui.toast(this, "Email visibility set to " + vals[x] + " ✓");
+                    });
+                });
+            }
+        }
         if (user.createdAt > 0) addAboutRow(card, "🗓", "Joined " + Format.dateTime(user.createdAt));
 
         if (user.hobbies != null && !user.hobbies.isEmpty()) {

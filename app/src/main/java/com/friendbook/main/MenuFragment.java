@@ -41,7 +41,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ☰ Menu tab — Authentic friendbook 525.0.0.5.102 layout:
+ * ☰ Menu tab — Authentic friendbook v2.2.0 layout:
  * Profile card + Multi-Account Quick Switcher, 2-Column Shortcut Tiles Grid,
  * Quick Lite toggles (Dark / Data Saver / Quiet), Settings & Privacy, Help & Logout.
  */
@@ -318,7 +318,7 @@ public class MenuFragment extends Fragment {
                 }));
         body.addView(logout);
 
-        TextView ver = Ui.tv(a, "friendbook for Android · v525.0.0.5.102", 11, Ui.sub(a));
+        TextView ver = Ui.tv(a, "friendbook for Android · v2.2.0", 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, Ui.dp(a, 14), 0, 0);
         body.addView(ver);

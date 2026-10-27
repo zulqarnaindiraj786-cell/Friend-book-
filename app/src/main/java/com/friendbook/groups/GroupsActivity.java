@@ -53,8 +53,8 @@ public class GroupsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "👨‍👩‍👧‍👦 Groups");
-        TextView create = Ui.tvBold(this, "＋ Create", 14, 0xFFFFFFFF);
-        create.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        TextView create = Ui.roundChip(this, "＋ Create", Ui.inputBg(this), Ui.txt(this), 13);
+        Ui.pad(create, 12, 6, 12, 6);
         create.setOnClickListener(v -> createDialog());
         bar.addView(create);
         root.addView(bar);

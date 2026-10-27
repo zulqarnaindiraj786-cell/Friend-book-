@@ -77,10 +77,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(topBar, 8, 10, 12, 10);
-        TextView back = Ui.tvBold(this, "‹", 28, Ui.txt(this));
-        Ui.pad(back, 10, 0, 14, 2);
-        back.setOnClickListener(v -> finish());
+        Ui.pad(topBar, 6, 6, 12, 6);
+        ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
         topBar.addView(back);
         TextView barTitle = Ui.tvBold(this, "Post & Comments", 17, Ui.txt(this));
         topBar.addView(barTitle, new LinearLayout.LayoutParams(0, -2, 1));

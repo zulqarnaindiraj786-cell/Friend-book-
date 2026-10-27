@@ -54,7 +54,7 @@ public class ActivityLogActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Activity log");
-        TextView archBtn = Ui.roundChip(this, "📦 Archive & Trash", 0x33FFFFFF, Color.WHITE, 12);
+        TextView archBtn = Ui.roundChip(this, "📦 Archive & Trash", Ui.inputBg(this), Ui.txt(this), 12);
         Ui.pad(archBtn, 10, 5, 10, 5);
         archBtn.setOnClickListener(v -> startActivity(new Intent(this, ArchiveTrashActivity.class)));
         bar.addView(archBtn);

@@ -115,9 +115,8 @@ public class ReelsFragment extends Fragment {
         Ui.pad(bar, showBack ? 8 : 16, showBack ? 28 : 12, 14, 10);
 
         if (showBack) {
-            TextView backBtn = Ui.tvBold(a, "‹", 30, Color.WHITE);
-            Ui.pad(backBtn, 10, 0, 12, 2);
-            backBtn.setOnClickListener(v -> { if (getActivity() != null) getActivity().finish(); });
+            ImageView backBtn = Ui.backArrow(a, Color.WHITE,
+                    v -> { if (getActivity() != null) getActivity().finish(); });
             bar.addView(backBtn);
         }
 

@@ -50,19 +50,18 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        // search bar
+        // crisp white search bar with vector back arrow
         LinearLayout bar = Ui.row(this);
-        bar.setBackgroundColor(Ui.BLUE);
-        TextView back = Ui.tv(this, "←", 22, 0xFFFFFFFF);
-        back.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12));
-        back.setOnClickListener(v -> finish());
+        bar.setBackground(Ui.barBg(this));
+        bar.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
+        android.widget.ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
         bar.addView(back);
         input = Ui.input(this, "🔍 Search people and posts…");
-        input.setBackground(Ui.round(this, 0x33FFFFFF, 20));
-        input.setTextColor(0xFFFFFFFF);
-        input.setHintTextColor(0xB3FFFFFF);
+        input.setBackground(Ui.round(this, Ui.inputBg(this), 20));
+        input.setTextColor(Ui.txt(this));
+        input.setHintTextColor(Ui.sub(this));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, Ui.dp(this, 40), 1);
-        ip.setMargins(0, 0, Ui.dp(this, 12), 0);
+        ip.setMargins(Ui.dp(this, 4), 0, 0, 0);
         bar.addView(input, ip);
         root.addView(bar);
 

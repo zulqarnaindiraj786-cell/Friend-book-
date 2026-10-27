@@ -75,7 +75,7 @@ public class MarketplaceActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Marketplace");
-        TextView sellBtn = Ui.roundChip(this, "＋ Sell", Color.WHITE, Ui.BLUE, 13);
+        TextView sellBtn = Ui.roundChip(this, "＋ Sell", Ui.inputBg(this), Ui.txt(this), 13);
         Ui.pad(sellBtn, 12, 6, 12, 6);
         sellBtn.setOnClickListener(v -> showSellDialog());
         bar.addView(sellBtn);

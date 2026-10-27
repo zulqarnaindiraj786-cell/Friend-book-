@@ -41,7 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * ⚙ Settings & privacy — Full friendbook 525.0.0.5.102 Settings Hub:
+ * ⚙ Settings & privacy — Full friendbook v2.2.0 Settings Hub:
  * Live settings search + Account, Security, Tools, Preferences, Media/Data Saver,
  * Wellbeing, Audience & Visibility (Privacy), Your Activity/Archive/Trash, and Legal.
  */
@@ -880,10 +880,12 @@ public class SettingsActivity extends Activity {
 
     private void howPeopleFindDialog() {
         Models.User me = Fb.me;
+        String curEmailPriv = (me != null && me.emailPrivacy != null && !me.emailPrivacy.isEmpty())
+                ? me.emailPrivacy : "Only me";
         String[] opts = {
                 "👥 Who can send friend requests: " + Prefs.friendRequestPrivacy(this),
                 "📋 Who can see your friends list: " + (me != null ? me.friendsListPrivacy : "Public"),
-                "📧 Who can see your email & phone: " + (me != null ? me.contactPrivacy : "Friends")};
+                "📧 Who can see your email & phone: " + curEmailPriv};
         Ui.choose(this, "How people find & contact you", opts, w -> {
             if (w == 0) {
                 Ui.choose(this, "Who can send you friend requests?",
@@ -899,10 +901,18 @@ public class SettingsActivity extends Activity {
                     recreate();
                 });
             } else {
-                String[] p = {"Public", "Friends", "Only me"};
+                String[] p = {"Only me", "Friends", "Public"};
                 Ui.choose(this, "Who can see your email & phone?", p, x -> {
-                    patchUser("contactPrivacy", p[x]);
-                    if (Fb.me != null) Fb.me.contactPrivacy = p[x];
+                    Map<String, Object> patch = new HashMap<>();
+                    patch.put("emailPrivacy", p[x]);
+                    patch.put("contactPrivacy", p[x]);
+                    patch.put("contactInfoPrivacy", p[x]);
+                    Fb.patchMe(patch);
+                    if (Fb.me != null) {
+                        Fb.me.emailPrivacy = p[x];
+                        Fb.me.contactPrivacy = p[x];
+                        Fb.me.contactInfoPrivacy = p[x];
+                    }
                     recreate();
                 });
             }
@@ -1094,7 +1104,7 @@ public class SettingsActivity extends Activity {
                 "1. Default post audience: " + Prefs.defaultPrivacy(this),
                 "2. Profile lock: " + (locked ? "ON 🔒" : "OFF"),
                 "3. Friends list visibility: " + (me != null ? me.friendsListPrivacy : "Public"),
-                "4. Email/phone visibility: " + (me != null ? me.contactPrivacy : "Friends"),
+                "4. Email/phone visibility: " + (me != null && me.emailPrivacy != null ? me.emailPrivacy : "Only me"),
                 "5. Blocked users (" + (me != null ? me.blocked.size() : 0) + ")"};
         Ui.choose(this, "🛡 5-Step Privacy Checkup", opts, w -> {
             if (w == 0) postsPrivacyDialog();
@@ -1246,7 +1256,7 @@ public class SettingsActivity extends Activity {
                     m.put("uid", Fb.uid());
                     m.put("name", Fb.myName());
                     m.put("text", txt);
-                    m.put("app", "friendbook-525.0.0.5.102");
+                    m.put("app", "friendbook-2.2.0");
                     m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
                     Fb.db().collection("feedback").add(m);
                     Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
@@ -1275,14 +1285,7 @@ public class SettingsActivity extends Activity {
                     if (!a.equals(p2.getText().toString())) { Ui.toast(this, "Passwords don't match"); return; }
                     if (Fb.auth().getCurrentUser() == null) return;
                     Fb.auth().getCurrentUser().updatePassword(a)
-                            .addOnSuccessListener(x -> {
-                                String curEmail = Fb.auth().getCurrentUser() != null
-                                        ? Fb.auth().getCurrentUser().getEmail() : null;
-                                if (curEmail != null && !curEmail.isEmpty()) {
-                                    com.friendbook.auth.AuthOtpVault.saveEncryptedSync(curEmail, a);
-                                }
-                                Ui.toast(this, "Password updated ✓");
-                            })
+                            .addOnSuccessListener(x -> Ui.toast(this, "Password updated ✓"))
                             .addOnFailureListener(e -> Ui.info(this, "Couldn't update",
                                     "For security, log out and log back in, then try again."));
                 })

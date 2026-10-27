@@ -62,10 +62,8 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         LinearLayout bar = Ui.row(this);
         bar.setBackgroundColor(Ui.card(this));
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(bar, 8, 10, 12, 10);
-        TextView back = Ui.tvBold(this, "‹", 28, Ui.txt(this));
-        Ui.pad(back, 10, 0, 14, 2);
-        back.setOnClickListener(v -> finish());
+        Ui.pad(bar, 6, 6, 12, 6);
+        android.widget.ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
         bar.addView(back);
         countHeader = Ui.tvBold(this, "Reel comments · All comments ▾", 16, Ui.txt(this));
         countHeader.setOnClickListener(v -> Ui.choose(this, "Filter comments", new String[]{

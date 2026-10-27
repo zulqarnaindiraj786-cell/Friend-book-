@@ -28,8 +28,9 @@ public class Models {
         public boolean profilePicGuard;   // 🛡 Profile Picture Guard shield
         public String lookupPrivacy = "Everyone";    // Everyone | Friends | Only me
         public String friendsListPrivacy = "Public"; // Public | Friends | Only me
-        public String contactPrivacy = "Friends";    // Public | Friends | Only me
-        public String contactInfoPrivacy = "Friends";
+        public String emailPrivacy = "Only me";      // Only me (default) | Friends | Public
+        public String contactPrivacy = "Only me";    // Only me (default) | Friends | Public
+        public String contactInfoPrivacy = "Only me";
         public String followersPrivacy = "Public";   // Public | Friends
         public String tagPrivacy = "Everyone";       // Everyone | Friends | Only me
         public String twoFactorPin = "";
@@ -104,9 +105,11 @@ public class Models {
             u.profilePicGuard = Format.boolOf(m, "profilePicGuard");
             u.lookupPrivacy = Format.strOr(m, "lookupPrivacy", "Everyone");
             u.friendsListPrivacy = Format.strOr(m, "friendsListPrivacy", "Public");
-            u.contactPrivacy = Format.strOr(m, "contactPrivacy", "Friends");
+            u.contactPrivacy = Format.strOr(m, "contactPrivacy", "Only me");
             u.contactInfoPrivacy = !Format.str(m, "contactInfoPrivacy").isEmpty()
                     ? Format.str(m, "contactInfoPrivacy") : u.contactPrivacy;
+            u.emailPrivacy = !Format.str(m, "emailPrivacy").isEmpty()
+                    ? Format.str(m, "emailPrivacy") : u.contactPrivacy;
             u.followersPrivacy = Format.strOr(m, "followersPrivacy", "Public");
             u.tagPrivacy = Format.strOr(m, "tagPrivacy", "Everyone");
             u.twoFactorPin = Format.str(m, "twoFactorPin");
