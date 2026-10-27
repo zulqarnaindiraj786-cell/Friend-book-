@@ -37,7 +37,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final List<Models.Message> data = new ArrayList<>();
     private String peerPhoto = "";
 
-    /** one MediaPlayer at a time for voice notes + 1x / 1.5x / 2x speed (FB Lite Messenger feature) */
+    /** one MediaPlayer at a time for voice notes + 1x / 1.5x / 2x speed (friendbook Messenger feature) */
     private static MediaPlayer voicePlayer;
     private static String playingId;
     private static float voiceSpeed = 1.0f;

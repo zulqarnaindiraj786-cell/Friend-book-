@@ -36,7 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * 📅 EventsActivity — Full Facebook-Lite Events Hub:
+ * 📅 EventsActivity — Full friendbook Events Hub:
  * Tabs (Upcoming · Going/Interested · Hosted by Me), RSVP, Add to Phone Calendar & Share.
  */
 public class EventsActivity extends Activity {

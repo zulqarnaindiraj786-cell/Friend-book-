@@ -41,7 +41,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ☰ Menu tab — Authentic Facebook-Lite 525.0.0.5.102 layout:
+ * ☰ Menu tab — Authentic friendbook 525.0.0.5.102 layout:
  * Profile card + Multi-Account Quick Switcher, 2-Column Shortcut Tiles Grid,
  * Quick Lite toggles (Dark / Data Saver / Quiet), Settings & Privacy, Help & Logout.
  */
@@ -141,7 +141,7 @@ public class MenuFragment extends Fragment {
             body.addView(adminCard, acp);
         }
 
-        // ---- All Shortcuts (Authentic FB Lite 2-Column Grid) ----
+        // ---- All Shortcuts (Authentic friendbook 2-Column Grid) ----
         TextView scHead = Ui.tvBold(a, "All shortcuts", 13, Ui.sub(a));
         scHead.setPadding(Ui.dp(a, 4), Ui.dp(a, 12), 0, Ui.dp(a, 6));
         body.addView(scHead);
@@ -279,7 +279,7 @@ public class MenuFragment extends Fragment {
 
         // ---- Settings, Activity & Help ----
         body.addView(item(a, Icons.SETTINGS, "Settings & privacy",
-                "Full FB-Lite settings: security, privacy, media, language, 2FA, archive",
+                "Full friendbook settings: security, privacy, media, language, 2FA, archive",
                 () -> startActivity(new Intent(a, SettingsActivity.class))));
         body.addView(item(a, Icons.LIST, "Activity log",
                 "Review your posts, comments & likes",
@@ -291,9 +291,9 @@ public class MenuFragment extends Fragment {
                                 + "• Open Settings & privacy to search 40+ controls\n"
                                 + "• Past stories & deleted posts live in Archive & Trash")));
         body.addView(item(a, Icons.INFO, "About friendbook",
-                "Version 525.0.0.5.102 · com.friendbook",
+                "Version 2.1.0 · com.friendbook",
                 () -> Ui.info(a, "friendbook",
-                        "Version 525.0.0.5.102 (Package: com.friendbook)\n\n"
+                        "Version 2.1.0 (Package: com.friendbook)\n\n"
                                 + "Fast, lightweight social network powered by Firebase & Cloudinary.")));
 
         body.addView(spacer(a, 12));

@@ -38,7 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 📄 PageDetailActivity — Full Facebook-Lite Page experience:
+ * 📄 PageDetailActivity — Full friendbook Page experience:
  * Page banner, avatar, category, follower count, Follow/Unfollow, Contact/Website,
  * Post-as-Page composer for Page owner, and live Page posts feed.
  */

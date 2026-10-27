@@ -26,7 +26,7 @@ import com.google.firebase.firestore.Source;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 📺 Facebook Lite Watch: Videos feed with For You / Popular / Favorites filter chips & 0ms cache render. */
+/** 📺 friendbook Watch: Videos feed with For You / Popular / Favorites filter chips & 0ms cache render. */
 public class WatchActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;

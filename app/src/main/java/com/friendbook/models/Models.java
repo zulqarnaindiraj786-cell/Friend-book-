@@ -8,12 +8,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Firestore document models — matches the schema shared with the Flutter app + FB Lite 525 fields. */
+/** Firestore document models — friendbook social schema. */
 public class Models {
 
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
-        public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone;
+        public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
         public boolean isOnline, isAdmin, banned, isVerified;
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
@@ -23,9 +23,9 @@ public class Models {
         public int stars;     // Stars balance (monetization)
         public String tickLevel = "none"; // none | blue | gold | diamond
         public boolean subscriptionsEnabled;
-        public int subscriptionPrice;     // USD per month (2 / 5 / 10)
-        public boolean profileLocked;     // 🔒 FB-style locked profile
-        public boolean profilePicGuard;   // 🛡 FB-Lite Profile Picture Guard shield
+        public int subscriptionPrice;
+        public boolean profileLocked;     // 🔒 locked profile
+        public boolean profilePicGuard;   // 🛡 Profile Picture Guard shield
         public String lookupPrivacy = "Everyone";    // Everyone | Friends | Only me
         public String friendsListPrivacy = "Public"; // Public | Friends | Only me
         public String contactPrivacy = "Friends";    // Public | Friends | Only me
@@ -40,7 +40,7 @@ public class Models {
         public List<String> savedReelIds = new ArrayList<>();
         public List<String> hobbies = new ArrayList<>();
         public String pinnedPostId;       // 📌 post pinned on own profile
-        public String statusNote;         // 💭 24h FB-Lite Note bubble ("Share a thought")
+        public String statusNote;         // 💭 24h Note bubble ("Share a thought")
         public long statusNoteAt;         // 💭 timestamp of Note bubble
         public int dailyStreak;           // 🎁 consecutive daily-bonus days
         public long lastBonusAt;          // 🎁 last daily-bonus claim (epoch ms)
@@ -79,7 +79,10 @@ public class Models {
             if (u.relationshipStatus.isEmpty()) u.relationshipStatus = u.relationship;
             u.website = Format.str(m, "website");
             u.pronouns = Format.str(m, "pronouns");
-            u.phone = Format.str(m, "phone");
+            String pn = Format.str(m, "phoneNumber");
+            String ph = Format.str(m, "phone");
+            u.phoneNumber = !pn.isEmpty() ? pn : ph;
+            u.phone = !ph.isEmpty() ? ph : u.phoneNumber;
             u.isOnline = Format.boolOf(m, "isOnline");
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.banned = Format.boolOf(m, "banned");

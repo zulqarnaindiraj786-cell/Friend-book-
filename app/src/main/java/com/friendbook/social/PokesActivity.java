@@ -20,7 +20,7 @@ import com.google.firebase.firestore.ListenerRegistration;
 import java.util.HashMap;
 import java.util.Map;
 
-/** 👋 Pokes — classic Facebook fun. See who poked you, poke back, clear. */
+/** 👋 Pokes — classic friendbook fun. See who poked you, poke back, clear. */
 public class PokesActivity extends Activity {
 
     private LinearLayout list;

@@ -53,7 +53,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 🎬 Facebook Lite Pro Reels Tab:
+ * 🎬 friendbook Pro Reels Tab:
  * - Full-screen vertical swipe feed combining both `reels` AND video `posts`!
  * - High-contrast right-side action rail with Like (6 reactions + Who Liked!), Comments (all users!),
  *   Share (Feed / Story / Apps / Copy Link), Save, Sound toggle & Playback Speed!
@@ -106,7 +106,7 @@ public class ReelsFragment extends Fragment {
         emptyState.addView(createNow, clp);
         root.addView(emptyState, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
-        // Top Facebook Lite Reels Overlay Header
+        // Top friendbook Reels Overlay Header
         LinearLayout bar = Ui.row(a);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(0x44000000);
@@ -154,7 +154,7 @@ public class ReelsFragment extends Fragment {
         return root;
     }
 
-    /** Advances the Facebook discovery epoch so new/unwatched Reels & fresh Sponsored Ads appear immediately! */
+    /** Advances the friendbook discovery epoch so new/unwatched Reels & fresh Sponsored Ads appear immediately! */
     public void refreshWithAlgorithm() {
         Activity a = getActivity();
         if (a == null) return;
@@ -349,7 +349,7 @@ public class ReelsFragment extends Fragment {
                 heartBurst.setElevation(Ui.dp(a, 30));
                 root.addView(heartBurst, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-                // Right-Side Facebook Lite Pro Action Rail (Like · Comment · Share · Save · Sound · •••)
+                // Right-Side friendbook Pro Action Rail (Like · Comment · Share · Save · Sound · •••)
                 LinearLayout rail = Ui.col(a);
                 rail.setGravity(Gravity.CENTER_HORIZONTAL);
                 rail.setElevation(Ui.dp(a, 24));

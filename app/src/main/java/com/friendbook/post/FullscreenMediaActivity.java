@@ -30,7 +30,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 🖼 Facebook Lite Pro Full-Screen HD DP & Photo Viewer:
+ * 🖼 friendbook Pro Full-Screen HD DP & Photo Viewer:
  * - Shows 100% FULL uncropped HD profile pictures (DP), cover photos & post photos!
  * - Interactive Pinch-to-Zoom (1x–5x) + Pan + Double-Tap 2.5x Zoom!
  * - Profile Picture Guard (🛡️) protection (blocks screenshots & downloads for guarded DPs).
@@ -146,7 +146,7 @@ public class FullscreenMediaActivity extends Activity {
             });
         }
 
-        // Top Facebook Lite Action Bar: ‹ Back · Title · ⬇ Save · 📤 Share · •••
+        // Top friendbook Action Bar: ‹ Back · Title · ⬇ Save · 📤 Share · •••
         topOverlay.setBackgroundColor(0x99000000);
         topOverlay.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(topOverlay, 8, 28, 12, 10);

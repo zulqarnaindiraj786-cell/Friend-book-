@@ -29,7 +29,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 📊 Facebook Lite Pro Creator Dashboard (Professional Mode Insights & Monetization Hub):
+ * 📊 friendbook Pro Creator Dashboard (Professional Mode Insights & Monetization Hub):
  * Live post performance, total likes/reactions, comments, followers, Creator Level progress,
  * Professional Mode switch, Stars earnings, Verification Tick & Profile Boost!
  */

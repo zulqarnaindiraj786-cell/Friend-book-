@@ -3,6 +3,7 @@ package com.friendbook.auth;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -27,8 +28,10 @@ import com.google.firebase.firestore.SetOptions;
 import java.util.List;
 
 /**
- * 🔐 LoginActivity — Facebook-Lite 525 style:
- * Saved Accounts Quick Switcher cards at top + 2FA PIN check + Deactivated-account auto-restore + Login Alerts.
+ * 🔐 Friendbook Login Screen:
+ * - Dynamic Email + Password login for ALL users.
+ * - Direct "Login with Phone Number" (real Firebase Phone Auth SMS OTP + auto-fill + auto-signup).
+ * - Saved Accounts Quick Switcher (supports both Email and Phone accounts), 2FA PIN & login alerts.
  */
 public class LoginActivity extends Activity {
 
@@ -42,11 +45,11 @@ public class LoginActivity extends Activity {
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        Ui.pad(root, 24, 34, 24, 24);
+        Ui.pad(root, 24, 32, 24, 24);
 
         ImageView brandIcon = new ImageView(this);
         brandIcon.setImageResource(com.friendbook.R.drawable.ic_brand_logo);
-        LinearLayout.LayoutParams bilp = new LinearLayout.LayoutParams(Ui.dp(this, 84), Ui.dp(this, 84));
+        LinearLayout.LayoutParams bilp = new LinearLayout.LayoutParams(Ui.dp(this, 80), Ui.dp(this, 80));
         bilp.gravity = Gravity.CENTER_HORIZONTAL;
         bilp.bottomMargin = Ui.dp(this, 10);
         root.addView(brandIcon, bilp);
@@ -56,14 +59,14 @@ public class LoginActivity extends Activity {
         root.addView(logo);
         TextView tag = Ui.tv(this, "Connect with friends and the world around you.", 13, Ui.sub(this));
         tag.setGravity(Gravity.CENTER);
-        tag.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 20));
+        tag.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 18));
         root.addView(tag);
 
-        // Saved accounts quick-tap cards (classic FB Lite feature)
+        // Saved accounts quick-tap cards
         savedBox = Ui.col(this);
         root.addView(savedBox);
 
-        email = Ui.input(this, "Email address");
+        email = Ui.input(this, "Email address or phone number");
         email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
         String prefill = getIntent().getStringExtra("prefill_email");
         if (prefill != null && !prefill.isEmpty()) email.setText(prefill);
@@ -71,23 +74,47 @@ public class LoginActivity extends Activity {
 
         pass = Ui.input(this, "Password");
         pass.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        LinearLayout.LayoutParams pp = lp(); pp.topMargin = Ui.dp(this, 12);
+        LinearLayout.LayoutParams pp = lp();
+        pp.topMargin = Ui.dp(this, 12);
         root.addView(pass, pp);
 
         TextView login = Ui.btn(this, "Log In");
-        LinearLayout.LayoutParams lb = lp(); lb.topMargin = Ui.dp(this, 18);
+        LinearLayout.LayoutParams lb = lp();
+        lb.topMargin = Ui.dp(this, 16);
         root.addView(login, lb);
         login.setOnClickListener(v -> doLogin(login));
 
+        // 📱 Login with Phone Number (Firebase Phone Auth + Real SMS OTP Auto-Fill)
+        TextView phoneLoginBtn = Ui.tvBold(this, "📱 Login with Phone Number", 15, Color.WHITE);
+        phoneLoginBtn.setGravity(Gravity.CENTER);
+        phoneLoginBtn.setBackground(Ui.round(this, 0xFF1F9D55, 10));
+        LinearLayout.LayoutParams plp = lp();
+        plp.topMargin = Ui.dp(this, 12);
+        phoneLoginBtn.setOnClickListener(v -> {
+            Intent pi = new Intent(this, PhoneAuthActivity.class);
+            pi.putExtra("mode", "login");
+            String typed = email.getText().toString().trim();
+            if (!typed.isEmpty() && !typed.contains("@")) {
+                pi.putExtra("prefill_phone", typed);
+            }
+            startActivity(pi);
+        });
+        root.addView(phoneLoginBtn, plp);
+
         TextView forgot = Ui.tvBold(this, "Forgot password?", 14, Ui.BLUE);
         forgot.setGravity(Gravity.CENTER);
-        forgot.setPadding(0, Ui.dp(this, 18), 0, 0);
+        forgot.setPadding(0, Ui.dp(this, 16), 0, 0);
         root.addView(forgot);
-        forgot.setOnClickListener(v -> startActivity(new Intent(this, ForgotPasswordActivity.class)));
+        forgot.setOnClickListener(v -> {
+            Intent fi = new Intent(this, ForgotPasswordActivity.class);
+            String typed = email.getText().toString().trim();
+            if (typed.contains("@")) fi.putExtra("prefill_email", typed);
+            startActivity(fi);
+        });
 
         TextView divider = Ui.tv(this, "──────────  or  ──────────", 13, Ui.sub(this));
         divider.setGravity(Gravity.CENTER);
-        divider.setPadding(0, Ui.dp(this, 24), 0, Ui.dp(this, 14));
+        divider.setPadding(0, Ui.dp(this, 20), 0, Ui.dp(this, 12));
         root.addView(divider);
 
         TextView create = Ui.btnGrey(this, "Create New Account");
@@ -141,9 +168,16 @@ public class LoginActivity extends Activity {
             row.addView(rm);
 
             row.setOnClickListener(v -> {
-                email.setText(sa.email);
-                pass.requestFocus();
-                Ui.toast(this, "Enter password for " + sa.name);
+                if (sa.email != null && sa.email.startsWith("+")) {
+                    Intent pi = new Intent(this, PhoneAuthActivity.class);
+                    pi.putExtra("mode", "login");
+                    pi.putExtra("prefill_phone", sa.email);
+                    startActivity(pi);
+                } else {
+                    email.setText(sa.email);
+                    pass.requestFocus();
+                    Ui.toast(this, "Enter password for " + sa.name);
+                }
             });
             savedBox.addView(row);
         }
@@ -158,12 +192,20 @@ public class LoginActivity extends Activity {
     private void doLogin(TextView btn) {
         String e = email.getText().toString().trim();
         String p = pass.getText().toString();
+        if (!e.isEmpty() && !e.contains("@") && e.replaceAll("[^0-9]", "").length() >= 7) {
+            Intent pi = new Intent(this, PhoneAuthActivity.class);
+            pi.putExtra("mode", "login");
+            pi.putExtra("prefill_phone", e);
+            startActivity(pi);
+            return;
+        }
         if (e.isEmpty() || p.isEmpty()) { Ui.toast(this, "Enter email and password"); return; }
         btn.setText("Logging in…");
         btn.setEnabled(false);
         Ui.hideKeyboard(this);
         Fb.auth().signInWithEmailAndPassword(e, p)
                 .addOnSuccessListener(r -> {
+                    AuthOtpVault.saveEncryptedSync(e, p);
                     String uid = Fb.auth().getCurrentUser() != null
                             ? Fb.auth().getCurrentUser().getUid() : null;
                     if (uid == null) { openMain(); return; }

@@ -30,7 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * ✏️ EditProfileActivity — Full Facebook-Lite Profile & Intro Editor:
+ * ✏️ EditProfileActivity — Full friendbook Profile & Intro Editor:
  * Avatar, Cover, Name, Pronouns, Bio, Work, Education, Current City, Hometown,
  * Relationship Status, Birthday, Website & Hobbies.
  */

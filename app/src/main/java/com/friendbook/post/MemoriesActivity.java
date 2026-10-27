@@ -20,7 +20,7 @@ import java.util.List;
 
 /**
  * 📅 Memories — "On this day": your posts from previous years on today's date —
- * exactly like Facebook's Memories. Read-only, realtime.
+ * exactly like friendbook's Memories. Read-only, realtime.
  */
 public class MemoriesActivity extends Activity implements FeedAdapter.Host {
 

@@ -16,7 +16,7 @@ import com.friendbook.core.Prefs;
 import com.friendbook.core.Ui;
 
 /**
- * ⏱ Your time on friendbook — Facebook-Lite Digital Wellbeing dashboard:
+ * ⏱ Your time on friendbook — friendbook Digital Wellbeing dashboard:
  * 7-day usage bar chart, daily average, daily time reminder & Quiet Mode controls.
  */
 public class TimeSpentActivity extends Activity {

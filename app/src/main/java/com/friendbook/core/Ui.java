@@ -34,7 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Programmatic UI toolkit with Facebook-Lite 525 look, dark mode, data-saver quality & QR/browser helpers. */
+/** Programmatic UI toolkit with friendbook 525 look, dark mode, data-saver quality & QR/browser helpers. */
 public class Ui {
 
     public static final int BLUE = 0xFF1877F2;
@@ -172,7 +172,7 @@ public class Ui {
         return e;
     }
 
-    // ---- ⚡ Facebook Lite 2G WebP CDN Image Optimizer ----
+    // ---- ⚡ friendbook 2G WebP CDN Image Optimizer ----
     /**
      * Rewrites Cloudinary URLs to request tiny server-side WebP thumbnails BEFORE downloading over the wire:
      * - Avatar: ~3 KB (96x96 WebP) instead of 2 MB raw!
@@ -255,7 +255,7 @@ public class Ui {
     }
 
     /**
-     * Full-aspect-ratio Feed & DP Post Photo loader (Facebook Lite style):
+     * Full-aspect-ratio Feed & DP Post Photo loader (friendbook style):
      * Preserves 100% of vertical/portrait/landscape photos from head to toe without square-chopping!
      */
     public static void imgFeed(Context c, ImageView iv, String url) {
@@ -620,7 +620,7 @@ public class Ui {
         } catch (Exception e) { toast(c, "No map app installed"); }
     }
 
-    /** Crisp white status bar with dark icons in light mode (exact Facebook Lite v525 look). */
+    /** Crisp white status bar with dark icons in light mode (exact friendbook v525 look). */
     @SuppressWarnings("deprecation")
     public static void statusBarLight(Activity a) {
         if (a == null) return;
@@ -639,7 +639,7 @@ public class Ui {
     }
 
     /**
-     * Authentic Facebook Lite top "Data mode" + "📡 Buy data / Data mode" strip
+     * Authentic friendbook top "Data mode" + "📡 Buy data / Data mode" strip
      * (matches Screenshots 1 & 2, and opens Pro 2G/Text-Only/Data-Saver controls on tap).
      */
     public static LinearLayout dataModeStrip(final Activity a, final Runnable onModeChanged) {

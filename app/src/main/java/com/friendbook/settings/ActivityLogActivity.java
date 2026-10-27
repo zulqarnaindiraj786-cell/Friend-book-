@@ -26,7 +26,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 📋 Activity log — Facebook-Lite filterable history:
+ * 📋 Activity log — friendbook filterable history:
  * Filter chips: All · 📝 Posts · 💬 Comments · 📖 Stories + shortcut to Archive & Trash.
  */
 public class ActivityLogActivity extends Activity {

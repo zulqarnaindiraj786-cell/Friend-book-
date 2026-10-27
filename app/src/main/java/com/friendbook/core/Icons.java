@@ -12,15 +12,15 @@ import androidx.core.graphics.drawable.DrawableCompat;
 import com.friendbook.R;
 
 /**
- * Facebook-Lite style icon system (v525 look): Lucide/Heroicons-style THIN OUTLINE icons,
+ * friendbook style icon system (v525 look): Lucide/Heroicons-style THIN OUTLINE icons,
  * 2px stroke, tinted #1877F2 (blue) when active and #65676B (gray) when inactive.
  * Fully native VectorDrawables — no emoji anywhere in navigation.
  */
 public class Icons {
 
-    /** Facebook blue (active / primary). */
+    /** friendbook blue (active / primary). */
     public static final int BLUE = 0xFF1877F2;
-    /** Facebook gray (inactive). */
+    /** friendbook gray (inactive). */
     public static final int GRAY = 0xFF65676B;
 
     // ---- the named set the user asked for ----
@@ -132,7 +132,7 @@ public class Icons {
         return iv;
     }
 
-    /** Facebook-Lite style menu icon: rounded gray circle chip with the outline icon inside. */
+    /** friendbook style menu icon: rounded gray circle chip with the outline icon inside. */
     public static LinearLayout chipIcon(Context c, int resId, int color) {
         LinearLayout wrap = new LinearLayout(c);
         wrap.setGravity(Gravity.CENTER);

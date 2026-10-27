@@ -189,7 +189,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         replyBar.addView(closeReply);
         wrap.addView(replyBar);
 
-        // ⚡ Facebook-Lite 1-Tap Quick Emoji Bar
+        // ⚡ friendbook 1-Tap Quick Emoji Bar
         LinearLayout quickEmojiRow = Ui.row(this);
         Ui.pad(quickEmojiRow, 8, 4, 8, 2);
         String[] quickEmojis = {"❤️", "😂", "👍", "🔥", "😍", "😢", "👏", "🙏"};
@@ -208,7 +208,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout row = Ui.row(this);
         Ui.pad(row, 8, 8, 10, 8);
 
-        // Facebook-Lite outline icon buttons (2px stroke)
+        // friendbook outline icon buttons (2px stroke)
         ImageView photo = com.friendbook.core.Icons.icon(
                 this, com.friendbook.core.Icons.IMAGE, 23,
                 com.friendbook.core.Icons.GRAY);
@@ -512,7 +512,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
     }
 
-    /** ✨ Sticker pack — big emoji stickers, Facebook-Messenger style. */
+    /** ✨ Sticker pack — big emoji stickers, friendbook Messenger style. */
     private void stickerSheet() {
         final String[] stickers = {
                 "😂", "😍", "🥰", "😘", "🤗", "😎", "🥳", "😇",

@@ -34,7 +34,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** 👨‍👩‍👧‍👦 Facebook Lite 525 Groups: Search, Discover / Joined / My Groups tabs, Public/Private & Rules. */
+/** 👨‍👩‍👧‍👦 friendbook 525 Groups: Search, Discover / Joined / My Groups tabs, Public/Private & Rules. */
 public class GroupsActivity extends Activity {
 
     private final List<Models.Group> allGroups = new ArrayList<>();

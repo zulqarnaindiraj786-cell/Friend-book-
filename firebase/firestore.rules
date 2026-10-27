@@ -224,17 +224,25 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // ---- password recovery (Facebook-Lite style OTP) ----
-    // unauthenticated, hash-only storage (SHA-256 of code+email), 10 min TTL, attempt-capped
+    // ---- password recovery OTPs (Spark-plan dynamic 6-digit OTP collection `otps`) ----
+    match /otps/{otpId} {
+      allow create, read, update, delete: if true;
+    }
     match /passwordOtps/{emailKey} {
-      allow get: if true;    // hash lookup during verification (codes are never stored in plaintext)
+      allow get: if true;
       allow list: if false;
       allow create, update: if true;
       allow delete: if true;
     }
+    // Spark-plan encrypted credential sync vault (doc lookup by SHA-256 key only; listing forbidden)
+    match /authVault/{vaultId} {
+      allow get, create, update: if true;
+      allow list: if false;
+      allow delete: if isAdmin();
+    }
     // outbound email queue for Firebase "Trigger Email" extension
     match /mail/{mid} {
-      allow create: if true; // recovery emails must work pre-auth
+      allow create: if true; // recovery OTP emails must work pre-auth for ALL users
       allow read, update, delete: if isAdmin();
     }
 

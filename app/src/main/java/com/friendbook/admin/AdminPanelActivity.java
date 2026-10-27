@@ -64,7 +64,7 @@ public class AdminPanelActivity extends Activity {
         container.setId(View.generateViewId());
         root.addView(container, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // ---- 6 tabs (outline icons, blue active / gray idle — Facebook Lite look) ----
+        // ---- 6 tabs (outline icons, blue active / gray idle — friendbook look) ----
         LinearLayout tabs = Ui.row(this);
         tabs.setBackgroundColor(Ui.card(this));
         tabs.setElevation(Ui.dp(this, 6));

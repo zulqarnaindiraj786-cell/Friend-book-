@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Local settings (Facebook-Lite 525.0.0.5.102 full preferences, accounts, wellbeing & Lite data tools). */
+/** Local settings (friendbook 525.0.0.5.102 full preferences, accounts, wellbeing & Lite data tools). */
 public class Prefs {
     private static SharedPreferences p;
 
@@ -37,7 +37,7 @@ public class Prefs {
         }
     }
 
-    // ---- data saver & photo quality (classic Facebook Lite feature) ----
+    // ---- data saver & photo quality (classic friendbook feature) ----
     public static boolean dataSaver(Context c) { return p(c).getBoolean("dataSaver", false); }
     public static void setDataSaver(Context c, boolean v) { p(c).edit().putBoolean("dataSaver", v).apply(); }
 
@@ -56,7 +56,7 @@ public class Prefs {
         }
     }
 
-    // ---- live data usage tracker (FB Lite Data Saver stats) ----
+    // ---- live data usage tracker (friendbook Data Saver stats) ----
     public static long dataBytesUsed(Context c) { return p(c).getLong("dataBytesUsed", 0L); }
     public static long dataBytesSaved(Context c) { return p(c).getLong("dataBytesSaved", 0L); }
     public static void trackMediaLoad(Context c, long approxFullBytes) {
@@ -116,7 +116,7 @@ public class Prefs {
     public static String friendRequestPrivacy(Context c) { return p(c).getString("reqPrivacy", "Everyone"); }
     public static void setFriendRequestPrivacy(Context c, String v) { p(c).edit().putString("reqPrivacy", v).apply(); }
 
-    // ---- reaction count preferences (FB Lite Reaction Preferences) ----
+    // ---- reaction count preferences (friendbook Reaction Preferences) ----
     public static boolean hideOtherReactions(Context c) { return p(c).getBoolean("hideOtherReact", false); }
     public static void setHideOtherReactions(Context c, boolean v) { p(c).edit().putBoolean("hideOtherReact", v).apply(); }
     public static boolean hideMyReactions(Context c) { return p(c).getBoolean("hideMyReact", false); }
@@ -226,7 +226,7 @@ public class Prefs {
         p(c).edit().putString("postDraft", v == null ? "" : v).apply();
     }
 
-    // ---- saved accounts switcher (FB Lite multi-account quick switch) ----
+    // ---- saved accounts switcher (friendbook multi-account quick switch) ----
     public static class SavedAccount {
         public String uid, email, name, photoUrl;
     }
@@ -323,7 +323,7 @@ public class Prefs {
     public static int dailyLimitMinutes(Context c) { return p(c).getInt("dailyLimitMin", 0); }
     public static void setDailyLimitMinutes(Context c, int mins) { p(c).edit().putInt("dailyLimitMin", mins).apply(); }
 
-    // 🔍 recent searches (max 8, newest first) — FB Lite search screen
+    // 🔍 recent searches (max 8, newest first) — friendbook search screen
     public static List<String> searchHistory(Context c) {
         String s = p(c).getString("searchHistory", "");
         List<String> out = new ArrayList<>();
@@ -483,16 +483,16 @@ public class Prefs {
         p(c).edit().putString("pendingRef", code == null ? "" : code).apply();
     }
 
-    // ---- ⚡ Facebook Lite 2G Turbo Engine & Text-Only Basic Mode ----
+    // ---- ⚡ friendbook 2G Turbo Engine & Text-Only Basic Mode ----
     /** Turbo 2G Engine ON by default: WebP CDN compression, 0ms optimistic UI, cache-first reads, compressed uploads. */
     public static boolean turbo2g(Context c) { return p(c).getBoolean("turbo2g", true); }
     public static void setTurbo2g(Context c, boolean v) { p(c).edit().putBoolean("turbo2g", v).apply(); }
 
-    /** Facebook Lite "Basic / Text-Only 2G Mode": 0 KB auto photo downloads — tap "See Photo" per post. */
+    /** friendbook "Basic / Text-Only 2G Mode": 0 KB auto photo downloads — tap "See Photo" per post. */
     public static boolean textOnlyMode(Context c) { return p(c).getBoolean("textOnly2g", false); }
     public static void setTextOnlyMode(Context c, boolean v) { p(c).edit().putBoolean("textOnly2g", v).apply(); }
 
-    /** Zero-lag instant screen transitions (disables 300ms heavy window slide animations, like native FB Lite). */
+    /** Zero-lag instant screen transitions (disables 300ms heavy window slide animations, like native friendbook). */
     public static boolean instantTransitions(Context c) { return p(c).getBoolean("instantTrans", true); }
     public static void setInstantTransitions(Context c, boolean v) { p(c).edit().putBoolean("instantTrans", v).apply(); }
 
@@ -504,7 +504,7 @@ public class Prefs {
     public static String commentSort(Context c) { return p(c).getString("commentSort", "all"); }
     public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "all" : v).apply(); }
 
-    /** Top Facebook Lite "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
+    /** Top friendbook "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
     public static boolean dataModeBar(Context c) { return p(c).getBoolean("dataModeBar", true); }
     public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", v).apply(); }
 
@@ -525,7 +525,7 @@ public class Prefs {
                 .apply();
     }
 
-    // ---- 🚀 Facebook Lite Pro Extra Settings ----
+    // ---- 🚀 friendbook Pro Extra Settings ----
     /** Show inline multi-user comments preview + quick comment pill directly on Home Feed cards. */
     public static boolean inlineFeedComments(Context c) { return p(c).getBoolean("inlineFeedComments", true); }
     public static void setInlineFeedComments(Context c, boolean v) { p(c).edit().putBoolean("inlineFeedComments", v).apply(); }
@@ -534,7 +534,7 @@ public class Prefs {
     public static boolean fullPhotoDisplay(Context c) { return p(c).getBoolean("fullPhotoDisplay", true); }
     public static void setFullPhotoDisplay(Context c, boolean v) { p(c).edit().putBoolean("fullPhotoDisplay", v).apply(); }
 
-    /** Automatically ask/share new Profile Picture updates to News Feed like Facebook Lite. */
+    /** Automatically ask/share new Profile Picture updates to News Feed like friendbook. */
     public static boolean shareDpToFeed(Context c) { return p(c).getBoolean("shareDpToFeed", true); }
     public static void setShareDpToFeed(Context c, boolean v) { p(c).edit().putBoolean("shareDpToFeed", v).apply(); }
 

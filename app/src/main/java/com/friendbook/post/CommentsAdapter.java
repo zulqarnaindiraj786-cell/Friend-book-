@@ -36,7 +36,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Facebook Lite Pro Threaded Comments Adapter:
+ * friendbook Pro Threaded Comments Adapter:
  * - Optional Header View (TYPE_HEADER) so PostDetailActivity uses ONE single native RecyclerView
  *   with ZERO ScrollView height-clipping bugs!
  * - Zero orphan dropping: any reply whose parentId is missing/"null" promotes cleanly to root.

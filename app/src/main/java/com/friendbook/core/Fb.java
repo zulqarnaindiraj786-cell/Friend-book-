@@ -26,7 +26,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Central Firebase access point with Facebook-Lite 2G cache-first engine:
+ * Central Firebase access point with friendbook 2G cache-first engine:
  * - 100 MB Persistent Offline Disk Cache so posts, chats, comments & profiles render in <2ms even offline/2G.
  * - Instant 0ms RAM hydration for {@link #me} and {@link #getUser(String)}.
  */
@@ -149,8 +149,13 @@ public class Fb {
 
     public static String myName() {
         if (me != null && me.displayName != null && !me.displayName.isEmpty()) return me.displayName;
-        return auth().getCurrentUser() != null && auth().getCurrentUser().getEmail() != null
-                ? auth().getCurrentUser().getEmail().split("@")[0] : "User";
+        com.google.firebase.auth.FirebaseUser cu = auth().getCurrentUser();
+        if (cu != null) {
+            if (cu.getDisplayName() != null && !cu.getDisplayName().isEmpty()) return cu.getDisplayName();
+            if (cu.getEmail() != null && !cu.getEmail().isEmpty()) return cu.getEmail().split("@")[0];
+            if (cu.getPhoneNumber() != null && !cu.getPhoneNumber().isEmpty()) return cu.getPhoneNumber();
+        }
+        return "User";
     }
 
     public static String myPhoto() { return me != null && me.photoUrl != null ? me.photoUrl : ""; }

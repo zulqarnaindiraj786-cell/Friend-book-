@@ -23,7 +23,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
- * ☁️ Facebook-Lite 2G Cloudinary Uploader:
+ * ☁️ friendbook 2G Cloudinary Uploader:
  * Automatically downscales & compresses camera/gallery images on-device BEFORE upload
  * (~55 KB in 2G/Data Saver mode, ~110 KB in Standard mode instead of 8–12 MB raw photos!),
  * so photo posts, stories, avatars & chat images upload in 1–2 seconds even on 2G!

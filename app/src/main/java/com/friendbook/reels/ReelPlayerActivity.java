@@ -7,7 +7,7 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 /**
- * 🎬 Standalone Full-Screen Facebook Lite Pro Reels Player:
+ * 🎬 Standalone Full-Screen friendbook Pro Reels Player:
  * Launched when tapping a Reel on Profile's Reels tab or a Video Post on Feed,
  * providing full Like, Comments, Share, Save, Follow, Sound & swipe-next Reels!
  */
