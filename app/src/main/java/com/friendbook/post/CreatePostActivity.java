@@ -69,6 +69,7 @@ public class CreatePostActivity extends Activity {
     private final List<String> pollOptions = new ArrayList<>();
     private String editId = null;
     private String groupId = null;
+    private boolean groupNeedsApproval = false;
     private String pageId = null, pageName = null, pagePhoto = null;
     private String postType = "regular"; // regular | life_event | qna | marketplace
     private String lifeEventIcon = "", lifeEventTitle = "";
@@ -87,6 +88,7 @@ public class CreatePostActivity extends Activity {
         Ui.statusBarBlue(this);
         editId = getIntent().getStringExtra("edit_id");
         groupId = getIntent().getStringExtra("group_id");
+        groupNeedsApproval = getIntent().getBooleanExtra("group_needs_approval", false);
         pageId = getIntent().getStringExtra("page_id");
         pageName = getIntent().getStringExtra("page_name");
         pagePhoto = getIntent().getStringExtra("page_photo");
@@ -877,7 +879,10 @@ public class CreatePostActivity extends Activity {
         m.put("taggedUids", new ArrayList<>(taggedUids));
         m.put("taggedNames", new ArrayList<>(taggedNames));
         if (uploadedUrl == null && bgColor == 0) { m.put("mediaUrl", ""); m.put("mediaType", "none"); }
-        if (groupId != null) m.put("groupId", groupId);
+        if (groupId != null) {
+            m.put("groupId", groupId);
+            m.put("groupApprovalStatus", groupNeedsApproval ? "pending" : "approved");
+        }
         m.put("likes", 0);
         m.put("comments", 0);
         m.put("shares", 0);
@@ -922,9 +927,13 @@ public class CreatePostActivity extends Activity {
         docRef.set(m).addOnFailureListener(e ->
                 android.util.Log.e("CreatePost", "Background sync failed: " + e));
         Prefs.setPostDraft(this, "");
-        Ui.toast(this, com.friendbook.core.FastCache.isOffline(this)
-                ? "Posted offline ✓ — will sync automatically"
-                : "Posted ✓");
+        if (groupId != null && groupNeedsApproval) {
+            Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");
+        } else {
+            Ui.toast(this, com.friendbook.core.FastCache.isOffline(this)
+                    ? "Posted offline ✓ — will sync automatically"
+                    : "Posted ✓");
+        }
         finish();
     }
 

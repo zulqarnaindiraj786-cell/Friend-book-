@@ -38,12 +38,12 @@ import java.util.Map;
  */
 public class AdminEarningsFragment extends Fragment {
 
-    private TextView tickIncomeT, boostIncomeT, subsIncomeT, liveIncomeT, totalT, splitT, monthT;
+    private TextView tickIncomeT, subsIncomeT, liveIncomeT, totalT, splitT, monthT;
     private BarChart chart;
     private ListenerRegistration payReg, giftReg;
 
     // running totals
-    private long tickBlue, tickGold, tickDiamond, boost, subs, liveStars;
+    private long tickBlue, tickGold, tickDiamond, subs, liveStars;
     private final Map<String, Long> monthly = new LinkedHashMap<>();
 
     @Nullable
@@ -58,7 +58,6 @@ public class AdminEarningsFragment extends Fragment {
 
         totalT = bigCard(body, "📊 Community Milestones Approved", "…", Ui.BLUE);
         tickIncomeT = row(body, "✓ Verified Badges Granted", "blue / gold / diamond reviews", Ui.BLUE);
-        boostIncomeT = row(body, "🚀 Community Boosts", "profile + post boosts", Ui.ORANGE);
         subsIncomeT = row(body, "⭐ VIP Fan Club Memberships", "free creator fan club", Ui.GREEN);
         liveIncomeT = row(body, "🔴 Live Community Stars", "total stars sent on live streams", Ui.RED);
 
@@ -151,7 +150,7 @@ public class AdminEarningsFragment extends Fragment {
         payReg = Fb.db().collection("payments")
                 .whereEqualTo("status", "approved").limit(1000)
                 .addSnapshotListener((snap, err) -> {
-                    tickBlue = tickGold = tickDiamond = boost = subs = 0;
+                    tickBlue = tickGold = tickDiamond = subs = 0;
                     monthly.clear();
                     seedMonths();
                     if (snap != null) {
@@ -166,8 +165,6 @@ public class AdminEarningsFragment extends Fragment {
                                 case "tick_blue": tickBlue += amount; break;
                                 case "tick_gold": tickGold += amount; break;
                                 case "tick_diamond": tickDiamond += amount; break;
-                                case "boost_profile":
-                                case "boost_post": boost += amount; break;
                                 case "subscription": subs += amount; break; // USD
                             }
                             if (!mk.isEmpty() && monthly.containsKey(mk) && !usd)
@@ -205,11 +202,10 @@ public class AdminEarningsFragment extends Fragment {
     private void render() {
         if (totalT == null) return;
         long tickTotal = tickBlue + tickGold + tickDiamond;
-        long totalMilestones = tickTotal + boost + subs + liveStars;
+        long totalMilestones = tickTotal + subs + liveStars;
 
         totalT.setText(Format.count(totalMilestones) + " milestones");
         tickIncomeT.setText(Format.count(tickTotal) + " ✓");
-        boostIncomeT.setText(Format.count(boost) + " 🚀");
         subsIncomeT.setText(Format.count(subs) + " ⭐");
         liveIncomeT.setText("⭐ " + Format.count(liveStars));
         splitT.setText("Badges — Blue: " + Format.count(tickBlue)

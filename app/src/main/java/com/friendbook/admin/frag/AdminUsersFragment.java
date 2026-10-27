@@ -123,6 +123,7 @@ public class AdminUsersFragment extends Fragment {
             StringBuilder s = new StringBuilder();
             if (Admin.isOwnerEmail(u.email)) s.append("👑 OWNER · ");
             else if (u.isAdmin) s.append("🛡 Admin · ");
+            else if (u.isModerator) s.append("🛡 Moderator · ");
             if (u.banned) s.append("🚫 BANNED · ");
             if (!"none".equals(u.tickLevel)) s.append(Admin.tickLabel(u.tickLevel)).append(" · ");
             s.append(u.email);
@@ -146,7 +147,10 @@ public class AdminUsersFragment extends Fragment {
         if (Admin.isOwnerEmail(u.email)) {
             opts.add("ℹ️ Owner account (protected)");
         } else {
-            opts.add(u.isAdmin ? "➖ Remove admin" : "🛡 Make admin");
+            opts.add(u.isModerator
+                    ? "➖ Remove App Moderator"
+                    : "🛡 Make App Moderator (Posts & Ban only)");
+            opts.add(u.isAdmin ? "➖ Remove FULL Admin" : "👑 Make FULL Admin");
             opts.add(u.banned ? "✅ Unban user" : "🚫 Ban user");
             opts.add("🗑 Delete user data");
         }
@@ -157,9 +161,13 @@ public class AdminUsersFragment extends Fragment {
             else if (sel.contains("Give GOLD")) Admin.setTickLevel(a, u.uid, u.displayName, "gold");
             else if (sel.contains("Give DIAMOND")) Admin.setTickLevel(a, u.uid, u.displayName, "diamond");
             else if (sel.contains("Remove ALL ticks")) Admin.setTickLevel(a, u.uid, u.displayName, "none");
-            else if (sel.contains("Make admin"))
+            else if (sel.contains("Make App Moderator"))
+                Admin.setGlobalModerator(a, u.uid, u.displayName, true);
+            else if (sel.contains("Remove App Moderator"))
+                Admin.setGlobalModerator(a, u.uid, u.displayName, false);
+            else if (sel.contains("Make FULL Admin"))
                 Fb.db().collection("users").document(u.uid).update("isAdmin", true);
-            else if (sel.contains("Remove admin"))
+            else if (sel.contains("Remove FULL Admin"))
                 Fb.db().collection("users").document(u.uid).update("isAdmin", false);
             else if (sel.contains("Unban"))
                 Fb.db().collection("users").document(u.uid).update("banned", false);

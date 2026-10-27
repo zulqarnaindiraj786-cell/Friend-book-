@@ -44,6 +44,15 @@ public class Ui {
     public static final int GREEN = 0xFF31A24C;
     public static final int RED = 0xFFE41E3F;
     public static final int ORANGE = 0xFFF7B928;
+    public static final String TEAM_AVATAR_TOKEN = "friendbook_team_logo";
+    public static final String TEAM_USER_ID = "friendbook_team";
+
+    public static boolean isTeamIdentity(String url, String nameOrId) {
+        if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) return true;
+        if (nameOrId == null) return false;
+        String low = nameOrId.trim().toLowerCase(Locale.US);
+        return TEAM_USER_ID.equals(low) || low.contains("friendbook team");
+    }
 
     public static int dp(Context c, float v) {
         return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
@@ -217,6 +226,17 @@ public class Ui {
     }
 
     public static void avatar(Context c, ImageView iv, String url) {
+        if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
+            Drawable darkPh = circle(0xFF1B1B1D);
+            Glide.with(c.getApplicationContext())
+                    .load(com.friendbook.R.drawable.ic_friendbook_team_logo)
+                    .circleCrop()
+                    .override(240, 240)
+                    .dontAnimate()
+                    .placeholder(darkPh).error(darkPh)
+                    .into(iv);
+            return;
+        }
         Drawable ph = circle(inputBg(c));
         if (url == null || url.isEmpty()) {
             iv.setImageDrawable(ph);
@@ -234,6 +254,17 @@ public class Ui {
 
     /** High-definition large circular DP for Profile hero header (never blurry!). */
     public static void avatarLarge(Context c, ImageView iv, String url) {
+        if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
+            Drawable darkPh = circle(0xFF1B1B1D);
+            Glide.with(c.getApplicationContext())
+                    .load(com.friendbook.R.drawable.ic_friendbook_team_logo)
+                    .circleCrop()
+                    .override(512, 512)
+                    .dontAnimate()
+                    .placeholder(darkPh).error(darkPh)
+                    .into(iv);
+            return;
+        }
         Drawable ph = circle(inputBg(c));
         if (url == null || url.isEmpty()) {
             iv.setImageDrawable(ph);

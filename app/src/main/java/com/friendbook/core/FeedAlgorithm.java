@@ -37,6 +37,7 @@ public final class FeedAlgorithm {
     private static final String K_POST_SEEN_COUNT = "post_seen_count";
     private static final String K_VIDEO_SEEN_EPOCH = "video_seen_epoch";
     private static final String K_VIDEO_SEEN_COUNT = "video_seen_count";
+    private static final String K_CREATOR_AFFINITY = "creator_affinity";
     private static final String K_LAST_TOP_POST = "last_top_post";
     private static final String K_LAST_TOP_REEL = "last_top_reel";
 
@@ -53,6 +54,7 @@ public final class FeedAlgorithm {
     private static final Map<String, Integer> postSeenCount = new HashMap<>();
     private static final Map<String, Integer> videoLastEpoch = new HashMap<>();
     private static final Map<String, Integer> videoSeenCount = new HashMap<>();
+    private static final Map<String, Integer> creatorAffinity = new HashMap<>();
 
     // Impressions collected during the CURRENT viewing session; flushed when next refresh/reopen happens
     // so cards never jump around mid-scroll while the user is reading or reacting!
@@ -73,6 +75,16 @@ public final class FeedAlgorithm {
         loadMap(sp.getString(K_POST_SEEN_COUNT, "{}"), postSeenCount);
         loadMap(sp.getString(K_VIDEO_SEEN_EPOCH, "{}"), videoLastEpoch);
         loadMap(sp.getString(K_VIDEO_SEEN_COUNT, "{}"), videoSeenCount);
+        loadMap(sp.getString(K_CREATOR_AFFINITY, "{}"), creatorAffinity);
+    }
+
+    /** Records positive user engagement (like/comment/share/save/follow) with a creator for BOTH Posts & Reels! */
+    public static synchronized void recordCreatorAffinity(Context c, String authorId, int points) {
+        if (authorId == null || authorId.isEmpty() || points <= 0) return;
+        ensureLoaded(c);
+        int cur = getOrZero(creatorAffinity, authorId);
+        creatorAffinity.put(authorId, Math.min(200, cur + points));
+        persist(c);
     }
 
     /** Called in MainActivity.onCreate (when user opens the app after closing it). */
@@ -281,10 +293,12 @@ public final class FeedAlgorithm {
             score += 55.0; // breaking fresh unseen post
         }
 
-        // 4. Social Graph Affinity (Favorites, Friends, Boosted, Verified Creators)
+        // 4. Social Graph + Creator Affinity (Favorites, Friends, Engaged Creators, Verified)
         if (p.authorId != null && favs.contains(p.authorId)) score += 68.0;
         if (p.authorId != null && friends.contains(p.authorId)) score += 34.0;
-        if (boosted.contains(p.id)) score += 72.0;
+        if (p.authorId != null) {
+            score += Math.min(60.0, getOrZero(creatorAffinity, p.authorId) * 2.2);
+        }
         if ("diamond".equals(p.authorTickLevel)) score += 26.0;
         else if ("gold".equals(p.authorTickLevel)) score += 18.0;
         else if ("blue".equals(p.authorTickLevel) || p.authorVerified) score += 12.0;
@@ -368,7 +382,7 @@ public final class FeedAlgorithm {
         return out;
     }
 
-    // ==================== 2. REELS & WATCH VIDEO DISCOVERY ====================
+    // ==================== 2. REELS & WATCH VIDEO DISCOVERY (FULL POST-GRADE ALGORITHM) ====================
 
     public static synchronized List<Models.Reel> rankReels(
             Context c,
@@ -377,30 +391,77 @@ public final class FeedAlgorithm {
 
         ensureLoaded(c);
         if (input == null || input.isEmpty()) return new ArrayList<>();
-        if (input.size() == 1) return new ArrayList<>(input);
+        if (input.size() == 1) {
+            if (input.get(0).id != null) pendingVideoImpressions.add(input.get(0).id);
+            return new ArrayList<>(input);
+        }
 
+        String me = Fb.uid();
         long now = System.currentTimeMillis();
+        Set<String> following = (Fb.me != null && Fb.me.following != null)
+                ? new HashSet<>(Fb.me.following) : Collections.emptySet();
+        Set<String> favs = (Fb.me != null && Fb.me.favoriteUids != null)
+                ? new HashSet<>(Fb.me.favoriteUids) : Collections.emptySet();
+
         List<ScoredReel> scored = new ArrayList<>(input.size());
         for (Models.Reel r : input) {
             if (r == null || r.id == null) continue;
+            long ageMs = Math.max(0L, now - r.createdAt);
             int seen = getOrZero(videoSeenCount, r.id);
             int lastEp = getOrZero(videoLastEpoch, r.id);
+
             double s = 0.0;
+            // 1. Creator's brand-new reel (<45s) gets instant #1 confirmation once
+            if (me != null && me.equals(r.authorId) && ageMs < 45_000L && seen == 0) {
+                s = 10_000.0;
+            } else {
+                // 2. Unseen Discovery Boost
+                if (seen == 0) s += 235.0;
 
-            if (seen == 0) s += 230.0; // Unwatched reels/videos always get top priority!
-            double ageHours = Math.max(0L, now - r.createdAt) / 3_600_000.0;
-            s += 110.0 / (1.0 + ageHours / 12.0);
-            s += Math.log1p(Math.max(0, r.likes) * 3.0 + Math.max(0, r.comments) * 5.0 + Math.max(0, r.shares) * 7.0) * 16.0;
+                // 3. Smooth Time-Decay Freshness + Breaking Upload Boost
+                double ageHours = ageMs / 3_600_000.0;
+                s += 130.0 / (1.0 + ageHours / 12.0);
+                if (ageHours < 2.0 && seen == 0) s += 60.0;
 
-            if (seen > 0) {
-                int epAgo = Math.max(1, currentEpoch - lastEp);
-                if (epAgo == 1) s -= 310.0;
-                else if (epAgo == 2) s -= 160.0;
-                s -= Math.min(seen, 8) * 38.0;
+                // 4. Social Graph + Post/Reel Cross-Affinity (Favorites, Following, Creator Engagement, Verified)
+                if (r.authorId != null) {
+                    if (favs.contains(r.authorId)) s += 74.0;
+                    if (following.contains(r.authorId)) s += 46.0;
+                    s += Math.min(80.0, getOrZero(creatorAffinity, r.authorId) * 2.5);
+                    String tick = TickCache.peek(r.authorId);
+                    if ("diamond".equals(tick)) s += 28.0;
+                    else if ("gold".equals(tick)) s += 20.0;
+                    else if ("blue".equals(tick)) s += 14.0;
+                }
+
+                // 5. Caption & Hashtag Content Quality Signal
+                if (r.caption != null && !r.caption.trim().isEmpty()) {
+                    s += 10.0;
+                    if (r.caption.contains("#")) s += 10.0;
+                }
+
+                // 6. Multi-Signal Engagement + Viral Velocity (Reactions, Comments, Shares, Saves)
+                int rx = Math.max(r.likes, r.reactions != null ? r.reactions.size() : 0);
+                int cm = Math.max(r.comments, r.inlineComments != null ? r.inlineComments.size() : 0);
+                int sh = Math.max(0, r.shares);
+                int sv = r.savedBy != null ? r.savedBy.size() : 0;
+                double eng = rx * 2.8 + cm * 5.2 + sh * 7.5 + sv * 6.0;
+                s += Math.log1p(eng) * 18.0;
+                s += Math.min(55.0, (eng / (ageHours + 2.0)) * 3.2);
+
+                // 7. Impression Cool-Down Penalty
+                if (seen > 0) {
+                    int epAgo = Math.max(1, currentEpoch - lastEp);
+                    if (epAgo == 1) s -= 310.0;
+                    else if (epAgo == 2) s -= 160.0;
+                    else if (epAgo == 3) s -= 75.0;
+                    s -= Math.min(seen, 8) * 38.0;
+                }
+                if (r.id.equals(lastTopReelId)) s -= 250.0;
+
+                // 8. Per-Epoch Exploration Jitter
+                s += jitter01(currentSeed ^ 0x517CC1B727220A95L, r.id) * 112.0;
             }
-            if (r.id.equals(lastTopReelId)) s -= 250.0;
-
-            s += jitter01(currentSeed ^ 0x517CC1B727220A95L, r.id) * 125.0;
             scored.add(new ScoredReel(r, s));
         }
 
@@ -562,6 +623,7 @@ public final class FeedAlgorithm {
                     .putString(K_POST_SEEN_COUNT, toJson(postSeenCount))
                     .putString(K_VIDEO_SEEN_EPOCH, toJson(videoLastEpoch))
                     .putString(K_VIDEO_SEEN_COUNT, toJson(videoSeenCount))
+                    .putString(K_CREATOR_AFFINITY, toJson(creatorAffinity))
                     .apply();
         } catch (Throwable ignored) {}
     }

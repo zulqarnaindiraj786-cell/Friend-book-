@@ -192,6 +192,25 @@ public class NotificationsFragment extends Fragment {
             case "friend_request":
                 if (a instanceof MainActivity) ((MainActivity) a).select(MainActivity.TAB_FRIENDS);
                 break;
+            case "group_invite":
+            case "group":
+                if (n.groupId != null && !n.groupId.isEmpty()) {
+                    Intent gi = new Intent(a, com.friendbook.groups.GroupDetailActivity.class);
+                    gi.putExtra("group_id", n.groupId);
+                    startActivity(gi);
+                } else {
+                    startActivity(new Intent(a, com.friendbook.groups.GroupsActivity.class));
+                }
+                break;
+            case "team":
+            case "announcement":
+            case "tick":
+            case "payment":
+            case "ban":
+                Intent tc = new Intent(a, com.friendbook.chat.ChatActivity.class);
+                tc.putExtra("uid", Ui.TEAM_USER_ID);
+                startActivity(tc);
+                break;
             case "friend_accept":
             case "follow":
             case "message":
@@ -204,10 +223,19 @@ public class NotificationsFragment extends Fragment {
                 if (a instanceof MainActivity) ((MainActivity) a).select(MainActivity.TAB_REELS);
                 break;
             default:
-                if (n.postId != null && !n.postId.isEmpty()) {
+                if (n.groupId != null && !n.groupId.isEmpty()) {
+                    Intent gi = new Intent(a, com.friendbook.groups.GroupDetailActivity.class);
+                    gi.putExtra("group_id", n.groupId);
+                    startActivity(gi);
+                } else if (n.postId != null && !n.postId.isEmpty()) {
                     Intent i = new Intent(a, PostDetailActivity.class);
                     i.putExtra("post_id", n.postId);
                     startActivity(i);
+                } else if (Ui.isTeamIdentity(n.fromUserPhoto, n.fromUserName)
+                        || Ui.TEAM_USER_ID.equals(n.fromUserId)) {
+                    Intent tc2 = new Intent(a, com.friendbook.chat.ChatActivity.class);
+                    tc2.putExtra("uid", Ui.TEAM_USER_ID);
+                    startActivity(tc2);
                 } else {
                     Intent p2 = new Intent(a, ProfileActivity.class);
                     p2.putExtra("uid", n.fromUserId);
@@ -227,6 +255,9 @@ public class NotificationsFragment extends Fragment {
             case "follow": return "🚶";
             case "share": return "↗";
             case "reel_like": case "reel_comment": return "🎞️";
+            case "group_invite": case "group": return "👥";
+            case "announcement": case "team": return "📣";
+            case "tick": return "✓";
             default: return "🔔";
         }
     }
@@ -275,12 +306,21 @@ public class NotificationsFragment extends Fragment {
         public void onBindViewHolder(@NonNull VH h, int position) {
             Models.Notif n = data.get(position);
             android.app.Activity c = getActivity();
-            Ui.avatar(c, h.av, n.fromUserPhoto);
+            boolean isTeam = Ui.isTeamIdentity(n.fromUserPhoto, n.fromUserName)
+                    || Ui.TEAM_USER_ID.equals(n.fromUserId)
+                    || "announcement".equals(n.type) || "team".equals(n.type)
+                    || "tick".equals(n.type) || "payment".equals(n.type) || "ban".equals(n.type);
+            Ui.avatar(c, h.av, isTeam ? Ui.TEAM_AVATAR_TOKEN : n.fromUserPhoto);
             h.typeDot.setText(emoji(n.type));
-            com.friendbook.core.TickCache.attach(h.tick, n.fromUserId);
+            if (isTeam) {
+                com.friendbook.core.Icons.setTickBadge(h.tick, "gold", false);
+            } else {
+                com.friendbook.core.TickCache.attach(h.tick, n.fromUserId);
+            }
+            String displaySender = isTeam ? "friendbook Team" : n.fromUserName;
             SpannableStringBuilder sb = new SpannableStringBuilder();
             int start = sb.length();
-            sb.append(n.fromUserName);
+            sb.append(displaySender);
             sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD), start, sb.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sb.append(" ").append(n.text == null || n.text.isEmpty() ? "interacted with you" : n.text);

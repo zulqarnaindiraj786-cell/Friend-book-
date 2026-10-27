@@ -49,6 +49,44 @@ public class Admin {
         return false;
     }
 
+    /**
+     * Global App Moderator (`users/{uid}.isModerator == true`):
+     * Can ONLY delete regular users' posts & ban/unban regular users.
+     * NEVER gets access to AdminPanelActivity (`isAdmin()` stays false!).
+     */
+    public static boolean isModerator() {
+        if (Fb.auth().getCurrentUser() == null) return false;
+        Models.User me = Fb.me;
+        return me != null && me.isModerator;
+    }
+
+    /** True if user is either Full Admin OR Global App Moderator. */
+    public static boolean canModerate() {
+        return isAdmin() || isModerator();
+    }
+
+    /** Protects Owner & Full Admins so a Global Moderator can never ban them or delete their posts. */
+    public static boolean isProtectedStaff(Models.User u) {
+        if (u == null) return false;
+        return isOwnerEmail(u.email) || u.isAdmin;
+    }
+
+    /** Appoint or remove a Global App Moderator (Full Admin only). */
+    public static void setGlobalModerator(Context c, String uid, String displayName, boolean makeMod) {
+        if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
+        Fb.db().collection("users").document(uid)
+                .set(Fb.map("isModerator", makeMod), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener(x -> {
+                    Notify.sendOfficialTeamMessage(uid, "team",
+                            makeMod
+                                    ? "🛡 You have been appointed as a friendbook Moderator! You can remove rule-breaking posts and ban abusive accounts."
+                                    : "Your friendbook Moderator role has been removed.",
+                            true);
+                    Ui.toast(c, (makeMod ? "🛡 Moderator appointed: " : "Moderator removed: ") + displayName);
+                })
+                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+    }
+
     /** Firestore rules-side check uses this email too (see firebase/firestore.rules). */
     public static boolean isOwnerEmail(String email) {
         return email != null && email.equalsIgnoreCase(OWNER_EMAIL);
@@ -68,9 +106,9 @@ public class Admin {
                     syncAuthorVerified(uid, Icons.tickRank(level) > 0);
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", uid,
-                            "fromUserId", Fb.uid(),
+                            "fromUserId", Ui.TEAM_USER_ID,
                             "fromUserName", "friendbook Team",
-                            "fromUserPhotoUrl", "",
+                            "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
                             "type", "tick",
                             "text", Icons.tickRank(level) > 0
                                     ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "."

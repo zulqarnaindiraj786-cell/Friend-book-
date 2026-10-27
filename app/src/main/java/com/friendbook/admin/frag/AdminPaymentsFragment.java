@@ -164,8 +164,6 @@ public class AdminPaymentsFragment extends Fragment {
             case "tick_blue": return "✓ Blue Tick";
             case "tick_gold": return "✨ Gold Tick";
             case "tick_diamond": return "💎 Diamond Tick";
-            case "boost_profile": return "🚀 Profile Boost 24h";
-            case "boost_post": return "🚀 Post Boost";
             case "subscription": return "⭐ Subscription";
             default: return type;
         }
@@ -190,14 +188,6 @@ public class AdminPaymentsFragment extends Fragment {
             String level = type.substring(5);
             batch.set(Fb.db().collection("users").document(uid),
                     Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
-        } else if ("boost_profile".equals(type) || "boost_post".equals(type)) {
-            String boostId = Format.str(m, "boostId");
-            if (!boostId.isEmpty()) {
-                DocumentReference bo = Fb.db().collection("boosts").document(boostId);
-                batch.update(bo, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
-                                new Date(System.currentTimeMillis() + 24L * 3600 * 1000)));
-            }
         } else if ("subscription".equals(type)) {
             String subId = Format.str(m, "subscriptionId");
             if (!subId.isEmpty()) {
@@ -221,15 +211,12 @@ public class AdminPaymentsFragment extends Fragment {
         String text;
         if (type != null && type.startsWith("tick_"))
             text = "✓ Approved! Your " + Admin.tickLabel(type.substring(5)) + " is now live 🎉";
-        else if ("boost_profile".equals(type))
-            text = "🚀 Your profile is boosted for the next 24 hours!";
-        else if ("boost_post".equals(type)) text = "🚀 Your post is boosted — more people will see it!";
-        else text = "⭐ Your subscription payment was approved. Enjoy!";
+        else text = "⭐ Your request was approved. Enjoy!";
         java.util.Map<String, Object> n = Fb.map(
                 "toUserId", uid,
-                "fromUserId", Fb.uid(),
+                "fromUserId", Ui.TEAM_USER_ID,
                 "fromUserName", "friendbook Team",
-                "fromUserPhotoUrl", "",
+                "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
                 "type", "payment",
                 "text", text,
                 "isRead", false,

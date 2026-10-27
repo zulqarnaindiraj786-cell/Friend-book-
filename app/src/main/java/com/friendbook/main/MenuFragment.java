@@ -122,7 +122,7 @@ public class MenuFragment extends Fragment {
             Icons.setTickBadge(tickIv, Fb.me.tickLevel, false);
         }
 
-        // ---- Admin Zone (owner / promoted admins only) ----
+        // ---- Admin Zone (owner / promoted FULL admins ONLY — never Global Moderators) ----
         if (Admin.isAdmin()) {
             LinearLayout adminCard = Ui.col(a);
             adminCard.setBackground(Ui.roundStroke(a, Ui.card(a), 12, Ui.ORANGE, 2));
@@ -130,7 +130,7 @@ public class MenuFragment extends Fragment {
             crown.setGravity(Gravity.CENTER);
             Ui.pad(crown, 0, 8, 0, 0);
             adminCard.addView(crown);
-            TextView open = Ui.tvBold(a, "⚡ Manage users · ticks · payments · boosts · live · broadcast", 13, Ui.txt(a));
+            TextView open = Ui.tvBold(a, "⚡ Manage users · moderators · ticks · live · broadcast", 13, Ui.txt(a));
             open.setGravity(Gravity.CENTER);
             Ui.pad(open, 12, 6, 12, 10);
             adminCard.addView(open);
@@ -139,6 +139,23 @@ public class MenuFragment extends Fragment {
             LinearLayout.LayoutParams acp = new LinearLayout.LayoutParams(-1, -2);
             acp.topMargin = Ui.dp(a, 10);
             body.addView(adminCard, acp);
+        } else if (Admin.isModerator()) {
+            // Global Moderator ONLY gets Moderator Desk (Delete Posts & Ban Users) — NO Admin Panel!
+            LinearLayout modCard = Ui.col(a);
+            modCard.setBackground(Ui.roundStroke(a, Ui.card(a), 12, Ui.BLUE, 2));
+            TextView badge = Ui.tvBold(a, "🛡 FRIENDBOOK MODERATOR DESK", 12, Ui.BLUE);
+            badge.setGravity(Gravity.CENTER);
+            Ui.pad(badge, 0, 8, 0, 0);
+            modCard.addView(badge);
+            TextView desc = Ui.tvBold(a, "🗑 Delete rule-breaking posts · 🚫 Ban abusive accounts", 13, Ui.txt(a));
+            desc.setGravity(Gravity.CENTER);
+            Ui.pad(desc, 12, 6, 12, 10);
+            modCard.addView(desc);
+            modCard.setOnClickListener(v ->
+                    startActivity(new Intent(a, com.friendbook.admin.ModeratorDeskActivity.class)));
+            LinearLayout.LayoutParams mcp = new LinearLayout.LayoutParams(-1, -2);
+            mcp.topMargin = Ui.dp(a, 10);
+            body.addView(modCard, mcp);
         }
 
         // ---- All Shortcuts (Authentic friendbook 2-Column Grid) ----

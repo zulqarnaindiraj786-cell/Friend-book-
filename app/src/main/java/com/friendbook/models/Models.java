@@ -14,7 +14,7 @@ public class Models {
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
         public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
-        public boolean isOnline, isAdmin, banned, isVerified;
+        public boolean isOnline, isAdmin, isModerator, banned, isVerified;
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
         public boolean showActiveStatus = true;
@@ -86,6 +86,7 @@ public class Models {
             u.phone = !ph.isEmpty() ? ph : u.phoneNumber;
             u.isOnline = Format.boolOf(m, "isOnline");
             u.isAdmin = Format.boolOf(m, "isAdmin");
+            u.isModerator = Format.boolOf(m, "isModerator");
             u.banned = Format.boolOf(m, "banned");
             u.isVerified = Format.boolOf(m, "isVerified");
             u.deactivated = Format.boolOf(m, "deactivated");
@@ -138,6 +139,7 @@ public class Models {
                 feeling, privacy, sharedFromId, sharedFromAuthor, sharedFromContent,
                 sharedFromMediaUrl, sharedFromMediaType, location, groupId;
         public String postType = "regular";
+        public String groupApprovalStatus = "approved"; // approved | pending | declined
         public String lifeEvent, lifeEventIcon, lifeEventTitle, qaPrompt;
         public String marketTitle, marketPrice, marketCategory, marketCondition;
         public boolean marketSold;
@@ -194,6 +196,7 @@ public class Models {
             p.privacy = Format.strOr(m, "privacy", "Public");
             p.location = Format.str(m, "location");
             p.groupId = Format.str(m, "groupId");
+            p.groupApprovalStatus = Format.strOr(m, "groupApprovalStatus", "approved");
             p.postType = Format.strOr(m, "postType", "regular");
             p.lifeEvent = Format.str(m, "lifeEvent");
             p.lifeEventIcon = Format.str(m, "lifeEventIcon");
@@ -460,7 +463,7 @@ public class Models {
     }
 
     public static class Message {
-        public String id, senderId, receiverId, text, imageUrl, type, voiceUrl;
+        public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, type, voiceUrl;
         public String replyToText, replyToSender;
         public boolean forwarded;
         public int voiceDurationSec;
@@ -474,6 +477,8 @@ public class Models {
             Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
             m0.id = d.getId();
             m0.senderId = Format.str(m, "senderId");
+            m0.senderName = Format.str(m, "senderName");
+            m0.senderPhoto = Format.str(m, "senderPhoto");
             m0.receiverId = Format.str(m, "receiverId");
             m0.text = Format.str(m, "text");
             m0.imageUrl = Format.str(m, "imageUrl");
@@ -525,12 +530,22 @@ public class Models {
     public static class ChatRoom {
         public String id, lastMessage;
         public long lastMessageTime;
+        public boolean isGroup;
+        public String groupName, groupPhoto, createdBy;
+        public boolean onlyAdminsCanSend;
+        public List<String> adminIds = new ArrayList<>();
         public List<String> participants = new ArrayList<>();
         public Map<String, Boolean> typing = new HashMap<>();
         public Map<String, String> participantNames = new HashMap<>();
         public Map<String, String> participantPhotos = new HashMap<>();
 
+        public boolean isGroupAdmin(String uid) {
+            if (uid == null || uid.isEmpty()) return false;
+            return uid.equals(createdBy) || (adminIds != null && adminIds.contains(uid));
+        }
+
         public String otherUid(String me) {
+            if (isGroup) return id;
             for (String p : participants) if (p != null && !p.equals(me)) return p;
             return participants.isEmpty() ? "" : participants.get(0);
         }
@@ -539,6 +554,15 @@ public class Models {
             ChatRoom c = new ChatRoom();
             Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
             c.id = d.getId();
+            c.isGroup = Format.boolOf(m, "isGroup");
+            c.groupName = Format.str(m, "groupName");
+            c.groupPhoto = Format.str(m, "groupPhoto");
+            c.createdBy = Format.str(m, "createdBy");
+            c.onlyAdminsCanSend = Format.boolOf(m, "onlyAdminsCanSend");
+            c.adminIds = Format.listOf(m, "adminIds");
+            if (c.createdBy != null && !c.createdBy.isEmpty() && !c.adminIds.contains(c.createdBy)) {
+                c.adminIds.add(c.createdBy);
+            }
             c.participants = Format.listOf(m, "participants");
             c.lastMessage = Format.str(m, "lastMessage");
             long ts = Format.ts(m == null ? null : m.get("lastMessageTime"));
@@ -572,9 +596,30 @@ public class Models {
     }
 
     public static class Group {
-        public String id, name, about, photoUrl, coverUrl, adminId, privacy, rules, pinnedPostId;
+        public String id, name, about, category, photoUrl, coverUrl, adminId, privacy, rules, pinnedPostId;
+        public String postPermission = "Everyone"; // Everyone | Admins & Moderators
+        public boolean requirePostApproval, requireJoinApproval;
         public long createdAt;
         public List<String> members = new ArrayList<>();
+        public List<String> adminIds = new ArrayList<>();
+        public List<String> moderatorIds = new ArrayList<>();
+        public List<String> pendingMemberIds = new ArrayList<>();
+        public List<String> bannedMemberIds = new ArrayList<>();
+        public List<String> invitedUids = new ArrayList<>();
+
+        public boolean isGroupAdmin(String uid) {
+            if (uid == null || uid.isEmpty()) return false;
+            return uid.equals(adminId) || (adminIds != null && adminIds.contains(uid));
+        }
+
+        public boolean isGroupModerator(String uid) {
+            if (uid == null || uid.isEmpty()) return false;
+            return moderatorIds != null && moderatorIds.contains(uid);
+        }
+
+        public boolean canManageGroup(String uid) {
+            return isGroupAdmin(uid) || isGroupModerator(uid);
+        }
 
         public static Group fromDoc(DocumentSnapshot d) {
             Group g = new Group();
@@ -582,14 +627,27 @@ public class Models {
             g.id = d.getId();
             g.name = Format.strOr(m, "name", "Group");
             g.about = Format.str(m, "about");
+            g.category = Format.strOr(m, "category", "Community");
             g.photoUrl = Format.str(m, "photoUrl");
             g.coverUrl = Format.str(m, "coverUrl");
             g.adminId = Format.str(m, "adminId");
             g.privacy = Format.strOr(m, "privacy", "Public");
             g.rules = Format.str(m, "rules");
             g.pinnedPostId = Format.str(m, "pinnedPostId");
+            g.postPermission = Format.strOr(m, "postPermission", "Everyone");
+            g.requirePostApproval = Format.boolOf(m, "requirePostApproval");
+            g.requireJoinApproval = Format.boolOf(m, "requireJoinApproval")
+                    || ("Private".equalsIgnoreCase(g.privacy) && (m == null || !m.containsKey("requireJoinApproval")));
             g.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             g.members = Format.listOf(m, "members");
+            g.adminIds = Format.listOf(m, "adminIds");
+            if (g.adminId != null && !g.adminId.isEmpty() && !g.adminIds.contains(g.adminId)) {
+                g.adminIds.add(g.adminId);
+            }
+            g.moderatorIds = Format.listOf(m, "moderatorIds");
+            g.pendingMemberIds = Format.listOf(m, "pendingMemberIds");
+            g.bannedMemberIds = Format.listOf(m, "bannedMemberIds");
+            g.invitedUids = Format.listOf(m, "invitedUids");
             return g;
         }
     }
@@ -613,7 +671,7 @@ public class Models {
     }
 
     public static class Notif {
-        public String id, toUserId, fromUserId, fromUserName, fromUserPhoto, type, postId, text;
+        public String id, toUserId, fromUserId, fromUserName, fromUserPhoto, type, postId, groupId, text;
         public boolean isRead;
         public long createdAt;
 
@@ -627,6 +685,7 @@ public class Models {
             n.fromUserPhoto = Format.str(m, "fromUserPhotoUrl");
             n.type = Format.str(m, "type");
             n.postId = Format.str(m, "postId");
+            n.groupId = Format.str(m, "groupId");
             n.text = Format.str(m, "text");
             n.isRead = Format.boolOf(m, "isRead");
             n.createdAt = Format.ts(m == null ? null : m.get("createdAt"));

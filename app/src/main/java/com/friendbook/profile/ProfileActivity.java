@@ -95,7 +95,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private LinearLayout ownActionsCol, visitorActionsRow, moneyRow;
     private TextView creatorDashBtn, addStoryBtn;
     private TextView primaryBtn, messageVisitorBtn, secondaryBtn;
-    private TextView boostBtn, subscribeBtn, tickBtn;
+    private TextView subscribeBtn, tickBtn;
     private ListenerRegistration subReg;
     private boolean subscribedActive;
 
@@ -344,22 +344,16 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         visitorActionsRow.addView(visitorMore, vb4);
         infoCard.addView(visitorActionsRow);
 
-        // Creator Monetization / Boost / Subscribe Quick Strip
+        // Creator Monetization / Tick / Subscribe Quick Strip
         moneyRow = Ui.row(this);
         moneyRow.setGravity(Gravity.CENTER);
         moneyRow.setPadding(0, Ui.dp(this, 8), 0, 0);
         moneyRow.setVisibility(View.GONE);
-        boostBtn = Ui.btnOutline(this, "🚀 Free 24h Boost", Icons.BLUE);
-        boostBtn.setOnClickListener(v -> boostProfile());
         tickBtn = Ui.btnGrey(this, "✓ Get a tick");
         tickBtn.setOnClickListener(v -> startActivity(new Intent(this, BlueTickActivity.class)));
         subscribeBtn = Ui.btn(this, "");
         subscribeBtn.setOnClickListener(v -> subscribe());
-        LinearLayout.LayoutParams m1 = new LinearLayout.LayoutParams(0, Ui.dp(this, 36), 1);
-        LinearLayout.LayoutParams m2 = new LinearLayout.LayoutParams(0, Ui.dp(this, 36), 1);
-        m2.leftMargin = Ui.dp(this, 8);
-        moneyRow.addView(boostBtn, m1);
-        moneyRow.addView(tickBtn, m2);
+        moneyRow.addView(tickBtn, new LinearLayout.LayoutParams(0, Ui.dp(this, 36), 1));
         moneyRow.addView(subscribeBtn, new LinearLayout.LayoutParams(0, Ui.dp(this, 36), 1));
         infoCard.addView(moneyRow);
 
@@ -992,14 +986,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (mine && !viewAsPublic) {
             ownActionsCol.setVisibility(View.VISIBLE);
             visitorActionsRow.setVisibility(View.GONE);
-            moneyRow.setVisibility(View.VISIBLE);
-            boostBtn.setVisibility(View.VISIBLE);
+            boolean showTick = user.tickRank() < 3;
+            moneyRow.setVisibility(showTick ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(View.GONE);
-            tickBtn.setVisibility(user.tickRank() >= 3 ? View.GONE : View.VISIBLE);
+            tickBtn.setVisibility(showTick ? View.VISIBLE : View.GONE);
         } else {
             ownActionsCol.setVisibility(View.GONE);
             visitorActionsRow.setVisibility(View.VISIBLE);
-            boostBtn.setVisibility(View.GONE);
             tickBtn.setVisibility(View.GONE);
             moneyRow.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
@@ -1208,25 +1201,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't join right now"));
     }
 
-    private void boostProfile() {
-        Ui.confirm(this, "🚀 Free 24h Community Profile Boost",
-                "Highlight your creator profile at the top of the Home feed for 24 hours — 100% Free!",
-                "Boost Now", () -> {
-                    String me = Fb.uid();
-                    if (me == null) return;
-                    Map<String, Object> bm = new HashMap<>();
-                    bm.put("userId", me);
-                    bm.put("type", "profile");
-                    bm.put("status", "active");
-                    bm.put("createdAt", FieldValue.serverTimestamp());
-                    bm.put("expiry", new com.google.firebase.Timestamp(
-                            new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                    Fb.db().collection("boosts").document("profile_" + me).set(bm)
-                            .addOnSuccessListener(x -> Ui.toast(this, "🚀 Profile boosted FREE for 24 hours!"))
-                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't boost profile right now"));
-                });
-    }
-
     private void watchSubscription() {
         if (subReg != null) subReg.remove();
         if (mine || Fb.uid() == null) return;
@@ -1390,9 +1364,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
+                pm.getMenu().add(user != null && user.isModerator
+                        ? "🛡 ➖ Remove App Moderator" : "🛡 ➕ Make App Moderator");
                 pm.getMenu().add("🛡 ⭐ Adjust stars (admin)…");
                 pm.getMenu().add("🛡 📢 Send official message (admin)…");
                 pm.getMenu().add("🛡 📊 User stats (admin)…");
+            } else if (Admin.isModerator() && !Admin.isProtectedStaff(user)) {
+                // Global Moderator ONLY gets Ban/Unban — NEVER full Admin controls!
+                pm.getMenu().add(user != null && user.banned
+                        ? "🛡 ✓ Unban user (Moderator)" : "🛡 🚫 Ban user (Moderator)");
             }
         } else {
             pm.getMenu().add("✏️ Edit profile & personal details");
@@ -1430,7 +1410,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         w -> Admin.setTickLevel(this, uid,
                                 user != null ? user.displayName : "user",
                                 w == 0 ? "blue" : w == 1 ? "gold" : w == 2 ? "diamond" : "none"));
+            } else if (t.contains("App Moderator") && Admin.isAdmin()) {
+                boolean make = user == null || !user.isModerator;
+                Admin.setGlobalModerator(this, uid, user != null ? user.displayName : "user", make);
+                if (user != null) user.isModerator = make;
             } else if (t.contains("Ban user") || t.contains("Unban user")) {
+                if (!Admin.isAdmin() && Admin.isProtectedStaff(user)) {
+                    Ui.toast(this, "Admin accounts cannot be modified");
+                    return true;
+                }
                 boolean unban = t.contains("Unban");
                 String name = user != null ? user.displayName : "this user";
                 Ui.confirm(this, unban ? "✓ Unban " + name + "?" : "🚫 Ban " + name + "?",
@@ -1440,8 +1428,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                 Fb.db().collection("users").document(uid)
                                         .set(Fb.map("banned", !unban), SetOptions.merge())
                                         .addOnSuccessListener(x -> {
+                                            if (user != null) user.banned = !unban;
                                             Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");
-                                            if (!unban) Notify.send(uid, "ban", "Your account was suspended by an admin.", null);
+                                            if (!unban) Notify.sendOfficialTeamMessage(uid, "ban",
+                                                    "Your account was suspended for violating community standards.", false);
                                         })
                                         .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
             } else if (t.contains("Adjust stars")) adminAdjustStars();
@@ -1546,8 +1536,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 .setPositiveButton("Send", (d, w) -> {
                     String text = e.getText().toString().trim();
                     if (text.isEmpty()) return;
-                    Notify.send(uid, "team", "🛡 " + text, null);
-                    Ui.toast(this, "Sent ✓");
+                    Notify.sendOfficialTeamMessage(uid, "team", text, true);
+                    Ui.toast(this, "Official friendbook Team message sent ✓");
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

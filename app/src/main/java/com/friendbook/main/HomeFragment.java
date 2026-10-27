@@ -65,7 +65,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private SwipeRefreshLayout swipe;
     private TextView freshPill;
     private LinearLayout notesRow;
-    private ListenerRegistration postsReg, storiesReg, friendsReg, boostsReg, livesReg;
+    private ListenerRegistration postsReg, storiesReg, friendsReg, livesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private final Set<String> friendIds = new HashSet<>();
@@ -198,8 +198,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             return copy;
         }
         List<String> favs = (Fb.me != null && Fb.me.favoriteUids != null) ? Fb.me.favoriteUids : null;
-        Set<String> boosted = (adapter != null) ? adapter.boostedPostIds : null;
-        return FeedAlgorithm.rankHomeFeed(a, list, friendIds, favs, boosted);
+        return FeedAlgorithm.rankHomeFeed(a, list, friendIds, favs, null);
     }
 
     public void scrollToTop() {
@@ -443,7 +442,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startFriendsListener();
         restartPostsListener();
         startStoriesListener();
-        startBoostsListener();
         startLivesListener();
         loadNotesUsers();
         com.friendbook.core.AdsConfig.setChangeListener((id, en) -> {
@@ -460,50 +458,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (postsReg != null) postsReg.remove();
         if (storiesReg != null) storiesReg.remove();
         if (friendsReg != null) friendsReg.remove();
-        if (boostsReg != null) boostsReg.remove();
         if (livesReg != null) livesReg.remove();
         com.friendbook.core.AdsConfig.setChangeListener(null);
-    }
-
-    // ---------- 🚀 boosted profiles/posts ----------
-    private void startBoostsListener() {
-        boostsReg = Fb.db().collection("boosts")
-                .whereEqualTo("status", "active")
-                .limit(20)
-                .addSnapshotListener((snap, err) -> {
-                    List<String> uids = new ArrayList<>();
-                    Set<String> postIds = new HashSet<>();
-                    long t = System.currentTimeMillis();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            long exp = d.getTimestamp("expiry") == null ? 0
-                                    : d.getTimestamp("expiry").toDate().getTime();
-                            if (exp != 0 && exp < t) continue;
-                            String type = d.getString("type");
-                            if ("post".equals(type)) {
-                                String pid = d.getString("postId");
-                                if (pid != null && !pid.isEmpty()) postIds.add(pid);
-                            } else {
-                                String uid = d.getString("userId");
-                                if (uid != null) uids.add(uid);
-                            }
-                        }
-                    }
-                    final Set<String> finalPostIds = postIds;
-                    List<Models.User> users = new ArrayList<>();
-                    if (uids.isEmpty()) { adapter.setBoosted(users, finalPostIds); return; }
-                    final int[] left = {uids.size()};
-                    for (String uid : uids) {
-                        Fb.getUser(uid)
-                                .addOnSuccessListener(u -> {
-                                    if (u != null) users.add(u);
-                                    if (--left[0] == 0) adapter.setBoosted(users, finalPostIds);
-                                })
-                                .addOnFailureListener(e -> {
-                                    if (--left[0] == 0) adapter.setBoosted(users, finalPostIds);
-                                });
-                    }
-                });
     }
 
     // ---------- 🔴 active lives strip ----------

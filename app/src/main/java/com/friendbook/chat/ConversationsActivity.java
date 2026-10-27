@@ -51,8 +51,8 @@ public class ConversationsActivity extends Activity {
     private ConvAdapter adapter;
     private ListenerRegistration reg;
     private LinearLayout activeRow, activeWrap;
-    private TextView inboxTab, unreadTab, archiveTab, empty;
-    private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 2 = Archived
+    private TextView inboxTab, unreadTab, groupsTab, archiveTab, empty;
+    private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 3 = Groups Only, 2 = Archived
     private boolean showArchived = false;
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
@@ -73,8 +73,15 @@ public class ConversationsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Messages");
-        TextView newChatBtn = Ui.roundChip(this, "✏️ New Chat", Ui.inputBg(this), Ui.txt(this), 12.5f);
-        Ui.pad(newChatBtn, 12, 6, 12, 6);
+        TextView newGroupBtn = Ui.roundChip(this, "👥 New Group", Ui.BLUE, Color.WHITE, 12f);
+        Ui.pad(newGroupBtn, 11, 6, 11, 6);
+        newGroupBtn.setOnClickListener(v -> startActivity(new Intent(this, CreateGroupChatActivity.class)));
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-2, -2);
+        gp.rightMargin = Ui.dp(this, 6);
+        bar.addView(newGroupBtn, gp);
+
+        TextView newChatBtn = Ui.roundChip(this, "✏️ Chat", Ui.inputBg(this), Ui.txt(this), 12f);
+        Ui.pad(newChatBtn, 11, 6, 11, 6);
         newChatBtn.setOnClickListener(v -> startActivity(new Intent(this, NewChatActivity.class)));
         bar.addView(newChatBtn);
         root.addView(bar);
@@ -96,24 +103,31 @@ public class ConversationsActivity extends Activity {
 
         LinearLayout tabs = Ui.row(this);
         tabs.setPadding(0, Ui.dp(this, 8), 0, 0);
-        inboxTab = Ui.tvBold(this, "💬 All", 12, Color.WHITE);
+        inboxTab = Ui.tvBold(this, "💬 All", 11.5f, Color.WHITE);
         inboxTab.setGravity(Gravity.CENTER);
-        Ui.pad(inboxTab, 10, 6, 10, 6);
-        unreadTab = Ui.tvBold(this, "🔵 Unread", 12, Ui.sub(this));
+        Ui.pad(inboxTab, 8, 6, 8, 6);
+        groupsTab = Ui.tvBold(this, "👥 Groups", 11.5f, Ui.sub(this));
+        groupsTab.setGravity(Gravity.CENTER);
+        Ui.pad(groupsTab, 8, 6, 8, 6);
+        unreadTab = Ui.tvBold(this, "🔵 Unread", 11.5f, Ui.sub(this));
         unreadTab.setGravity(Gravity.CENTER);
-        Ui.pad(unreadTab, 10, 6, 10, 6);
-        archiveTab = Ui.tvBold(this, "📦 Archived", 12, Ui.sub(this));
+        Ui.pad(unreadTab, 8, 6, 8, 6);
+        archiveTab = Ui.tvBold(this, "📦 Archived", 11.5f, Ui.sub(this));
         archiveTab.setGravity(Gravity.CENTER);
-        Ui.pad(archiveTab, 10, 6, 10, 6);
+        Ui.pad(archiveTab, 8, 6, 8, 6);
         LinearLayout.LayoutParams tp1 = new LinearLayout.LayoutParams(0, -2, 1);
+        LinearLayout.LayoutParams tpG = new LinearLayout.LayoutParams(0, -2, 1);
+        tpG.leftMargin = Ui.dp(this, 5);
         LinearLayout.LayoutParams tpU = new LinearLayout.LayoutParams(0, -2, 1);
-        tpU.leftMargin = Ui.dp(this, 6);
+        tpU.leftMargin = Ui.dp(this, 5);
         LinearLayout.LayoutParams tp2 = new LinearLayout.LayoutParams(0, -2, 1);
-        tp2.leftMargin = Ui.dp(this, 6);
+        tp2.leftMargin = Ui.dp(this, 5);
         tabs.addView(inboxTab, tp1);
+        tabs.addView(groupsTab, tpG);
         tabs.addView(unreadTab, tpU);
         tabs.addView(archiveTab, tp2);
         inboxTab.setOnClickListener(v -> { tabMode = 0; showArchived = false; updateTabs(); applyFilter(); });
+        groupsTab.setOnClickListener(v -> { tabMode = 3; showArchived = false; updateTabs(); applyFilter(); });
         unreadTab.setOnClickListener(v -> { tabMode = 1; showArchived = false; updateTabs(); applyFilter(); });
         archiveTab.setOnClickListener(v -> { tabMode = 2; showArchived = true; updateTabs(); applyFilter(); });
         top.addView(tabs);
@@ -174,6 +188,10 @@ public class ConversationsActivity extends Activity {
     private void updateTabs() {
         inboxTab.setBackground(Ui.round(this, tabMode == 0 ? Ui.BLUE : Ui.inputBg(this), 16));
         inboxTab.setTextColor(tabMode == 0 ? Color.WHITE : Ui.sub(this));
+        if (groupsTab != null) {
+            groupsTab.setBackground(Ui.round(this, tabMode == 3 ? Ui.BLUE : Ui.inputBg(this), 16));
+            groupsTab.setTextColor(tabMode == 3 ? Color.WHITE : Ui.sub(this));
+        }
         if (unreadTab != null) {
             unreadTab.setBackground(Ui.round(this, tabMode == 1 ? Ui.BLUE : Ui.inputBg(this), 16));
             unreadTab.setTextColor(tabMode == 1 ? Color.WHITE : Ui.sub(this));
@@ -211,15 +229,15 @@ public class ConversationsActivity extends Activity {
                             Room r = new Room();
                             r.room = Models.ChatRoom.fromDoc(d);
                             r.other = r.room.otherUid(me);
-                            if (r.other.isEmpty()) continue;
-                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.other)) continue;
+                            if (!r.room.isGroup && r.other.isEmpty()) continue;
+                            if (!r.room.isGroup && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.other)) continue;
                             Object u = d.get("unreadCount");
                             if (u instanceof Map) {
                                 Object n = ((Map<?, ?>) u).get(me);
                                 if (n instanceof Number) r.unread = ((Number) n).intValue();
                             }
                             allRooms.add(r);
-                            if (!userCache.containsKey(r.other)) {
+                            if (!r.room.isGroup && !Ui.TEAM_USER_ID.equals(r.other) && !userCache.containsKey(r.other)) {
                                 Fb.getUser(r.other).addOnSuccessListener(us -> {
                                     if (us != null) {
                                         com.friendbook.core.FastCache.putUser(us);
@@ -286,11 +304,13 @@ public class ConversationsActivity extends Activity {
             boolean arch = Prefs.isChatArchived(this, r.room.id);
             if (arch != showArchived) continue;
             if (tabMode == 1 && r.unread <= 0) continue;
+            if (tabMode == 3 && !r.room.isGroup) continue;
             if (!query.isEmpty()) {
                 Models.User u = userCache.get(r.other);
                 String nick = Prefs.chatNickname(this, r.room.id);
+                String gName = r.room.groupName == null ? "" : r.room.groupName;
                 String hay = ((u != null && u.displayName != null ? u.displayName : "") + " "
-                        + nick + " "
+                        + gName + " " + nick + " "
                         + (r.room.lastMessage == null ? "" : r.room.lastMessage)).toLowerCase();
                 if (!hay.contains(query)) continue;
             }
@@ -423,23 +443,51 @@ public class ConversationsActivity extends Activity {
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
-            Models.User tmpU = userCache.get(r.other);
-            if (tmpU == null) {
-                tmpU = com.friendbook.core.FastCache.getUser(r.other);
-                if (tmpU != null) userCache.put(r.other, tmpU);
+            if (h.presence != null) { h.presence.close(); h.presence = null; }
+            h.dot.setVisibility(View.GONE);
+            h.av.setPadding(0, 0, 0, 0);
+            h.av.setBackground(null);
+
+            final String resolvedName;
+            if (r.room.isGroup) {
+                resolvedName = (r.room.groupName == null || r.room.groupName.isEmpty())
+                        ? "Group Chat" : r.room.groupName;
+                h.name.setText("👥 " + resolvedName);
+                h.tick.setVisibility(View.GONE);
+                if (r.room.groupPhoto != null && !r.room.groupPhoto.isEmpty()) {
+                    Ui.avatar(ConversationsActivity.this, h.av, r.room.groupPhoto);
+                } else {
+                    h.av.setBackground(Ui.circle(Ui.BLUE));
+                    int p = Ui.dp(ConversationsActivity.this, 13);
+                    h.av.setPadding(p, p, p, p);
+                    h.av.setImageDrawable(Icons.tinted(ConversationsActivity.this, Icons.GROUPS, Color.WHITE));
+                }
+            } else if (Ui.TEAM_USER_ID.equals(r.other)) {
+                resolvedName = "friendbook Team";
+                h.name.setText(resolvedName);
+                Icons.setTickBadge(h.tick, "gold", false);
+                Ui.avatar(ConversationsActivity.this, h.av, Ui.TEAM_AVATAR_TOKEN);
+            } else {
+                Models.User tmpU = userCache.get(r.other);
+                if (tmpU == null) {
+                    tmpU = com.friendbook.core.FastCache.getUser(r.other);
+                    if (tmpU != null) userCache.put(r.other, tmpU);
+                }
+                final Models.User u = tmpU;
+                String nick = Prefs.chatNickname(ConversationsActivity.this, r.room.id);
+                String fallbackName = r.room.participantNames != null ? r.room.participantNames.get(r.other) : null;
+                String fallbackPhoto = r.room.participantPhotos != null ? r.room.participantPhotos.get(r.other) : null;
+                resolvedName = !nick.isEmpty() ? nick
+                        : (u != null && u.displayName != null && !u.displayName.isEmpty() ? u.displayName
+                        : (fallbackName != null && !fallbackName.isEmpty() ? fallbackName : "friendbook user"));
+                final String resolvedPhoto = u != null && u.photoUrl != null && !u.photoUrl.isEmpty()
+                        ? u.photoUrl : (fallbackPhoto == null ? "" : fallbackPhoto);
+                h.name.setText(resolvedName);
+                Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
+                Ui.avatar(ConversationsActivity.this, h.av, resolvedPhoto);
+                h.presence = Presence.watch(r.other, (online, lastSeen) ->
+                        h.dot.setVisibility(online && r.unread == 0 ? View.VISIBLE : View.GONE));
             }
-            final Models.User u = tmpU;
-            String nick = Prefs.chatNickname(ConversationsActivity.this, r.room.id);
-            String fallbackName = r.room.participantNames != null ? r.room.participantNames.get(r.other) : null;
-            String fallbackPhoto = r.room.participantPhotos != null ? r.room.participantPhotos.get(r.other) : null;
-            final String resolvedName = !nick.isEmpty() ? nick
-                    : (u != null && u.displayName != null && !u.displayName.isEmpty() ? u.displayName
-                    : (fallbackName != null && !fallbackName.isEmpty() ? fallbackName : "friendbook user"));
-            final String resolvedPhoto = u != null && u.photoUrl != null && !u.photoUrl.isEmpty()
-                    ? u.photoUrl : (fallbackPhoto == null ? "" : fallbackPhoto);
-            h.name.setText(resolvedName);
-            Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
-            Ui.avatar(ConversationsActivity.this, h.av, resolvedPhoto);
 
             boolean unread = r.unread > 0;
             h.last.setText(r.room.lastMessage == null || r.room.lastMessage.isEmpty()
@@ -453,14 +501,16 @@ public class ConversationsActivity extends Activity {
                     + (Prefs.isChatMuted(ConversationsActivity.this, r.room.id) ? "🔕" : "");
             h.pin.setText(flags);
 
-            if (h.presence != null) h.presence.close();
-            h.presence = Presence.watch(r.other, (online, lastSeen) ->
-                    h.dot.setVisibility(online && r.unread == 0 ? View.VISIBLE : View.GONE));
-
             h.itemView.setOnClickListener(v -> {
                 Intent i = new Intent(ConversationsActivity.this, ChatActivity.class);
-                i.putExtra("uid", r.other);
-                i.putExtra("name", resolvedName);
+                if (r.room.isGroup) {
+                    i.putExtra("chat_id", r.room.id);
+                    i.putExtra("is_group", true);
+                    i.putExtra("name", resolvedName);
+                } else {
+                    i.putExtra("uid", r.other);
+                    i.putExtra("name", resolvedName);
+                }
                 startActivity(i);
             });
             h.itemView.setOnLongClickListener(v -> { roomMenu(r); return true; });
