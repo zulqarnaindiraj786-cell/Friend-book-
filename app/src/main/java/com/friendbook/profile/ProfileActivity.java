@@ -1647,7 +1647,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         user.emailPrivacy = vals[x];
                         user.contactPrivacy = vals[x];
                         user.contactInfoPrivacy = vals[x];
-                        renderAboutTab();
+                        renderAbout();
                         Ui.toast(this, "Email visibility set to " + vals[x] + " ✓");
                     });
                 });
