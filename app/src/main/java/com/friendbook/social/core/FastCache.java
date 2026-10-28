@@ -303,6 +303,27 @@ public final class FastCache {
         if (postId != null) LOCAL_REACTION_TS.put(postId, System.currentTimeMillis());
     }
 
+    public static boolean isLocalReactionInFlight(String postId) {
+        if (postId == null) return false;
+        Long ts = LOCAL_REACTION_TS.get(postId);
+        return ts != null && (System.currentTimeMillis() - ts) < 4500L;
+    }
+
+    /** Seeds cold-start reaction state from embedded post.reactionsMap without blocking subcollection sync. */
+    public static void seedReactionFromPostMap(String postId, String myReaction, int total) {
+        if (postId == null || isLocalReactionInFlight(postId)) return;
+        int cleanTotal = Math.max(0, total);
+        Integer existing = REACTION_TOTALS.get(postId);
+        if (existing == null || !REACTION_FETCHED.contains(postId)) {
+            REACTION_TOTALS.put(postId, cleanTotal);
+        }
+        if (!MY_REACTIONS.containsKey(postId)) {
+            MY_REACTIONS.put(postId, (myReaction == null || myReaction.isEmpty()) ? "none" : myReaction);
+        } else if (myReaction != null && !myReaction.isEmpty() && !REACTION_FETCHED.contains(postId)) {
+            MY_REACTIONS.put(postId, myReaction);
+        }
+    }
+
     public static boolean isReactionSynced(String postId) {
         return postId != null && REACTION_FETCHED.contains(postId);
     }
