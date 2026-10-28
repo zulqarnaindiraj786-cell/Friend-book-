@@ -11,8 +11,8 @@ android {
         applicationId 'com.friendbook.social'
         minSdk 24
         targetSdk 35
-        versionCode 28
-        versionName '2.6.1'
+        versionCode 29
+        versionName '2.7.0'
         manifestPlaceholders = [
             privacyPolicyUrl: 'https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view'
         ]

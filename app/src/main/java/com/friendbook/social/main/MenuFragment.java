@@ -317,11 +317,14 @@ public class MenuFragment extends Fragment {
                         "• Shake your phone anytime on Home to send a bug report\n"
                                 + "• Open Settings & privacy to search 40+ controls\n"
                                 + "• Past stories & deleted posts live in Archive & Trash")));
+        final String vName = Ui.appVersionName(a);
+        final int vCode = Ui.appVersionCode(a);
+        final String pkg = a.getPackageName();
         body.addView(item(a, Icons.INFO, "About friendbook",
-                "Version 2.1.0 · com.friendbook.social",
-                () -> Ui.info(a, "friendbook",
-                        "Version 2.1.0 (Package: com.friendbook.social)\n\n"
-                                + "Fast, lightweight social network powered by Firebase & Cloudinary.")));
+                "Version " + vName + " · " + pkg,
+                () -> Ui.info(a, "About friendbook",
+                        "friendbook for Android\nVersion " + vName + " (Build " + vCode + ")\nPackage: " + pkg + "\n\n"
+                                + "Fast, lightweight social network with Live Video & Voice Broadcasts, Reels, Stories, Groups & Messenger.")));
 
         body.addView(spacer(a, 12));
 
@@ -346,7 +349,7 @@ public class MenuFragment extends Fragment {
                 }));
         body.addView(logout);
 
-        TextView ver = Ui.tv(a, "friendbook for Android · v2.5.2", 11, Ui.sub(a));
+        TextView ver = Ui.tv(a, "friendbook for Android · v" + vName, 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, Ui.dp(a, 14), 0, 0);
         body.addView(ver);
