@@ -164,12 +164,22 @@ public class MenuFragment extends Fragment {
         body.addView(scHead);
 
         addGridRow(body, a,
+                tile(a, Icons.VIDEO, 0xFFE41E3F, "🔴 Live Videos", "Go Live or watch live",
+                        () -> startActivity(new Intent(a, com.friendbook.social.live.LiveHubActivity.class))),
                 tile(a, Icons.CHART, Ui.BLUE, "Creator Dashboard", "Reach, likes & level",
-                        () -> com.friendbook.social.profile.CreatorDashboardDialog.show(a, null)),
+                        () -> com.friendbook.social.profile.CreatorDashboardDialog.show(a, null)));
+
+        addGridRow(body, a,
                 tile(a, Icons.DATA_SAVER, 0xFF0E5FC7, "Data mode & 2G", "Free text / Saver",
                         () -> com.friendbook.social.core.FastCache.showLiteModeDialog(a, () -> {
                             if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
-                        })));
+                        })),
+                tile(a, Icons.GLOBE, 0xFFE41E3F, "🎥 Go Live Studio", "Start camera & voice live",
+                        () -> {
+                            Intent li = new Intent(a, com.friendbook.social.live.LiveActivity.class);
+                            li.putExtra("host", true);
+                            startActivity(li);
+                        }));
 
         addGridRow(body, a,
                 tile(a, Icons.FRIENDS, Ui.BLUE, "Friends", "Requests & PYMK",
@@ -307,11 +317,14 @@ public class MenuFragment extends Fragment {
                         "• Shake your phone anytime on Home to send a bug report\n"
                                 + "• Open Settings & privacy to search 40+ controls\n"
                                 + "• Past stories & deleted posts live in Archive & Trash")));
+        final String vName = Ui.appVersionName(a);
+        final int vCode = Ui.appVersionCode(a);
+        final String pkg = a.getPackageName();
         body.addView(item(a, Icons.INFO, "About friendbook",
-                "Version 2.1.0 · com.friendbook.social",
-                () -> Ui.info(a, "friendbook",
-                        "Version 2.1.0 (Package: com.friendbook.social)\n\n"
-                                + "Fast, lightweight social network powered by Firebase & Cloudinary.")));
+                "Version " + vName + " · " + pkg,
+                () -> Ui.info(a, "About friendbook",
+                        "friendbook for Android\nVersion " + vName + " (Build " + vCode + ")\nPackage: " + pkg + "\n\n"
+                                + "Fast, lightweight social network with Live Video & Voice Broadcasts, Reels, Stories, Groups & Messenger.")));
 
         body.addView(spacer(a, 12));
 
@@ -336,7 +349,7 @@ public class MenuFragment extends Fragment {
                 }));
         body.addView(logout);
 
-        TextView ver = Ui.tv(a, "friendbook for Android · v2.5.2", 11, Ui.sub(a));
+        TextView ver = Ui.tv(a, "friendbook for Android · v" + vName, 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, Ui.dp(a, 14), 0, 0);
         body.addView(ver);

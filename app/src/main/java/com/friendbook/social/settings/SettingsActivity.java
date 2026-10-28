@@ -463,11 +463,15 @@ public class SettingsActivity extends Activity {
                 "Permanently delete your friendbook account, profile & content", this::deleteAccount));
         body.addView(rowI(Icons.HELP, "Help & Support Center", "FAQs · troubleshooting · contact support",
                 this::helpDialog));
-        body.addView(rowI(Icons.INFO, "About", "friendbook 2.5.2 · com.friendbook.social", () -> Ui.info(this,
+        final String appVerName = Ui.appVersionName(this);
+        final int appVerCode = Ui.appVersionCode(this);
+        final String appPkg = getPackageName();
+        body.addView(rowI(Icons.INFO, "About", "Version " + appVerName + " · " + appPkg, () -> Ui.info(this,
                 "About friendbook",
-                "friendbook for Android\nVersion 2.5.2 (build 26)\nPackage: com.friendbook.social\n\n"
+                "friendbook for Android\nVersion " + appVerName + " (Build " + appVerCode + ")\nPackage: " + appPkg + "\n\n"
                         + "Core friendbook features:\n"
                         + "• News Feed (Top, Most Recent, Favorites, PYMK, Colored Posts, Polls, Life Events, Q&A)\n"
+                        + "• Real-Time Live Video & Voice Studio, Co-Host Split-Screen, Live Polls & Star Gifts\n"
                         + "• Stories (Photo, Video, Aa Text Stories, Reactions, Archive & Profile Highlights)\n"
                         + "• Reels, Watch, Groups, Pages (Post as Page), Events & 2-Column Marketplace\n"
                         + "• Messenger (Active Now bar, Voice Notes, Stickers, Quoted Replies, Forwarding, Themes)\n"
@@ -1232,7 +1236,7 @@ public class SettingsActivity extends Activity {
                     m.put("uid", Fb.uid());
                     m.put("name", Fb.myName());
                     m.put("text", txt);
-                    m.put("app", "friendbook-2.2.0");
+                    m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
                     m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
                     Fb.db().collection("feedback").add(m);
                     Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");

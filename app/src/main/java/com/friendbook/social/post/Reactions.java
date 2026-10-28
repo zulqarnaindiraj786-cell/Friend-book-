@@ -212,13 +212,11 @@ public class Reactions {
     }
 
     /**
-     * Syncs BOTH the current user's reaction AND the exact reaction count + top emoji stack
-     * from post.reactionsMap + posts/{postId}/reactions, healing posts/{postId}.likes if out-of-sync!
+     * 0.0ms synchronous hydration from embedded post.reactionsMap BEFORE FeedAdapter binds UI!
      */
-    public static void syncPostReactions(final Context c, final Models.Post post) {
+    public static void hydrateFromPostInstant(final Models.Post post) {
         if (post == null || post.id == null) return;
-        final String postId = post.id;
-        // 0ms immediate hydrate from embedded post.reactionsMap (multi-user guaranteed!)
+        if (FastCache.isLocalReactionInFlight(post.id)) return;
         if (post.reactionsMap != null && !post.reactionsMap.isEmpty()) {
             String me = Fb.uid();
             String myType = null;
@@ -229,11 +227,21 @@ public class Reactions {
                 if (em.indexOf(emoji) < 0 && em.length() < 6) em.append(emoji);
                 if (me != null && me.equals(e.getKey())) myType = t;
             }
-            if (em.length() > 0) FastCache.setReactionEmojis(postId, em.toString());
+            if (em.length() > 0) FastCache.setReactionEmojis(post.id, em.toString());
             int count = Math.max(post.likes, post.reactionsMap.size());
-            FastCache.setReactionState(c, postId, myType, count, false);
+            FastCache.seedReactionFromPostMap(post.id, myType, count);
         }
-        if (FastCache.isReactionSynced(postId)) return;
+    }
+
+    /**
+     * Syncs BOTH the current user's reaction AND the exact reaction count + top emoji stack
+     * from post.reactionsMap + posts/{postId}/reactions, healing posts/{postId}.likes if out-of-sync!
+     */
+    public static void syncPostReactions(final Context c, final Models.Post post) {
+        if (post == null || post.id == null) return;
+        hydrateFromPostInstant(post);
+        final String postId = post.id;
+        if (FastCache.isReactionSynced(postId) || FastCache.isLocalReactionInFlight(postId)) return;
         FastCache.markReactionSynced(postId);
         reconcileFromCollection(c, postId, post.likes);
     }
@@ -241,11 +249,14 @@ public class Reactions {
     public static void reconcileFromCollection(final Context c, final String postId, final int storedLikes) {
         if (postId == null || postId.isEmpty()) return;
         final String me = Fb.uid();
+        final Long tapBeforeFetch = FastCache.isLocalReactionInFlight(postId) ? System.currentTimeMillis() : null;
         Fb.db().collection("posts").document(postId).collection("reactions")
                 .limit(250)
                 .get()
                 .addOnSuccessListener((QuerySnapshot snap) -> {
                     if (snap == null) return;
+                    // Never let an older in-flight snapshot overwrite a fresh optimistic tap!
+                    if (tapBeforeFetch == null && FastCache.isLocalReactionInFlight(postId)) return;
                     int realCount = snap.size();
                     String myType = null;
                     Map<String, Integer> freq = new LinkedHashMap<>();

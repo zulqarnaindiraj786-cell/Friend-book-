@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Left solid blue cuff -->
+    <path
+        android:fillColor="#FF1877F2"
+        android:pathData="M3.5,10h3.2c0.44,0 0.8,0.36 0.8,0.8v9.4c0,0.44 -0.36,0.8 -0.8,0.8H3.5C2.67,21 2,20.33 2,19.5v-8C2,10.67 2.67,10 3.5,10z" />
+    <!-- Right solid blue thumb & hand -->
+    <path
+        android:fillColor="#FF1877F2"
+        android:pathData="M9.2,9.7l3.35,-6.35c0.42,-0.8 1.38,-1.18 2.24,-0.88c0.88,0.31 1.4,1.21 1.24,2.13L15.3,9.2h4.45c1.38,0 2.4,1.28 2.1,2.63l-1.62,7.35C20.01,20.23 19.08,21 18,21H9.8c-0.55,0 -1,-0.45 -1,-1v-9.5C8.8,10.17 8.95,9.88 9.2,9.7z" />
+</vector>

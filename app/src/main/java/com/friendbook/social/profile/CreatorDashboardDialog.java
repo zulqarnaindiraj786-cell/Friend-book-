@@ -172,9 +172,11 @@ public final class CreatorDashboardDialog {
                     a.startActivity(new Intent(a, AddReelActivity.class));
                 });
         addToolRow(a, toolsCard, "🔴 Go Live now",
-                "Broadcast live video & receive Stars from viewers", () -> {
+                "Broadcast real live video & voice, invite Co-Host & earn Stars", () -> {
                     dlg.dismiss();
-                    a.startActivity(new Intent(a, LiveActivity.class));
+                    Intent li = new Intent(a, LiveActivity.class);
+                    li.putExtra("host", true);
+                    a.startActivity(li);
                 });
         addToolRow(a, toolsCard, "📝 Publish a new Post",
                 "Share photos, polls, feelings or check-ins", () -> {

@@ -1,861 +1,830 @@
 package com.friendbook.social.live;
 
 import android.Manifest;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.params.StreamConfigurationMap;
-import android.os.Build;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Looper;
-import android.util.Size;
+import android.text.InputFilter;
+import android.text.TextUtils;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.MotionEvent;
-import android.view.Surface;
+import android.view.ScaleGestureDetector;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
+import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.friendbook.social.core.Admin;
-import com.friendbook.social.core.AdsConfig;
+import com.friendbook.social.R;
+import com.friendbook.social.core.ContentSafetyEngine;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
-import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Notify;
-import com.friendbook.social.core.TickCache;
 import com.friendbook.social.core.Ui;
-import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
- * 🔴 friendbook Pro Live Broadcast Studio & Real-Time Interactive Live Room:
- *  - Real Camera2 Front/Rear hardware video preview (`TextureView`) for Host + Flip, Flash/Torch & Studio Color Filters!
- *  - Pre-Live Setup Studio (Title, Category, Public/Friends privacy, Comments/Slow-Mode/Gifts toggles, 3-2-1 Countdown)
- *  - Live Broadcast HUD: Host Avatar + Follow + Pulsing LIVE Timer + Active Viewers List + Stars Counter + Pinned Topic
- *  - Real-time scrolling Live Chat with Host/Moderator controls (Pin message, Delete comment, Mute user, Slow Mode)
- *  - Animated floating Live Reactions (❤️ 🔥 😂 👏 😍 🎉) synced across all viewers in real time!
- *  - Post-Live Broadcast Summary screen with Duration, Peak Viewers, Likes, Comments & Stars earned!
+ * Full Real-Time Live Video & Audio Broadcast Studio + Viewer Room (`v2.6.0`):
+ * - Real live Camera2 WebP video streaming + real live 8kHz G.711 u-law voice streaming
+ * - Co-Host / Guest split-screen camera & voice ("Join Live")
+ * - Interactive Live Polls, Q&A Stage Spotlight, Star Gifts & Top Supporters Leaderboard
+ * - Full Studio Controls: Flip, Mirror, Pinch-Zoom, Tap-Focus, Torch, Front Ring-Light,
+ *   Beauty Exposure Boost, 8 Visual Filters, Video Quality (HD / Auto / Data Saver),
+ *   Camera Pause Shield, Clean View HUD, Slow Mode, Keyword Filter, Live Moderators, Mute & Kick.
  */
-public class LiveActivity extends Activity {
+public class LiveActivity extends Activity implements LiveStreamEngine.Listener {
 
-    private static final int REQ_CAMERA_AUDIO = 941;
+    private static final int REQ_LIVE_PERMS = 701;
+    private static final int REQ_COHOST_PERMS = 702;
 
-    private static final String[] CATEGORIES = {
-            "💬 Chatting", "🎮 Gaming", "🎵 Music", "📚 Q&A", "🏏 Sports", "✨ Lifestyle"
-    };
     private static final String[] FILTER_NAMES = {
-            "✨ Natural", "🔥 Warm", "❄️ Cool", "🌸 Rose", "🌙 Cinema"
+            "✨ Natural", "☀️ Warm", "❄️ Cool", "🌸 Rose",
+            "🌙 Cinema", "🎞️ Vintage", "💎 Vivid", "🖤 Mono"
     };
-    private static final int[] FILTER_TINTS = {
-            0x00000000, 0x24FF8A00, 0x2400B0FF, 0x24FF4081, 0x380D1B2A
+    private static final int[] FILTER_OVERLAYS = {
+            0x00000000, 0x26FF9800, 0x2400B0FF, 0x26FF4081,
+            0x380D1B2A, 0x2AD7CCC8, 0x1E7C4DFF, 0x48212121
     };
-    private static final String[] REACTIONS = {"❤️", "🔥", "😂", "👏", "😍", "🎉"};
+    private static final String[] CATEGORIES = {
+            "💬 Chatting", "🎮 Gaming", "🎵 Music", "📚 Q&A",
+            "🏏 Sports", "✨ Lifestyle", "🍳 Cooking", "💻 Tech"
+    };
+    private static final String[] REACTION_EMOJIS = {"❤️", "🔥", "😂", "👏", "😍", "🎉"};
 
+    // Launch & Identity
     private String liveId;
+    private String hostId;
     private boolean isHost;
     private boolean isLiveStarted;
-    private boolean joinedCounted;
-    private boolean endingShown;
+    private boolean isEnded;
+    private boolean viewerCountJoined;
 
-    // Live metadata & settings
-    private String hostId = "";
-    private String hostName = "";
-    private String hostPhoto = "";
-    private String hostTick = "none";
-    private String liveTitle = "";
-    private String liveCategory = CATEGORIES[0];
-    private String livePrivacy = "Public";
-    private String pinnedComment = "";
-    private boolean allowComments = true;
-    private boolean slowMode = false;
-    private boolean allowGifts = true;
-    private boolean micMuted = false;
-    private boolean viewerAudioMuted = false;
-    private boolean torchOn = false;
-    private boolean useFrontCamera = true;
-    private int filterIndex = 0;
+    // Engines (main + optional Co-Host local engine when viewer joins stage)
+    private LiveStreamEngine engine;
+    private LiveStreamEngine coHostLocalEngine;
 
-    // Live counters & timers
-    private long liveStartMs = 0L;
-    private int currentViewers = 0;
-    private int peakViewers = 0;
-    private int totalStars = 0;
-    private int totalLikes = 0;
-    private int lastSyncedLikes = -1;
-    private int totalCommentsCount = 0;
-    private long lastCommentSentAt = 0L;
-    private final List<String> viewerIds = new ArrayList<>();
-    private final List<String> mutedUserIds = new ArrayList<>();
-
-    // Camera2 hardware fields
-    private TextureView cameraTexture;
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession captureSession;
-    private CaptureRequest.Builder previewBuilder;
-    private HandlerThread camThread;
-    private Handler camHandler;
-    private Size previewSize = new Size(1280, 720);
-
-    // UI layers
+    // Stage Views
     private FrameLayout rootStage;
-    private FrameLayout fallbackStage;
+    private TextureView cameraTexture;
+    private ImageView remoteVideoView;
+    private LinearLayout fallbackStage;
     private ImageView stageAvatar;
-    private TextView stageStatusLabel;
-    private View filterOverlay;
-    private FrameLayout preLiveLayer;
-    private FrameLayout broadcastLayer;
+    private TextView stageStatusTv;
+    private View filterOverlayView;
+    private View ringLightOverlay;
+    private FrameLayout floatingHeartsLayer;
+
+    // Co-Host PIP Card (Top-Right under header)
+    private FrameLayout coHostCard;
+    private TextureView coHostLocalTexture;
+    private ImageView coHostRemoteImage;
+    private TextView coHostLabelTv;
+    private TextView coHostCloseBtn;
+
+    // Pre-Live Studio Views
+    private FrameLayout preLiveOverlay;
+    private EditText titleInput;
+    private String selectedCategory = CATEGORIES[0];
+    private boolean privacyFriendsOnly = false;
+    private TextView privacyChip;
+    private LinearLayout categoryChipRow;
+    private TextView qualityStudioChip;
     private TextView countdownTv;
 
-    // Broadcast HUD widgets
-    private ImageView hostAvIv, hostTickIv;
-    private TextView hostNameTv, hostSubTv, followBtnTv;
-    private TextView liveBadgeTv, viewersPillTv, starsPillTv, endOrLeaveBtn;
-    private LinearLayout pinnedBox;
-    private TextView pinnedTextTv;
-    private TextView giftBannerTv;
-    private RecyclerView chatRv;
-    private EditText chatInput;
-    private TextView sendBtn, giftBtn;
-    private TextView micRailBtn, flashRailBtn, filterRailBtn;
+    // Active Broadcast HUD Views
+    private FrameLayout liveHudOverlay;
+    private TextView restoreHudBtn;
+    private ImageView hostTopAvatar;
+    private TextView hostTopName;
+    private TextView hostTopSub;
+    private TextView followHostBtn;
+    private TextView liveBadgeTv;
+    private TextView timerTv;
+    private TextView viewerCountTv;
+    private TextView voiceMeterTv;
+    private LinearLayout pinnedCommentBox;
+    private TextView pinnedCommentTv;
 
-    private final List<Map<String, Object>> comments = new ArrayList<>();
+    // Stage Interactive Cards (Spotlight Q&A + Active Poll)
+    private LinearLayout spotlightQaCard;
+    private TextView spotlightQaTv;
+    private LinearLayout activePollCard;
+
+    // Chat & Bottom Bar
+    private RecyclerView chatRv;
     private ChatAdapter chatAdapter;
-    private ListenerRegistration liveReg, chatReg;
+    private EditText commentInput;
+    private LinearLayout bottomComposerBar;
+
+    // Right Action Rail Buttons
+    private TextView btnMic;
+    private TextView btnVideoPause;
+    private TextView btnSpeaker;
+    private TextView btnTorch;
+    private TextView btnRingLight;
+    private TextView btnFilter;
+    private TextView btnCoHost;
+    private TextView btnQa;
+    private TextView btnPoll;
+
+    // Broadcast Settings & Room State
+    private int currentFilterIdx = 0;
+    private boolean ringLightOn = false;
+    private boolean cleanViewMode = false;
+    private boolean fitVideoCenter = false;
+    private boolean commentsEnabled = true;
+    private boolean slowModeEnabled = false;
+    private boolean giftsEnabled = true;
+    private boolean qaEnabled = true;
+    private boolean coHostAllowed = true;
+    private String blockedKeywordsCsv = "";
+    private long lastCommentSentMs = 0L;
+
+    // Metrics & Realtime Sync
+    private long liveStartMs = 0L;
+    private long frameSeqOut = 0L;
+    private long audioSeqOut = 0L;
+    private long coHostSeqOut = 0L;
+    private long lastHostVideoUpdateMs = 0L;
+    private long lastCoHostMediaPushMs = 0L;
+    private int peakViewers = 1;
+    private int currentViewers = 1;
+    private int totalUniqueViewers = 1;
+    private int totalLikes = 0;
+    private int totalComments = 0;
+    private int totalStarsReceived = 0;
+    private String hostNameStr = "Host";
+    private String hostPhotoStr = "";
+    private String liveTitleStr = "";
+
+    // Co-Host, Moderation, Q&A, Polls & Leaderboard State
+    private String activeCoHostUid = "";
+    private String activeCoHostName = "";
+    private boolean isMeActiveCoHost = false;
+    private final Set<String> activeViewerIds = new HashSet<>();
+    private final Map<String, String> viewerNames = new LinkedHashMap<>();
+    private final Map<String, String> viewerPhotos = new HashMap<>();
+    private final Set<String> mutedUserIds = new HashSet<>();
+    private final Set<String> kickedUserIds = new HashSet<>();
+    private final Set<String> moderatorIds = new HashSet<>();
+    private final Set<String> deletedMsgIds = new HashSet<>();
+    private final Map<String, Integer> supporterStars = new HashMap<>();
+    private final Map<String, String> supporterNames = new HashMap<>();
+    private final List<ChatItem> qaItems = new ArrayList<>();
+    private final Map<String, ChatItem> pendingCoHostRequests = new LinkedHashMap<>();
+
+    // Poll State
+    private String activePollId = "";
+    private String activePollQuestion = "";
+    private List<String> activePollOptions = new ArrayList<>();
+    private final Map<String, Integer> activePollVoterChoice = new HashMap<>();
+    private int myVotedOption = -1;
+
+    // Listeners & Timers
+    private ListenerRegistration liveDocReg;
+    private ListenerRegistration chatColReg;
+    private DatabaseReference rtdbStreamRef;
+    private ValueEventListener rtdbStreamListener;
+
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final Random rng = new Random();
 
-    private final Runnable timerTick = new Runnable() {
+    private final Runnable durationTicker = new Runnable() {
         @Override
         public void run() {
-            if (isLiveStarted && liveBadgeTv != null && liveStartMs > 0) {
+            if (!isEnded && isLiveStarted && liveStartMs > 0 && timerTv != null) {
                 long sec = Math.max(0L, (System.currentTimeMillis() - liveStartMs) / 1000L);
-                long mm = sec / 60L, ss = sec % 60L;
-                String clock = sec >= 3600
-                        ? String.format(Locale.US, "%d:%02d:%02d", sec / 3600L, (sec % 3600L) / 60L, ss)
-                        : String.format(Locale.US, "%02d:%02d", mm, ss);
-                liveBadgeTv.setText((micMuted ? "🔇 LIVE " : "🔴 LIVE ") + clock);
+                long mm = sec / 60L;
+                long ss = sec % 60L;
+                if (mm >= 60) {
+                    timerTv.setText(String.format(Locale.US, "%d:%02d:%02d", mm / 60, mm % 60, ss));
+                } else {
+                    timerTv.setText(String.format(Locale.US, "%02d:%02d", mm, ss));
+                }
+                uiHandler.postDelayed(this, 1000L);
             }
-            uiHandler.postDelayed(this, 1000L);
+        }
+    };
+
+    private final Runnable hostHeartbeatTask = new Runnable() {
+        @Override
+        public void run() {
+            if (!isEnded && isHost && isLiveStarted && liveId != null) {
+                Map<String, Object> hb = new HashMap<>();
+                hb.put("lastHeartbeatMs", System.currentTimeMillis());
+                hb.put("viewerIds", new ArrayList<>(activeViewerIds));
+                hb.put("viewerCount", Math.max(1, currentViewers));
+                hb.put("peakViewers", peakViewers);
+                hb.put("likesCount", totalLikes);
+                Fb.db().collection("lives").document(liveId).update(hb);
+                uiHandler.postDelayed(this, 8000L);
+            }
         }
     };
 
     @Override
-    protected void onCreate(Bundle b) {
-        super.onCreate(b);
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            getWindow().setStatusBarColor(0xFF0A0A0F);
-        }
+        getWindow().setStatusBarColor(0xFF000000);
+        getWindow().setNavigationBarColor(0xFF000000);
 
         liveId = getIntent().getStringExtra("live_id");
-        isHost = getIntent().getBooleanExtra("host", false);
-        String passedTitle = getIntent().getStringExtra("title");
-        if (passedTitle != null && !passedTitle.trim().isEmpty()) {
-            liveTitle = passedTitle.trim();
+        hostId = getIntent().getStringExtra("host_id");
+        // SAFETY FIX: Never close silently! Empty live_id always launches Host Pre-Live Studio.
+        boolean hostFlag = getIntent().getBooleanExtra("host", false);
+        isHost = hostFlag || liveId == null || liveId.trim().isEmpty();
+        if (isHost) {
+            hostId = Fb.uid();
         }
-
-        if (!isHost && (liveId == null || liveId.isEmpty())) {
+        if (Fb.uid() == null) {
+            Ui.toast(this, "Please sign in first");
             finish();
             return;
         }
 
-        rootStage = new FrameLayout(this);
-        rootStage.setBackgroundColor(0xFF0B0D14);
+        engine = new LiveStreamEngine(this, this);
+        buildCompleteUi();
 
-        // 1. Hardware Camera2 TextureView (for Host real camera feed)
         if (isHost) {
-            cameraTexture = new TextureView(this);
-            cameraTexture.setSurfaceTextureListener(surfaceListener);
-            rootStage.addView(cameraTexture, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        }
-
-        // 2. Fallback / Viewer Studio Stage (shown for viewers or before camera permission is granted)
-        fallbackStage = buildFallbackStage();
-        rootStage.addView(fallbackStage, new FrameLayout.LayoutParams(-1, -1));
-        if (isHost) fallbackStage.setVisibility(View.GONE);
-
-        // 3. Real-time Studio Color Filter Tint Layer
-        filterOverlay = new View(this);
-        filterOverlay.setBackgroundColor(FILTER_TINTS[0]);
-        rootStage.addView(filterOverlay, new FrameLayout.LayoutParams(-1, -1));
-
-        // 4. Broadcast Live HUD Layer
-        broadcastLayer = buildBroadcastHud();
-        rootStage.addView(broadcastLayer, new FrameLayout.LayoutParams(-1, -1));
-
-        // 5. Pre-Live Setup Layer (Host configures title, category, camera & settings before going live!)
-        if (isHost && (liveId == null || liveId.isEmpty())) {
-            broadcastLayer.setVisibility(View.GONE);
-            preLiveLayer = buildPreLiveStudio(passedTitle);
-            rootStage.addView(preLiveLayer, new FrameLayout.LayoutParams(-1, -1));
+            preLiveOverlay.setVisibility(View.VISIBLE);
+            liveHudOverlay.setVisibility(View.GONE);
+            ensureLivePermissions(REQ_LIVE_PERMS);
         } else {
-            isLiveStarted = true;
+            preLiveOverlay.setVisibility(View.GONE);
+            liveHudOverlay.setVisibility(View.VISIBLE);
+            joinExistingLiveAsViewer();
         }
+    }
 
-        // 6. Giant 3-2-1 Countdown Label
-        countdownTv = Ui.tvBold(this, "", 74, Color.WHITE);
-        countdownTv.setShadowLayer(12f, 0f, 4f, 0xCC000000);
+    // ==================== COMPLETE PRO STUDIO + BROADCAST UI ====================
+
+    private void buildCompleteUi() {
+        rootStage = new FrameLayout(this);
+        rootStage.setBackgroundColor(0xFF0B0C10);
+
+        // 1. Local Camera2 TextureView (Host)
+        cameraTexture = new TextureView(this);
+        cameraTexture.setVisibility(isHost ? View.VISIBLE : View.GONE);
+        rootStage.addView(cameraTexture, new FrameLayout.LayoutParams(-1, -1));
+
+        // 2. Remote Live Video ImageView (Viewer watches Host's real-time camera frames!)
+        remoteVideoView = new ImageView(this);
+        remoteVideoView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        remoteVideoView.setVisibility(View.GONE);
+        rootStage.addView(remoteVideoView, new FrameLayout.LayoutParams(-1, -1));
+
+        // 3. Fallback Avatar Stage (shown before frames arrive or when Host pauses camera)
+        fallbackStage = Ui.col(this);
+        fallbackStage.setGravity(Gravity.CENTER);
+        GradientDrawable bgGrad = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF1A1D29, 0xFF0F1118, 0xFF090A0F});
+        fallbackStage.setBackground(bgGrad);
+        fallbackStage.setVisibility(isHost ? View.GONE : View.VISIBLE);
+
+        stageAvatar = new ImageView(this);
+        Ui.avatar(this, stageAvatar, isHost ? Fb.myPhoto() : null);
+        int avSz = Ui.dp(this, 108);
+        FrameLayout ringWrap = new FrameLayout(this);
+        ringWrap.setBackground(Ui.roundStroke(this, 0x22E41E3F, 64, 0xFFE41E3F, 3));
+        Ui.pad(ringWrap, 6, 6, 6, 6);
+        ringWrap.addView(stageAvatar, new FrameLayout.LayoutParams(avSz, avSz, Gravity.CENTER));
+        fallbackStage.addView(ringWrap, new LinearLayout.LayoutParams(-2, -2));
+
+        stageStatusTv = Ui.tvBold(this,
+                isHost ? "📷 Camera paused (Audio still live)" : "📡 Connecting to live video & audio...",
+                14, 0xDDFFFFFF);
+        stageStatusTv.setGravity(Gravity.CENTER);
+        Ui.pad(stageStatusTv, 20, 14, 20, 4);
+        fallbackStage.addView(stageStatusTv);
+        rootStage.addView(fallbackStage, new FrameLayout.LayoutParams(-1, -1));
+
+        // 4. Studio Visual Filter Tint Layer
+        filterOverlayView = new View(this);
+        filterOverlayView.setBackgroundColor(0x00000000);
+        filterOverlayView.setClickable(false);
+        rootStage.addView(filterOverlayView, new FrameLayout.LayoutParams(-1, -1));
+
+        // 5. Front Screen Ring-Light Fill Border (Warm white studio glow for dark rooms!)
+        ringLightOverlay = new View(this);
+        ringLightOverlay.setBackground(Ui.roundStroke(this, 0x16FFF8E1, 22, 0xEEFFF9C4, 18));
+        ringLightOverlay.setVisibility(View.GONE);
+        ringLightOverlay.setClickable(false);
+        rootStage.addView(ringLightOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        // 6. Top & Bottom Readability Gradients
+        View topScrim = new View(this);
+        topScrim.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xB0000000, 0x00000000}));
+        rootStage.addView(topScrim, new FrameLayout.LayoutParams(-1, Ui.dp(this, 140), Gravity.TOP));
+
+        View botScrim = new View(this);
+        botScrim.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.BOTTOM_TOP,
+                new int[]{0xCC000000, 0x44000000, 0x00000000}));
+        rootStage.addView(botScrim, new FrameLayout.LayoutParams(-1, Ui.dp(this, 320), Gravity.BOTTOM));
+
+        // 7. Co-Host Picture-in-Picture Split Card (116dp x 168dp)
+        buildCoHostPipCard();
+        rootStage.addView(coHostCard);
+
+        // 8. Touch Gestures: Pinch-to-Zoom (Host), Tap-to-Focus (Host), Double-Tap Reaction!
+        attachStageGestures();
+
+        // 9. Floating Emoji Reactions Layer
+        floatingHeartsLayer = new FrameLayout(this);
+        floatingHeartsLayer.setClickable(false);
+        rootStage.addView(floatingHeartsLayer, new FrameLayout.LayoutParams(-1, -1));
+
+        // 10. Pre-Live Setup Studio Overlay + Live Broadcast HUD Overlay
+        preLiveOverlay = buildPreLiveStudioOverlay();
+        rootStage.addView(preLiveOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        liveHudOverlay = buildLiveHudOverlay();
+        rootStage.addView(liveHudOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        // 11. Restore HUD Pill when user enters Clean View Mode
+        restoreHudBtn = Ui.roundChip(this, "👁 Show Controls", 0xAA000000, 0xFFFFFFFF, 12);
+        Ui.pad(restoreHudBtn, 14, 8, 14, 8);
+        restoreHudBtn.setVisibility(View.GONE);
+        restoreHudBtn.setOnClickListener(v -> toggleCleanViewMode(false));
+        FrameLayout.LayoutParams rhLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        rhLp.setMargins(0, Ui.dp(this, 18), Ui.dp(this, 14), 0);
+        rootStage.addView(restoreHudBtn, rhLp);
+
+        // 12. Countdown Overlay (3 · 2 · 1 · LIVE!)
+        countdownTv = new TextView(this);
+        countdownTv.setTextColor(0xFFFFFFFF);
+        countdownTv.setTextSize(72);
+        countdownTv.setTypeface(Typeface.DEFAULT_BOLD);
+        countdownTv.setGravity(Gravity.CENTER);
+        countdownTv.setBackgroundColor(0x66000000);
         countdownTv.setVisibility(View.GONE);
-        rootStage.addView(countdownTv, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        rootStage.addView(countdownTv, new FrameLayout.LayoutParams(-1, -1));
 
         setContentView(rootStage);
-
-        if (isHost) {
-            hostId = Fb.uid() == null ? "" : Fb.uid();
-            hostName = Fb.myName();
-            hostPhoto = Fb.myPhoto();
-            hostTick = Fb.me != null ? Fb.me.tickLevel : "none";
-            ensureCameraAndAudioPermissions();
-            if (isLiveStarted) {
-                attachRoomListeners();
-                uiHandler.post(timerTick);
-            }
-        } else {
-            joinAsViewer();
-            attachRoomListeners();
-            uiHandler.post(timerTick);
-        }
     }
 
-    // ==================== CAMERA2 REAL HARDWARE PREVIEW ====================
+    private void buildCoHostPipCard() {
+        coHostCard = new FrameLayout(this);
+        coHostCard.setBackground(Ui.roundStroke(this, 0xFF18191A, 14, 0xFFFFFFFF, 2));
+        coHostCard.setVisibility(View.GONE);
+        FrameLayout.LayoutParams pipLp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 118), Ui.dp(this, 168), Gravity.TOP | Gravity.END);
+        pipLp.setMargins(0, Ui.dp(this, 78), Ui.dp(this, 62), 0);
+        coHostCard.setLayoutParams(pipLp);
 
-    private void ensureCameraAndAudioPermissions() {
-        List<String> need = new ArrayList<>();
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            need.add(Manifest.permission.CAMERA);
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            need.add(Manifest.permission.RECORD_AUDIO);
-        }
-        if (!need.isEmpty()) {
-            ActivityCompat.requestPermissions(this, need.toArray(new String[0]), REQ_CAMERA_AUDIO);
-        } else {
-            startCameraThread();
-            if (cameraTexture != null && cameraTexture.isAvailable()) openCameraHardware();
-        }
+        coHostRemoteImage = new ImageView(this);
+        coHostRemoteImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        coHostCard.addView(coHostRemoteImage, new FrameLayout.LayoutParams(-1, -1));
+
+        coHostLocalTexture = new TextureView(this);
+        coHostLocalTexture.setVisibility(View.GONE);
+        coHostCard.addView(coHostLocalTexture, new FrameLayout.LayoutParams(-1, -1));
+
+        coHostLabelTv = Ui.tvBold(this, "🤝 Co-Host", 10, 0xFFFFFFFF);
+        coHostLabelTv.setSingleLine(true);
+        coHostLabelTv.setEllipsize(TextUtils.TruncateAt.END);
+        coHostLabelTv.setBackground(Ui.round(this, 0xAA000000, 8));
+        Ui.pad(coHostLabelTv, 6, 2, 6, 2);
+        FrameLayout.LayoutParams lblLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+        lblLp.setMargins(Ui.dp(this, 5), 0, Ui.dp(this, 5), Ui.dp(this, 5));
+        coHostCard.addView(coHostLabelTv, lblLp);
+
+        coHostCloseBtn = Ui.roundChip(this, "✕", 0xCCE41E3F, 0xFFFFFFFF, 10);
+        Ui.pad(coHostCloseBtn, 6, 2, 6, 2);
+        coHostCloseBtn.setVisibility(View.GONE);
+        coHostCloseBtn.setOnClickListener(v -> removeActiveCoHost());
+        FrameLayout.LayoutParams xLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        xLp.setMargins(0, Ui.dp(this, 4), Ui.dp(this, 4), 0);
+        coHostCard.addView(coHostCloseBtn, xLp);
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQ_CAMERA_AUDIO) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                if (fallbackStage != null) fallbackStage.setVisibility(View.GONE);
-                startCameraThread();
-                if (cameraTexture != null && cameraTexture.isAvailable()) openCameraHardware();
-            } else {
-                if (fallbackStage != null) fallbackStage.setVisibility(View.VISIBLE);
-                Ui.avatarLarge(this, stageAvatar, Fb.myPhoto());
-                stageStatusLabel.setText("📷 Audio-Only Studio Mode (Tap Flip to enable camera)");
-            }
-        }
-    }
-
-    private final TextureView.SurfaceTextureListener surfaceListener = new TextureView.SurfaceTextureListener() {
-        @Override
-        public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-            openCameraHardware();
-        }
-        @Override public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture s, int w, int h) {}
-        @Override public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture s) { return true; }
-        @Override public void onSurfaceTextureUpdated(@NonNull SurfaceTexture s) {}
-    };
-
-    private void startCameraThread() {
-        if (camThread != null) return;
-        camThread = new HandlerThread("FriendbookLiveCam");
-        camThread.start();
-        camHandler = new Handler(camThread.getLooper());
-    }
-
-    private void stopCameraThread() {
-        closeCameraHardware();
-        if (camThread != null) {
-            camThread.quitSafely();
-            try { camThread.join(300); } catch (InterruptedException ignored) {}
-            camThread = null;
-            camHandler = null;
-        }
-    }
-
-    private void closeCameraHardware() {
-        try {
-            if (captureSession != null) { captureSession.close(); captureSession = null; }
-        } catch (Throwable ignored) {}
-        try {
-            if (cameraDevice != null) { cameraDevice.close(); cameraDevice = null; }
-        } catch (Throwable ignored) {}
-    }
-
-    private void openCameraHardware() {
-        if (!isHost || cameraTexture == null || !cameraTexture.isAvailable()) return;
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            if (fallbackStage != null) fallbackStage.setVisibility(View.VISIBLE);
-            return;
-        }
-        startCameraThread();
-        closeCameraHardware();
-        try {
-            CameraManager cm = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-            if (cm == null) return;
-            String chosenId = null;
-            int targetLens = useFrontCamera
-                    ? CameraCharacteristics.LENS_FACING_FRONT
-                    : CameraCharacteristics.LENS_FACING_BACK;
-            for (String cid : cm.getCameraIdList()) {
-                CameraCharacteristics cc = cm.getCameraCharacteristics(cid);
-                Integer facing = cc.get(CameraCharacteristics.LENS_FACING);
-                if (facing != null && facing == targetLens) {
-                    chosenId = cid;
-                    StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-                    if (map != null) {
-                        Size[] sizes = map.getOutputSizes(SurfaceTexture.class);
-                        if (sizes != null && sizes.length > 0) previewSize = pickOptimalSize(sizes);
-                    }
-                    break;
-                }
-            }
-            if (chosenId == null && cm.getCameraIdList().length > 0) {
-                chosenId = cm.getCameraIdList()[0];
-            }
-            if (chosenId == null) {
-                if (fallbackStage != null) fallbackStage.setVisibility(View.VISIBLE);
-                return;
-            }
-            cm.openCamera(chosenId, new CameraDevice.StateCallback() {
-                @Override
-                public void onOpened(@NonNull CameraDevice camera) {
-                    cameraDevice = camera;
-                    startPreviewSession();
-                }
-                @Override
-                public void onDisconnected(@NonNull CameraDevice camera) {
-                    camera.close();
-                    cameraDevice = null;
-                }
-                @Override
-                public void onError(@NonNull CameraDevice camera, int error) {
-                    camera.close();
-                    cameraDevice = null;
-                    runOnUiThread(() -> {
-                        if (fallbackStage != null) fallbackStage.setVisibility(View.VISIBLE);
-                    });
-                }
-            }, camHandler);
-        } catch (Throwable t) {
-            if (fallbackStage != null) fallbackStage.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private Size pickOptimalSize(Size[] sizes) {
-        Size best = sizes[0];
-        int bestDiff = Integer.MAX_VALUE;
-        for (Size s : sizes) {
-            int diff = Math.abs(s.getWidth() - 1280) + Math.abs(s.getHeight() - 720);
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                best = s;
-            }
-        }
-        return best;
-    }
-
-    private void startPreviewSession() {
-        try {
-            if (cameraDevice == null || cameraTexture == null || !cameraTexture.isAvailable()) return;
-            SurfaceTexture st = cameraTexture.getSurfaceTexture();
-            if (st == null) return;
-            st.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
-            Surface surface = new Surface(st);
-            previewBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            previewBuilder.addTarget(surface);
-            previewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
-            if (!useFrontCamera && torchOn) {
-                previewBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
-            }
-            cameraDevice.createCaptureSession(Collections.singletonList(surface),
-                    new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(@NonNull CameraCaptureSession session) {
-                            if (cameraDevice == null) return;
-                            captureSession = session;
-                            try {
-                                captureSession.setRepeatingRequest(previewBuilder.build(), null, camHandler);
-                            } catch (Throwable ignored) {}
+    private void attachStageGestures() {
+        final ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override
+                    public boolean onScale(ScaleGestureDetector detector) {
+                        if (isHost && engine != null) {
+                            float nextZoom = engine.getCurrentZoom() * detector.getScaleFactor();
+                            engine.setZoom(nextZoom);
                         }
-                        @Override public void onConfigureFailed(@NonNull CameraCaptureSession s) {}
-                    }, camHandler);
-        } catch (Throwable ignored) {}
+                        return true;
+                    }
+                });
+
+        final GestureDetector tapDetector = new GestureDetector(this,
+                new GestureDetector.SimpleOnGestureListener() {
+                    @Override
+                    public boolean onSingleTapConfirmed(MotionEvent e) {
+                        if (isHost && engine != null && cameraTexture != null) {
+                            engine.focusAt(e.getX(), e.getY(),
+                                    cameraTexture.getWidth(), cameraTexture.getHeight());
+                        }
+                        return true;
+                    }
+                    @Override
+                    public boolean onDoubleTap(MotionEvent e) {
+                        if (isLiveStarted) {
+                            sendReaction("❤️");
+                        }
+                        return true;
+                    }
+                });
+
+        rootStage.setOnTouchListener((v, ev) -> {
+            scaleDetector.onTouchEvent(ev);
+            tapDetector.onTouchEvent(ev);
+            return true;
+        });
     }
 
-    private void flipCamera() {
-        if (!isHost) return;
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ensureCameraAndAudioPermissions();
-            return;
-        }
-        useFrontCamera = !useFrontCamera;
-        if (useFrontCamera) torchOn = false;
-        updateRailButtonLabels();
-        openCameraHardware();
-        Ui.toast(this, useFrontCamera ? "🤳 Front camera" : "📷 Rear camera");
-    }
+    // ==================== PRE-LIVE BROADCAST SETUP STUDIO ====================
 
-    private void toggleTorch() {
-        if (!isHost) return;
-        if (useFrontCamera) {
-            Ui.toast(this, "Switch to Rear camera to use Flash 🔦");
-            return;
-        }
-        torchOn = !torchOn;
-        updateRailButtonLabels();
-        try {
-            if (previewBuilder != null && captureSession != null) {
-                previewBuilder.set(CaptureRequest.FLASH_MODE,
-                        torchOn ? CaptureRequest.FLASH_MODE_TORCH : CaptureRequest.FLASH_MODE_OFF);
-                captureSession.setRepeatingRequest(previewBuilder.build(), null, camHandler);
-            }
-        } catch (Throwable ignored) {}
-    }
+    private FrameLayout buildPreLiveStudioOverlay() {
+        FrameLayout wrap = new FrameLayout(this);
 
-    private void cycleStudioFilter() {
-        filterIndex = (filterIndex + 1) % FILTER_TINTS.length;
-        if (filterOverlay != null) filterOverlay.setBackgroundColor(FILTER_TINTS[filterIndex]);
-        updateRailButtonLabels();
-        if (isHost && isLiveStarted && liveId != null) {
-            Fb.db().collection("lives").document(liveId)
-                    .set(Fb.map("filterIndex", filterIndex), SetOptions.merge());
-        }
-        Ui.toast(this, "Filter: " + FILTER_NAMES[filterIndex]);
-    }
+        // Top Studio Control Bar
+        LinearLayout topBar = Ui.row(this);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        Ui.pad(topBar, 14, 16, 14, 10);
 
-    // ==================== PRE-LIVE STUDIO OVERLAY ====================
+        TextView closeBtn = circleBtn("✕", 38, v -> finish());
+        topBar.addView(closeBtn);
 
-    private FrameLayout buildPreLiveStudio(String initialTitle) {
-        FrameLayout layer = new FrameLayout(this);
-        layer.setBackgroundColor(0x55000000);
+        TextView badge = Ui.roundChip(this, "🎥 LIVE CAMERA STUDIO", 0xAA000000, 0xFFFFFFFF, 12);
+        Ui.pad(badge, 14, 7, 14, 7);
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(-2, -2);
+        bLp.setMargins(Ui.dp(this, 10), 0, 0, 0);
+        topBar.addView(badge, bLp);
 
-        // Top bar: Close + Pre-live quick camera switches
-        LinearLayout top = Ui.row(this);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(top, 14, 34, 14, 10);
-        TextView close = Ui.roundChip(this, "✕ Close", 0x88000000, Color.WHITE, 13);
-        Ui.pad(close, 12, 6, 12, 6);
-        close.setOnClickListener(v -> finish());
-        top.addView(close);
-        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        topBar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
-        TextView flipTop = Ui.roundChip(this, "🔄 Flip", 0x88000000, Color.WHITE, 13);
-        Ui.pad(flipTop, 12, 6, 12, 6);
-        flipTop.setOnClickListener(v -> flipCamera());
-        top.addView(flipTop);
+        privacyChip = Ui.roundChip(this, "🌍 Public", 0xAA1877F2, 0xFFFFFFFF, 12);
+        Ui.pad(privacyChip, 12, 7, 12, 7);
+        privacyChip.setOnClickListener(v -> {
+            privacyFriendsOnly = !privacyFriendsOnly;
+            privacyChip.setText(privacyFriendsOnly ? "👥 Friends" : "🌍 Public");
+            privacyChip.setBackground(Ui.round(this, privacyFriendsOnly ? 0xAA2E7D32 : 0xAA1877F2, 20));
+        });
+        topBar.addView(privacyChip);
+        wrap.addView(topBar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
-        TextView filterTop = Ui.roundChip(this, "✨ Filter", 0x88000000, Color.WHITE, 13);
-        Ui.pad(filterTop, 12, 6, 12, 6);
-        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-2, -2);
-        flp.leftMargin = Ui.dp(this, 8);
-        filterTop.setOnClickListener(v -> cycleStudioFilter());
-        top.addView(filterTop, flp);
-        layer.addView(top, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        // Right Studio Quick Tools Rail
+        LinearLayout sideRail = Ui.col(this);
+        sideRail.setGravity(Gravity.CENTER_HORIZONTAL);
+        Ui.pad(sideRail, 8, 8, 12, 8);
 
-        // Bottom Setup Card
+        sideRail.addView(studioSideItem("🔄", "Flip", v -> {
+            engine.flipCamera();
+            Ui.toast(this, engine.isLensFront() ? "Front camera" : "Back camera");
+        }));
+        sideRail.addView(studioSideItem("🪞", "Mirror", v -> {
+            boolean next = !engine.isMirrorFront();
+            engine.setMirrorFront(next);
+            Ui.toast(this, next ? "Front mirror ON" : "Front mirror OFF");
+        }));
+        sideRail.addView(studioSideItem("💡", "Light", v -> toggleRingLightOrTorch()));
+        sideRail.addView(studioSideItem("✨", "Beauty", v -> {
+            boolean b = engine.toggleBeautyBoost();
+            Ui.toast(this, b ? "✨ Studio brightness boost ON" : "Studio brightness normal");
+        }));
+        sideRail.addView(studioSideItem("🎨", "Filter", v -> cycleVisualFilter()));
+        sideRail.addView(studioSideItem("⚙️", "Settings", v -> showHostSettingsSheet()));
+
+        FrameLayout.LayoutParams srLp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
+        wrap.addView(sideRail, srLp);
+
+        // Bottom Studio Setup Card
         LinearLayout card = Ui.col(this);
-        card.setBackground(Ui.round(this, 0xDD14161F, 22));
-        Ui.pad(card, 18, 18, 18, 22);
-        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        clp.setMargins(Ui.dp(this, 12), 0, Ui.dp(this, 12), Ui.dp(this, 18));
-        card.setLayoutParams(clp);
+        card.setBackground(Ui.round(this, 0xCC14161D, 22));
+        Ui.pad(card, 16, 16, 16, 20);
 
-        LinearLayout meRow = Ui.row(this);
-        meRow.setGravity(Gravity.CENTER_VERTICAL);
+        // Host profile + Title Input + Quality Chip
+        LinearLayout hostRow = Ui.row(this);
+        hostRow.setGravity(Gravity.CENTER_VERTICAL);
         ImageView myAv = new ImageView(this);
         Ui.avatar(this, myAv, Fb.myPhoto());
-        int as = Ui.dp(this, 44);
-        meRow.addView(myAv, new LinearLayout.LayoutParams(as, as));
-        LinearLayout meCol = Ui.col(this);
-        meCol.setPadding(Ui.dp(this, 10), 0, 0, 0);
-        meCol.addView(Ui.tvBold(this, Fb.myName(), 15, Color.WHITE));
-        final TextView audChip = Ui.tvBold(this, "🌍 Public · Tap to change", 12, 0xFF64B5F6);
-        audChip.setOnClickListener(v -> {
-            livePrivacy = "Public".equals(livePrivacy) ? "Friends" : "Public";
-            audChip.setText(("Public".equals(livePrivacy) ? "🌍 Public" : "👥 Friends Only") + " · Tap to change");
-        });
-        meCol.addView(audChip);
-        meRow.addView(meCol, new LinearLayout.LayoutParams(0, -2, 1));
-        card.addView(meRow);
+        hostRow.addView(myAv, new LinearLayout.LayoutParams(Ui.dp(this, 44), Ui.dp(this, 44)));
 
-        final EditText titleIn = Ui.input(this, "Add a catchy Live title (e.g. Q&A with friends 🔥)…");
-        titleIn.setTextColor(Color.WHITE);
-        titleIn.setHintTextColor(0x99FFFFFF);
-        titleIn.setBackground(Ui.roundStroke(this, 0x33FFFFFF, 14, 0x44FFFFFF, 1));
-        if (initialTitle != null && !initialTitle.isEmpty()) titleIn.setText(initialTitle);
-        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
-        tlp.topMargin = Ui.dp(this, 12);
-        card.addView(titleIn, tlp);
+        titleInput = new EditText(this);
+        titleInput.setHint("Add a title for your Live broadcast...");
+        titleInput.setHintTextColor(0x99FFFFFF);
+        titleInput.setTextColor(0xFFFFFFFF);
+        titleInput.setTextSize(14);
+        titleInput.setMaxLines(2);
+        titleInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(100)});
+        titleInput.setBackground(Ui.round(this, 0x33FFFFFF, 14));
+        Ui.pad(titleInput, 12, 10, 12, 10);
+        LinearLayout.LayoutParams tiLp = new LinearLayout.LayoutParams(0, -2, 1f);
+        tiLp.setMargins(Ui.dp(this, 10), 0, Ui.dp(this, 8), 0);
+        hostRow.addView(titleInput, tiLp);
+
+        qualityStudioChip = Ui.roundChip(this, "⚡ Auto 288p", 0x33FFFFFF, 0xFFFFFFFF, 11);
+        Ui.pad(qualityStudioChip, 10, 8, 10, 8);
+        qualityStudioChip.setOnClickListener(v -> cycleStreamQuality());
+        hostRow.addView(qualityStudioChip);
+        card.addView(hostRow);
 
         // Category Horizontal Chips
-        HorizontalScrollView catSv = new HorizontalScrollView(this);
-        catSv.setHorizontalScrollBarEnabled(false);
-        final LinearLayout catRow = Ui.row(this);
-        catRow.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 6));
-        final List<TextView> catChips = new ArrayList<>();
-        for (int i = 0; i < CATEGORIES.length; i++) {
-            final int idx = i;
-            TextView ch = Ui.roundChip(this, CATEGORIES[i],
-                    i == 0 ? Ui.BLUE : 0x33FFFFFF, Color.WHITE, 12);
-            Ui.pad(ch, 12, 6, 12, 6);
-            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
-            cp.rightMargin = Ui.dp(this, 6);
-            ch.setOnClickListener(v -> {
-                liveCategory = CATEGORIES[idx];
-                for (int j = 0; j < catChips.size(); j++) {
-                    catChips.get(j).setBackground(Ui.round(this, j == idx ? Ui.BLUE : 0x33FFFFFF, 18));
-                }
-            });
-            catChips.add(ch);
-            catRow.addView(ch, cp);
-        }
-        catSv.addView(catRow);
-        card.addView(catSv);
+        HorizontalScrollView catScroll = new HorizontalScrollView(this);
+        catScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams csLp = new LinearLayout.LayoutParams(-1, -2);
+        csLp.setMargins(0, Ui.dp(this, 12), 0, Ui.dp(this, 14));
+        categoryChipRow = Ui.row(this);
+        catScroll.addView(categoryChipRow);
+        card.addView(catScroll, csLp);
+        refreshPreLiveCategoryChips();
 
-        // Pre-live toggles row
-        LinearLayout optsRow = Ui.row(this);
-        optsRow.setGravity(Gravity.CENTER_VERTICAL);
-        optsRow.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 12));
-        final TextView cmOpt = Ui.roundChip(this, "💬 Comments: ON", 0x33FFFFFF, Color.WHITE, 11);
-        Ui.pad(cmOpt, 10, 5, 10, 5);
-        cmOpt.setOnClickListener(v -> {
-            allowComments = !allowComments;
-            cmOpt.setText(allowComments ? "💬 Comments: ON" : "🔇 Comments: OFF");
-        });
-        final TextView smOpt = Ui.roundChip(this, "🐢 Slow Mode: OFF", 0x33FFFFFF, Color.WHITE, 11);
-        Ui.pad(smOpt, 10, 5, 10, 5);
-        LinearLayout.LayoutParams smp = new LinearLayout.LayoutParams(-2, -2);
-        smp.leftMargin = Ui.dp(this, 6);
-        smOpt.setOnClickListener(v -> {
-            slowMode = !slowMode;
-            smOpt.setText(slowMode ? "🐢 Slow Mode: 5s" : "🐢 Slow Mode: OFF");
-        });
-        final TextView stOpt = Ui.roundChip(this, "⭐ Gifts: ON", 0x33FFFFFF, Color.WHITE, 11);
-        Ui.pad(stOpt, 10, 5, 10, 5);
-        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-2, -2);
-        stp.leftMargin = Ui.dp(this, 6);
-        stOpt.setOnClickListener(v -> {
-            allowGifts = !allowGifts;
-            stOpt.setText(allowGifts ? "⭐ Gifts: ON" : "⭐ Gifts: OFF");
-        });
-        optsRow.addView(cmOpt);
-        optsRow.addView(smOpt, smp);
-        optsRow.addView(stOpt, stp);
-        card.addView(optsRow);
-
-        TextView goBtn = Ui.roundChip(this, "🔴  Go Live Now", Ui.RED, Color.WHITE, 16);
+        // Big Red GO LIVE CTA Button
+        TextView goBtn = Ui.tvBold(this, "🔴 GO LIVE NOW (VIDEO + VOICE)", 15, 0xFFFFFFFF);
         goBtn.setGravity(Gravity.CENTER);
-        Ui.pad(goBtn, 20, 13, 20, 13);
-        goBtn.setOnClickListener(v -> {
-            String t = titleIn.getText().toString().trim();
-            liveTitle = t.isEmpty() ? (Fb.myName() + " is Live! " + liveCategory) : t;
-            goBtn.setEnabled(false);
-            runCountdownAndStartLive();
-        });
+        goBtn.setBackground(Ui.round(this, 0xFFE41E3F, 26));
+        Ui.pad(goBtn, 20, 14, 20, 14);
+        goBtn.setOnClickListener(v -> beginCountdownAndStartLive());
         card.addView(goBtn, new LinearLayout.LayoutParams(-1, -2));
 
-        layer.addView(card);
-        return layer;
+        FrameLayout.LayoutParams cLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        cLp.setMargins(Ui.dp(this, 12), 0, Ui.dp(this, 12), Ui.dp(this, 16));
+        wrap.addView(card, cLp);
+
+        return wrap;
     }
 
-    private void runCountdownAndStartLive() {
-        if (preLiveLayer != null) preLiveLayer.setVisibility(View.GONE);
-        countdownTv.setVisibility(View.VISIBLE);
-        final int[] step = {3};
-        Runnable tick = new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing()) return;
-                if (step[0] > 0) {
-                    countdownTv.setText(String.valueOf(step[0]));
-                    countdownTv.setScaleX(0.6f);
-                    countdownTv.setScaleY(0.6f);
-                    countdownTv.animate().scaleX(1.25f).scaleY(1.25f).setDuration(420).start();
-                    step[0]--;
-                    uiHandler.postDelayed(this, 850L);
-                } else {
-                    countdownTv.setVisibility(View.GONE);
-                    publishLiveRoomToFirestore();
-                }
-            }
-        };
-        tick.run();
+    private View studioSideItem(String icon, String label, View.OnClickListener click) {
+        LinearLayout col = Ui.col(this);
+        col.setGravity(Gravity.CENTER);
+        Ui.pad(col, 4, 5, 4, 5);
+        col.addView(circleBtn(icon, 40, click));
+        TextView t = Ui.tvBold(this, label, 10, 0xEEFFFFFF);
+        t.setPadding(0, Ui.dp(this, 2), 0, 0);
+        col.addView(t);
+        col.setOnClickListener(click);
+        return col;
     }
 
-    private void publishLiveRoomToFirestore() {
-        String me = Fb.uid();
-        if (me == null) { finish(); return; }
-        liveStartMs = System.currentTimeMillis();
-        isLiveStarted = true;
-        broadcastLayer.setVisibility(View.VISIBLE);
-
-        DocumentReference ref = Fb.db().collection("lives").document();
-        liveId = ref.getId();
-        Map<String, Object> doc = new HashMap<>();
-        doc.put("hostId", me);
-        doc.put("hostName", Fb.myName());
-        doc.put("hostPhoto", Fb.myPhoto());
-        doc.put("hostTick", Fb.me != null ? Fb.me.tickLevel : "none");
-        doc.put("title", liveTitle);
-        doc.put("category", liveCategory);
-        doc.put("privacy", livePrivacy);
-        doc.put("status", "live");
-        doc.put("allowComments", allowComments);
-        doc.put("slowMode", slowMode);
-        doc.put("allowGifts", allowGifts);
-        doc.put("micMuted", micMuted);
-        doc.put("filterIndex", filterIndex);
-        doc.put("pinnedComment", "");
-        doc.put("viewerCount", 1);
-        doc.put("peakViewers", 1);
-        doc.put("likesCount", 0);
-        doc.put("totalStars", 0);
-        doc.put("viewerIds", Collections.singletonList(me));
-        doc.put("mutedUserIds", new ArrayList<String>());
-        doc.put("startedAtMs", liveStartMs);
-        doc.put("createdAt", FieldValue.serverTimestamp());
-
-        ref.set(doc).addOnSuccessListener(x -> {
-            Ui.toast(this, "🔴 You are LIVE!");
-            attachRoomListeners();
-            uiHandler.removeCallbacks(timerTick);
-            uiHandler.post(timerTick);
-        }).addOnFailureListener(e -> {
-            Ui.toast(this, "Couldn't start live: " + e.getMessage());
-            finish();
-        });
+    private void refreshPreLiveCategoryChips() {
+        if (categoryChipRow == null) return;
+        categoryChipRow.removeAllViews();
+        for (final String cat : CATEGORIES) {
+            boolean sel = cat.equals(selectedCategory);
+            TextView chip = Ui.roundChip(this, cat,
+                    sel ? 0xFFE41E3F : 0x26FFFFFF, 0xFFFFFFFF, 12);
+            Ui.pad(chip, 12, 6, 12, 6);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.setMargins(0, 0, Ui.dp(this, 8), 0);
+            chip.setOnClickListener(v -> {
+                selectedCategory = cat;
+                refreshPreLiveCategoryChips();
+            });
+            categoryChipRow.addView(chip, lp);
+        }
     }
 
-    // ==================== FALLBACK / VIEWER STAGE ====================
+    // ==================== ACTIVE BROADCAST HUD OVERLAY ====================
 
-    private FrameLayout buildFallbackStage() {
-        FrameLayout st = new FrameLayout(this);
-        st.setBackgroundColor(0xFF101322);
-
-        LinearLayout center = Ui.col(this);
-        center.setGravity(Gravity.CENTER);
-        FrameLayout pulseRing = new FrameLayout(this);
-        pulseRing.setBackground(Ui.roundStroke(this, 0x22E41E3F, 72, Ui.RED, 3));
-        int ringSz = Ui.dp(this, 138);
-        stageAvatar = new ImageView(this);
-        int avSz = Ui.dp(this, 118);
-        pulseRing.addView(stageAvatar, new FrameLayout.LayoutParams(avSz, avSz, Gravity.CENTER));
-        center.addView(pulseRing, new LinearLayout.LayoutParams(ringSz, ringSz));
-
-        stageStatusLabel = Ui.tvBold(this, "🔴 Connecting to Live Stream…", 15, Color.WHITE);
-        stageStatusLabel.setGravity(Gravity.CENTER);
-        stageStatusLabel.setPadding(Ui.dp(this, 20), Ui.dp(this, 14), Ui.dp(this, 20), 0);
-        center.addView(stageStatusLabel);
-        st.addView(center, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
-        return st;
-    }
-
-    // ==================== FULL BROADCAST HUD ====================
-
-    private FrameLayout buildBroadcastHud() {
+    private FrameLayout buildLiveHudOverlay() {
         FrameLayout hud = new FrameLayout(this);
 
-        // Double-tap anywhere on stage to send floating ❤️ reaction!
-        GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
-            @Override
-            public boolean onDoubleTap(MotionEvent e) {
-                sendReaction("❤️");
-                return true;
-            }
-        });
-        hud.setOnTouchListener((v, ev) -> {
-            gd.onTouchEvent(ev);
-            return false;
-        });
-
-        // ---- TOP BAR + PINNED BANNER ----
+        // 1. TOP HEADER BAR (Host Pill + Follow + LIVE Timer + Viewers + Voice Meter + End/Leave)
         LinearLayout topWrap = Ui.col(this);
-        Ui.pad(topWrap, 12, 32, 12, 8);
+        Ui.pad(topWrap, 10, 14, 10, 6);
 
         LinearLayout topRow = Ui.row(this);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        // Host capsule
-        LinearLayout hostCap = Ui.row(this);
-        hostCap.setGravity(Gravity.CENTER_VERTICAL);
-        hostCap.setBackground(Ui.round(this, 0x88000000, 24));
-        Ui.pad(hostCap, 6, 5, 10, 5);
-        hostAvIv = new ImageView(this);
-        int hs = Ui.dp(this, 34);
-        hostCap.addView(hostAvIv, new LinearLayout.LayoutParams(hs, hs));
+        // Host profile pill
+        LinearLayout hostPill = Ui.row(this);
+        hostPill.setGravity(Gravity.CENTER_VERTICAL);
+        hostPill.setBackground(Ui.round(this, 0x88000000, 24));
+        Ui.pad(hostPill, 5, 4, 10, 4);
 
-        LinearLayout hInfo = Ui.col(this);
-        hInfo.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 6), 0);
-        LinearLayout hNameRow = Ui.row(this);
-        hNameRow.setGravity(Gravity.CENTER_VERTICAL);
-        hostNameTv = Ui.tvBold(this, "Live Host", 13, Color.WHITE);
-        hostNameTv.setMaxWidth(Ui.dp(this, 105));
-        hostNameTv.setSingleLine(true);
-        hNameRow.addView(hostNameTv);
-        hostTickIv = new ImageView(this);
-        int ts = Ui.dp(this, 13);
-        LinearLayout.LayoutParams tkLp = new LinearLayout.LayoutParams(ts, ts);
-        tkLp.leftMargin = Ui.dp(this, 4);
-        hNameRow.addView(hostTickIv, tkLp);
-        hInfo.addView(hNameRow);
-        hostSubTv = Ui.tv(this, CATEGORIES[0], 10.5f, 0xCCFFFFFF);
-        hostSubTv.setMaxWidth(Ui.dp(this, 125));
-        hostSubTv.setSingleLine(true);
-        hInfo.addView(hostSubTv);
-        hostCap.addView(hInfo);
+        hostTopAvatar = new ImageView(this);
+        Ui.avatar(this, hostTopAvatar, isHost ? Fb.myPhoto() : null);
+        hostPill.addView(hostTopAvatar, new LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34)));
 
-        followBtnTv = Ui.roundChip(this, "Follow", Ui.BLUE, Color.WHITE, 11);
-        Ui.pad(followBtnTv, 9, 4, 9, 4);
-        followBtnTv.setVisibility(isHost ? View.GONE : View.VISIBLE);
-        followBtnTv.setOnClickListener(v -> toggleFollowHost());
-        hostCap.addView(followBtnTv);
-        hostCap.setOnClickListener(v -> {
-            if (!hostId.isEmpty()) {
-                startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", hostId));
+        LinearLayout hostNames = Ui.col(this);
+        hostNames.setPadding(Ui.dp(this, 7), 0, Ui.dp(this, 6), 0);
+        hostTopName = Ui.tvBold(this, isHost ? Fb.myName() : "Live Host", 12, 0xFFFFFFFF);
+        hostTopName.setSingleLine(true);
+        hostTopName.setMaxWidth(Ui.dp(this, 108));
+        hostTopName.setEllipsize(TextUtils.TruncateAt.END);
+        hostNames.addView(hostTopName);
+
+        hostTopSub = Ui.tv(this, "⭐ 0 Stars", 10, 0xFFFFD54F);
+        hostTopSub.setSingleLine(true);
+        hostNames.addView(hostTopSub);
+        hostPill.addView(hostNames);
+
+        if (!isHost) {
+            followHostBtn = Ui.roundChip(this, "+ Follow", 0xFFE41E3F, 0xFFFFFFFF, 10);
+            Ui.pad(followHostBtn, 8, 4, 8, 4);
+            followHostBtn.setOnClickListener(v -> followHostNow());
+            hostPill.addView(followHostBtn);
+        }
+        hostPill.setOnClickListener(v -> {
+            if (hostId != null && !hostId.isEmpty()) {
+                Intent p = new Intent(this, ProfileActivity.class);
+                p.putExtra("uid", hostId);
+                startActivity(p);
             }
         });
-        topRow.addView(hostCap);
+        topRow.addView(hostPill);
 
-        topRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        topRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
-        // LIVE timer + Viewers + End/Leave
-        liveBadgeTv = Ui.roundChip(this, "🔴 LIVE 00:00", Ui.RED, Color.WHITE, 11);
-        Ui.pad(liveBadgeTv, 9, 5, 9, 5);
-        topRow.addView(liveBadgeTv);
+        // LIVE + Timer Badge
+        LinearLayout livePill = Ui.row(this);
+        livePill.setGravity(Gravity.CENTER_VERTICAL);
+        livePill.setBackground(Ui.round(this, 0xFFE41E3F, 14));
+        Ui.pad(livePill, 8, 4, 8, 4);
+        liveBadgeTv = Ui.tvBold(this, "LIVE", 10, 0xFFFFFFFF);
+        livePill.addView(liveBadgeTv);
+        timerTv = Ui.tvBold(this, "00:00", 10, 0xFFFFFFFF);
+        timerTv.setPadding(Ui.dp(this, 5), 0, 0, 0);
+        livePill.addView(timerTv);
+        topRow.addView(livePill);
 
-        viewersPillTv = Ui.roundChip(this, "👁 1", 0x88000000, Color.WHITE, 11);
-        Ui.pad(viewersPillTv, 9, 5, 9, 5);
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(-2, -2);
-        vlp.leftMargin = Ui.dp(this, 5);
-        viewersPillTv.setOnClickListener(v -> showViewersDialog());
-        topRow.addView(viewersPillTv, vlp);
+        // Active Viewers Badge (clickable -> Viewers & Supporters Sheet)
+        viewerCountTv = Ui.roundChip(this, "👁 1", 0x88000000, 0xFFFFFFFF, 11);
+        Ui.pad(viewerCountTv, 9, 5, 9, 5);
+        viewerCountTv.setOnClickListener(v -> showViewersAndLeaderboardSheet());
+        LinearLayout.LayoutParams vcLp = new LinearLayout.LayoutParams(-2, -2);
+        vcLp.setMargins(Ui.dp(this, 5), 0, Ui.dp(this, 5), 0);
+        topRow.addView(viewerCountTv, vcLp);
 
-        endOrLeaveBtn = Ui.roundChip(this, isHost ? "End" : "✕", isHost ? 0xCC000000 : 0x88000000, Color.WHITE, 12);
-        Ui.pad(endOrLeaveBtn, 11, 5, 11, 5);
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-2, -2);
-        elp.leftMargin = Ui.dp(this, 6);
-        endOrLeaveBtn.setOnClickListener(v -> onExitOrEndPressed());
-        topRow.addView(endOrLeaveBtn, elp);
+        // Close / End Button
+        TextView exitBtn = circleBtn("✕", 34, v -> confirmExitOrEnd());
+        topRow.addView(exitBtn);
         topWrap.addView(topRow);
 
-        // Stars +Likes mini strip
-        LinearLayout statsStrip = Ui.row(this);
-        statsStrip.setPadding(0, Ui.dp(this, 6), 0, 0);
-        starsPillTv = Ui.roundChip(this, "⭐ 0 Stars · ❤️ 0", 0x77000000, 0xFFFFD54F, 11);
-        Ui.pad(starsPillTv, 10, 4, 10, 4);
-        statsStrip.addView(starsPillTv);
-        topWrap.addView(statsStrip);
+        // Second mini bar: Live Voice Meter + Quality + Leaderboard + Clean View
+        LinearLayout subRow = Ui.row(this);
+        subRow.setGravity(Gravity.CENTER_VERTICAL);
+        subRow.setPadding(Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 4), 0);
 
-        // Pinned announcement banner
-        pinnedBox = Ui.row(this);
-        pinnedBox.setGravity(Gravity.CENTER_VERTICAL);
-        pinnedBox.setBackground(Ui.roundStroke(this, 0xAA1877F2, 12, 0x66FFFFFF, 1));
-        Ui.pad(pinnedBox, 10, 6, 10, 6);
-        pinnedBox.setVisibility(View.GONE);
-        LinearLayout.LayoutParams pbp = new LinearLayout.LayoutParams(-1, -2);
-        pbp.topMargin = Ui.dp(this, 8);
-        pinnedTextTv = Ui.tvBold(this, "", 12, Color.WHITE);
-        pinnedBox.addView(pinnedTextTv, new LinearLayout.LayoutParams(0, -2, 1));
+        voiceMeterTv = Ui.roundChip(this, "🎙️ Voice Live", 0x77000000, 0xFF69F0AE, 10);
+        Ui.pad(voiceMeterTv, 8, 3, 8, 3);
+        subRow.addView(voiceMeterTv);
+
+        TextView topGiftChip = Ui.roundChip(this, "🏆 Top Gifters", 0x77000000, 0xFFFFD54F, 10);
+        Ui.pad(topGiftChip, 8, 3, 8, 3);
+        topGiftChip.setOnClickListener(v -> showViewersAndLeaderboardSheet());
+        LinearLayout.LayoutParams tgLp = new LinearLayout.LayoutParams(-2, -2);
+        tgLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+        subRow.addView(topGiftChip, tgLp);
+
+        TextView cleanChip = Ui.roundChip(this, "👁 Clean View", 0x77000000, 0xDDFFFFFF, 10);
+        Ui.pad(cleanChip, 8, 3, 8, 3);
+        cleanChip.setOnClickListener(v -> toggleCleanViewMode(true));
+        LinearLayout.LayoutParams clLp = new LinearLayout.LayoutParams(-2, -2);
+        clLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+        subRow.addView(cleanChip, clLp);
+
+        topWrap.addView(subRow);
+
+        // Pinned Comment Banner
+        pinnedCommentBox = Ui.row(this);
+        pinnedCommentBox.setGravity(Gravity.CENTER_VERTICAL);
+        pinnedCommentBox.setBackground(Ui.round(this, 0xCC1877F2, 12));
+        Ui.pad(pinnedCommentBox, 10, 6, 10, 6);
+        pinnedCommentBox.setVisibility(View.GONE);
+        pinnedCommentTv = Ui.tvBold(this, "", 12, 0xFFFFFFFF);
+        pinnedCommentTv.setMaxLines(2);
+        pinnedCommentTv.setEllipsize(TextUtils.TruncateAt.END);
+        pinnedCommentBox.addView(pinnedCommentTv, new LinearLayout.LayoutParams(0, -2, 1f));
         if (isHost) {
-            TextView unpin = Ui.tvBold(this, "✕", 12, Color.WHITE);
-            unpin.setPadding(Ui.dp(this, 8), 0, 0, 0);
+            TextView unpin = Ui.tvBold(this, " ✕", 12, 0xFFFFFFFF);
             unpin.setOnClickListener(v -> updatePinnedComment(""));
-            pinnedBox.addView(unpin);
+            pinnedCommentBox.addView(unpin);
         }
-        topWrap.addView(pinnedBox, pbp);
+        LinearLayout.LayoutParams pinLp = new LinearLayout.LayoutParams(-1, -2);
+        pinLp.setMargins(0, Ui.dp(this, 6), Ui.dp(this, 56), 0);
+        topWrap.addView(pinnedCommentBox, pinLp);
+
+        // Stage Spotlight Q&A Card
+        spotlightQaCard = Ui.row(this);
+        spotlightQaCard.setGravity(Gravity.CENTER_VERTICAL);
+        spotlightQaCard.setBackground(Ui.roundStroke(this, 0xDD1F222E, 14, 0xFFFFD54F, 1));
+        Ui.pad(spotlightQaCard, 12, 8, 12, 8);
+        spotlightQaCard.setVisibility(View.GONE);
+        spotlightQaTv = Ui.tvBold(this, "", 12, 0xFFFFFFFF);
+        spotlightQaCard.addView(spotlightQaTv, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (isHost) {
+            TextView closeQa = Ui.tvBold(this, " ✕", 13, 0xFFFFD54F);
+            closeQa.setOnClickListener(v -> clearSpotlightQa());
+            spotlightQaCard.addView(closeQa);
+        }
+        LinearLayout.LayoutParams qaLp = new LinearLayout.LayoutParams(-1, -2);
+        qaLp.setMargins(0, Ui.dp(this, 6), Ui.dp(this, 56), 0);
+        topWrap.addView(spotlightQaCard, qaLp);
+
+        // Active Interactive Poll Card
+        activePollCard = Ui.col(this);
+        activePollCard.setBackground(Ui.roundStroke(this, 0xDD151822, 14, 0xFF1877F2, 1));
+        Ui.pad(activePollCard, 12, 10, 12, 10);
+        activePollCard.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pollLp = new LinearLayout.LayoutParams(-1, -2);
+        pollLp.setMargins(0, Ui.dp(this, 6), Ui.dp(this, 56), 0);
+        topWrap.addView(activePollCard, pollLp);
+
         hud.addView(topWrap, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
-        // ---- GIFT TOAST BANNER ----
-        giftBannerTv = Ui.roundChip(this, "", 0xDDFF9800, Color.WHITE, 13);
-        Ui.pad(giftBannerTv, 16, 8, 16, 8);
-        giftBannerTv.setVisibility(View.GONE);
-        FrameLayout.LayoutParams gbp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-        gbp.topMargin = Ui.dp(this, 128);
-        hud.addView(giftBannerTv, gbp);
-
-        // ---- RIGHT-SIDE ACTION RAIL ----
+        // 2. RIGHT VERTICAL CONTROL RAIL (Scroll-safe compact buttons)
+        ScrollView railScroll = new ScrollView(this);
+        railScroll.setVerticalScrollBarEnabled(false);
         LinearLayout rail = Ui.col(this);
         rail.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-        rlp.setMargins(0, 0, Ui.dp(this, 10), Ui.dp(this, 112));
-        if (isHost) {
-            rail.addView(railBtn("🔄", "Flip", this::flipCamera));
-            micRailBtn = railBtn("🎙️", "Mic", this::toggleHostMic);
-            rail.addView(micRailBtn);
-            flashRailBtn = railBtn("🔦", "Flash", this::toggleTorch);
-            rail.addView(flashRailBtn);
-            filterRailBtn = railBtn("✨", "Filter", this::cycleStudioFilter);
-            rail.addView(filterRailBtn);
-            rail.addView(railBtn("📌", "Pin", this::promptPinTopic));
-            rail.addView(railBtn("⚙️", "Settings", this::showHostLiveSettingsSheet));
-            rail.addView(railBtn("📤", "Share", this::shareLiveStream));
-        } else {
-            rail.addView(railBtn("❤️", "Like", () -> sendReaction("❤️")));
-            rail.addView(railBtn("🔥", "React", this::showReactionPicker));
-            rail.addView(railBtn("⭐", "Gift", this::giftStarsDialog));
-            final TextView muteBtn = railBtn("🔊", "Sound", null);
-            muteBtn.setOnClickListener(v -> {
-                viewerAudioMuted = !viewerAudioMuted;
-                muteBtn.setText(viewerAudioMuted ? "🔇\nMuted" : "🔊\nSound");
-                Ui.toast(this, viewerAudioMuted ? "Live audio muted" : "Live audio ON");
-            });
-            rail.addView(muteBtn);
-            rail.addView(railBtn("📤", "Share", this::shareLiveStream));
-            rail.addView(railBtn("🚩", "Report", this::reportLiveStream));
-        }
-        hud.addView(rail, rlp);
+        Ui.pad(rail, 4, 4, 8, 4);
 
-        // ---- BOTTOM LIVE CHAT + COMPOSER + QUICK REACTIONS ----
-        LinearLayout bottom = Ui.col(this);
-        Ui.pad(bottom, 12, 8, 68, 12);
+        if (isHost) {
+            rail.addView(circleBtnSpaced("🔄", v -> engine.flipCamera()));
+            btnMic = circleBtnSpaced("🎙️", v -> toggleHostMic());
+            rail.addView(btnMic);
+            btnVideoPause = circleBtnSpaced("📹", v -> toggleHostCameraPause());
+            rail.addView(btnVideoPause);
+            btnRingLight = circleBtnSpaced("💡", v -> toggleRingLightOrTorch());
+            rail.addView(btnRingLight);
+            btnFilter = circleBtnSpaced("🎨", v -> cycleVisualFilter());
+            rail.addView(btnFilter);
+            btnCoHost = circleBtnSpaced("🙋", v -> showCoHostManagerSheet());
+            rail.addView(btnCoHost);
+            btnQa = circleBtnSpaced("❓", v -> showQaDrawerSheet());
+            rail.addView(btnQa);
+            btnPoll = circleBtnSpaced("📊", v -> showCreatePollDialog());
+            rail.addView(btnPoll);
+            rail.addView(circleBtnSpaced("📤", v -> showShareAndInviteSheet()));
+            rail.addView(circleBtnSpaced("⚙️", v -> showHostSettingsSheet()));
+        } else {
+            btnSpeaker = circleBtnSpaced("🔊", v -> toggleViewerSpeaker());
+            rail.addView(btnSpeaker);
+            btnCoHost = circleBtnSpaced("🙋", v -> requestOrLeaveCoHostStage());
+            rail.addView(btnCoHost);
+            btnQa = circleBtnSpaced("❓", v -> showAskQuestionDialog());
+            rail.addView(btnQa);
+            rail.addView(circleBtnSpaced("⭐", v -> showSendGiftSheet()));
+            rail.addView(circleBtnSpaced("📤", v -> showShareAndInviteSheet()));
+            rail.addView(circleBtnSpaced("⚙️", v -> showViewerSettingsSheet()));
+        }
+
+        railScroll.addView(rail);
+        FrameLayout.LayoutParams railLp = new FrameLayout.LayoutParams(
+                -2, Ui.dp(this, 360), Gravity.END | Gravity.BOTTOM);
+        railLp.setMargins(0, 0, 0, Ui.dp(this, 108));
+        hud.addView(railScroll, railLp);
+
+        // 3. BOTTOM LIVE CHAT STREAM + EMOJI REACTION STRIP + COMMENT COMPOSER
+        LinearLayout bottomZone = Ui.col(this);
+        Ui.pad(bottomZone, 10, 0, 10, 12);
 
         chatRv = new RecyclerView(this);
         LinearLayoutManager lm = new LinearLayoutManager(this);
@@ -863,676 +832,1731 @@ public class LiveActivity extends Activity {
         chatRv.setLayoutManager(lm);
         chatAdapter = new ChatAdapter();
         chatRv.setAdapter(chatAdapter);
-        bottom.addView(chatRv, new LinearLayout.LayoutParams(-1, Ui.dp(this, 210)));
+        LinearLayout.LayoutParams chatLp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 185));
+        chatLp.setMargins(0, 0, Ui.dp(this, 52), Ui.dp(this, 6));
+        bottomZone.addView(chatRv, chatLp);
 
-        // Quick 1-tap reaction emojis strip
-        LinearLayout reactRow = Ui.row(this);
-        reactRow.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
-        for (final String em : REACTIONS) {
-            TextView rb = Ui.tv(this, em, 19, Color.WHITE);
-            rb.setBackground(Ui.round(this, 0x55000000, 18));
-            Ui.pad(rb, 9, 4, 9, 4);
-            LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-2, -2);
-            ep.rightMargin = Ui.dp(this, 6);
-            rb.setOnClickListener(v -> sendReaction(em));
-            reactRow.addView(rb, ep);
+        // Quick Reaction Emoji Bar
+        LinearLayout emojiRow = Ui.row(this);
+        emojiRow.setGravity(Gravity.CENTER_VERTICAL);
+        emojiRow.setPadding(0, 0, Ui.dp(this, 52), Ui.dp(this, 6));
+        for (final String em : REACTION_EMOJIS) {
+            TextView eBtn = Ui.tv(this, em, 18, 0xFFFFFFFF);
+            eBtn.setGravity(Gravity.CENTER);
+            eBtn.setBackground(Ui.round(this, 0x55000000, 18));
+            Ui.pad(eBtn, 9, 4, 9, 4);
+            LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(-2, -2);
+            elp.setMargins(0, 0, Ui.dp(this, 6), 0);
+            eBtn.setOnClickListener(v -> sendReaction(em));
+            emojiRow.addView(eBtn, elp);
         }
-        bottom.addView(reactRow);
+        bottomZone.addView(emojiRow);
 
-        // Comment composer row
-        LinearLayout inputRow = Ui.row(this);
-        inputRow.setGravity(Gravity.CENTER_VERTICAL);
-        chatInput = new EditText(this);
-        chatInput.setHint("Say something nice…");
-        chatInput.setHintTextColor(0xAAFFFFFF);
-        chatInput.setTextColor(Color.WHITE);
-        chatInput.setTextSize(14);
-        chatInput.setSingleLine(true);
-        chatInput.setBackground(Ui.roundStroke(this, 0x77000000, 22, 0x44FFFFFF, 1));
-        Ui.pad(chatInput, 14, 9, 14, 9);
-        inputRow.addView(chatInput, new LinearLayout.LayoutParams(0, -2, 1));
+        // Comment Composer Row
+        bottomComposerBar = Ui.row(this);
+        bottomComposerBar.setGravity(Gravity.CENTER_VERTICAL);
 
-        sendBtn = Ui.roundChip(this, "➤", Ui.BLUE, Color.WHITE, 14);
-        Ui.pad(sendBtn, 13, 9, 13, 9);
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
-        slp.leftMargin = Ui.dp(this, 6);
-        sendBtn.setOnClickListener(v -> sendLiveComment());
-        inputRow.addView(sendBtn, slp);
+        commentInput = new EditText(this);
+        commentInput.setHint("Say something nice...");
+        commentInput.setHintTextColor(0xAAFFFFFF);
+        commentInput.setTextColor(0xFFFFFFFF);
+        commentInput.setTextSize(13);
+        commentInput.setSingleLine(true);
+        commentInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(220)});
+        commentInput.setBackground(Ui.round(this, 0x66000000, 22));
+        Ui.pad(commentInput, 14, 9, 14, 9);
+        bottomComposerBar.addView(commentInput, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView sendBtn = Ui.roundChip(this, "Send", Ui.BLUE, 0xFFFFFFFF, 12);
+        Ui.pad(sendBtn, 14, 9, 14, 9);
+        sendBtn.setOnClickListener(v -> sendChatMessage());
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(-2, -2);
+        sbLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+        bottomComposerBar.addView(sendBtn, sbLp);
 
         if (!isHost) {
-            giftBtn = Ui.roundChip(this, "⭐", Ui.ORANGE, Color.WHITE, 14);
-            Ui.pad(giftBtn, 12, 9, 12, 9);
-            LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-2, -2);
-            glp.leftMargin = Ui.dp(this, 6);
-            giftBtn.setOnClickListener(v -> giftStarsDialog());
-            inputRow.addView(giftBtn, glp);
+            TextView giftQuick = Ui.roundChip(this, "⭐ Gift", 0xFFFF9800, 0xFFFFFFFF, 12);
+            Ui.pad(giftQuick, 12, 9, 12, 9);
+            giftQuick.setOnClickListener(v -> showSendGiftSheet());
+            LinearLayout.LayoutParams gqLp = new LinearLayout.LayoutParams(-2, -2);
+            gqLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+            bottomComposerBar.addView(giftQuick, gqLp);
         }
-        bottom.addView(inputRow);
 
-        hud.addView(bottom, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        bottomZone.addView(bottomComposerBar, new LinearLayout.LayoutParams(-1, -2));
+        hud.addView(bottomZone, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+
         return hud;
     }
 
-    private TextView railBtn(String emoji, String label, Runnable click) {
-        TextView tv = Ui.tvBold(this, emoji + "\n" + label, 10.5f, Color.WHITE);
-        tv.setGravity(Gravity.CENTER);
-        tv.setBackground(Ui.roundStroke(this, 0x77000000, 18, 0x33FFFFFF, 1));
-        Ui.pad(tv, 8, 7, 8, 7);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Ui.dp(this, 50), -2);
-        lp.bottomMargin = Ui.dp(this, 8);
-        tv.setLayoutParams(lp);
-        if (click != null) tv.setOnClickListener(v -> click.run());
-        return tv;
+    private TextView circleBtn(String emoji, int sizeDp, View.OnClickListener click) {
+        TextView t = new TextView(this);
+        t.setText(emoji);
+        t.setTextSize(16);
+        t.setTextColor(0xFFFFFFFF);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(Ui.round(this, 0x77000000, sizeDp));
+        int px = Ui.dp(this, sizeDp);
+        t.setLayoutParams(new LinearLayout.LayoutParams(px, px));
+        t.setOnClickListener(click);
+        return t;
     }
 
-    private void updateRailButtonLabels() {
-        if (micRailBtn != null) micRailBtn.setText((micMuted ? "🔇\nMuted" : "🎙️\nMic"));
-        if (flashRailBtn != null) flashRailBtn.setText((torchOn ? "⚡\nOn" : "🔦\nFlash"));
-        if (filterRailBtn != null) filterRailBtn.setText("✨\nFilter");
+    private TextView circleBtnSpaced(String emoji, View.OnClickListener click) {
+        TextView t = circleBtn(emoji, 38, click);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Ui.dp(this, 38), Ui.dp(this, 38));
+        lp.setMargins(0, 0, 0, Ui.dp(this, 8));
+        t.setLayoutParams(lp);
+        return t;
     }
 
-    // ==================== FIRESTORE ROOM SYNC ====================
+    // ==================== PERMISSIONS & STARTING LIVE BROADCAST ====================
 
-    private void joinAsViewer() {
-        String me = Fb.uid();
-        if (liveId == null || me == null) return;
-        joinedCounted = true;
-        Map<String, Object> up = new HashMap<>();
-        up.put("viewerCount", FieldValue.increment(1));
-        up.put("viewerIds", FieldValue.arrayUnion(me));
-        Fb.db().collection("lives").document(liveId).update(up);
-    }
-
-    private void attachRoomListeners() {
-        if (liveId == null || liveId.isEmpty()) return;
-        if (liveReg != null) liveReg.remove();
-        if (chatReg != null) chatReg.remove();
-
-        liveReg = Fb.db().collection("lives").document(liveId)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    Map<String, Object> m = d.getData();
-                    if ("ended".equals(Format.str(m, "status")) && !isHost) {
-                        Ui.toast(this, "🔴 Live broadcast has ended");
-                        finish();
-                        return;
-                    }
-                    hostId = Format.str(m, "hostId");
-                    hostName = Format.strOr(m, "hostName", "Creator");
-                    hostPhoto = Format.str(m, "hostPhoto");
-                    hostTick = Format.strOr(m, "hostTick", "none");
-                    liveTitle = Format.strOr(m, "title", "Live Broadcast");
-                    liveCategory = Format.strOr(m, "category", CATEGORIES[0]);
-                    livePrivacy = Format.strOr(m, "privacy", "Public");
-                    pinnedComment = Format.str(m, "pinnedComment");
-                    allowComments = m == null || !m.containsKey("allowComments") || Format.boolOf(m, "allowComments");
-                    slowMode = Format.boolOf(m, "slowMode");
-                    allowGifts = m == null || !m.containsKey("allowGifts") || Format.boolOf(m, "allowGifts");
-                    micMuted = Format.boolOf(m, "micMuted");
-
-                    long started = Format.ts(m == null ? null : m.get("startedAtMs"));
-                    if (started == 0L) started = Format.ts(m == null ? null : m.get("createdAt"));
-                    if (started > 0L) liveStartMs = started;
-
-                    currentViewers = Math.max(0, Format.intOf(m, "viewerCount"));
-                    int dbPeak = Format.intOf(m, "peakViewers");
-                    if (currentViewers > peakViewers) peakViewers = currentViewers;
-                    if (dbPeak > peakViewers) peakViewers = dbPeak;
-                    if (isHost && currentViewers > dbPeak) {
-                        Fb.db().collection("lives").document(liveId).update("peakViewers", currentViewers);
-                    }
-
-                    int newLikes = Math.max(0, Format.intOf(m, "likesCount"));
-                    if (lastSyncedLikes >= 0 && newLikes > lastSyncedLikes) {
-                        int burst = Math.min(4, newLikes - lastSyncedLikes);
-                        for (int i = 0; i < burst; i++) {
-                            uiHandler.postDelayed(() -> spawnFloatingEmoji(
-                                    REACTIONS[rng.nextInt(REACTIONS.length)]), i * 140L);
-                        }
-                    }
-                    lastSyncedLikes = newLikes;
-                    totalLikes = newLikes;
-                    totalStars = Math.max(0, Format.intOf(m, "totalStars"));
-
-                    viewerIds.clear();
-                    viewerIds.addAll(Format.listOf(m, "viewerIds"));
-                    mutedUserIds.clear();
-                    mutedUserIds.addAll(Format.listOf(m, "mutedUserIds"));
-
-                    if (!isHost) {
-                        int fIdx = Math.max(0, Math.min(FILTER_TINTS.length - 1, Format.intOf(m, "filterIndex")));
-                        filterOverlay.setBackgroundColor(FILTER_TINTS[fIdx]);
-                    }
-                    refreshHudViews();
-                });
-
-        chatReg = Fb.db().collection("lives").document(liveId).collection("comments")
-                .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(80)
-                .addSnapshotListener((snap, err) -> {
-                    comments.clear();
-                    if (snap != null) {
-                        totalCommentsCount = Math.max(totalCommentsCount, snap.size());
-                        for (DocumentSnapshot dc : snap.getDocuments()) {
-                            Map<String, Object> row = new HashMap<>();
-                            if (dc.getData() != null) row.putAll(dc.getData());
-                            row.put("_id", dc.getId());
-                            comments.add(row);
-                            if ("gift".equals(Format.str(row, "type")) && snap.getDocumentChanges().size() == 1) {
-                                flashGiftBanner(Format.str(row, "userName") + " " + Format.str(row, "text"));
-                            }
-                        }
-                    }
-                    chatAdapter.notifyDataSetChanged();
-                    if (!comments.isEmpty()) chatRv.scrollToPosition(comments.size() - 1);
-                });
-    }
-
-    private void refreshHudViews() {
-        Ui.avatar(this, hostAvIv, hostPhoto);
-        hostNameTv.setText(hostName);
-        Icons.setTickBadge(hostTickIv, hostTick, false);
-        hostSubTv.setText(liveTitle + " · " + liveCategory);
-        viewersPillTv.setText("👁 " + Format.count(Math.max(1, currentViewers)));
-        starsPillTv.setText("⭐ " + Format.count(totalStars) + " Stars · ❤️ " + Format.count(totalLikes));
-
-        if (!isHost) {
-            Ui.avatarLarge(this, stageAvatar, hostPhoto);
-            stageStatusLabel.setText("🔴 " + hostName + " is LIVE\n" + liveTitle
-                    + (micMuted ? "\n🔇 Host muted microphone" : ""));
-            boolean following = Fb.me != null && Fb.me.following != null && Fb.me.following.contains(hostId);
-            followBtnTv.setText(following ? "Following" : "Follow");
-            followBtnTv.setVisibility(hostId.equals(Fb.uid()) ? View.GONE : View.VISIBLE);
-            if (giftBtn != null) giftBtn.setVisibility(allowGifts ? View.VISIBLE : View.GONE);
-            // Admins can also force-end a violating live stream
-            if (Admin.isAdmin()) endOrLeaveBtn.setText("🛡 End");
+    private void ensureLivePermissions(int reqCode) {
+        List<String> need = new ArrayList<>();
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.CAMERA);
         }
-
-        if (pinnedComment != null && !pinnedComment.isEmpty()) {
-            pinnedBox.setVisibility(View.VISIBLE);
-            pinnedTextTv.setText("📌 " + pinnedComment);
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (!need.isEmpty()) {
+            requestPermissions(need.toArray(new String[0]), reqCode);
         } else {
-            pinnedBox.setVisibility(View.GONE);
-        }
-
-        boolean amMuted = Fb.uid() != null && mutedUserIds.contains(Fb.uid());
-        boolean canChat = isHost || (allowComments && !amMuted);
-        chatInput.setEnabled(canChat);
-        sendBtn.setAlpha(canChat ? 1f : 0.4f);
-        if (!allowComments && !isHost) {
-            chatInput.setHint("🔒 Host turned off comments");
-        } else if (amMuted) {
-            chatInput.setHint("🔇 You are muted in this Live");
-        } else if (slowMode && !isHost) {
-            chatInput.setHint("🐢 Slow mode (5s) · Say something…");
-        } else {
-            chatInput.setHint("Say something nice…");
+            if (reqCode == REQ_LIVE_PERMS) {
+                engine.attachCameraPreview(cameraTexture, true);
+            } else if (reqCode == REQ_COHOST_PERMS) {
+                activateLocalCoHostStreaming();
+            }
         }
     }
 
-    // ==================== INTERACTIVE ACTIONS & SETTINGS ====================
-
-    private void sendReaction(String emoji) {
-        spawnFloatingEmoji(emoji);
-        Ui.haptic(rootStage);
-        if (liveId != null && !liveId.isEmpty()) {
-            lastSyncedLikes = Math.max(0, totalLikes) + 1;
-            totalLikes = lastSyncedLikes;
-            starsPillTv.setText("⭐ " + Format.count(totalStars) + " Stars · ❤️ " + Format.count(totalLikes));
-            Fb.db().collection("lives").document(liveId).update("likesCount", FieldValue.increment(1));
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        boolean camOk = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == REQ_LIVE_PERMS) {
+            if (camOk) {
+                engine.attachCameraPreview(cameraTexture, true);
+            } else {
+                fallbackStage.setVisibility(View.VISIBLE);
+                stageStatusTv.setText("🎙️ Audio-only mode (grant Camera permission for video)");
+            }
+        } else if (requestCode == REQ_COHOST_PERMS && camOk) {
+            activateLocalCoHostStreaming();
         }
     }
 
-    private void spawnFloatingEmoji(String emoji) {
-        if (rootStage == null || isFinishing()) return;
-        TextView tv = Ui.tv(this, emoji, 28, Color.WHITE);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-        int rightOffset = Ui.dp(this, 18 + rng.nextInt(44));
-        lp.setMargins(0, 0, rightOffset, Ui.dp(this, 120));
-        rootStage.addView(tv, lp);
-
-        float driftX = Ui.dp(this, rng.nextInt(50) - 25);
-        float riseY = -Ui.dp(this, 260 + rng.nextInt(140));
-        tv.setScaleX(0.5f);
-        tv.setScaleY(0.5f);
-        tv.animate()
-                .translationX(driftX)
-                .translationY(riseY)
-                .scaleX(1.25f)
-                .scaleY(1.25f)
-                .alpha(0f)
-                .setDuration(1850L)
-                .withEndAction(() -> {
-                    try { rootStage.removeView(tv); } catch (Throwable ignored) {}
-                })
-                .start();
+    private void beginCountdownAndStartLive() {
+        String rawTitle = titleInput.getText().toString().trim();
+        ContentSafetyEngine.Verdict verdict = ContentSafetyEngine.checkText(rawTitle);
+        if (verdict.unsafe) {
+            Ui.toast(this, verdict.message);
+            return;
+        }
+        preLiveOverlay.setVisibility(View.GONE);
+        countdownTv.setVisibility(View.VISIBLE);
+        final int[] step = {3};
+        countdownTv.setText("3");
+        Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing()) return;
+                step[0]--;
+                if (step[0] > 0) {
+                    countdownTv.setText(String.valueOf(step[0]));
+                    uiHandler.postDelayed(this, 850L);
+                } else if (step[0] == 0) {
+                    countdownTv.setText("🔴 LIVE!");
+                    uiHandler.postDelayed(this, 550L);
+                } else {
+                    countdownTv.setVisibility(View.GONE);
+                    startHostBroadcastNow();
+                }
+            }
+        };
+        uiHandler.postDelayed(tick, 850L);
     }
 
-    private void showReactionPicker() {
-        Ui.choose(this, "Send Live Reaction",
-                new String[]{"❤️ Love", "🔥 Fire", "😂 Haha", "👏 Applause", "😍 Amazing", "🎉 Party"},
-                w -> sendReaction(REACTIONS[w]));
-    }
-
-    private void sendLiveComment() {
-        if (liveId == null || liveId.isEmpty()) return;
+    private void startHostBroadcastNow() {
         String me = Fb.uid();
         if (me == null) return;
-        if (!isHost && !allowComments) {
-            Ui.toast(this, "Comments are turned off by the host");
+
+        hostNameStr = Fb.myName();
+        hostPhotoStr = Fb.myPhoto() == null ? "" : Fb.myPhoto();
+        String entered = titleInput.getText().toString().trim();
+        liveTitleStr = entered.isEmpty() ? (hostNameStr + " is Live 🔴") : entered;
+        liveStartMs = System.currentTimeMillis();
+        isLiveStarted = true;
+
+        DocumentReference docRef = Fb.db().collection("lives").document();
+        liveId = docRef.getId();
+        activeViewerIds.add(me);
+        viewerNames.put(me, hostNameStr + " (Host)");
+        viewerPhotos.put(me, hostPhotoStr);
+
+        // Write ALL canonical + legacy fields so FeedAdapter, HomeFragment, LiveHub, AdminLive & Firestore Rules all match 100%!
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("hostId", me);
+        doc.put("hostName", hostNameStr);
+        doc.put("hostPhoto", hostPhotoStr);
+        doc.put("hostPhotoUrl", hostPhotoStr);
+        doc.put("title", liveTitleStr);
+        doc.put("category", selectedCategory);
+        doc.put("privacy", privacyFriendsOnly ? "friends" : "public");
+        doc.put("status", "live");
+        doc.put("viewers", 1);
+        doc.put("viewerCount", 1);
+        doc.put("peakViewers", 1);
+        doc.put("stars", 0);
+        doc.put("totalStars", 0);
+        doc.put("likesCount", 0);
+        doc.put("filterIndex", currentFilterIdx);
+        doc.put("cameraPaused", engine.isCameraPaused());
+        doc.put("commentsEnabled", commentsEnabled);
+        doc.put("slowMode", slowModeEnabled);
+        doc.put("giftsEnabled", giftsEnabled);
+        doc.put("qaEnabled", qaEnabled);
+        doc.put("coHostAllowed", coHostAllowed);
+        doc.put("blockedKeywords", blockedKeywordsCsv);
+        doc.put("pinnedComment", "");
+        doc.put("viewerIds", new ArrayList<>(activeViewerIds));
+        doc.put("startedAtMs", liveStartMs);
+        doc.put("lastHeartbeatMs", liveStartMs);
+        doc.put("startedAt", FieldValue.serverTimestamp());
+        doc.put("createdAt", FieldValue.serverTimestamp());
+
+        liveHudOverlay.setVisibility(View.VISIBLE);
+        Ui.avatar(this, hostTopAvatar, hostPhotoStr);
+        hostTopName.setText(hostNameStr);
+
+        docRef.set(doc).addOnSuccessListener(unused -> {
+            setupRtdbFastLane();
+            attachRoomListeners();
+            // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
+            engine.startBroadcasting(true);
+            engine.startSpeakerPlayback();
+            uiHandler.post(durationTicker);
+            uiHandler.postDelayed(hostHeartbeatTask, 8000L);
+            postSystemChat("🔴 " + hostNameStr + " started a live video & voice broadcast!");
+            notifyFollowersGoingLive();
+        }).addOnFailureListener(e -> {
+            Ui.toast(this, "Could not start live: " + e.getMessage());
+            finish();
+        });
+    }
+
+    private void notifyFollowersGoingLive() {
+        if (Fb.me == null || Fb.me.followers == null) return;
+        int sent = 0;
+        for (String fUid : Fb.me.followers) {
+            if (fUid == null || fUid.isEmpty()) continue;
+            Notify.send(fUid, "live", "🔴 is LIVE now: " + liveTitleStr, liveId);
+            if (++sent >= 40) break;
+        }
+    }
+
+    // ==================== VIEWER JOINING REAL-TIME VIDEO + VOICE ROOM ====================
+
+    private void joinExistingLiveAsViewer() {
+        isLiveStarted = true;
+        engine.startSpeakerPlayback();
+        setupRtdbFastLane();
+        attachRoomListeners();
+
+        // Update `viewers` (100% allowed by deployed firestore.rules!) + post join packet in `chat`!
+        viewerCountJoined = true;
+        Fb.db().collection("lives").document(liveId)
+                .update("viewers", FieldValue.increment(1));
+
+        Map<String, Object> joinPkt = new HashMap<>();
+        joinPkt.put("type", "join");
+        joinPkt.put("uid", Fb.uid());
+        joinPkt.put("name", Fb.myName());
+        joinPkt.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        joinPkt.put("text", "👋 joined the live");
+        joinPkt.put("createdAtMs", System.currentTimeMillis());
+        joinPkt.put("createdAt", FieldValue.serverTimestamp());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(joinPkt);
+    }
+
+    // ==================== DUAL-LANE STREAMING (RTDB FAST LANE + FIRESTORE GUARANTEED LANE) ====================
+
+    private void setupRtdbFastLane() {
+        if (liveId == null) return;
+        try {
+            FirebaseDatabase rtdb = Fb.rtdb();
+            if (rtdb == null) return;
+            rtdbStreamRef = rtdb.getReference("live_streams").child(liveId);
+            if (!isHost) {
+                rtdbStreamListener = new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snapshot) {
+                        if (isFinishing() || isEnded || !snapshot.exists()) return;
+                        String vB64 = snapshot.child("v").getValue(String.class);
+                        Long vSeq = snapshot.child("vs").getValue(Long.class);
+                        if (vB64 != null && !vB64.isEmpty()) {
+                            engine.decodeRemoteFrame(vB64, vSeq == null ? 0L : vSeq, false);
+                        }
+                        String aB64 = snapshot.child("a").getValue(String.class);
+                        Long aSeq = snapshot.child("as").getValue(Long.class);
+                        if (aB64 != null && !aB64.isEmpty()) {
+                            engine.enqueueRemoteAudio(aB64, aSeq == null ? 0L : aSeq, false);
+                        }
+                    }
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) { }
+                };
+                rtdbStreamRef.addValueEventListener(rtdbStreamListener);
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    @Override
+    public void onEncodedVideoFrame(String base64Webp, int width, int height) {
+        if (isEnded || !isLiveStarted || liveId == null) return;
+        if (isHost) {
+            long seq = ++frameSeqOut;
+            long now = System.currentTimeMillis();
+            if (rtdbStreamRef != null) {
+                Map<String, Object> fast = new HashMap<>();
+                fast.put("v", base64Webp);
+                fast.put("vs", seq);
+                rtdbStreamRef.updateChildren(fast);
+            }
+            // Guaranteed Firestore real-time stream (100% allowed for hostId == request.auth.uid!)
+            Map<String, Object> upd = new HashMap<>();
+            upd.put("liveFrameB64", base64Webp);
+            upd.put("frameSeq", seq);
+            upd.put("frameTs", now);
+            upd.put("cameraPaused", false);
+            upd.put("filterIndex", currentFilterIdx);
+            Fb.db().collection("lives").document(liveId).update(upd);
+        }
+    }
+
+    @Override
+    public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
+        if (isEnded || !isLiveStarted || liveId == null) return;
+        if (isHost) {
+            long seq = ++audioSeqOut;
+            if (rtdbStreamRef != null) {
+                Map<String, Object> fast = new HashMap<>();
+                fast.put("a", base64Ulaw);
+                fast.put("as", seq);
+                rtdbStreamRef.updateChildren(fast);
+            }
+            Map<String, Object> upd = new HashMap<>();
+            upd.put("audioB64", base64Ulaw);
+            upd.put("audioSeq", seq);
+            upd.put("audioLevel", voiceLevel);
+            Fb.db().collection("lives").document(liveId).update(upd);
+        }
+    }
+
+    @Override
+    public void onLocalVoiceLevel(int voiceLevel) {
+        if (voiceMeterTv == null) return;
+        if (engine.isMicMuted()) {
+            voiceMeterTv.setText("🔇 Mic Muted");
+            voiceMeterTv.setTextColor(0xFFFF8A80);
+        } else {
+            String bars = voiceLevel > 45 ? "▂▅▇" : (voiceLevel > 12 ? "▂▅" : "▂");
+            voiceMeterTv.setText("🎙️ Live " + bars);
+            voiceMeterTv.setTextColor(voiceLevel > 8 ? 0xFF69F0AE : 0xCCFFFFFF);
+        }
+    }
+
+    @Override
+    public void onDecodedRemoteVideo(Bitmap bitmap, boolean isCoHost) {
+        if (isFinishing() || isEnded || bitmap == null) return;
+        if (isCoHost) {
+            coHostCard.setVisibility(View.VISIBLE);
+            coHostRemoteImage.setVisibility(View.VISIBLE);
+            coHostRemoteImage.setImageBitmap(bitmap);
+        } else {
+            lastHostVideoUpdateMs = System.currentTimeMillis();
+            remoteVideoView.setVisibility(View.VISIBLE);
+            remoteVideoView.setImageBitmap(bitmap);
+            fallbackStage.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
+    public void onCameraError(String message) {
+        if (isHost) {
+            fallbackStage.setVisibility(View.VISIBLE);
+            stageStatusTv.setText("🎙️ " + message + " (Audio broadcast active)");
+        }
+    }
+
+    // ==================== FIRESTORE ROOM & CHAT REALTIME LISTENERS ====================
+
+    private void attachRoomListeners() {
+        if (liveId == null) return;
+
+        liveDocReg = Fb.db().collection("lives").document(liveId)
+                .addSnapshotListener((snap, err) -> {
+                    if (isFinishing() || snap == null || !snap.exists()) return;
+                    onLiveDocumentSnapshot(snap);
+                });
+
+        chatColReg = Fb.db().collection("lives").document(liveId).collection("chat")
+                .orderBy("createdAtMs", Query.Direction.ASCENDING)
+                .limitToLast(100)
+                .addSnapshotListener((snap, err) -> {
+                    if (isFinishing() || snap == null) return;
+                    onChatSnapshot(snap.getDocuments());
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    private void onLiveDocumentSnapshot(DocumentSnapshot d) {
+        Map<String, Object> m = d.getData();
+        if (m == null) return;
+
+        String status = Format.str(m, "status");
+        if ("ended".equals(status) && !isHost && !isEnded) {
+            isEnded = true;
+            showViewerBroadcastEndedDialog();
             return;
         }
-        if (!isHost && mutedUserIds.contains(me)) {
-            Ui.toast(this, "You are muted in this live stream");
+
+        hostId = Format.strOr(m, "hostId", hostId);
+        hostNameStr = Format.strOr(m, "hostName", hostNameStr);
+        hostPhotoStr = Format.str(m, "hostPhotoUrl");
+        if (hostPhotoStr.isEmpty()) hostPhotoStr = Format.str(m, "hostPhoto");
+        liveTitleStr = Format.strOr(m, "title", liveTitleStr);
+
+        // Kick check for Viewer
+        Object kickedObj = m.get("kickedUserIds");
+        if (kickedObj instanceof List) {
+            kickedUserIds.clear();
+            for (Object o : (List<?>) kickedObj) if (o != null) kickedUserIds.add(String.valueOf(o));
+            if (!isHost && kickedUserIds.contains(Fb.uid())) {
+                isEnded = true;
+                Ui.toast(this, "You were removed from this broadcast");
+                finish();
+                return;
+            }
+        }
+        Object mutedObj = m.get("mutedUserIds");
+        if (mutedObj instanceof List) {
+            mutedUserIds.clear();
+            for (Object o : (List<?>) mutedObj) if (o != null) mutedUserIds.add(String.valueOf(o));
+        }
+        Object modObj = m.get("moderatorIds");
+        if (modObj instanceof List) {
+            moderatorIds.clear();
+            for (Object o : (List<?>) modObj) if (o != null) moderatorIds.add(String.valueOf(o));
+        }
+        Object delObj = m.get("deletedMsgIds");
+        if (delObj instanceof List) {
+            deletedMsgIds.clear();
+            for (Object o : (List<?>) delObj) if (o != null) deletedMsgIds.add(String.valueOf(o));
+        }
+
+        // Sync Room Settings
+        commentsEnabled = m.get("commentsEnabled") == null || Boolean.TRUE.equals(m.get("commentsEnabled"));
+        slowModeEnabled = Boolean.TRUE.equals(m.get("slowMode"));
+        giftsEnabled = m.get("giftsEnabled") == null || Boolean.TRUE.equals(m.get("giftsEnabled"));
+        qaEnabled = m.get("qaEnabled") == null || Boolean.TRUE.equals(m.get("qaEnabled"));
+        coHostAllowed = m.get("coHostAllowed") == null || Boolean.TRUE.equals(m.get("coHostAllowed"));
+        blockedKeywordsCsv = Format.str(m, "blockedKeywords");
+
+        commentInput.setEnabled(commentsEnabled || isHost || isMeModerator());
+        commentInput.setHint(!commentsEnabled ? "🔇 Host turned off comments"
+                : (slowModeEnabled ? "🐢 Slow mode (5s)..." : "Say something nice..."));
+
+        // Header Stats & Timer
+        if (!isHost) {
+            hostTopName.setText(hostNameStr);
+            Ui.avatar(this, hostTopAvatar, hostPhotoStr);
+            Ui.avatar(this, stageAvatar, hostPhotoStr);
+            long startedMs = Format.longOf(m, "startedAtMs");
+            if (startedMs > 0 && liveStartMs == 0L) {
+                liveStartMs = startedMs;
+                uiHandler.removeCallbacks(durationTicker);
+                uiHandler.post(durationTicker);
+            }
+        }
+
+        int vDoc = Math.max(1, Math.max(Format.intOf(m, "viewers"), Format.intOf(m, "viewerCount")));
+        currentViewers = isHost ? Math.max(vDoc, activeViewerIds.size()) : vDoc;
+        if (currentViewers > peakViewers) peakViewers = currentViewers;
+        viewerCountTv.setText("👁 " + Format.count(currentViewers));
+
+        totalStarsReceived = Math.max(Format.intOf(m, "stars"), Format.intOf(m, "totalStars"));
+        hostTopSub.setText("⭐ " + Format.count(totalStarsReceived) + " Stars");
+
+        // Filter Sync
+        int remoteFilter = Format.intOf(m, "filterIndex");
+        if (!isHost && remoteFilter >= 0 && remoteFilter < FILTER_OVERLAYS.length) {
+            currentFilterIdx = remoteFilter;
+            filterOverlayView.setBackgroundColor(FILTER_OVERLAYS[currentFilterIdx]);
+        }
+
+        // Viewer Decodes Real-Time Host Video + Real-Time Host Audio!
+        if (!isHost) {
+            boolean hostCamPaused = Boolean.TRUE.equals(m.get("cameraPaused"));
+            if (hostCamPaused) {
+                remoteVideoView.setVisibility(View.GONE);
+                fallbackStage.setVisibility(View.VISIBLE);
+                stageStatusTv.setText("⏸ " + hostNameStr + " paused camera · Live voice active 🔊");
+            } else {
+                String frameB64 = Format.str(m, "liveFrameB64");
+                long fSeq = Format.longOf(m, "frameSeq");
+                if (!frameB64.isEmpty()) {
+                    engine.decodeRemoteFrame(frameB64, fSeq, false);
+                } else if (System.currentTimeMillis() - lastHostVideoUpdateMs > 5000L) {
+                    fallbackStage.setVisibility(View.VISIBLE);
+                    stageStatusTv.setText("🎙️ " + hostNameStr + " is Live");
+                }
+            }
+
+            String audioB64 = Format.str(m, "audioB64");
+            long aSeq = Format.longOf(m, "audioSeq");
+            int aLevel = Format.intOf(m, "audioLevel");
+            if (!audioB64.isEmpty()) {
+                engine.enqueueRemoteAudio(audioB64, aSeq, false);
+            }
+            if (voiceMeterTv != null) {
+                if (engine.isSpeakerMuted()) {
+                    voiceMeterTv.setText("🔇 Sound Muted");
+                    voiceMeterTv.setTextColor(0xFFFF8A80);
+                } else {
+                    String bars = aLevel > 40 ? "▂▅▇" : (aLevel > 10 ? "▂▅" : "▂");
+                    voiceMeterTv.setText("🔊 Live Voice " + bars);
+                    voiceMeterTv.setTextColor(aLevel > 8 ? 0xFF69F0AE : 0xCCFFFFFF);
+                }
+            }
+        }
+
+        // Co-Host Stage State Sync
+        String newCoUid = Format.str(m, "coHostUid");
+        String newCoName = Format.str(m, "coHostName");
+        handleCoHostStateUpdate(newCoUid, newCoName,
+                Format.str(m, "coHostFrameB64"), Format.longOf(m, "coHostFrameSeq"),
+                Format.str(m, "coHostAudioB64"), Format.longOf(m, "coHostAudioSeq"));
+
+        // Pinned Comment Banner
+        String pinned = Format.str(m, "pinnedComment");
+        pinnedCommentBox.setVisibility(pinned.isEmpty() ? View.GONE : View.VISIBLE);
+        pinnedCommentTv.setText("📌 " + pinned);
+
+        // Stage Spotlight Q&A Card
+        String qaSpot = Format.str(m, "spotlightQa");
+        spotlightQaCard.setVisibility(qaSpot.isEmpty() ? View.GONE : View.VISIBLE);
+        spotlightQaTv.setText(qaSpot);
+
+        // Interactive Poll Sync
+        String pId = Format.str(m, "pollId");
+        String pQ = Format.str(m, "pollQuestion");
+        Object optsObj = m.get("pollOptions");
+        if (!pId.isEmpty() && !pQ.isEmpty() && optsObj instanceof List) {
+            if (!pId.equals(activePollId)) {
+                activePollId = pId;
+                myVotedOption = -1;
+                activePollVoterChoice.clear();
+            }
+            activePollQuestion = pQ;
+            activePollOptions = new ArrayList<>();
+            for (Object o : (List<?>) optsObj) activePollOptions.add(String.valueOf(o));
+            renderActivePollCard();
+        } else {
+            activePollId = "";
+            activePollCard.setVisibility(View.GONE);
+        }
+    }
+
+    private final Set<String> processedPacketIds = new HashSet<>();
+
+    private void onChatSnapshot(List<DocumentSnapshot> docs) {
+        List<ChatItem> visibleMessages = new ArrayList<>();
+        for (DocumentSnapshot d : docs) {
+            Map<String, Object> m = d.getData();
+            if (m == null) continue;
+            String id = d.getId();
+            if (deletedMsgIds.contains(id)) continue;
+
+            String type = Format.strOr(m, "type", "chat");
+            String uid = Format.str(m, "uid");
+            String name = Format.strOr(m, "name", "Viewer");
+            String photo = Format.str(m, "photo");
+            String text = Format.str(m, "text");
+            boolean isNewPacket = processedPacketIds.add(id);
+
+            if (!uid.isEmpty()) {
+                viewerNames.put(uid, name);
+                if (!photo.isEmpty()) viewerPhotos.put(uid, photo);
+            }
+
+            if ("join".equals(type)) {
+                if (!uid.isEmpty() && activeViewerIds.add(uid)) {
+                    totalUniqueViewers++;
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
+            } else if ("leave".equals(type)) {
+                activeViewerIds.remove(uid);
+            } else if ("reaction".equals(type)) {
+                if (isNewPacket) {
+                    totalLikes++;
+                    if (!uid.equals(Fb.uid())) {
+                        spawnFloatingEmoji(text.isEmpty() ? "❤️" : text);
+                    }
+                }
+            } else if ("gift".equals(type)) {
+                int stars = Format.intOf(m, "stars");
+                if (isNewPacket && stars > 0) {
+                    int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;
+                    supporterStars.put(uid, prev + stars);
+                    supporterNames.put(uid, name);
+                    spawnFloatingEmoji("⭐");
+                    spawnFloatingEmoji("🎉");
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, text, "gift"));
+            } else if ("qa".equals(type)) {
+                if (isNewPacket) {
+                    qaItems.add(0, new ChatItem(id, uid, name, photo, text, "qa"));
+                    if (isHost) Ui.toast(this, "❓ New Q&A question from " + name);
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, "❓ Asked: " + text, "qa"));
+            } else if ("poll_vote".equals(type)) {
+                String pId = Format.str(m, "pollId");
+                int optIdx = Format.intOf(m, "optionIndex");
+                if (!pId.isEmpty() && pId.equals(activePollId) && !uid.isEmpty()) {
+                    activePollVoterChoice.put(uid, optIdx);
+                    if (isNewPacket) renderActivePollCard();
+                }
+            } else if ("cohost_req".equals(type)) {
+                if (isNewPacket && !uid.isEmpty() && !uid.equals(hostId)) {
+                    pendingCoHostRequests.put(uid, new ChatItem(id, uid, name, photo, text, "cohost_req"));
+                    if (isHost) {
+                        Ui.toast(this, "🙋 " + name + " requested to join your Live!");
+                    }
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, "🙋 requested to join Live", "system"));
+            } else if ("cohost_media".equals(type)) {
+                // Co-Host real-time camera + voice relay packet!
+                if (isNewPacket && uid.equals(activeCoHostUid) && !uid.equals(Fb.uid())) {
+                    String cf = Format.str(m, "v");
+                    String ca = Format.str(m, "a");
+                    long seq = Format.longOf(m, "seq");
+                    if (!cf.isEmpty()) engine.decodeRemoteFrame(cf, seq, true);
+                    if (!ca.isEmpty()) engine.enqueueRemoteAudio(ca, seq, true);
+                    if (isHost && liveId != null) {
+                        Map<String, Object> relay = new HashMap<>();
+                        if (!cf.isEmpty()) {
+                            relay.put("coHostFrameB64", cf);
+                            relay.put("coHostFrameSeq", seq);
+                        }
+                        if (!ca.isEmpty()) {
+                            relay.put("coHostAudioB64", ca);
+                            relay.put("coHostAudioSeq", seq);
+                        }
+                        if (!relay.isEmpty()) {
+                            Fb.db().collection("lives").document(liveId).update(relay);
+                        }
+                    }
+                }
+            } else {
+                if (isNewPacket && "chat".equals(type)) totalComments++;
+                visibleMessages.add(new ChatItem(id, uid, name, photo, text, type));
+            }
+        }
+        chatAdapter.setItems(visibleMessages);
+        if (!visibleMessages.isEmpty()) {
+            chatRv.scrollToPosition(visibleMessages.size() - 1);
+        }
+    }
+
+    // ==================== CO-HOST ("JOIN LIVE" SPLIT SCREEN VIDEO + VOICE) ====================
+
+    private void handleCoHostStateUpdate(String coUid, String coName,
+                                         String coFrameB64, long coFrameSeq,
+                                         String coAudioB64, long coAudioSeq) {
+        activeCoHostUid = coUid == null ? "" : coUid;
+        activeCoHostName = coName == null ? "" : coName;
+        String me = Fb.uid();
+
+        if (activeCoHostUid.isEmpty()) {
+            if (isMeActiveCoHost) {
+                stopLocalCoHostStreaming();
+                Ui.toast(this, "You left the Co-Host stage");
+            }
+            coHostCard.setVisibility(View.GONE);
             return;
         }
+
+        coHostCard.setVisibility(View.VISIBLE);
+        coHostLabelTv.setText("🤝 " + (activeCoHostName.isEmpty() ? "Co-Host" : activeCoHostName));
+        coHostCloseBtn.setVisibility((isHost || activeCoHostUid.equals(me)) ? View.VISIBLE : View.GONE);
+
+        if (activeCoHostUid.equals(me)) {
+            if (!isMeActiveCoHost) {
+                isMeActiveCoHost = true;
+                Ui.toast(this, "🎉 Host accepted! Starting your Co-Host camera & mic...");
+                ensureLivePermissions(REQ_COHOST_PERMS);
+            }
+        } else {
+            if (isMeActiveCoHost) stopLocalCoHostStreaming();
+            coHostLocalTexture.setVisibility(View.GONE);
+            coHostRemoteImage.setVisibility(View.VISIBLE);
+            if (!isHost) {
+                if (!coFrameB64.isEmpty()) engine.decodeRemoteFrame(coFrameB64, coFrameSeq, true);
+                if (!coAudioB64.isEmpty()) engine.enqueueRemoteAudio(coAudioB64, coAudioSeq, true);
+            }
+        }
+    }
+
+    private void activateLocalCoHostStreaming() {
+        if (!isMeActiveCoHost || isFinishing()) return;
+        coHostRemoteImage.setVisibility(View.GONE);
+        coHostLocalTexture.setVisibility(View.VISIBLE);
+        if (coHostLocalEngine == null) {
+            coHostLocalEngine = new LiveStreamEngine(this, new LiveStreamEngine.Listener() {
+                @Override
+                public void onEncodedVideoFrame(String base64Webp, int width, int height) {
+                    pushCoHostMediaPacket(base64Webp, null);
+                }
+                @Override
+                public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
+                    pushCoHostMediaPacket(null, base64Ulaw);
+                }
+                @Override
+                public void onLocalVoiceLevel(int voiceLevel) { }
+                @Override
+                public void onDecodedRemoteVideo(Bitmap bitmap, boolean isCoHost) { }
+                @Override
+                public void onCameraError(String message) { }
+            });
+            coHostLocalEngine.setStreamQuality(LiveStreamEngine.QUALITY_DATA_SAVER);
+        }
+        coHostLocalEngine.attachCameraPreview(coHostLocalTexture, true);
+        coHostLocalEngine.startBroadcasting(true);
+    }
+
+    private void pushCoHostMediaPacket(@Nullable String vB64, @Nullable String aB64) {
+        if (!isMeActiveCoHost || liveId == null || isEnded) return;
         long now = System.currentTimeMillis();
-        if (!isHost && slowMode && (now - lastCommentSentAt) < 5000L) {
-            long wait = 5L - ((now - lastCommentSentAt) / 1000L);
-            Ui.toast(this, "🐢 Slow mode: wait " + Math.max(1L, wait) + "s");
+        if (vB64 != null && now - lastCoHostMediaPushMs < 650L) return;
+        if (vB64 != null) lastCoHostMediaPushMs = now;
+
+        Map<String, Object> pkt = new HashMap<>();
+        pkt.put("type", "cohost_media");
+        pkt.put("uid", Fb.uid());
+        pkt.put("name", Fb.myName());
+        pkt.put("seq", ++coHostSeqOut);
+        if (vB64 != null) pkt.put("v", vB64);
+        if (aB64 != null) pkt.put("a", aB64);
+        pkt.put("createdAtMs", now);
+        Fb.db().collection("lives").document(liveId).collection("chat").add(pkt);
+    }
+
+    private void stopLocalCoHostStreaming() {
+        isMeActiveCoHost = false;
+        if (coHostLocalEngine != null) {
+            coHostLocalEngine.releaseAll();
+            coHostLocalEngine = null;
+        }
+        coHostLocalTexture.setVisibility(View.GONE);
+    }
+
+    private void requestOrLeaveCoHostStage() {
+        if (isMeActiveCoHost) {
+            removeActiveCoHost();
             return;
         }
-        String text = chatInput.getText().toString().trim();
-        if (text.isEmpty()) return;
-        chatInput.setText("");
-        lastCommentSentAt = now;
-
-        Map<String, Object> c = new HashMap<>();
-        c.put("userId", me);
-        c.put("userName", Fb.myName());
-        c.put("userPhoto", Fb.myPhoto());
-        c.put("userTick", Fb.me != null ? Fb.me.tickLevel : "none");
-        c.put("isHostMsg", isHost);
-        c.put("text", text);
-        c.put("type", "chat");
-        c.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("lives").document(liveId).collection("comments").add(c);
-    }
-
-    private void toggleHostMic() {
-        micMuted = !micMuted;
-        updateRailButtonLabels();
-        if (liveId != null && !liveId.isEmpty()) {
-            Fb.db().collection("lives").document(liveId).update("micMuted", micMuted);
+        if (!coHostAllowed) {
+            Ui.toast(this, "Host has turned off Co-Host requests");
+            return;
         }
-        Ui.toast(this, micMuted ? "🔇 Microphone muted" : "🎙️ Microphone live");
+        Map<String, Object> req = new HashMap<>();
+        req.put("type", "cohost_req");
+        req.put("uid", Fb.uid());
+        req.put("name", Fb.myName());
+        req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        req.put("text", "wants to join on camera");
+        req.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
+        Ui.toast(this, "🙋 Co-Host join request sent to " + hostNameStr + "!");
     }
 
-    private void promptPinTopic() {
-        EditText in = Ui.input(this, "Pinned message at top of Live…");
-        in.setText(pinnedComment);
+    private void showCoHostManagerSheet() {
+        List<String> labels = new ArrayList<>();
+        final List<Runnable> actions = new ArrayList<>();
+
+        if (!activeCoHostUid.isEmpty()) {
+            labels.add("❌ Remove current Co-Host (" + activeCoHostName + ")");
+            actions.add(this::removeActiveCoHost);
+        }
+        for (final ChatItem req : pendingCoHostRequests.values()) {
+            labels.add("✅ Accept " + req.name + " onto Split-Screen Live");
+            actions.add(() -> {
+                pendingCoHostRequests.remove(req.uid);
+                Map<String, Object> upd = new HashMap<>();
+                upd.put("coHostUid", req.uid);
+                upd.put("coHostName", req.name);
+                Fb.db().collection("lives").document(liveId).update(upd);
+                postSystemChat("🤝 " + req.name + " joined as Co-Host!");
+            });
+        }
+        labels.add(coHostAllowed ? "🔒 Turn OFF Co-Host Requests" : "🔓 Turn ON Co-Host Requests");
+        actions.add(() -> {
+            coHostAllowed = !coHostAllowed;
+            if (liveId != null) Fb.db().collection("lives").document(liveId).update("coHostAllowed", coHostAllowed);
+            Ui.toast(this, coHostAllowed ? "Co-Host requests enabled" : "Co-Host requests disabled");
+        });
+
+        Ui.choose(this, "🙋 Co-Host Split-Screen Studio",
+                labels.toArray(new String[0]), which -> actions.get(which).run());
+    }
+
+    private void removeActiveCoHost() {
+        if (isHost && liveId != null) {
+            Map<String, Object> upd = new HashMap<>();
+            upd.put("coHostUid", "");
+            upd.put("coHostName", "");
+            upd.put("coHostFrameB64", "");
+            upd.put("coHostAudioB64", "");
+            Fb.db().collection("lives").document(liveId).update(upd);
+        } else if (isMeActiveCoHost) {
+            stopLocalCoHostStreaming();
+            coHostCard.setVisibility(View.GONE);
+            postSystemChat("👋 " + Fb.myName() + " left the Co-Host stage");
+        }
+    }
+
+    // ==================== INTERACTIVE LIVE POLLS & Q&A STAGE SPOTLIGHT ====================
+
+    private void showCreatePollDialog() {
         LinearLayout box = Ui.col(this);
-        Ui.pad(box, 18, 10, 18, 0);
-        box.addView(in);
+        Ui.pad(box, 18, 12, 18, 8);
+        final EditText qEt = new EditText(this);
+        qEt.setHint("Ask viewers a poll question...");
+        box.addView(qEt);
+
+        final EditText o1 = new EditText(this);
+        o1.setHint("Option 1 (e.g. Yes 🔥)");
+        box.addView(o1);
+
+        final EditText o2 = new EditText(this);
+        o2.setHint("Option 2 (e.g. Next topic 💬)");
+        box.addView(o2);
+
+        final EditText o3 = new EditText(this);
+        o3.setHint("Option 3 (optional)");
+        box.addView(o3);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("📊 Launch Live Poll");
+        b.setView(box);
+        b.setPositiveButton("Launch Poll", (d, w) -> {
+            String q = qEt.getText().toString().trim();
+            List<String> opts = new ArrayList<>();
+            if (!o1.getText().toString().trim().isEmpty()) opts.add(o1.getText().toString().trim());
+            if (!o2.getText().toString().trim().isEmpty()) opts.add(o2.getText().toString().trim());
+            if (!o3.getText().toString().trim().isEmpty()) opts.add(o3.getText().toString().trim());
+            if (q.isEmpty() || opts.size() < 2) {
+                Ui.toast(this, "Enter a question and at least 2 options");
+                return;
+            }
+            String pid = "poll_" + System.currentTimeMillis();
+            Map<String, Object> upd = new HashMap<>();
+            upd.put("pollId", pid);
+            upd.put("pollQuestion", q);
+            upd.put("pollOptions", opts);
+            Fb.db().collection("lives").document(liveId).update(upd);
+            postSystemChat("📊 Host started a Live Poll: " + q);
+        });
+        if (!activePollId.isEmpty()) {
+            b.setNeutralButton("End Current Poll", (d, w) -> {
+                Map<String, Object> upd = new HashMap<>();
+                upd.put("pollId", "");
+                upd.put("pollQuestion", "");
+                Fb.db().collection("lives").document(liveId).update(upd);
+            });
+        }
+        b.setNegativeButton("Cancel", null);
+        b.show();
+    }
+
+    private void renderActivePollCard() {
+        activePollCard.removeAllViews();
+        if (activePollId.isEmpty() || activePollOptions.isEmpty()) {
+            activePollCard.setVisibility(View.GONE);
+            return;
+        }
+        activePollCard.setVisibility(View.VISIBLE);
+
+        LinearLayout head = Ui.row(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(Ui.tvBold(this, "📊 " + activePollQuestion, 12, 0xFFFFFFFF),
+                new LinearLayout.LayoutParams(0, -2, 1f));
+        if (isHost) {
+            TextView endP = Ui.tvBold(this, "End ✕", 11, 0xFFFF8A80);
+            endP.setOnClickListener(v -> {
+                Map<String, Object> upd = new HashMap<>();
+                upd.put("pollId", "");
+                upd.put("pollQuestion", "");
+                Fb.db().collection("lives").document(liveId).update(upd);
+            });
+            head.addView(endP);
+        }
+        activePollCard.addView(head);
+
+        int totalVotes = activePollVoterChoice.size();
+        int[] counts = new int[activePollOptions.size()];
+        for (Integer c : activePollVoterChoice.values()) {
+            if (c != null && c >= 0 && c < counts.length) counts[c]++;
+        }
+
+        for (int i = 0; i < activePollOptions.size(); i++) {
+            final int idx = i;
+            int c = counts[i];
+            int pct = totalVotes == 0 ? 0 : Math.round((c * 100f) / totalVotes);
+            boolean picked = (myVotedOption == i)
+                    || (activePollVoterChoice.containsKey(Fb.uid()) && activePollVoterChoice.get(Fb.uid()) == i);
+
+            TextView row = Ui.tvBold(this,
+                    (picked ? "✓ " : "") + activePollOptions.get(i) + "  ·  " + pct + "% (" + c + ")",
+                    11, 0xFFFFFFFF);
+            row.setBackground(Ui.round(this, picked ? 0xCC1877F2 : 0x33FFFFFF, 10));
+            Ui.pad(row, 10, 6, 10, 6);
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+            rlp.setMargins(0, Ui.dp(this, 5), 0, 0);
+            row.setOnClickListener(v -> voteInPoll(idx));
+            activePollCard.addView(row, rlp);
+        }
+    }
+
+    private void voteInPoll(int idx) {
+        if (activePollId.isEmpty() || liveId == null) return;
+        myVotedOption = idx;
+        activePollVoterChoice.put(Fb.uid(), idx);
+        renderActivePollCard();
+
+        Map<String, Object> vote = new HashMap<>();
+        vote.put("type", "poll_vote");
+        vote.put("pollId", activePollId);
+        vote.put("optionIndex", idx);
+        vote.put("uid", Fb.uid());
+        vote.put("name", Fb.myName());
+        vote.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(vote);
+    }
+
+    private void showAskQuestionDialog() {
+        if (!qaEnabled) {
+            Ui.toast(this, "Q&A box is currently closed by the host");
+            return;
+        }
+        final EditText et = new EditText(this);
+        et.setHint("Type your question for " + hostNameStr + "...");
+        LinearLayout wrap = Ui.col(this);
+        Ui.pad(wrap, 18, 12, 18, 8);
+        wrap.addView(et);
         new AlertDialog.Builder(this)
-                .setTitle("📌 Pin Live Announcement")
-                .setView(box)
-                .setPositiveButton("Pin", (d, w) -> updatePinnedComment(in.getText().toString().trim()))
-                .setNeutralButton("Clear Pin", (d, w) -> updatePinnedComment(""))
+                .setTitle("❓ Ask Host a Question")
+                .setView(wrap)
+                .setPositiveButton("Submit Question", (d, w) -> {
+                    String q = et.getText().toString().trim();
+                    if (q.isEmpty()) return;
+                    if (ContentSafetyEngine.checkText(q).unsafe) {
+                        Ui.toast(this, "Question blocked by safety filter");
+                        return;
+                    }
+                    Map<String, Object> pkt = new HashMap<>();
+                    pkt.put("type", "qa");
+                    pkt.put("uid", Fb.uid());
+                    pkt.put("name", Fb.myName());
+                    pkt.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+                    pkt.put("text", q);
+                    pkt.put("createdAtMs", System.currentTimeMillis());
+                    Fb.db().collection("lives").document(liveId).collection("chat").add(pkt);
+                    Ui.toast(this, "❓ Question sent to Host!");
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void updatePinnedComment(String text) {
-        pinnedComment = text == null ? "" : text;
-        if (liveId != null && !liveId.isEmpty()) {
-            Fb.db().collection("lives").document(liveId).update("pinnedComment", pinnedComment);
-        }
-        refreshHudViews();
-    }
-
-    private void showHostLiveSettingsSheet() {
-        ScrollView sv = new ScrollView(this);
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 18, 14, 18, 10);
-        sv.addView(box);
-
-        EditText titleEdit = Ui.input(this, "Live Stream Title");
-        titleEdit.setText(liveTitle);
-        box.addView(Ui.tvBold(this, " Broadcast Title", 13, Ui.sub(this)));
-        box.addView(titleEdit);
-
-        Switch swComments = settingSwitch(box, "💬 Allow Live Comments", allowComments);
-        Switch swSlow = settingSwitch(box, "🐢 Slow Mode (1 message / 5s)", slowMode);
-        Switch swGifts = settingSwitch(box, "⭐ Allow Star Gifts", allowGifts);
-        Switch swMic = settingSwitch(box, "🔇 Mute My Microphone", micMuted);
-
-        TextView clearChat = Ui.btnOutline(this, "🧹 Clear All Live Chat Messages", Ui.RED);
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.topMargin = Ui.dp(this, 10);
-        clearChat.setOnClickListener(v -> Fb.db().collection("lives").document(liveId)
-                .collection("comments").limit(100).get().addOnSuccessListener(s -> {
-                    for (DocumentSnapshot d : s.getDocuments()) d.getReference().delete();
-                    Ui.toast(this, "Live chat cleared ✓");
-                }));
-        box.addView(clearChat, clp);
-
-        new AlertDialog.Builder(this)
-                .setTitle("⚙️ Live Broadcast Settings")
-                .setView(sv)
-                .setPositiveButton("Save Settings", (d, w) -> {
-                    liveTitle = titleEdit.getText().toString().trim();
-                    allowComments = swComments.isChecked();
-                    slowMode = swSlow.isChecked();
-                    allowGifts = swGifts.isChecked();
-                    micMuted = swMic.isChecked();
-                    updateRailButtonLabels();
-                    if (liveId != null && !liveId.isEmpty()) {
-                        Fb.db().collection("lives").document(liveId).set(Fb.map(
-                                "title", liveTitle,
-                                "allowComments", allowComments,
-                                "slowMode", slowMode,
-                                "allowGifts", allowGifts,
-                                "micMuted", micMuted), SetOptions.merge());
-                    }
-                    refreshHudViews();
-                    Ui.toast(this, "Live settings updated ✓");
-                })
-                .setNegativeButton("Close", null)
-                .show();
-    }
-
-    private Switch settingSwitch(LinearLayout parent, String label, boolean initial) {
-        LinearLayout r = Ui.row(this);
-        r.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(r, 2, 10, 2, 6);
-        r.addView(Ui.tvBold(this, label, 14, Ui.txt(this)), new LinearLayout.LayoutParams(0, -2, 1));
-        Switch sw = new Switch(this);
-        sw.setChecked(initial);
-        r.addView(sw);
-        parent.addView(r);
-        return sw;
-    }
-
-    private void showViewersDialog() {
-        if (viewerIds.isEmpty()) {
-            Ui.info(this, "👁 Active Viewers", "Currently watching: " + Math.max(1, currentViewers));
+    private void showQaDrawerSheet() {
+        if (qaItems.isEmpty()) {
+            Ui.toast(this, "No viewer Q&A questions yet — viewers can tap ❓ to ask!");
             return;
         }
-        LinearLayout list = Ui.col(this);
-        Ui.pad(list, 16, 10, 16, 10);
-        ScrollView sv = new ScrollView(this);
-        sv.addView(list);
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("👁 Live Viewers (" + viewerIds.size() + ")")
-                .setView(sv)
-                .setNegativeButton("Close", null)
-                .show();
-
-        for (String vUid : viewerIds) {
-            Fb.getUser(vUid).addOnSuccessListener(u -> {
-                if (u == null || isFinishing()) return;
-                LinearLayout row = Ui.row(this);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                Ui.pad(row, 4, 8, 4, 8);
-                ImageView av = new ImageView(this);
-                Ui.avatar(this, av, u.photoUrl);
-                int s = Ui.dp(this, 36);
-                row.addView(av, new LinearLayout.LayoutParams(s, s));
-                TextView nm = Ui.tvBold(this, u.displayName + (vUid.equals(hostId) ? " (Host)" : ""), 14, Ui.txt(this));
-                nm.setPadding(Ui.dp(this, 10), 0, 0, 0);
-                row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
-                row.setOnClickListener(v -> {
-                    dlg.dismiss();
-                    startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", u.uid));
-                });
-                list.addView(row);
-            });
+        List<String> labels = new ArrayList<>();
+        for (ChatItem item : qaItems) {
+            labels.add("🎤 Spotlight @" + item.name + ": " + item.text);
         }
-    }
-
-    private void toggleFollowHost() {
-        String me = Fb.uid();
-        if (me == null || hostId.isEmpty() || me.equals(hostId)) return;
-        boolean already = Fb.me != null && Fb.me.following != null && Fb.me.following.contains(hostId);
-        Fb.db().collection("users").document(me)
-                .update("following", already ? FieldValue.arrayRemove(hostId) : FieldValue.arrayUnion(hostId));
-        Fb.db().collection("users").document(hostId)
-                .update("followers", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-        if (Fb.me != null && Fb.me.following != null) {
-            if (already) Fb.me.following.remove(hostId);
-            else Fb.me.following.add(hostId);
-        }
-        if (!already) Notify.send(hostId, "follow", "started following you from your Live 🔴", null);
-        refreshHudViews();
-    }
-
-    private void shareLiveStream() {
-        String link = AdsConfig.OFFICIAL_WEBSITE_URL + "/?live=" + (liveId == null ? "" : liveId);
-        Ui.choose(this, "📤 Share Live Broadcast",
-                new String[]{"📝 Share Live invite to News Feed", "📤 Share to WhatsApp / other apps", "🔗 Copy Live link"},
-                w -> {
-                    if (w == 0) {
-                        Map<String, Object> p = new HashMap<>();
-                        p.put("authorId", Fb.uid());
-                        p.put("authorName", Fb.myName());
-                        p.put("authorPhotoUrl", Fb.myPhoto());
-                        p.put("content", "🔴 Watching " + hostName + " LIVE right now: \"" + liveTitle + "\"! Join in on friendbook 🔥");
-                        p.put("mediaType", "none");
-                        p.put("privacy", "Public");
-                        p.put("likes", 0);
-                        p.put("comments", 0);
-                        p.put("shares", 0);
-                        p.put("createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(p)
-                                .addOnSuccessListener(x -> Ui.toast(this, "Shared Live invite to Feed ✓"));
-                    } else if (w == 1) {
-                        Intent s = new Intent(Intent.ACTION_SEND);
-                        s.setType("text/plain");
-                        s.putExtra(Intent.EXTRA_TEXT, "🔴 Watch " + hostName + " LIVE on friendbook: " + liveTitle + "\n" + link);
-                        startActivity(Intent.createChooser(s, "Share Live"));
+        labels.add("🧹 Clear Current Stage Spotlight");
+        Ui.choose(this, "❓ Viewer Q&A Questions (" + qaItems.size() + ")",
+                labels.toArray(new String[0]), which -> {
+                    if (which == qaItems.size()) {
+                        clearSpotlightQa();
                     } else {
-                        Ui.copy(this, link);
+                        ChatItem picked = qaItems.get(which);
+                        String banner = "❓ Q&A · @" + picked.name + ": " + picked.text;
+                        Fb.db().collection("lives").document(liveId).update("spotlightQa", banner);
                     }
                 });
+    }
+
+    private void clearSpotlightQa() {
+        if (liveId != null) Fb.db().collection("lives").document(liveId).update("spotlightQa", "");
+    }
+
+    // ==================== CHAT, REACTIONS, STAR GIFTS & MODERATION ====================
+
+    private void sendChatMessage() {
+        if (liveId == null || isEnded) return;
+        String me = Fb.uid();
+        if (mutedUserIds.contains(me)) {
+            Ui.toast(this, "🔇 You are muted in this live chat");
+            return;
+        }
+        if (!commentsEnabled && !isHost && !isMeModerator()) {
+            Ui.toast(this, "Comments are turned off");
+            return;
+        }
+        if (slowModeEnabled && !isHost && !isMeModerator()) {
+            long elapsed = System.currentTimeMillis() - lastCommentSentMs;
+            if (elapsed < 5000L) {
+                Ui.toast(this, "🐢 Slow mode: wait " + ((5000L - elapsed) / 1000L + 1) + "s");
+                return;
+            }
+        }
+        String txt = commentInput.getText().toString().trim();
+        if (txt.isEmpty()) return;
+
+        ContentSafetyEngine.Verdict v = ContentSafetyEngine.checkText(txt);
+        if (v.unsafe) {
+            Ui.toast(this, v.message);
+            return;
+        }
+        if (matchesBlockedKeyword(txt) && !isHost) {
+            Ui.toast(this, "Message blocked by host's keyword filter");
+            return;
+        }
+
+        lastCommentSentMs = System.currentTimeMillis();
+        commentInput.setText("");
+
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("type", "chat");
+        msg.put("uid", me);
+        msg.put("name", Fb.myName());
+        msg.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        msg.put("text", txt);
+        msg.put("isHost", isHost);
+        msg.put("isMod", isMeModerator());
+        msg.put("createdAtMs", lastCommentSentMs);
+        msg.put("createdAt", FieldValue.serverTimestamp());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(msg);
+    }
+
+    private boolean matchesBlockedKeyword(String text) {
+        if (blockedKeywordsCsv == null || blockedKeywordsCsv.trim().isEmpty()) return false;
+        String low = text.toLowerCase(Locale.US);
+        for (String w : blockedKeywordsCsv.split(",")) {
+            String kw = w.trim().toLowerCase(Locale.US);
+            if (!kw.isEmpty() && low.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    private boolean isMeModerator() {
+        return moderatorIds.contains(Fb.uid());
+    }
+
+    private void postSystemChat(String text) {
+        if (liveId == null) return;
+        Map<String, Object> sys = new HashMap<>();
+        sys.put("type", "system");
+        sys.put("uid", Fb.uid());
+        sys.put("name", Fb.myName());
+        sys.put("text", text);
+        sys.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(sys);
+    }
+
+    private void sendReaction(String emoji) {
+        spawnFloatingEmoji(emoji);
+        if (liveId == null || isEnded) return;
+        Map<String, Object> r = new HashMap<>();
+        r.put("type", "reaction");
+        r.put("uid", Fb.uid());
+        r.put("name", Fb.myName());
+        r.put("text", emoji);
+        r.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+    }
+
+    private void spawnFloatingEmoji(String emoji) {
+        if (floatingHeartsLayer == null || isFinishing()) return;
+        final TextView tv = new TextView(this);
+        tv.setText(emoji);
+        tv.setTextSize(26);
+        int startX = Math.max(40, floatingHeartsLayer.getWidth() - Ui.dp(this, 86))
+                + rng.nextInt(Ui.dp(this, 36)) - Ui.dp(this, 18);
+        int startY = Math.max(200, floatingHeartsLayer.getHeight() - Ui.dp(this, 130));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2);
+        lp.leftMargin = Math.max(16, startX);
+        lp.topMargin = startY;
+        floatingHeartsLayer.addView(tv, lp);
+
+        ObjectAnimator up = ObjectAnimator.ofFloat(tv, "translationY", 0f, -Ui.dp(this, 270));
+        ObjectAnimator drift = ObjectAnimator.ofFloat(tv, "translationX", 0f, rng.nextInt(90) - 45);
+        ObjectAnimator fade = ObjectAnimator.ofFloat(tv, "alpha", 1f, 0f);
+        AnimatorSet set = new AnimatorSet();
+        set.playTogether(up, drift, fade);
+        set.setDuration(1900L);
+        set.setInterpolator(new DecelerateInterpolator());
+        set.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                floatingHeartsLayer.removeView(tv);
+            }
+        });
+        set.start();
+    }
+
+    private void showSendGiftSheet() {
+        if (!giftsEnabled) {
+            Ui.toast(this, "Host turned off Star gifts for this stream");
+            return;
+        }
+        final int[] amounts = {10, 50, 100, 500};
+        final String[] names = {
+                "⭐ 10 Stars — Cheer",
+                "🌟 50 Stars — Super Heart",
+                "💫 100 Stars — Spotlight Boost",
+                "👑 500 Stars — Crown Supporter"
+        };
+        Ui.choose(this, "⭐ Send Community Stars to " + hostNameStr, names, which -> {
+            int stars = amounts[which];
+            // Matches deployed firestore.rules: `senderId == request.auth.uid` & `lives/{lid}` `stars`!
+            Fb.db().collection("lives").document(liveId)
+                    .update("stars", FieldValue.increment(stars));
+
+            Map<String, Object> giftDoc = new HashMap<>();
+            giftDoc.put("senderId", Fb.uid());
+            giftDoc.put("senderName", Fb.myName());
+            giftDoc.put("toUid", hostId);
+            giftDoc.put("liveId", liveId);
+            giftDoc.put("stars", stars);
+            giftDoc.put("createdAt", FieldValue.serverTimestamp());
+            Fb.db().collection("gifts").add(giftDoc);
+
+            Map<String, Object> chatGift = new HashMap<>();
+            chatGift.put("type", "gift");
+            chatGift.put("uid", Fb.uid());
+            chatGift.put("name", Fb.myName());
+            chatGift.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+            chatGift.put("stars", stars);
+            chatGift.put("text", "sent ⭐ " + stars + " Stars!");
+            chatGift.put("createdAtMs", System.currentTimeMillis());
+            Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
+
+            spawnFloatingEmoji("⭐");
+            Ui.toast(this, "Sent ⭐ " + stars + " Stars to " + hostNameStr + "!");
+        });
+    }
+
+    private void onChatItemClicked(ChatItem item) {
+        if (item == null || item.uid.isEmpty()) return;
+        List<String> opts = new ArrayList<>();
+        List<Runnable> acts = new ArrayList<>();
+
+        opts.add("👤 View " + item.name + "'s Profile");
+        acts.add(() -> {
+            Intent p = new Intent(this, ProfileActivity.class);
+            p.putExtra("uid", item.uid);
+            startActivity(p);
+        });
+
+        if (isHost || isMeModerator()) {
+            opts.add("📌 Pin this comment");
+            acts.add(() -> updatePinnedComment(item.name + ": " + item.text));
+        }
+
+        if (isHost) {
+            opts.add("🗑 Hide / Delete comment");
+            acts.add(() -> {
+                deletedMsgIds.add(item.id);
+                Fb.db().collection("lives").document(liveId)
+                        .update("deletedMsgIds", new ArrayList<>(deletedMsgIds));
+            });
+
+            if (!item.uid.equals(Fb.uid())) {
+                boolean muted = mutedUserIds.contains(item.uid);
+                opts.add(muted ? "🔊 Unmute " + item.name : "🔇 Mute " + item.name + " in Chat");
+                acts.add(() -> {
+                    if (muted) mutedUserIds.remove(item.uid);
+                    else mutedUserIds.add(item.uid);
+                    Fb.db().collection("lives").document(liveId)
+                            .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                    Ui.toast(this, muted ? "Unmuted " + item.name : "Muted " + item.name);
+                });
+
+                boolean isMod = moderatorIds.contains(item.uid);
+                opts.add(isMod ? "🛡 Remove Live Moderator" : "🛡 Make " + item.name + " Live Moderator");
+                acts.add(() -> {
+                    if (isMod) moderatorIds.remove(item.uid);
+                    else moderatorIds.add(item.uid);
+                    Fb.db().collection("lives").document(liveId)
+                            .update("moderatorIds", new ArrayList<>(moderatorIds));
+                    postSystemChat(isMod ? ("🛡 " + item.name + " is no longer moderator")
+                            : ("🛡 " + item.name + " is now a Live Moderator!"));
+                });
+
+                opts.add("🤝 Invite " + item.name + " as Split-Screen Co-Host");
+                acts.add(() -> {
+                    Map<String, Object> upd = new HashMap<>();
+                    upd.put("coHostUid", item.uid);
+                    upd.put("coHostName", item.name);
+                    Fb.db().collection("lives").document(liveId).update(upd);
+                });
+
+                opts.add("🚫 Remove / Kick " + item.name + " from Live");
+                acts.add(() -> {
+                    kickedUserIds.add(item.uid);
+                    Fb.db().collection("lives").document(liveId)
+                            .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                    Ui.toast(this, "Removed " + item.name + " from broadcast");
+                });
+            }
+        }
+
+        Ui.choose(this, item.name, opts.toArray(new String[0]), w -> acts.get(w).run());
+    }
+
+    private void updatePinnedComment(String text) {
+        if (liveId == null) return;
+        if (isHost) {
+            Fb.db().collection("lives").document(liveId).update("pinnedComment", text);
+        } else {
+            postSystemChat("📌 Moderator pinned: " + text);
+        }
+    }
+
+    // ==================== COMPLETE STUDIO CONTROLS & SETTINGS SHEETS ====================
+
+    private void toggleHostMic() {
+        boolean nextMuted = !engine.isMicMuted();
+        engine.setMicMuted(nextMuted);
+        if (btnMic != null) btnMic.setText(nextMuted ? "🔇" : "🎙️");
+        Ui.toast(this, nextMuted ? "🔇 Microphone muted" : "🎙️ Microphone live");
+    }
+
+    private void toggleHostCameraPause() {
+        boolean nextPaused = !engine.isCameraPaused();
+        engine.setCameraPaused(nextPaused);
+        cameraTexture.setVisibility(nextPaused ? View.GONE : View.VISIBLE);
+        fallbackStage.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+        if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "🚫" : "📹");
+        if (liveId != null && isLiveStarted) {
+            Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused);
+        }
+        Ui.toast(this, nextPaused ? "⏸ Camera paused (Audio still live)" : "▶️ Camera video resumed");
+    }
+
+    private void toggleViewerSpeaker() {
+        boolean nextMuted = !engine.isSpeakerMuted();
+        engine.setSpeakerMuted(nextMuted);
+        if (btnSpeaker != null) btnSpeaker.setText(nextMuted ? "🔇" : "🔊");
+        Ui.toast(this, nextMuted ? "🔇 Stream sound muted" : "🔊 Stream sound ON");
+    }
+
+    private void toggleRingLightOrTorch() {
+        if (engine.isLensFront()) {
+            ringLightOn = !ringLightOn;
+            ringLightOverlay.setVisibility(ringLightOn ? View.VISIBLE : View.GONE);
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.screenBrightness = ringLightOn ? 1.0f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            getWindow().setAttributes(lp);
+            Ui.toast(this, ringLightOn ? "💡 Front Screen Ring-Light ON" : "Ring-Light OFF");
+        } else {
+            boolean on = engine.toggleTorch();
+            Ui.toast(this, on ? "🔦 Rear Flash Torch ON" : "Rear Torch OFF");
+        }
+    }
+
+    private void cycleVisualFilter() {
+        currentFilterIdx = (currentFilterIdx + 1) % FILTER_NAMES.length;
+        filterOverlayView.setBackgroundColor(FILTER_OVERLAYS[currentFilterIdx]);
+        if (isHost && isLiveStarted && liveId != null) {
+            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+        }
+        Ui.toast(this, "Filter: " + FILTER_NAMES[currentFilterIdx]);
+    }
+
+    private void cycleStreamQuality() {
+        int next = (engine.getStreamQuality() + 1) % 3;
+        engine.setStreamQuality(next);
+        String lbl = engine.getQualityLabel();
+        if (qualityStudioChip != null) qualityStudioChip.setText("⚡ " + lbl);
+        Ui.toast(this, "Stream Quality: " + lbl);
+    }
+
+    private void toggleCleanViewMode(boolean hide) {
+        cleanViewMode = hide;
+        liveHudOverlay.setVisibility(hide ? View.GONE : View.VISIBLE);
+        restoreHudBtn.setVisibility(hide ? View.VISIBLE : View.GONE);
+    }
+
+    private void showHostSettingsSheet() {
+        String[] opts = {
+                "✏️ Edit Live Broadcast Title",
+                "🎬 Stream Quality (" + engine.getQualityLabel() + ")",
+                engine.isMicMuted() ? "🎙️ Unmute Microphone" : "🔇 Mute Microphone",
+                engine.isCameraPaused() ? "▶️ Resume Camera Video" : "⏸ Pause Camera (Audio-Only Shield)",
+                engine.isMirrorFront() ? "🪞 Front Mirror: ON (Tap to flip)" : "🪞 Front Mirror: OFF (Tap to flip)",
+                ringLightOn ? "💡 Front Ring-Light: ON" : "💡 Front Ring-Light: OFF",
+                engine.isBeautyBoost() ? "✨ Studio Brightness Boost: ON" : "✨ Studio Brightness Boost: OFF",
+                "🎨 Studio Color Filter (" + FILTER_NAMES[currentFilterIdx] + ")",
+                commentsEnabled ? "💬 Turn OFF Live Comments" : "💬 Turn ON Live Comments",
+                slowModeEnabled ? "🐢 Disable Slow Mode (5s)" : "🐢 Enable Slow Mode (5s)",
+                "🛡️ Set Blocked Chat Keywords" + (blockedKeywordsCsv.isEmpty() ? "" : " (Active)"),
+                giftsEnabled ? "⭐ Turn OFF Star Gifts" : "⭐ Turn ON Star Gifts",
+                qaEnabled ? "❓ Turn OFF Q&A Box" : "❓ Turn ON Q&A Box",
+                coHostAllowed ? "🙋 Turn OFF Co-Host Requests" : "🙋 Turn ON Co-Host Requests"
+        };
+
+        Ui.choose(this, "⚙️ Live Studio Settings & Controls", opts, which -> {
+            switch (which) {
+                case 0: promptEditLiveTitle(); break;
+                case 1: cycleStreamQuality(); break;
+                case 2: toggleHostMic(); break;
+                case 3: toggleHostCameraPause(); break;
+                case 4:
+                    engine.setMirrorFront(!engine.isMirrorFront());
+                    Ui.toast(this, engine.isMirrorFront() ? "Mirror ON" : "Mirror OFF");
+                    break;
+                case 5: toggleRingLightOrTorch(); break;
+                case 6:
+                    boolean b = engine.toggleBeautyBoost();
+                    Ui.toast(this, b ? "✨ Brightness Boost ON" : "Brightness normal");
+                    break;
+                case 7: cycleVisualFilter(); break;
+                case 8:
+                    commentsEnabled = !commentsEnabled;
+                    syncHostSetting("commentsEnabled", commentsEnabled);
+                    break;
+                case 9:
+                    slowModeEnabled = !slowModeEnabled;
+                    syncHostSetting("slowMode", slowModeEnabled);
+                    break;
+                case 10: promptBlockedKeywords(); break;
+                case 11:
+                    giftsEnabled = !giftsEnabled;
+                    syncHostSetting("giftsEnabled", giftsEnabled);
+                    break;
+                case 12:
+                    qaEnabled = !qaEnabled;
+                    syncHostSetting("qaEnabled", qaEnabled);
+                    break;
+                case 13:
+                    coHostAllowed = !coHostAllowed;
+                    syncHostSetting("coHostAllowed", coHostAllowed);
+                    break;
+            }
+        });
+    }
+
+    private void syncHostSetting(String field, Object value) {
+        if (isHost && isLiveStarted && liveId != null) {
+            Fb.db().collection("lives").document(liveId).update(field, value);
+        }
+        Ui.toast(this, "Updated " + field);
+    }
+
+    private void promptEditLiveTitle() {
+        final EditText et = new EditText(this);
+        et.setText(isLiveStarted ? liveTitleStr : titleInput.getText().toString());
+        LinearLayout w = Ui.col(this);
+        Ui.pad(w, 18, 12, 18, 8);
+        w.addView(et);
+        new AlertDialog.Builder(this)
+                .setTitle("✏️ Broadcast Title")
+                .setView(w)
+                .setPositiveButton("Save", (d, x) -> {
+                    String t = et.getText().toString().trim();
+                    if (t.isEmpty() || ContentSafetyEngine.checkText(t).unsafe) return;
+                    liveTitleStr = t;
+                    titleInput.setText(t);
+                    if (isLiveStarted && liveId != null) {
+                        Fb.db().collection("lives").document(liveId).update("title", t);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void promptBlockedKeywords() {
+        final EditText et = new EditText(this);
+        et.setHint("Comma-separated words (e.g. spam, link, fake)");
+        et.setText(blockedKeywordsCsv);
+        LinearLayout w = Ui.col(this);
+        Ui.pad(w, 18, 12, 18, 8);
+        w.addView(et);
+        new AlertDialog.Builder(this)
+                .setTitle("🛡️ Chat Keyword Filter")
+                .setView(w)
+                .setPositiveButton("Save Filter", (d, x) -> {
+                    blockedKeywordsCsv = et.getText().toString().trim();
+                    syncHostSetting("blockedKeywords", blockedKeywordsCsv);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showViewerSettingsSheet() {
+        boolean boosted = engine.getSpeakerGain() > 1.05f;
+        String[] opts = {
+                engine.isSpeakerMuted() ? "🔊 Unmute Live Audio" : "🔇 Mute Live Audio",
+                boosted ? "🔉 Normal Speaker Volume (100%)" : "📢 Speaker Volume Boost (150%)",
+                fitVideoCenter ? "📱 Fill Fullscreen Video (Crop)" : "🖼 Fit Complete Video Frame",
+                "👁 Enter Clean View Mode (Hide Chat & HUD)",
+                "📤 Share or Invite Friends to Live",
+                "🚩 Report Live Broadcast"
+        };
+        Ui.choose(this, "⚙️ Viewer Controls & Settings", opts, which -> {
+            switch (which) {
+                case 0: toggleViewerSpeaker(); break;
+                case 1:
+                    engine.setSpeakerGain(boosted ? 1.0f : 1.5f);
+                    Ui.toast(this, boosted ? "Normal volume (100%)" : "📢 Volume Boost ON (150%)");
+                    break;
+                case 2:
+                    fitVideoCenter = !fitVideoCenter;
+                    remoteVideoView.setScaleType(fitVideoCenter
+                            ? ImageView.ScaleType.FIT_CENTER : ImageView.ScaleType.CENTER_CROP);
+                    break;
+                case 3: toggleCleanViewMode(true); break;
+                case 4: showShareAndInviteSheet(); break;
+                case 5: reportLiveStream(); break;
+            }
+        });
+    }
+
+    private void showViewersAndLeaderboardSheet() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("👁 Active Viewers: ").append(currentViewers)
+          .append("   ·   Peak: ").append(peakViewers)
+          .append("\n⭐ Total Stars: ").append(totalStarsReceived).append("\n\n");
+
+        if (!supporterStars.isEmpty()) {
+            sb.append("🏆 TOP STAR SUPPORTERS:\n");
+            List<Map.Entry<String, Integer>> list = new ArrayList<>(supporterStars.entrySet());
+            Collections.sort(list, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
+            int rank = 1;
+            for (Map.Entry<String, Integer> e : list) {
+                sb.append(rank++).append(". ")
+                  .append(supporterNames.getOrDefault(e.getKey(), "Supporter"))
+                  .append(" — ⭐ ").append(e.getValue()).append("\n");
+                if (rank > 5) break;
+            }
+            sb.append("\n");
+        }
+
+        sb.append("👥 RECENT PARTICIPANTS:\n");
+        int shown = 0;
+        for (Map.Entry<String, String> e : viewerNames.entrySet()) {
+            sb.append("• ").append(e.getValue());
+            if (moderatorIds.contains(e.getKey())) sb.append(" 🛡");
+            sb.append("\n");
+            if (++shown >= 12) break;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("🔴 Live Audience & Leaderboard")
+                .setMessage(sb.toString().trim())
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void showShareAndInviteSheet() {
+        String[] opts = {
+                "🔔 Invite My Followers Inside friendbook",
+                "📝 Share 'Watch Live Now' Card to Feed",
+                "📲 Share Live Invite via Other Apps"
+        };
+        Ui.choose(this, "📤 Share & Invite to Live", opts, which -> {
+            if (which == 0) {
+                if (Fb.me == null || Fb.me.followers == null || Fb.me.followers.isEmpty()) {
+                    Ui.toast(this, "No followers to invite yet — share to Feed instead!");
+                    return;
+                }
+                int n = 0;
+                for (String uid : Fb.me.followers) {
+                    Notify.send(uid, "live_invite", "🔴 invited you to watch a Live broadcast: " + liveTitleStr, liveId);
+                    if (++n >= 30) break;
+                }
+                Ui.toast(this, "🔔 Invited " + n + " friend(s) to join Live!");
+            } else if (which == 1) {
+                Map<String, Object> post = new HashMap<>();
+                post.put("authorId", Fb.uid());
+                post.put("authorName", Fb.myName());
+                post.put("authorPhotoUrl", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+                post.put("text", "🔴 Watching LIVE right now: " + liveTitleStr + " — Join us in friendbook Live!");
+                post.put("bgColor", "#FFE41E3F");
+                post.put("privacy", "public");
+                post.put("likesCount", 0);
+                post.put("commentsCount", 0);
+                post.put("sharesCount", 0);
+                post.put("createdAt", FieldValue.serverTimestamp());
+                Fb.db().collection("posts").add(post);
+                Ui.toast(this, "✅ Shared Live invite to Home Feed!");
+            } else {
+                Intent s = new Intent(Intent.ACTION_SEND);
+                s.setType("text/plain");
+                s.putExtra(Intent.EXTRA_TEXT, "🔴 Watch " + hostNameStr + " LIVE on friendbook: " + liveTitleStr);
+                startActivity(Intent.createChooser(s, "Share Live"));
+            }
+        });
+    }
+
+    private void followHostNow() {
+        String me = Fb.uid();
+        if (me == null || hostId == null || hostId.equals(me)) return;
+        Fb.db().collection("users").document(hostId).update("followers", FieldValue.arrayUnion(me));
+        Fb.db().collection("users").document(me).update("following", FieldValue.arrayUnion(hostId));
+        if (followHostBtn != null) {
+            followHostBtn.setText("✓ Following");
+            followHostBtn.setBackground(Ui.round(this, 0x55FFFFFF, 14));
+        }
+        Notify.send(hostId, "follow", "started following you from your Live broadcast");
+        postSystemChat("❤️ " + Fb.myName() + " followed " + hostNameStr + "!");
     }
 
     private void reportLiveStream() {
-        Ui.choose(this, "🚩 Report Live Stream",
-                new String[]{"🔞 Nudity or inappropriate content", "🚨 Child safety violation", "🩸 Violence or harassment", "🎭 Spam / fake stream"},
-                w -> {
-                    Fb.db().collection("reports").add(Fb.map(
-                            "type", "live",
-                            "liveId", liveId,
-                            "authorId", hostId,
-                            "reportedBy", Fb.uid(),
-                            "createdAt", FieldValue.serverTimestamp()));
-                    Ui.toast(this, "Report submitted to Moderators ✓");
-                });
+        String[] reasons = {"Inappropriate / Nudity", "Harassment or Bullying", "Violence / Harm", "Spam or Scam"};
+        Ui.choose(this, "🚩 Report Live Broadcast", reasons, which -> {
+            Map<String, Object> rep = new HashMap<>();
+            rep.put("targetType", "live");
+            rep.put("targetId", liveId);
+            rep.put("targetOwnerId", hostId);
+            rep.put("reporterId", Fb.uid());
+            rep.put("reason", reasons[which]);
+            rep.put("createdAt", FieldValue.serverTimestamp());
+            Fb.db().collection("reports").add(rep);
+            Ui.toast(this, "Thank you — our moderation team received your report.");
+        });
     }
 
-    private void giftStarsDialog() {
-        if (!allowGifts) {
-            Ui.toast(this, "Host turned off gifts for this Live");
+    // ==================== ENDING BROADCAST & POST-LIVE ANALYTICS SUMMARY ====================
+
+    private void confirmExitOrEnd() {
+        if (!isLiveStarted) {
+            finish();
             return;
         }
-        String[] opts = {"⭐ 10 Stars · Cheer!", "🌟 50 Stars · Super Fan!", "💫 100 Stars · Mega Star!", "👑 500 Stars · Crown Legend!"};
-        int[] amounts = {10, 50, 100, 500};
-        Ui.choose(this, "⭐ Send Community Stars to " + hostName, opts, i -> sendStars(amounts[i]));
-    }
-
-    private void sendStars(int stars) {
-        if (hostId.isEmpty() || liveId == null) return;
-        Fb.db().collection("gifts").add(Fb.map(
-                "liveId", liveId, "fromUid", Fb.uid(), "fromName", Fb.myName(),
-                "toUid", hostId, "stars", stars, "createdAt", FieldValue.serverTimestamp()));
-        Fb.db().collection("lives").document(liveId).update("totalStars", FieldValue.increment(stars));
-        Fb.db().collection("users").document(hostId).update("stars", FieldValue.increment(stars));
-        Fb.db().collection("lives").document(liveId).collection("comments").add(Fb.map(
-                "userId", Fb.uid(), "userName", Fb.myName(), "userPhoto", Fb.myPhoto(),
-                "type", "gift", "text", "sent ⭐ " + stars + " Stars! 🎉",
-                "createdAt", FieldValue.serverTimestamp()));
-        spawnFloatingEmoji("⭐");
-        Notify.send(hostId, "gift", "⭐ sent you " + stars + " Stars on your Live!", null);
-        Ui.toast(this, "Sent ⭐ " + stars + " Stars!");
-    }
-
-    private void flashGiftBanner(String text) {
-        giftBannerTv.setText("🎁 " + text);
-        giftBannerTv.setVisibility(View.VISIBLE);
-        uiHandler.removeCallbacks(hideGiftBanner);
-        uiHandler.postDelayed(hideGiftBanner, 3200L);
-    }
-
-    private final Runnable hideGiftBanner = () -> {
-        if (giftBannerTv != null) giftBannerTv.setVisibility(View.GONE);
-    };
-
-    // ==================== END LIVE & SUMMARY RECAP ====================
-
-    private void onExitOrEndPressed() {
-        if (isHost || Admin.isAdmin()) {
-            Ui.confirm(this, "🔴 End Live Broadcast?",
-                    "End this live stream for all viewers?",
-                    "End Live", this::endBroadcastAndShowSummary);
+        if (isHost) {
+            Ui.confirm(this, "End Live Broadcast?",
+                    "This will end the live video & audio stream for all " + currentViewers + " viewer(s).",
+                    "End Live", this::endHostBroadcastAndShowSummary);
         } else {
             finish();
         }
     }
 
-    private void endBroadcastAndShowSummary() {
-        if (endingShown) { finish(); return; }
-        endingShown = true;
-        if (liveId != null && !liveId.isEmpty()) {
-            Fb.db().collection("lives").document(liveId).update(
-                    "status", "ended", "endedAt", FieldValue.serverTimestamp());
-        }
-        stopCameraThread();
-        if (!isHost) { finish(); return; }
+    private void endHostBroadcastAndShowSummary() {
+        if (isEnded) return;
+        isEnded = true;
+        engine.stopBroadcasting();
+        engine.stopSpeakerPlayback();
 
         long durSec = liveStartMs > 0 ? Math.max(1L, (System.currentTimeMillis() - liveStartMs) / 1000L) : 0L;
-        String durStr = String.format(Locale.US, "%02d:%02d", durSec / 60L, durSec % 60L);
-        String summary = "⏱ Duration: " + durStr
-                + "\n👁 Peak Viewers: " + Math.max(1, peakViewers)
-                + "\n❤️ Total Reactions: " + totalLikes
-                + "\n💬 Total Comments: " + totalCommentsCount
-                + "\n⭐ Stars Earned: " + totalStars;
+        if (liveId != null) {
+            Map<String, Object> endMap = new HashMap<>();
+            endMap.put("status", "ended");
+            endMap.put("endedAt", FieldValue.serverTimestamp());
+            endMap.put("durationSec", durSec);
+            endMap.put("peakViewers", peakViewers);
+            endMap.put("liveFrameB64", "");
+            endMap.put("audioB64", "");
+            Fb.db().collection("lives").document(liveId).update(endMap);
+            if (rtdbStreamRef != null) {
+                try { rtdbStreamRef.removeValue(); } catch (Throwable ignored) { }
+            }
+        }
+
+        String summary = String.format(Locale.US,
+                "⏱ Duration: %02d:%02d\n" +
+                "👁 Peak Concurrent Viewers: %d\n" +
+                "👥 Total Viewers Joined: %d\n" +
+                "❤️ Floating Reactions: %d\n" +
+                "💬 Live Chat Messages: %d\n" +
+                "❓ Q&A Questions: %d\n" +
+                "⭐ Community Stars Earned: %d",
+                durSec / 60, durSec % 60,
+                peakViewers, totalUniqueViewers, totalLikes,
+                totalComments, qaItems.size(), totalStarsReceived);
 
         new AlertDialog.Builder(this)
                 .setCancelable(false)
-                .setTitle("🎬 Live Broadcast Ended")
+                .setTitle("🎬 Broadcast Summary")
                 .setMessage(summary)
                 .setPositiveButton("Share Recap to Feed", (d, w) -> {
-                    Fb.db().collection("posts").add(Fb.map(
-                            "authorId", Fb.uid(),
-                            "authorName", Fb.myName(),
-                            "authorPhotoUrl", Fb.myPhoto(),
-                            "content", "🎬 Just wrapped up my Live stream: \"" + liveTitle + "\"!\n"
-                                    + "👁 " + Math.max(1, peakViewers) + " viewers · ❤️ " + totalLikes + " likes · ⭐ " + totalStars + " stars. Thanks for tuning in! 💙",
-                            "mediaType", "none",
-                            "privacy", livePrivacy,
-                            "likes", 0, "comments", 0, "shares", 0,
-                            "createdAt", FieldValue.serverTimestamp()));
-                    Ui.toast(this, "Live recap shared to Feed ✓");
+                    publishRecapPost(durSec);
                     finish();
                 })
                 .setNegativeButton("Done", (d, w) -> finish())
                 .show();
     }
 
+    private void publishRecapPost(long durSec) {
+        Map<String, Object> post = new HashMap<>();
+        post.put("authorId", Fb.uid());
+        post.put("authorName", Fb.myName());
+        post.put("authorPhotoUrl", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        post.put("text", String.format(Locale.US,
+                "🔴 Just finished a %02d:%02d Live Broadcast: \"%s\"!\nThank you to %d viewers & everyone who sent ⭐ %d Stars! ❤️",
+                durSec / 60, durSec % 60, liveTitleStr, totalUniqueViewers, totalStarsReceived));
+        post.put("privacy", privacyFriendsOnly ? "friends" : "public");
+        post.put("likesCount", 0);
+        post.put("commentsCount", 0);
+        post.put("sharesCount", 0);
+        post.put("createdAt", FieldValue.serverTimestamp());
+        Fb.db().collection("posts").add(post);
+        Ui.toast(this, "✅ Live recap shared to Feed!");
+    }
+
+    private void showViewerBroadcastEndedDialog() {
+        engine.stopSpeakerPlayback();
+        stopLocalCoHostStreaming();
+        if (isFinishing()) return;
+        new AlertDialog.Builder(this)
+                .setCancelable(false)
+                .setTitle("🔴 Broadcast Ended")
+                .setMessage(hostNameStr + " has ended this live broadcast. Thanks for watching!")
+                .setPositiveButton("Back", (d, w) -> finish())
+                .show();
+    }
+
     @Override
     public void onBackPressed() {
-        if (isHost && isLiveStarted && !endingShown) {
-            onExitOrEndPressed();
-        } else {
-            super.onBackPressed();
+        if (cleanViewMode) {
+            toggleCleanViewMode(false);
+            return;
         }
+        confirmExitOrEnd();
     }
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
         uiHandler.removeCallbacksAndMessages(null);
-        if (liveReg != null) liveReg.remove();
-        if (chatReg != null) chatReg.remove();
-        stopCameraThread();
-        if (liveId != null && !liveId.isEmpty()) {
-            if (isHost && isLiveStarted && !endingShown) {
-                Fb.db().collection("lives").document(liveId).update(
-                        "status", "ended", "endedAt", FieldValue.serverTimestamp());
-            } else if (joinedCounted) {
-                String me = Fb.uid();
-                Map<String, Object> up = new HashMap<>();
-                up.put("viewerCount", FieldValue.increment(-1));
-                if (me != null) up.put("viewerIds", FieldValue.arrayRemove(me));
-                Fb.db().collection("lives").document(liveId).update(up);
-            }
+        if (liveDocReg != null) { liveDocReg.remove(); liveDocReg = null; }
+        if (chatColReg != null) { chatColReg.remove(); chatColReg = null; }
+        if (rtdbStreamRef != null && rtdbStreamListener != null) {
+            try { rtdbStreamRef.removeEventListener(rtdbStreamListener); } catch (Throwable ignored) { }
+        }
+
+        if (isHost && isLiveStarted && !isEnded && liveId != null) {
+            Map<String, Object> endMap = new HashMap<>();
+            endMap.put("status", "ended");
+            endMap.put("endedAt", FieldValue.serverTimestamp());
+            endMap.put("liveFrameB64", "");
+            endMap.put("audioB64", "");
+            Fb.db().collection("lives").document(liveId).update(endMap);
+        } else if (!isHost && viewerCountJoined && liveId != null) {
+            viewerCountJoined = false;
+            Fb.db().collection("lives").document(liveId)
+                    .update("viewers", FieldValue.increment(-1));
+            Map<String, Object> leave = new HashMap<>();
+            leave.put("type", "leave");
+            leave.put("uid", Fb.uid());
+            leave.put("name", Fb.myName());
+            leave.put("createdAtMs", System.currentTimeMillis());
+            Fb.db().collection("lives").document(liveId).collection("chat").add(leave);
+        }
+
+        stopLocalCoHostStreaming();
+        if (engine != null) engine.releaseAll();
+        super.onDestroy();
+    }
+
+    // ==================== LIVE CHAT ADAPTER ====================
+
+    private static class ChatItem {
+        final String id, uid, name, photo, text, type;
+        ChatItem(String id, String uid, String name, String photo, String text, String type) {
+            this.id = id;
+            this.uid = uid == null ? "" : uid;
+            this.name = name == null ? "User" : name;
+            this.photo = photo == null ? "" : photo;
+            this.text = text == null ? "" : text;
+            this.type = type == null ? "chat" : type;
         }
     }
 
-    // ==================== LIVE CHAT ADAPTER WITH MODERATION ====================
-
     private class ChatAdapter extends RecyclerView.Adapter<ChatAdapter.VH> {
+        private final List<ChatItem> items = new ArrayList<>();
+
+        void setItems(List<ChatItem> next) {
+            items.clear();
+            items.addAll(next);
+            notifyDataSetChanged();
+        }
+
         @NonNull
         @Override
-        public VH onCreateViewHolder(@NonNull ViewGroup parent, int v) {
+        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             LinearLayout row = Ui.row(LiveActivity.this);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setBackground(Ui.round(LiveActivity.this, 0x66000000, 14));
-            Ui.pad(row, 10, 5, 10, 5);
+            row.setBackground(Ui.round(LiveActivity.this, 0x55000000, 16));
+            Ui.pad(row, 8, 5, 10, 5);
             RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(-2, -2);
-            lp.bottomMargin = Ui.dp(LiveActivity.this, 4);
+            lp.setMargins(0, 0, 0, Ui.dp(LiveActivity.this, 4));
             row.setLayoutParams(lp);
-            TextView tv = Ui.tv(LiveActivity.this, "", 13, Color.WHITE);
-            row.addView(tv);
-            return new VH(row, tv);
+            return new VH(row);
         }
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int pos) {
-            Map<String, Object> m = comments.get(pos);
-            String cid = Format.str(m, "_id");
-            String uid = Format.str(m, "userId");
-            String who = Format.strOr(m, "userName", "Viewer");
-            String text = Format.str(m, "text");
-            boolean gift = "gift".equals(Format.str(m, "type"));
-            boolean hostMsg = Format.boolOf(m, "isHostMsg") || uid.equals(hostId);
+            final ChatItem it = items.get(pos);
+            if ("gift".equals(it.type)) {
+                h.root.setBackground(Ui.round(LiveActivity.this, 0xAAFF6F00, 16));
+            } else if ("qa".equals(it.type)) {
+                h.root.setBackground(Ui.round(LiveActivity.this, 0xAA1565C0, 16));
+            } else {
+                h.root.setBackground(Ui.round(LiveActivity.this, 0x58000000, 16));
+            }
 
-            String prefix = hostMsg ? "👑 " : "";
-            h.tv.setText(prefix + who + ": " + text);
-            h.tv.setTextColor(gift ? 0xFFFFD54F : (hostMsg ? 0xFF82B1FF : Color.WHITE));
-            h.itemView.setBackground(Ui.round(LiveActivity.this, gift ? 0x88FF6F00 : 0x66000000, 14));
+            Ui.avatar(LiveActivity.this, h.av, it.photo);
+            String badge = "";
+            if (it.uid.equals(hostId)) badge = " 👑";
+            else if (moderatorIds.contains(it.uid)) badge = " 🛡";
 
-            h.itemView.setOnClickListener(v -> {
-                if (!isHost && !Admin.canModerate()) {
-                    if (!uid.isEmpty()) {
-                        startActivity(new Intent(LiveActivity.this, ProfileActivity.class).putExtra("uid", uid));
-                    }
-                    return;
-                }
-                PopupMenu pm = new PopupMenu(LiveActivity.this, v);
-                if (isHost) pm.getMenu().add(0, 1, 0, "📌 Pin this message");
-                pm.getMenu().add(0, 2, 0, "🗑 Delete comment");
-                if (isHost && !uid.isEmpty() && !uid.equals(hostId)) {
-                    boolean muted = mutedUserIds.contains(uid);
-                    pm.getMenu().add(0, 3, 0, muted ? "🔊 Unmute " + who : "🔇 Mute " + who + " in Live");
-                }
-                pm.getMenu().add(0, 4, 0, "👤 View " + who + "'s profile");
-                pm.setOnMenuItemClickListener(it -> {
-                    int id = it.getItemId();
-                    if (id == 1) updatePinnedComment(who + ": " + text);
-                    else if (id == 2 && !cid.isEmpty()) {
-                        Fb.db().collection("lives").document(liveId)
-                                .collection("comments").document(cid).delete();
-                    } else if (id == 3) {
-                        boolean muted = mutedUserIds.contains(uid);
-                        Fb.db().collection("lives").document(liveId).update("mutedUserIds",
-                                muted ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
-                        Ui.toast(LiveActivity.this, muted ? "Unmuted " + who : "Muted " + who);
-                    } else if (id == 4 && !uid.isEmpty()) {
-                        startActivity(new Intent(LiveActivity.this, ProfileActivity.class).putExtra("uid", uid));
-                    }
-                    return true;
-                });
-                pm.show();
-            });
+            h.nameTv.setText(it.name + badge + "  ");
+            h.msgTv.setText(it.text);
+            h.root.setOnClickListener(v -> onChatItemClicked(it));
         }
 
-        @Override public int getItemCount() { return comments.size(); }
+        @Override
+        public int getItemCount() { return items.size(); }
 
         class VH extends RecyclerView.ViewHolder {
-            final TextView tv;
-            VH(View root, TextView t) { super(root); tv = t; }
+            final LinearLayout root;
+            final ImageView av;
+            final TextView nameTv, msgTv;
+            VH(LinearLayout r) {
+                super(r);
+                root = r;
+                av = new ImageView(LiveActivity.this);
+                int s = Ui.dp(LiveActivity.this, 22);
+                r.addView(av, new LinearLayout.LayoutParams(s, s));
+
+                LinearLayout textWrap = Ui.row(LiveActivity.this);
+                textWrap.setPadding(Ui.dp(LiveActivity.this, 6), 0, 0, 0);
+                nameTv = Ui.tvBold(LiveActivity.this, "", 11, 0xFFFFD54F);
+                msgTv = Ui.tv(LiveActivity.this, "", 12, 0xFFFFFFFF);
+                msgTv.setMaxWidth(Ui.dp(LiveActivity.this, 215));
+                textWrap.addView(nameTv);
+                textWrap.addView(msgTv);
+                r.addView(textWrap);
+            }
         }
     }
 }
