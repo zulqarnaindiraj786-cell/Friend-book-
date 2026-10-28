@@ -218,6 +218,17 @@ public class NotificationsFragment extends Fragment {
                 p.putExtra("uid", n.fromUserId);
                 startActivity(p);
                 break;
+            case "live":
+            case "live_invite":
+                if (n.postId != null && !n.postId.isEmpty()) {
+                    Intent li = new Intent(a, com.friendbook.social.live.LiveActivity.class);
+                    li.putExtra("live_id", n.postId);
+                    li.putExtra("host_id", n.fromUserId);
+                    startActivity(li);
+                } else {
+                    startActivity(new Intent(a, com.friendbook.social.live.LiveHubActivity.class));
+                }
+                break;
             case "reel_like":
             case "reel_comment":
                 if (a instanceof MainActivity) ((MainActivity) a).select(MainActivity.TAB_REELS);
@@ -257,6 +268,7 @@ public class NotificationsFragment extends Fragment {
             case "reel_like": case "reel_comment": return "🎞️";
             case "group_invite": case "group": return "👥";
             case "announcement": case "team": return "📣";
+            case "live": case "live_invite": return "🔴";
             case "tick": return "✓";
             default: return "🔔";
         }

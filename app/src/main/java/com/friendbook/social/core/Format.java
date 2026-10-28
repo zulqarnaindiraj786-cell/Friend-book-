@@ -76,6 +76,12 @@ public class Format {
         return 0;
     }
 
+    public static long longOf(Map<String, Object> m, String k) {
+        Object v = m == null ? null : m.get(k);
+        if (v instanceof Number) return ((Number) v).longValue();
+        return ts(v);
+    }
+
     public static boolean boolOf(Map<String, Object> m, String k) {
         Object v = m == null ? null : m.get(k);
         return v instanceof Boolean && (Boolean) v;

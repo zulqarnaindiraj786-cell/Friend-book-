@@ -188,7 +188,8 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.hostId == request.auth.uid;
       allow read: if signedIn();
       allow update: if isAdmin() || resource.data.hostId == request.auth.uid
-        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers', 'stars']);
+        || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['viewers', 'viewerCount', 'stars', 'totalStars', 'likesCount', 'viewerIds']);
       allow delete: if isAdmin();
       match /chat/{cid} {
         allow read: if signedIn();

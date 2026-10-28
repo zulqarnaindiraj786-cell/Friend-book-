@@ -49,12 +49,18 @@ public class AdminLiveFragment extends Fragment {
     public void onStart() {
         super.onStart();
         reg = Fb.db().collection("lives")
-                .orderBy("startedAt", Query.Direction.DESCENDING).limit(50)
+                .limit(50)
                 .addSnapshotListener((snap, err) -> {
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
-                    int n = snap == null ? 0 : snap.size();
+                    java.util.List<DocumentSnapshot> docs = snap == null
+                            ? new java.util.ArrayList<>()
+                            : new java.util.ArrayList<>(snap.getDocuments());
+                    java.util.Collections.sort(docs, (d1, d2) -> Long.compare(
+                            Format.longOf(d2.getData(), "startedAtMs"),
+                            Format.longOf(d1.getData(), "startedAtMs")));
+                    int n = docs.size();
                     countT.setText(n + " room(s) — newest first");
                     if (n == 0) {
                         TextView e = Ui.tv(a, "🔴 No live rooms yet.", 13, Ui.sub(a));
@@ -62,7 +68,7 @@ public class AdminLiveFragment extends Fragment {
                         list.addView(e);
                         return;
                     }
-                    for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(a, d));
+                    for (DocumentSnapshot d : docs) list.addView(row(a, d));
                 });
     }
 
@@ -84,7 +90,9 @@ public class AdminLiveFragment extends Fragment {
         card.setLayoutParams(cp);
 
         ImageView av = new ImageView(a);
-        Ui.avatar(a, av, Format.str(m, "hostPhotoUrl"));
+        String photo = Format.str(m, "hostPhotoUrl");
+        if (photo.isEmpty()) photo = Format.str(m, "hostPhoto");
+        Ui.avatar(a, av, photo);
         int s = Ui.dp(a, 48);
         card.addView(av, new LinearLayout.LayoutParams(s, s));
 
@@ -92,8 +100,10 @@ public class AdminLiveFragment extends Fragment {
         info.setPadding(Ui.dp(a, 12), 0, 0, 0);
         info.addView(Ui.tvBold(a, Format.strOr(m, "hostName", "Host"), 14, Ui.txt(a)));
         info.addView(Ui.tv(a, Format.str(m, "title"), 12, Ui.sub(a)));
-        info.addView(Ui.tv(a, "👁 " + Format.count(Format.intOf(m, "viewers"))
-                + "  ·  ⭐ " + Format.count(Format.intOf(m, "stars")) + " community stars",
+        int vCnt = Math.max(Format.intOf(m, "viewers"), Format.intOf(m, "viewerCount"));
+        int sCnt = Math.max(Format.intOf(m, "stars"), Format.intOf(m, "totalStars"));
+        info.addView(Ui.tv(a, "👁 " + Format.count(vCnt)
+                + "  ·  ⭐ " + Format.count(sCnt) + " community stars",
                 11, Ui.sub(a)));
         card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 

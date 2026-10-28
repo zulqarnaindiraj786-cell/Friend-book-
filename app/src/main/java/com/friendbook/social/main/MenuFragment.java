@@ -164,12 +164,22 @@ public class MenuFragment extends Fragment {
         body.addView(scHead);
 
         addGridRow(body, a,
+                tile(a, Icons.VIDEO, 0xFFE41E3F, "🔴 Live Videos", "Go Live or watch live",
+                        () -> startActivity(new Intent(a, com.friendbook.social.live.LiveHubActivity.class))),
                 tile(a, Icons.CHART, Ui.BLUE, "Creator Dashboard", "Reach, likes & level",
-                        () -> com.friendbook.social.profile.CreatorDashboardDialog.show(a, null)),
+                        () -> com.friendbook.social.profile.CreatorDashboardDialog.show(a, null)));
+
+        addGridRow(body, a,
                 tile(a, Icons.DATA_SAVER, 0xFF0E5FC7, "Data mode & 2G", "Free text / Saver",
                         () -> com.friendbook.social.core.FastCache.showLiteModeDialog(a, () -> {
                             if (a instanceof MainActivity) ((MainActivity) a).refreshLiteUi();
-                        })));
+                        })),
+                tile(a, Icons.GLOBE, 0xFFE41E3F, "🎥 Go Live Studio", "Start camera & voice live",
+                        () -> {
+                            Intent li = new Intent(a, com.friendbook.social.live.LiveActivity.class);
+                            li.putExtra("host", true);
+                            startActivity(li);
+                        }));
 
         addGridRow(body, a,
                 tile(a, Icons.FRIENDS, Ui.BLUE, "Friends", "Requests & PYMK",

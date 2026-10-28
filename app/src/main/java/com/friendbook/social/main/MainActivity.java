@@ -292,9 +292,12 @@ public class MainActivity extends Activity {
                 case 2:
                     startActivity(new Intent(this, AddReelActivity.class));
                     break;
-                case 3:
-                    startActivity(new Intent(this, LiveActivity.class));
+                case 3: {
+                    Intent li = new Intent(this, LiveActivity.class);
+                    li.putExtra("host", true);
+                    startActivity(li);
                     break;
+                }
                 case 4:
                     select(TAB_HOME);
                     if (tabFragments[TAB_HOME] instanceof HomeFragment) {

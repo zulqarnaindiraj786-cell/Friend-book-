@@ -466,16 +466,25 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startLivesListener() {
         livesReg = Fb.db().collection("lives")
                 .whereEqualTo("status", "live")
-                .limit(10)
+                .limit(25)
                 .addSnapshotListener((snap, err) -> {
                     List<Map<String, Object>> lives = new ArrayList<>();
+                    long now = System.currentTimeMillis();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
-                            Map<String, Object> m = new HashMap<>(d.getData());
+                            Map<String, Object> raw = d.getData();
+                            if (raw == null) continue;
+                            long hb = com.friendbook.social.core.Format.longOf(raw, "lastHeartbeatMs");
+                            // Filter out abandoned/crashed live rooms older than 2.5 minutes without heartbeat
+                            if (hb > 0 && (now - hb) > 150_000L) continue;
+                            Map<String, Object> m = new HashMap<>(raw);
                             m.put("_id", d.getId());
                             lives.add(m);
                         }
                     }
+                    Collections.sort(lives, (a, b) -> Long.compare(
+                            com.friendbook.social.core.Format.longOf(b, "startedAtMs"),
+                            com.friendbook.social.core.Format.longOf(a, "startedAtMs")));
                     adapter.setLives(lives);
                 });
     }

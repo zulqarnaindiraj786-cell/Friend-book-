@@ -290,14 +290,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             hh.composeHint.setText(first.isEmpty() || "FriendBook".equalsIgnoreCase(first)
                     ? "What's on your mind?"
                     : "What's on your mind, " + first + "?");
-            // 🔴 live rooms + go-live button (opens Pro Live Pre-Broadcast Camera Studio!)
+            // 🔴 live rooms + ALWAYS-VISIBLE Go-Live & Live Hub bar!
             hh.goLiveBtn.setOnClickListener(v -> {
                 Intent li = new Intent(activity, com.friendbook.social.live.LiveActivity.class);
                 li.putExtra("host", true);
                 activity.startActivity(li);
             });
-            hh.liveBox.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
+            hh.liveBox.setVisibility(View.VISIBLE);
             hh.liveCards.removeAllViews();
+            hh.liveCards.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
             // 👥 People You May Know horizontal rail (friendbook signature widget)
             hh.pymkBox.setVisibility(pymkUsers.isEmpty() ? View.GONE : View.VISIBLE);
             hh.pymkCards.removeAllViews();
@@ -330,19 +331,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             for (final java.util.Map<String, Object> live : activeLives) {
                 LinearLayout card = Ui.col(activity);
                 card.setGravity(Gravity.CENTER);
-                card.setBackground(Ui.round(activity, Ui.inputBg(activity), 14));
+                card.setBackground(Ui.roundStroke(activity, Ui.inputBg(activity), 14, 0x55E41E3F, 1));
                 Ui.pad(card, 12, 8, 12, 8);
                 ImageView av = new ImageView(activity);
-                Ui.avatar(activity, av, Format.str(live, "hostPhotoUrl"));
+                String liveAv = Format.str(live, "hostPhotoUrl");
+                if (liveAv.isEmpty()) liveAv = Format.str(live, "hostPhoto");
+                Ui.avatar(activity, av, liveAv);
                 int s = Ui.dp(activity, 46);
-                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
+                FrameLayout ring = new FrameLayout(activity);
+                ring.setBackground(Ui.roundStroke(activity, 0x00000000, 30, 0xFFE41E3F, 2));
+                Ui.pad(ring, 2, 2, 2, 2);
+                ring.addView(av, new FrameLayout.LayoutParams(s, s, Gravity.CENTER));
+                LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(-2, -2);
                 avp.gravity = Gravity.CENTER;
-                card.addView(av, avp);
+                card.addView(ring, avp);
                 TextView nm = Ui.tvBold(activity, Format.strOr(live, "hostName", "Live"), 11, Ui.txt(activity));
                 nm.setSingleLine(true);
-                nm.setMaxWidth(Ui.dp(activity, 84));
+                nm.setMaxWidth(Ui.dp(activity, 88));
+                nm.setPadding(0, Ui.dp(activity, 3), 0, Ui.dp(activity, 2));
                 card.addView(nm);
-                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(Format.intOf(live, "viewers")),
+                int vCnt = Math.max(1, Math.max(Format.intOf(live, "viewers"), Format.intOf(live, "viewerCount")));
+                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(vCnt),
                         0xFFE41E3F, 0xFFFFFFFF, 9));
                 final String lid = Format.str(live, "_id");
                 final String hostId = Format.str(live, "hostId");
@@ -1521,19 +1530,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
 
-            // 🔴 GO LIVE button + active lives strip (friendbook style)
+            // 🔴 GO LIVE button + Live Hub + active lives strip (friendbook style)
             liveBox = Ui.col(c);
             liveBox.setBackgroundColor(Ui.card(c));
-            liveBox.setVisibility(View.GONE);
             LinearLayout liveTop = Ui.row(c);
             liveTop.setGravity(Gravity.CENTER_VERTICAL);
-            Ui.pad(liveTop, 12, 10, 12, 4);
-            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 13);
-            Ui.pad(goLiveBtn, 16, 8, 16, 8);
+            Ui.pad(liveTop, 12, 8, 12, 6);
+            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 12);
+            Ui.pad(goLiveBtn, 14, 7, 14, 7);
             liveTop.addView(goLiveBtn);
-            TextView liveTitle = Ui.tvBold(c, "Live now", 14, Ui.txt(c));
+            TextView liveTitle = Ui.tvBold(c, "Live Video & Voice", 13, Ui.txt(c));
             liveTitle.setPadding(Ui.dp(c, 10), 0, 0, 0);
-            liveTop.addView(liveTitle);
+            liveTop.addView(liveTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView hubBtn = Ui.roundChip(c, "📺 Live Hub ›", Ui.inputBg(c), Ui.BLUE, 11);
+            Ui.pad(hubBtn, 10, 6, 10, 6);
+            hubBtn.setOnClickListener(v -> c.startActivity(
+                    new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
+            liveTop.addView(hubBtn);
             liveBox.addView(liveTop);
             android.widget.HorizontalScrollView lsv = new android.widget.HorizontalScrollView(c);
             lsv.setHorizontalScrollBarEnabled(false);
