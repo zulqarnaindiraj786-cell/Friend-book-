@@ -220,9 +220,12 @@ public class MainActivity extends Activity {
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
                 rc.setConfigSettingsAsync(new com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings.Builder()
                         .setMinimumFetchIntervalInSeconds(3600).build());
-                rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled", true));
-                rc.fetchAndActivate().addOnCompleteListener(t ->
-                        AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
+                rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled_v3", true))
+                        .addOnCompleteListener(dt -> rc.fetchAndActivate().addOnCompleteListener(t -> {
+                            String raw = rc.getString("ads_enabled_v3");
+                            boolean allow = !"false".equalsIgnoreCase(raw == null ? "" : raw.trim());
+                            AdsConfig.setRemoteAllowed(allow);
+                        }));
             } catch (Throwable ignored) { }
             return false;
         });

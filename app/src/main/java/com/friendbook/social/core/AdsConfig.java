@@ -1,321 +1,134 @@
 package com.friendbook.social.core;
 
-import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Build;
-import android.os.SystemClock;
+import android.util.Log;
 
-import androidx.annotation.NonNull;
-
-import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdValue;
-import com.google.android.gms.ads.LoadAdError;
-import com.google.android.gms.ads.interstitial.InterstitialAd;
-import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback;
+import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.firestore.SetOptions;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 📢 Real Earning AdMob Native Advanced Engine (`com.friendbook.social` — Google Play Store Ready):
- *
- * - Real App ID:              ca-app-pub-3387480177023669~5696528190
- * - Real Native Ad Unit ID:   ca-app-pub-3387480177023669/5657602381
- * - Google Play Store URL:    https://play.google.com/store/apps/details?id=com.friendbook.social
- * - Official Website URL:     https://zulqarnaindiraj786-cell.github.io/Friend-book-
- * - app-ads.txt:              google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
- *
- * Key Match-Rate & Anti-Ban Protections (Fixes 519 req / 5.2% match rate):
- * 1. Real Device Guard (`isRealDevice()`): Blocks 100% of ad requests on Android Emulators.
- * 2. Strict Global Rate Limiter (`MIN_REQUEST_INTERVAL_MS = 30_000L`): Max 1 ad request per 30 seconds
- *    across the entire app, with zero concurrent requests — prevents burst-request throttling!
- * 3. Error 3 (No-Fill) Smart Backoff (`NO_FILL_RETRY_DELAY_MS = 60_000L`): Waits 60 seconds after
- *    No-Fill ("Requires review") before allowing the next request.
- * 4. Pure Native Advanced (`AdLoader` + `NativeAdView` + `MediaView`): Zero Banner `AdView`, zero test IDs,
- *    zero `WebView`.
+ * 📢 friendbook Production AdMob Configuration (`com.friendbook.social`):
+ * - Uses ONLY real production AdMob IDs (zero test IDs, zero test devices, zero debug ad mode):
+ *   • App ID:       ca-app-pub-3387480177023669~1513026594
+ *   • Feed Native:  ca-app-pub-3387480177023669/4957447582
+ *   • Reels Native: ca-app-pub-3387480177023669/6468085788
+ * - Loads Native Ads fresh via AdLoader.Builder on every Feed & Reels slot bind (never reuses old/failed ads).
  */
 public class AdsConfig {
 
+    public static final String LOG_TAG = "FriendBookAds";
+
+    /** Official friendbook AdMob Publisher ID (matches root /app-ads.txt). */
+    public static final String PUBLISHER_ID = "pub-3387480177023669";
     public static final String PUBLISHER_PREFIX = "ca-app-pub-3387480177023669/";
-    public static final String APP_ID = "ca-app-pub-3387480177023669~5696528190";
-    public static final String DEFAULT_NATIVE_ID = "ca-app-pub-3387480177023669/5657602381";
-    public static final String NATIVE_UNIT_NAME = "friendbook native";
+
+    /** Official Production AdMob App ID (matches AndroidManifest.xml APPLICATION_ID). */
+    public static final String APP_ID = "ca-app-pub-3387480177023669~1513026594";
+
+    /** Official Production Feed Native Ad Unit ID. */
+    public static final String FEED_NATIVE_ID = "ca-app-pub-3387480177023669/4957447582";
+    public static final String DEFAULT_NATIVE_ID = FEED_NATIVE_ID;
+    public static final String NATIVE_UNIT_NAME = "Feed Native";
+
+    /** Official Production Reels Native Ad Unit ID. */
+    public static final String REELS_NATIVE_ID = "ca-app-pub-3387480177023669/6468085788";
+    public static final String REELS_UNIT_NAME = "Reels Native";
+
     public static final String DEFAULT_INTERSTITIAL_ID = "";
 
-    /** Hard cap: max 1 ad request per 30 seconds across the entire app! */
-    public static final long MIN_REQUEST_INTERVAL_MS = 30_000L;
-    /** On Error Code 3 (No-Fill during "Requires review"), wait 60 seconds before retrying! */
-    public static final long NO_FILL_RETRY_DELAY_MS = 60_000L;
-
-    public static final String PLAY_STORE_URL =
-            "https://play.google.com/store/apps/details?id=com.friendbook.social";
-    public static final String OFFICIAL_WEBSITE_URL =
-            "https://zulqarnaindiraj786-cell.github.io/Friend-book-";
-    public static final String APP_ADS_TXT_URL =
-            "https://zulqarnaindiraj786-cell.github.io/Friend-book-/app-ads.txt";
-    public static final String PRIVACY_POLICY_URL =
-            "https://zulqarnaindiraj786-cell.github.io/Friend-book-/privacy-policy.html";
-    public static final String CHILD_SAFETY_URL =
-            "https://zulqarnaindiraj786-cell.github.io/Friend-book-/child-safety.html";
-    public static final String DELETE_ACCOUNT_URL =
-            "https://zulqarnaindiraj786-cell.github.io/Friend-book-/delete-account.html";
-    public static final String APP_ADS_TXT_CONTENT =
+    /** Official Developer Website, Privacy Policy, Child Safety, Account Deletion & app-ads.txt URLs. */
+    public static final String OFFICIAL_WEBSITE_URL = "https://zulqarnaindiraj786-cell.github.io/Friend-book-";
+    public static final String APP_ADS_TXT_URL = OFFICIAL_WEBSITE_URL + "/app-ads.txt";
+    public static final String PRIVACY_POLICY_URL = OFFICIAL_WEBSITE_URL + "/privacy-policy.html";
+    public static final String DELETE_ACCOUNT_URL = OFFICIAL_WEBSITE_URL + "/delete-account.html";
+    public static final String CHILD_SAFETY_URL = OFFICIAL_WEBSITE_URL + "/child-safety.html";
+    public static final String PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.friendbook.social";
+    public static final String APP_ADS_TXT_RECORD =
             "google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0";
 
-    private static final String PREF_STATS = "friendbook_admob_stats";
-    private static final double BASELINE_TARGET_ECPM_USD = 0.17;
+    private static final String PREF = "fb_admob_stats_v3";
+    private static final String KEY_REQUESTS = "ad_requests";
+    private static final String KEY_LOADS = "ad_loads";
+    private static final String KEY_IMPRESSIONS = "ad_impressions";
+    private static final String KEY_CLICKS = "ad_clicks";
+    private static final String KEY_FAILS = "ad_fails";
+    private static final String KEY_LAST_ERROR = "last_error_code";
+    private static final String KEY_MICROS = "paid_micros_total";
 
-    private static final AtomicBoolean adRequestInFlight = new AtomicBoolean(false);
-    private static final AtomicLong nextAllowedRequestElapsedMs = new AtomicLong(0L);
-
-    private static String nativeId = DEFAULT_NATIVE_ID;
-    private static String interstitialId = DEFAULT_INTERSTITIAL_ID;
-    private static boolean enabled = true;
-    private static boolean remoteAllowed = true;
+    private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
+    private static volatile String reelsNativeUnitId = REELS_NATIVE_ID;
+    private static volatile boolean masterSwitchEnabled = true;
+    private static volatile boolean remoteAllowed = true;
     private static ListenerRegistration reg;
-    private static InterstitialAd cachedInterstitial;
-    private static boolean loadingInterstitial = false;
-    private static long lastInterstitialShownAt = 0L;
 
-    // ---------- 1. Real Physical Device Detection (Block All Emulators) ----------
-
-    /**
-     * Detects Android Studio AVDs, Genymotion, BlueStacks, Nox, LDPlayer, MEmu, vbox & generic x86 SDKs.
-     * Real AdMob IDs must NEVER be requested on emulators!
-     */
-    public static boolean isEmulator() {
-        String fingerprint = safeLower(Build.FINGERPRINT);
-        String model = safeLower(Build.MODEL);
-        String manufacturer = safeLower(Build.MANUFACTURER);
-        String brand = safeLower(Build.BRAND);
-        String device = safeLower(Build.DEVICE);
-        String product = safeLower(Build.PRODUCT);
-        String hardware = safeLower(Build.HARDWARE);
-        String board = safeLower(Build.BOARD);
-
-        return fingerprint.startsWith("generic")
-                || fingerprint.startsWith("unknown")
-                || fingerprint.contains("test-keys") && (fingerprint.contains("sdk") || fingerprint.contains("emulator"))
-                || model.contains("google_sdk")
-                || model.contains("emulator")
-                || model.contains("android sdk built for")
-                || model.contains("sdk_gphone")
-                || manufacturer.contains("genymotion")
-                || manufacturer.contains("bluestacks")
-                || manufacturer.contains("nox")
-                || manufacturer.contains("memu")
-                || manufacturer.contains("ldplayer")
-                || (brand.startsWith("generic") && device.startsWith("generic"))
-                || product.contains("sdk_gphone")
-                || product.contains("google_sdk")
-                || product.contains("sdk_x86")
-                || product.contains("vbox86p")
-                || product.contains("emulator")
-                || product.contains("simulator")
-                || hardware.contains("goldfish")
-                || hardware.contains("ranchu")
-                || hardware.contains("vbox86")
-                || hardware.contains("nox")
-                || board.contains("goldfish")
-                || board.contains("ranchu");
+    public interface ChangeListener {
+        void onAdsConfigChanged(String nativeUnitId, boolean enabled);
     }
 
-    /** Returns true ONLY on a real physical Android phone/tablet. */
-    public static boolean isRealDevice() {
-        return !isEmulator();
+    private static ChangeListener listener;
+
+    public static void setChangeListener(ChangeListener l) {
+        listener = l;
     }
 
-    private static String safeLower(String s) {
-        return s == null ? "" : s.toLowerCase(Locale.US);
+    public static void notifyChange() {
+        if (listener != null) {
+            listener.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
+        }
     }
 
-    // ---------- 2. Global 1-Request-Per-30s Rate Limiter & 60s Error-3 Backoff ----------
-
-    /**
-     * Atomically reserves the single global ad-request slot if:
-     * - Running on a REAL physical device (not emulator)
-     * - MobileAds SDK & UMP check are ready
-     * - No other ad request is currently in-flight
-     * - At least 30s have passed since the last request (or 60s after Error Code 3 No-Fill)
-     */
-    public static synchronized boolean tryAcquireAdRequestSlot(Context ctx) {
-        if (ctx == null || !nativeAdsEnabled() || !isRealDevice()) {
-            return false;
+    /** Validates that a unit ID belongs to our real production AdMob publisher (`pub-3387480177023669`). */
+    public static boolean isRealProductionUnit(String unitId) {
+        if (unitId == null) return false;
+        String trimmed = unitId.trim();
+        if (!trimmed.startsWith(PUBLISHER_PREFIX)) return false;
+        String suffix = trimmed.substring(PUBLISHER_PREFIX.length());
+        if (suffix.length() < 6) return false;
+        for (int i = 0; i < suffix.length(); i++) {
+            if (!Character.isDigit(suffix.charAt(i))) return false;
         }
-        if (!ConsentManager.canRequestAds(ctx)) {
-            return false;
-        }
-        if (adRequestInFlight.get()) {
-            return false;
-        }
-        long now = SystemClock.elapsedRealtime();
-        long allowedAt = nextAllowedRequestElapsedMs.get();
-        if (now < allowedAt) {
-            return false;
-        }
-        adRequestInFlight.set(true);
-        // Immediately lock out any other slot for at least 30 seconds
-        nextAllowedRequestElapsedMs.set(now + MIN_REQUEST_INTERVAL_MS);
-        recordAdRequest(ctx);
         return true;
     }
 
-    /** How many ms a feed ad slot should wait before trying again. */
-    public static long msUntilNextAllowedRequest(Context ctx) {
-        if (!isRealDevice()) return -1L; // Never retry on emulator
-        if (!ConsentManager.isAdsSdkReady()) return 2_500L; // Wait briefly for MobileAds.initialize()
-        if (adRequestInFlight.get()) return MIN_REQUEST_INTERVAL_MS;
-        long remaining = nextAllowedRequestElapsedMs.get() - SystemClock.elapsedRealtime();
-        return Math.max(1_000L, remaining);
+    /** Active Feed Native Ad Unit ID (`ca-app-pub-3387480177023669/4957447582`). */
+    public static String feedNativeId() {
+        String id = feedNativeUnitId;
+        return isRealProductionUnit(id) ? id : FEED_NATIVE_ID;
     }
 
-    /** Called when AdLoader successfully receives a NativeAd. Enforces 30s before next request. */
-    public static synchronized void onNativeAdLoaded(Context ctx) {
-        adRequestInFlight.set(false);
-        long minNext = SystemClock.elapsedRealtime() + MIN_REQUEST_INTERVAL_MS;
-        if (nextAllowedRequestElapsedMs.get() < minNext) {
-            nextAllowedRequestElapsedMs.set(minNext);
-        }
+    /** Active Reels Native Ad Unit ID (`ca-app-pub-3387480177023669/6468085788`). */
+    public static String reelsNativeId() {
+        String id = reelsNativeUnitId;
+        return isRealProductionUnit(id) ? id : REELS_NATIVE_ID;
     }
 
-    /** Called when AdLoader fails (e.g. Error 3 No-Fill). Enforces 60s retry delay! */
-    public static synchronized void onNativeAdFailed(Context ctx, int errorCode) {
-        adRequestInFlight.set(false);
-        nextAllowedRequestElapsedMs.set(SystemClock.elapsedRealtime() + NO_FILL_RETRY_DELAY_MS);
-        recordAdFailed(ctx, errorCode);
-    }
-
-    // ---------- 3. Production Unit Validation ----------
-
-    /** Accepts only real production AdMob unit IDs belonging to publisher ca-app-pub-3387480177023669. */
-    public static boolean isRealProductionUnit(String id) {
-        if (id == null) return false;
-        String clean = id.trim();
-        return clean.startsWith(PUBLISHER_PREFIX) && clean.length() > PUBLISHER_PREFIX.length() + 5;
-    }
-
+    /** Alias for Feed Native Ad Unit ID for existing callers. */
     public static String nativeId() {
-        return isRealProductionUnit(nativeId) ? nativeId.trim() : DEFAULT_NATIVE_ID;
+        return feedNativeId();
     }
 
     public static String interstitialId() {
-        return isRealProductionUnit(interstitialId) ? interstitialId.trim() : "";
-    }
-
-    public static boolean nativeAdsEnabled() {
-        return enabled && remoteAllowed && isRealDevice() && !nativeId().isEmpty();
+        return DEFAULT_INTERSTITIAL_ID;
     }
 
     public static boolean isMasterSwitchEnabled() {
-        return enabled && remoteAllowed;
+        return masterSwitchEnabled;
     }
 
-    public static String readBundledAppAdsTxt(Context ctx) {
-        if (ctx == null) return APP_ADS_TXT_CONTENT;
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(ctx.getAssets().open("app-ads.txt")))) {
-            String line = br.readLine();
-            return (line != null && !line.trim().isEmpty()) ? line.trim() : APP_ADS_TXT_CONTENT;
-        } catch (Throwable t) {
-            return APP_ADS_TXT_CONTENT;
-        }
-    }
-
-    // ---------- 4. Real-Time AdMob Match Rate, Impressions & eCPM ($0.17+) Telemetry ----------
-
-    public static void recordAdRequest(Context c) {
-        if (c == null) return;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        sp.edit().putLong("requests", sp.getLong("requests", 0L) + 1L).apply();
-    }
-
-    public static void recordAdImpression(Context c) {
-        if (c == null) return;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        sp.edit().putLong("impressions", sp.getLong("impressions", 0L) + 1L).apply();
-    }
-
-    public static void recordAdClick(Context c) {
-        if (c == null) return;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        sp.edit().putLong("clicks", sp.getLong("clicks", 0L) + 1L).apply();
-    }
-
-    public static void recordAdFailed(Context c, int errorCode) {
-        if (c == null) return;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        SharedPreferences.Editor ed = sp.edit().putInt("last_error_code", errorCode);
-        if (errorCode == AdRequest.ERROR_CODE_NO_FILL) {
-            ed.putLong("no_fill_3", sp.getLong("no_fill_3", 0L) + 1L);
-        }
-        ed.apply();
-    }
-
-    public static void recordPaidEvent(Context c, AdValue adValue) {
-        if (c == null || adValue == null) return;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        long prevMicros = sp.getLong("paid_micros_total", 0L);
-        long paidCount = sp.getLong("paid_events", 0L) + 1L;
-        sp.edit()
-                .putLong("paid_micros_total", prevMicros + adValue.getValueMicros())
-                .putLong("paid_events", paidCount)
-                .apply();
-    }
-
-    public static double estimatedEcpmUsd(Context c) {
-        if (c == null) return BASELINE_TARGET_ECPM_USD;
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        long paidEvents = sp.getLong("paid_events", 0L);
-        long totalMicros = sp.getLong("paid_micros_total", 0L);
-        if (paidEvents > 0L && totalMicros > 0L) {
-            double liveEcpm = ((totalMicros / 1_000_000.0) / (double) paidEvents) * 1000.0;
-            return Math.max(BASELINE_TARGET_ECPM_USD, liveEcpm);
-        }
-        return BASELINE_TARGET_ECPM_USD;
-    }
-
-    public static String statsSummary(Context c) {
-        String devStatus = isRealDevice() ? "REAL DEVICE ✓" : "EMULATOR BLOCKED ⛔";
-        if (c == null) return devStatus + " · Target eCPM: $0.17+";
-        SharedPreferences sp = c.getApplicationContext().getSharedPreferences(PREF_STATS, Context.MODE_PRIVATE);
-        long req = sp.getLong("requests", 0L);
-        long imp = sp.getLong("impressions", 0L);
-        long clk = sp.getLong("clicks", 0L);
-        long noFill = sp.getLong("no_fill_3", 0L);
-        double matchPct = req > 0 ? (imp * 100.0 / req) : 0.0;
-        double ecpm = estimatedEcpmUsd(c);
-        return String.format(Locale.US,
-                "Device: %s  ·  Rate Limit: 1 req / 30s max (60s retry)\nRequests: %d  ·  Native Impressions: %d  ·  Match: %.1f%%\nClicks: %d  ·  Error 3 (No-Fill): %d  ·  Est. eCPM: $%.2f+",
-                devStatus, req, imp, matchPct, clk, noFill, ecpm);
-    }
-
-    // ---------- 5. Firestore / Remote Config Sync ----------
-
-    public interface ChangeListener { void onChange(String nativeAdUnitId, boolean enabled); }
-    private static ChangeListener changeListener;
-    public static void setChangeListener(ChangeListener l) { changeListener = l; }
-
-    public static void startWatching() {
-        if (reg != null) return;
-        reg = Fb.db().collection("config").document("ads")
-                .addSnapshotListener((d, err) -> {
-                    if (d != null && d.exists()) {
-                        String nId = d.getString("native_unit_v2");
-                        String iId = d.getString("interstitialId");
-                        Boolean en = d.getBoolean("nativeEnabled");
-                        nativeId = isRealProductionUnit(nId) ? nId.trim() : DEFAULT_NATIVE_ID;
-                        interstitialId = isRealProductionUnit(iId) ? iId.trim() : DEFAULT_INTERSTITIAL_ID;
-                        if (en != null) enabled = en;
-                        notifyChange();
-                    }
-                });
+    /** Returns true when production Native Ads are enabled. */
+    public static boolean nativeAdsEnabled() {
+        return masterSwitchEnabled && remoteAllowed;
     }
 
     public static void setRemoteAllowed(boolean allowed) {
@@ -323,69 +136,120 @@ public class AdsConfig {
         notifyChange();
     }
 
-    public static void notifyChange() {
-        if (changeListener != null) changeListener.onChange(nativeId(), nativeAdsEnabled());
+    public static void recordAdRequest(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putLong(KEY_REQUESTS, sp.getLong(KEY_REQUESTS, 0L) + 1L).apply();
     }
 
-    public static void preloadInterstitial(Context ctx) {
-        String unit = interstitialId();
-        if (ctx == null || unit.isEmpty() || !isMasterSwitchEnabled() || !isRealDevice()
-                || !ConsentManager.canRequestAds(ctx) || cachedInterstitial != null || loadingInterstitial) {
-            return;
+    public static void onNativeAdLoaded(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit()
+                .putLong(KEY_LOADS, sp.getLong(KEY_LOADS, 0L) + 1L)
+                .putInt(KEY_LAST_ERROR, -1)
+                .apply();
+    }
+
+    public static void onNativeAdFailed(Context c, int errorCode) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit()
+                .putLong(KEY_FAILS, sp.getLong(KEY_FAILS, 0L) + 1L)
+                .putInt(KEY_LAST_ERROR, errorCode)
+                .apply();
+    }
+
+    public static void recordAdImpression(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putLong(KEY_IMPRESSIONS, sp.getLong(KEY_IMPRESSIONS, 0L) + 1L).apply();
+    }
+
+    public static void recordAdClick(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putLong(KEY_CLICKS, sp.getLong(KEY_CLICKS, 0L) + 1L).apply();
+    }
+
+    public static void recordPaidEvent(Context c, AdValue adValue) {
+        if (c == null || adValue == null) return;
+        SharedPreferences sp = prefs(c);
+        long total = sp.getLong(KEY_MICROS, 0L) + adValue.getValueMicros();
+        sp.edit().putLong(KEY_MICROS, total).apply();
+    }
+
+    public static String statsSummary(Context c) {
+        SharedPreferences sp = prefs(c);
+        long req = sp.getLong(KEY_REQUESTS, 0L);
+        long loads = sp.getLong(KEY_LOADS, 0L);
+        long imps = sp.getLong(KEY_IMPRESSIONS, 0L);
+        long clicks = sp.getLong(KEY_CLICKS, 0L);
+        long fails = sp.getLong(KEY_FAILS, 0L);
+        int lastErr = sp.getInt(KEY_LAST_ERROR, -1);
+        double usd = sp.getLong(KEY_MICROS, 0L) / 1_000_000.0;
+        String errLabel = lastErr < 0 ? "None" : ("Code " + lastErr);
+        return String.format(Locale.US,
+                "Mode: Real Production Only  •  Requests: %d  •  Loaded: %d\n"
+                        + "Impressions: %d  •  Clicks: %d  •  Failed: %d (Last error: %s)  •  Est: $%.4f",
+                req, loads, imps, clicks, fails, errLabel, usd);
+    }
+
+    /** Reads bundled assets/app-ads.txt for instant verification inside the app. */
+    public static String readBundledAppAdsTxt(Context c) {
+        try (InputStream is = c.getAssets().open("app-ads.txt");
+             BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            String line = br.readLine();
+            if (line != null && !line.trim().isEmpty()) return line.trim();
+        } catch (Throwable ignored) {}
+        return APP_ADS_TXT_RECORD;
+    }
+
+    private static SharedPreferences prefs(Context c) {
+        return c.getApplicationContext().getSharedPreferences(PREF, Context.MODE_PRIVATE);
+    }
+
+    /** Watches Firestore `config/ads` v3 fields (ignores retired legacy IDs so new real IDs stay active). */
+    public static void startWatching() {
+        if (reg != null) return;
+        try {
+            reg = Fb.db().collection("config").document("ads")
+                    .addSnapshotListener((snap, err) -> {
+                        if (snap != null && snap.exists()) {
+                            String fId = snap.getString("feed_native_unit_v3");
+                            String rId = snap.getString("reels_native_unit_v3");
+                            Boolean en = snap.getBoolean("ads_enabled_v3");
+                            feedNativeUnitId = isRealProductionUnit(fId) ? fId.trim() : FEED_NATIVE_ID;
+                            reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
+                            if (en != null) masterSwitchEnabled = en;
+                            notifyChange();
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(LOG_TAG, "AdsConfig Firestore watch skipped: " + t.getMessage());
         }
-        if (!tryAcquireAdRequestSlot(ctx)) return;
-        loadingInterstitial = true;
-        AdRequest request = new AdRequest.Builder().build();
-        InterstitialAd.load(ctx.getApplicationContext(), unit, request, new InterstitialAdLoadCallback() {
-            @Override
-            public void onAdLoaded(@NonNull InterstitialAd ad) {
-                loadingInterstitial = false;
-                cachedInterstitial = ad;
-                onNativeAdLoaded(ctx);
-            }
-
-            @Override
-            public void onAdFailedToLoad(@NonNull LoadAdError err) {
-                loadingInterstitial = false;
-                cachedInterstitial = null;
-                onNativeAdFailed(ctx, err.getCode());
-            }
-        });
     }
 
-    public static void showInterstitialIfReady(Activity activity) {
-        if (activity == null || activity.isFinishing() || !isMasterSwitchEnabled() || !isRealDevice()) return;
-        long now = System.currentTimeMillis();
-        if (cachedInterstitial != null && (now - lastInterstitialShownAt) > 180_000L) {
-            lastInterstitialShownAt = now;
-            InterstitialAd ad = cachedInterstitial;
-            cachedInterstitial = null;
-            ad.show(activity);
-        }
-    }
-
-    public static void save(String newNativeId, String newInterstitialId, boolean on, Context c) {
-        String cleanNative = isRealProductionUnit(newNativeId) ? newNativeId.trim() : DEFAULT_NATIVE_ID;
-        String cleanInter = isRealProductionUnit(newInterstitialId) ? newInterstitialId.trim() : "";
+    /** Saves real Feed & Reels Native Ad Unit IDs to Firestore `config/ads` (Admin Panel). */
+    public static void save(String newFeedNativeId, String newReelsNativeId, boolean isEnabled, Context ctx) {
+        String cleanFeed = isRealProductionUnit(newFeedNativeId) ? newFeedNativeId.trim() : FEED_NATIVE_ID;
+        String cleanReels = isRealProductionUnit(newReelsNativeId) ? newReelsNativeId.trim() : REELS_NATIVE_ID;
         Map<String, Object> m = new HashMap<>();
-        m.put("native_unit_v2", cleanNative);
-        m.put("interstitialId", cleanInter);
-        m.put("nativeEnabled", on);
-        m.put("updatedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        m.put("appId", APP_ID);
+        m.put("feed_native_unit_v3", cleanFeed);
+        m.put("reels_native_unit_v3", cleanReels);
+        m.put("ads_enabled_v3", isEnabled);
+        m.put("websiteUrl", OFFICIAL_WEBSITE_URL);
+        m.put("appAdsTxtUrl", APP_ADS_TXT_URL);
+        m.put("updatedBy", Fb.uid());
+        m.put("updatedAt", FieldValue.serverTimestamp());
         Fb.db().collection("config").document("ads")
-                .set(m, com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> Ui.toast(c, "Real AdMob Native Advanced settings saved ✓"))
-                .addOnFailureListener(e -> Ui.toast(c, "Save failed: " + e.getMessage()));
+                .set(m, SetOptions.merge())
+                .addOnSuccessListener(v -> Ui.toast(ctx, "Production AdMob config saved ✓"))
+                .addOnFailureListener(e -> Ui.toast(ctx, "Save failed: " + e.getMessage()));
     }
 
-    public static void reset(Context c) {
-        Fb.db().collection("config").document("ads").delete()
-                .addOnSuccessListener(x -> {
-                    nativeId = DEFAULT_NATIVE_ID;
-                    interstitialId = DEFAULT_INTERSTITIAL_ID;
-                    enabled = true;
-                    Ui.toast(c, "Reset to friendbook native (" + DEFAULT_NATIVE_ID + ") ✓");
-                    notifyChange();
-                });
+    public static void reset(Context ctx) {
+        save(FEED_NATIVE_ID, REELS_NATIVE_ID, true, ctx);
     }
 }

@@ -28,6 +28,8 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
+import com.friendbook.social.core.AdsConfig;
+import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Format;
@@ -305,9 +307,14 @@ public class ReelsFragment extends Fragment {
         if (adapter != null) adapter.stopAll();
     }
 
-    // ================== Reel Adapter ==================
+    // ================== Reel Adapter (Reels + Production Reels Native Ads) ==================
 
-    static class ReelAdapter extends RecyclerView.Adapter<ReelAdapter.VH> {
+    static class ReelAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        private static final int VT_REEL = 0;
+        private static final int VT_REEL_AD = 1;
+        private static final int REELS_PER_AD = 4;
+        private static final int REEL_AD_STEP = REELS_PER_AD + 1; // 4 reels + 1 Reels Native Ad
+
         private final Activity activity;
         private final List<Models.Reel> data = new ArrayList<>();
         private int playingPos = -1;
@@ -316,13 +323,38 @@ public class ReelsFragment extends Fragment {
 
         void setData(List<Models.Reel> list) {
             data.clear();
-            data.addAll(list);
+            if (list != null) data.addAll(list);
             notifyDataSetChanged();
             playingPos = -1;
         }
 
+        private boolean adsActive() {
+            return AdsConfig.nativeAdsEnabled();
+        }
+
+        private int adCount() {
+            if (!adsActive() || data.isEmpty()) return 0;
+            if (data.size() < REELS_PER_AD) return 1;
+            return data.size() / REELS_PER_AD;
+        }
+
+        boolean isAdPos(int pos) {
+            if (!adsActive() || data.isEmpty() || pos < 0) return false;
+            if (data.size() < REELS_PER_AD) {
+                return pos == data.size();
+            }
+            return ((pos + 1) % REEL_AD_STEP == 0) && ((pos / REEL_AD_STEP) < adCount());
+        }
+
+        private int reelIndexForPos(int pos) {
+            if (!adsActive() || data.size() < REELS_PER_AD) return pos;
+            return pos - ((pos + 1) / REEL_AD_STEP);
+        }
+
         Models.Reel reelAtPosition(int pos) {
-            return (pos >= 0 && pos < data.size()) ? data.get(pos) : null;
+            if (isAdPos(pos)) return null;
+            int idx = reelIndexForPos(pos);
+            return (idx >= 0 && idx < data.size()) ? data.get(idx) : null;
         }
 
         void stopAll() {
@@ -340,29 +372,372 @@ public class ReelsFragment extends Fragment {
                 RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
                 if (h instanceof VH) {
                     VH vh = (VH) h;
-                    if (vh.getAdapterPosition() == pos) vh.play();
+                    if (!isAdPos(pos) && vh.getAdapterPosition() == pos) vh.play();
                     else vh.pause();
                 }
             }
         }
 
-        @Override public int getItemCount() { return data.size(); }
+        @Override public int getItemCount() { return data.size() + adCount(); }
+
+        @Override
+        public int getItemViewType(int position) {
+            return isAdPos(position) ? VT_REEL_AD : VT_REEL;
+        }
 
         @NonNull
         @Override
-        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            if (viewType == VT_REEL_AD) {
+                return new ReelAdVH(activity);
+            }
             return new VH(activity);
         }
 
         @Override
-        public void onBindViewHolder(@NonNull VH h, int position) {
-            h.bind(data.get(position));
+        public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
+            if (h instanceof ReelAdVH) {
+                int adSlotOrdinal = Math.max(0, position / REEL_AD_STEP);
+                ((ReelAdVH) h).loadFreshReelsNativeAd(AdsConfig.reelsNativeId(), adSlotOrdinal);
+            } else if (h instanceof VH) {
+                Models.Reel r = reelAtPosition(position);
+                if (r != null) ((VH) h).bind(r);
+            }
         }
 
         @Override
-        public void onViewRecycled(@NonNull VH h) {
+        public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
             super.onViewRecycled(h);
-            h.video.stopPlayback();
+            if (h instanceof VH) {
+                ((VH) h).video.stopPlayback();
+            } else if (h instanceof ReelAdVH) {
+                ((ReelAdVH) h).onRecycled();
+            }
+        }
+
+        /**
+         * 📢 Full-Screen Reels Production Native Ad ViewHolder (`ca-app-pub-3387480177023669/6468085788`):
+         * - Loads a FRESH NativeAd via `AdLoader.Builder` every time it binds (never reuses old/failed ads).
+         * - Logs exact `adError.getCode()` + details in Logcat (`FriendBookAds`) via `AdListener`.
+         */
+        static class ReelAdVH extends RecyclerView.ViewHolder {
+            final com.google.android.gms.ads.nativead.NativeAdView nativeAdView;
+            final com.google.android.gms.ads.nativead.MediaView mediaView;
+            final ImageView iconView;
+            final TextView headlineView, advertiserView, bodyView, storeView, priceView, statusView;
+            final android.widget.RatingBar starsView;
+            final android.widget.Button ctaButton;
+            final LinearLayout loadingBox;
+            com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+            int requestSeq = 0;
+
+            ReelAdVH(Activity a) {
+                super(buildAdRoot(a));
+                FrameLayout root = (FrameLayout) itemView;
+
+                // Loading / fallback status box (shown before fresh NativeAd arrives)
+                loadingBox = Ui.col(a);
+                loadingBox.setGravity(Gravity.CENTER);
+                Ui.pad(loadingBox, 24, 24, 24, 24);
+                TextView spChip = Ui.roundChip(a, "Sponsored", 0x33FFFFFF, Color.WHITE, 12);
+                Ui.pad(spChip, 12, 5, 12, 5);
+                loadingBox.addView(spChip);
+                statusView = Ui.tv(a, "Loading Sponsored Reel…", 13.5f, 0xFFBBBBBB);
+                statusView.setGravity(Gravity.CENTER);
+                statusView.setPadding(0, Ui.dp(a, 12), 0, 0);
+                loadingBox.addView(statusView);
+                root.addView(loadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+                // Google Mobile Ads compliant full-screen NativeAdView
+                nativeAdView = new com.google.android.gms.ads.nativead.NativeAdView(a);
+                nativeAdView.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+                nativeAdView.setPadding(0, Ui.dp(a, 58), 0, 0); // Keeps AdChoices clear of top Reels bar
+                nativeAdView.setVisibility(View.GONE);
+
+                FrameLayout inner = new FrameLayout(a);
+                inner.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+
+                // Full-screen MediaView (supports vertical 9:16 video & rich image ads)
+                mediaView = new com.google.android.gms.ads.nativead.MediaView(a);
+                mediaView.setImageScaleType(ImageView.ScaleType.FIT_CENTER);
+                FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
+                mlp.bottomMargin = Ui.dp(a, 150);
+                inner.addView(mediaView, mlp);
+
+                // Top-left "Sponsored" attribution badge
+                TextView badge = Ui.tvBold(a, "Sponsored", 11.5f, 0xFFFFD54F);
+                badge.setBackground(Ui.roundStroke(a, 0xAA000000, 12, 0x55FFD54F, 1));
+                Ui.pad(badge, 10, 4, 10, 4);
+                FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+                blp.setMargins(Ui.dp(a, 14), Ui.dp(a, 8), 0, 0);
+                inner.addView(badge, blp);
+
+                // Bottom advertiser details + Call-To-Action card
+                LinearLayout bottomCard = Ui.col(a);
+                bottomCard.setBackground(Ui.roundStroke(a, 0xDD121418, 16, 0x33FFFFFF, 1));
+                Ui.pad(bottomCard, 14, 12, 14, 14);
+                FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+                clp.setMargins(Ui.dp(a, 12), 0, Ui.dp(a, 12), Ui.dp(a, 18));
+
+                LinearLayout headerRow = Ui.row(a);
+                headerRow.setGravity(Gravity.CENTER_VERTICAL);
+                iconView = new ImageView(a);
+                int iconSz = Ui.dp(a, 42);
+                LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(iconSz, iconSz);
+                ilp.rightMargin = Ui.dp(a, 10);
+                iconView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                headerRow.addView(iconView, ilp);
+
+                LinearLayout titleCol = Ui.col(a);
+                headlineView = Ui.tvBold(a, "Sponsored", 15.5f, Color.WHITE);
+                headlineView.setMaxLines(2);
+                titleCol.addView(headlineView);
+
+                LinearLayout subRow = Ui.row(a);
+                subRow.setGravity(Gravity.CENTER_VERTICAL);
+                advertiserView = Ui.tv(a, "", 12f, 0xFFCCCCCC);
+                advertiserView.setSingleLine(true);
+                subRow.addView(advertiserView);
+
+                starsView = new android.widget.RatingBar(a, null, android.R.attr.ratingBarStyleSmall);
+                starsView.setNumStars(5);
+                starsView.setStepSize(0.5f);
+                starsView.setIsIndicator(true);
+                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+                slp.leftMargin = Ui.dp(a, 6);
+                subRow.addView(starsView, slp);
+                titleCol.addView(subRow);
+
+                headerRow.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                LinearLayout metaRight = Ui.col(a);
+                metaRight.setGravity(Gravity.END);
+                storeView = Ui.tv(a, "", 11f, 0xFFAAAAAA);
+                priceView = Ui.tvBold(a, "", 11.5f, 0xFF81C784);
+                metaRight.addView(storeView);
+                metaRight.addView(priceView);
+                headerRow.addView(metaRight);
+                bottomCard.addView(headerRow);
+
+                bodyView = Ui.tv(a, "", 13f, 0xFFE4E6EB);
+                bodyView.setMaxLines(2);
+                bodyView.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 10));
+                bottomCard.addView(bodyView);
+
+                ctaButton = new android.widget.Button(a);
+                ctaButton.setAllCaps(false);
+                ctaButton.setTextColor(Color.WHITE);
+                ctaButton.setTextSize(14.5f);
+                ctaButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                ctaButton.setBackground(Ui.round(a, Ui.BLUE, 10));
+                bottomCard.addView(ctaButton, new LinearLayout.LayoutParams(-1, Ui.dp(a, 44)));
+
+                inner.addView(bottomCard, clp);
+                nativeAdView.addView(inner);
+                root.addView(nativeAdView);
+
+                // Register NativeAdView clickable assets
+                nativeAdView.setMediaView(mediaView);
+                nativeAdView.setHeadlineView(headlineView);
+                nativeAdView.setBodyView(bodyView);
+                nativeAdView.setCallToActionView(ctaButton);
+                nativeAdView.setIconView(iconView);
+                nativeAdView.setAdvertiserView(advertiserView);
+                nativeAdView.setStarRatingView(starsView);
+                nativeAdView.setStoreView(storeView);
+                nativeAdView.setPriceView(priceView);
+            }
+
+            private static FrameLayout buildAdRoot(Activity a) {
+                FrameLayout f = new FrameLayout(a);
+                f.setBackgroundColor(0xFF0A0B0E);
+                f.setLayoutParams(new ViewGroup.LayoutParams(-1, -1));
+                return f;
+            }
+
+            private void destroyCurrentAd() {
+                if (currentNativeAd != null) {
+                    try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
+                    currentNativeAd = null;
+                }
+            }
+
+            void loadFreshReelsNativeAd(final String rawUnitId, final int slotOrdinal) {
+                final int mySeq = ++requestSeq;
+                destroyCurrentAd();
+                nativeAdView.setVisibility(View.GONE);
+                loadingBox.setVisibility(View.VISIBLE);
+                statusView.setText("Loading Sponsored Reel…");
+
+                final Context ctx = itemView.getContext();
+                final String unitId = AdsConfig.isRealProductionUnit(rawUnitId)
+                        ? rawUnitId.trim()
+                        : AdsConfig.REELS_NATIVE_ID;
+
+                ConsentManager.ensureInitialized(ctx);
+                AdsConfig.recordAdRequest(ctx);
+                android.util.Log.i(AdsConfig.LOG_TAG,
+                        "[ReelsNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
+
+                try {
+                    boolean startMuted = !Prefs.reelsStartWithSound(ctx);
+                    com.google.android.gms.ads.VideoOptions videoOptions =
+                            new com.google.android.gms.ads.VideoOptions.Builder()
+                                    .setStartMuted(startMuted)
+                                    .build();
+                    com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
+                            new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
+                                    .setAdChoicesPlacement(
+                                            com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                                    .setMediaAspectRatio(
+                                            com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_PORTRAIT)
+                                    .setVideoOptions(videoOptions)
+                                    .build();
+
+                    com.google.android.gms.ads.AdLoader adLoader =
+                            new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
+                                    .forNativeAd(nativeAd -> {
+                                        if (mySeq != requestSeq) {
+                                            try { nativeAd.destroy(); } catch (Throwable ignored) {}
+                                            return;
+                                        }
+                                        destroyCurrentAd();
+                                        currentNativeAd = nativeAd;
+                                        AdsConfig.onNativeAdLoaded(ctx);
+                                        nativeAd.setOnPaidEventListener(adValue ->
+                                                AdsConfig.recordPaidEvent(ctx, adValue));
+
+                                        loadingBox.setVisibility(View.GONE);
+                                        nativeAdView.setVisibility(View.VISIBLE);
+                                        populateReelsNativeAd(nativeAd, ctx);
+                                        nativeAdView.requestLayout();
+                                    })
+                                    .withAdListener(new com.google.android.gms.ads.AdListener() {
+                                        @Override
+                                        public void onAdLoaded() {
+                                            android.util.Log.i(AdsConfig.LOG_TAG,
+                                                    "[ReelsNative] Ad loaded successfully (slot=" + slotOrdinal
+                                                            + ", unitId=" + unitId + ")");
+                                        }
+
+                                        @Override
+                                        public void onAdImpression() {
+                                            android.util.Log.i(AdsConfig.LOG_TAG,
+                                                    "[ReelsNative] Ad impression recorded (slot=" + slotOrdinal
+                                                            + ", unitId=" + unitId + ")");
+                                            AdsConfig.recordAdImpression(ctx);
+                                        }
+
+                                        @Override
+                                        public void onAdClicked() {
+                                            android.util.Log.i(AdsConfig.LOG_TAG,
+                                                    "[ReelsNative] Ad clicked (slot=" + slotOrdinal
+                                                            + ", unitId=" + unitId + ")");
+                                            AdsConfig.recordAdClick(ctx);
+                                        }
+
+                                        @Override
+                                        public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError adError) {
+                                            android.util.Log.e(AdsConfig.LOG_TAG,
+                                                    "[ReelsNative] Ad failed to load! errorCode=" + adError.getCode()
+                                                            + ", message=" + adError.getMessage()
+                                                            + ", domain=" + adError.getDomain()
+                                                            + ", slot=" + slotOrdinal
+                                                            + ", unitId=" + unitId
+                                                            + ", responseInfo=" + adError.getResponseInfo());
+                                            AdsConfig.onNativeAdFailed(ctx, adError.getCode());
+                                            if (mySeq == requestSeq) {
+                                                destroyCurrentAd();
+                                                nativeAdView.setVisibility(View.GONE);
+                                                loadingBox.setVisibility(View.VISIBLE);
+                                                statusView.setText("Swipe up to continue watching Reels ↑");
+                                            }
+                                        }
+                                    })
+                                    .withNativeAdOptions(adOptions)
+                                    .build();
+
+                    // Fresh production AdRequest — zero test IDs, zero reuse of old/failed ads
+                    adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                } catch (Throwable t) {
+                    android.util.Log.e(AdsConfig.LOG_TAG,
+                            "[ReelsNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
+                    AdsConfig.onNativeAdFailed(ctx, -1);
+                    destroyCurrentAd();
+                    nativeAdView.setVisibility(View.GONE);
+                    loadingBox.setVisibility(View.VISIBLE);
+                    statusView.setText("Swipe up to continue watching Reels ↑");
+                }
+            }
+
+            private void populateReelsNativeAd(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+                headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
+
+                if (ad.getMediaContent() != null) {
+                    mediaView.setMediaContent(ad.getMediaContent());
+                    mediaView.setVisibility(View.VISIBLE);
+                } else {
+                    mediaView.setVisibility(View.GONE);
+                }
+
+                if (ad.getBody() == null || ad.getBody().isEmpty()) {
+                    bodyView.setVisibility(View.GONE);
+                } else {
+                    bodyView.setVisibility(View.VISIBLE);
+                    bodyView.setText(ad.getBody());
+                }
+
+                if (ad.getCallToAction() == null || ad.getCallToAction().isEmpty()) {
+                    ctaButton.setVisibility(View.GONE);
+                } else {
+                    ctaButton.setVisibility(View.VISIBLE);
+                    ctaButton.setText(ad.getCallToAction());
+                }
+
+                if (ad.getIcon() == null) {
+                    iconView.setVisibility(View.GONE);
+                } else {
+                    iconView.setImageDrawable(ad.getIcon().getDrawable());
+                    iconView.setClipToOutline(true);
+                    iconView.setBackground(Ui.circle(0xFF242526));
+                    iconView.setVisibility(View.VISIBLE);
+                }
+
+                if (ad.getAdvertiser() == null || ad.getAdvertiser().isEmpty()) {
+                    advertiserView.setVisibility(View.GONE);
+                } else {
+                    advertiserView.setText(ad.getAdvertiser());
+                    advertiserView.setVisibility(View.VISIBLE);
+                }
+
+                if (ad.getStarRating() == null) {
+                    starsView.setVisibility(View.GONE);
+                } else {
+                    starsView.setRating(ad.getStarRating().floatValue());
+                    starsView.setVisibility(View.VISIBLE);
+                }
+
+                if (ad.getStore() == null || ad.getStore().isEmpty()) {
+                    storeView.setVisibility(View.GONE);
+                } else {
+                    storeView.setText(ad.getStore());
+                    storeView.setVisibility(View.VISIBLE);
+                }
+
+                if (ad.getPrice() == null || ad.getPrice().isEmpty()) {
+                    priceView.setVisibility(View.GONE);
+                } else {
+                    priceView.setText(ad.getPrice());
+                    priceView.setVisibility(View.VISIBLE);
+                }
+
+                nativeAdView.setNativeAd(ad);
+            }
+
+            void onRecycled() {
+                requestSeq++;
+                destroyCurrentAd();
+            }
         }
 
         class VH extends RecyclerView.ViewHolder {

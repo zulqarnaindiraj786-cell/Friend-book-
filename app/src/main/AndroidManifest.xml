@@ -25,7 +25,7 @@
 
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3387480177023669~5696528190"/>
+            android:value="ca-app-pub-3387480177023669~1513026594"/>
 
         <activity android:name="com.friendbook.social.SplashActivity"
             android:icon="@mipmap/ic_friendbook_crown"

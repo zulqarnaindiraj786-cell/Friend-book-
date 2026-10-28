@@ -109,9 +109,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         notifyDataSetChanged();
     }
 
-    /** Exact adapter slot (excluding header) for a post index, accounting for 1 Native Ad every 5 posts. */
+    /** Exact adapter slot (excluding header) for a post index, accounting for Feed Native Ads. */
     private int slotForPostIndex(int postIdx) {
-        return adsActive() ? (postIdx + (postIdx / NATIVE_AD_EVERY_N_POSTS)) : postIdx;
+        if (!adsActive() || posts.size() < NATIVE_AD_EVERY_N_POSTS) return postIdx;
+        return postIdx + (postIdx / NATIVE_AD_EVERY_N_POSTS);
     }
 
     /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (payload-only — ZERO height/scroll jump!). */
@@ -141,9 +142,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void addPosts(List<Models.Post> list) {
-        int start = posts.size();
+        if (list == null || list.isEmpty()) return;
         posts.addAll(list);
-        notifyItemRangeInserted(offset() + start, list.size());
+        notifyDataSetChanged();
     }
 
     public void setStories(List<StoriesAdapter.Group> groups) {
@@ -171,70 +172,59 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int offset() { return showHeader ? 1 : 0; }
     private int footerCount() { return showFooter ? 1 : 0; }
 
-    // ---- 📢 Google AdMob Native Ad Slots: Strictly 1 Native Ad after every 5 posts! ----
-    private static final int NATIVE_AD_EVERY_N_POSTS = 5;
-    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 5 posts + 1 Native Ad = 6
+    // ---- 📢 Google AdMob Feed Native Ad Slots (`ca-app-pub-3387480177023669/4957447582`) ----
+    private static final int NATIVE_AD_EVERY_N_POSTS = 4;
+    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 4 posts + 1 Native Ad = 5
 
-    private String nativeAdUnitId = com.friendbook.social.core.AdsConfig.nativeId();
+    private String nativeAdUnitId = com.friendbook.social.core.AdsConfig.feedNativeId();
     private boolean adsEnabled = com.friendbook.social.core.AdsConfig.nativeAdsEnabled();
-    private final android.util.SparseArray<com.google.android.gms.ads.nativead.NativeAd> cachedNativeAds =
-            new android.util.SparseArray<>();
-    private long lastAdCacheClearElapsed = android.os.SystemClock.elapsedRealtime();
 
     public void setAdsConfig(String id, boolean enabled) {
-        String cleanId = id == null ? "" : id.trim();
-        boolean nextEnabled = enabled && !cleanId.isEmpty() && com.friendbook.social.core.AdsConfig.isRealDevice();
+        String cleanId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(id)
+                ? id.trim()
+                : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
+        boolean nextEnabled = enabled && !cleanId.isEmpty();
         if (cleanId.equals(nativeAdUnitId) && nextEnabled == adsEnabled) {
             return; // unchanged — avoid full RecyclerView redraw!
-        }
-        if (!nextEnabled) {
-            clearCachedNativeAds();
         }
         nativeAdUnitId = cleanId;
         adsEnabled = nextEnabled;
         notifyDataSetChanged();
     }
 
-    /** Refreshes in-feed Native Ads at most once every 60s so pull-to-refresh never spams AdMob requests! */
+    /** Triggers fresh Native Ad requests on Feed refresh — never reuses old or failed ads. */
     public void refreshSponsoredAds() {
-        long now = android.os.SystemClock.elapsedRealtime();
-        if (now - lastAdCacheClearElapsed >= com.friendbook.social.core.AdsConfig.NO_FILL_RETRY_DELAY_MS) {
-            lastAdCacheClearElapsed = now;
-            clearCachedNativeAds();
-        }
         notifyDataSetChanged();
     }
 
     public void clearCachedNativeAds() {
-        for (int i = 0; i < cachedNativeAds.size(); i++) {
-            com.google.android.gms.ads.nativead.NativeAd ad = cachedNativeAds.valueAt(i);
-            if (ad != null) {
-                try { ad.destroy(); } catch (Throwable ignored) {}
-            }
-        }
-        cachedNativeAds.clear();
+        // Fresh-load architecture: no shared NativeAd cache is retained.
     }
 
     private boolean adsActive() {
         return adsEnabled
-                && com.friendbook.social.core.AdsConfig.isRealDevice()
                 && nativeAdUnitId != null
                 && !nativeAdUnitId.isEmpty();
     }
 
     private int adCount() {
-        return adsActive() ? (posts.size() / NATIVE_AD_EVERY_N_POSTS) : 0;
+        if (!adsActive() || posts.isEmpty()) return 0;
+        if (posts.size() < NATIVE_AD_EVERY_N_POSTS) return 1;
+        return posts.size() / NATIVE_AD_EVERY_N_POSTS;
     }
 
-    /** Does this feed slot (after the header) hold a Native Ad? Slots 5, 11, 17… (after every 5 posts!) */
+    /** Does this feed slot (after the header) hold a Native Ad? */
     private boolean isAdSlot(int slot) {
-        return adsActive()
-                && ((slot + 1) % NATIVE_AD_STEP == 0)
+        if (!adsActive() || posts.isEmpty()) return false;
+        if (posts.size() < NATIVE_AD_EVERY_N_POSTS) {
+            return slot == posts.size();
+        }
+        return ((slot + 1) % NATIVE_AD_STEP == 0)
                 && ((slot / NATIVE_AD_STEP) < adCount());
     }
 
     private int postIndexForSlot(int slot) {
-        if (!adsActive()) return slot;
+        if (!adsActive() || posts.size() < NATIVE_AD_EVERY_N_POSTS) return slot;
         return slot - ((slot + 1) / NATIVE_AD_STEP);
     }
 
@@ -378,7 +368,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
             int adSlotOrdinal = Math.max(0, (position - offset()) / NATIVE_AD_STEP);
-            ((AdVH) h).bindOrRequestNativeAd(nativeAdUnitId, adSlotOrdinal, cachedNativeAds);
+            ((AdVH) h).loadFreshFeedNativeAd(nativeAdUnitId, adSlotOrdinal);
         } else {
             // Guard: realtime list swaps between measure & bind must not crash the feed.
             // A broken post gets a small placeholder card — NEVER an invisible one
@@ -1596,16 +1586,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * 📢 Google AdMob Native Advanced ViewHolder (`R.layout.native_ad_layout`):
-     * - Shows naturally after every 5 posts in RecyclerView.
-     * - Requests ads ONLY on real physical Android devices (`AdsConfig.isRealDevice()`).
-     * - Enforces global max 1 ad request per 30 seconds (`AdsConfig.tryAcquireAdRequestSlot`).
-     * - Caches loaded NativeAds across scroll so filled ads are NEVER wasted or re-requested.
-     * - On Error Code 3 (No-Fill due to "Requires review"): hides container completely (0dp, no blank space)
-     *   and retries after 60 seconds (`60_000L`).
+     * 📢 Google AdMob Production Feed Native ViewHolder (`R.layout.native_ad_layout`):
+     * - Uses ONLY real production Feed Native ID (`ca-app-pub-3387480177023669/4957447582`).
+     * - Loads a FRESH NativeAd via `AdLoader.Builder` on every bind (destroying any previous ad,
+     *   never reusing an old or failed ad).
+     * - Attaches `AdListener` and prints exact `adError.getCode()` + details in Logcat on failure.
      */
     static class AdVH extends RecyclerView.ViewHolder {
-        private static final long NO_FILL_RETRY_MS = 60_000L;
 
         final com.google.android.gms.ads.nativead.NativeAdView nativeAdView;
         final ImageView iconView;
@@ -1614,9 +1601,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final com.google.android.gms.ads.nativead.MediaView mediaView;
         final android.widget.Button ctaButton;
         final LinearLayout ctaBar;
-        final android.os.Handler retryHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-        Runnable pendingRetry;
-        int boundSlotOrdinal = -1;
+        com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+        int requestSeq = 0;
 
         AdVH(ViewGroup parent) {
             super(android.view.LayoutInflater.from(parent.getContext())
@@ -1661,10 +1647,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             nativeAdView.setMediaView(mediaView);
         }
 
-        private void cancelRetry() {
-            if (pendingRetry != null) {
-                retryHandler.removeCallbacks(pendingRetry);
-                pendingRetry = null;
+        private void destroyCurrentAd() {
+            if (currentNativeAd != null) {
+                try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
+                currentNativeAd = null;
             }
         }
 
@@ -1701,40 +1687,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         }
 
-        void bindOrRequestNativeAd(
-                final String unitId,
-                final int slotOrdinal,
-                final android.util.SparseArray<com.google.android.gms.ads.nativead.NativeAd> cache) {
-            cancelRetry();
-            boundSlotOrdinal = slotOrdinal;
-            final Context ctx = itemView.getContext();
-
-            // 1. Block emulators & disabled configs completely — hide container with zero blank space
-            if (unitId == null || unitId.isEmpty() || !com.friendbook.social.core.AdsConfig.isRealDevice()) {
-                collapse();
-                return;
-            }
-
-            // 2. Instant reuse if a NativeAd is already loaded for this feed slot (0 extra requests!)
-            com.google.android.gms.ads.nativead.NativeAd existing = cache.get(slotOrdinal);
-            if (existing != null) {
-                expand(ctx);
-                populateNativeAdView(existing, ctx);
-                nativeAdView.requestLayout();
-                return;
-            }
-
-            // 3. Enforce Global Rate Limiter: max 1 ad request per 30 seconds across entire app!
+        void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal) {
+            final int mySeq = ++requestSeq;
+            destroyCurrentAd();
             collapse();
-            if (!com.friendbook.social.core.AdsConfig.tryAcquireAdRequestSlot(ctx)) {
-                long waitMs = com.friendbook.social.core.AdsConfig.msUntilNextAllowedRequest(ctx);
-                if (waitMs > 0L) {
-                    scheduleRetry(unitId, slotOrdinal, cache, waitMs);
-                }
-                return;
-            }
 
-            // 4. Send 1 clean real Native Advanced request via AdLoader.Builder + forNativeAd
+            final Context ctx = itemView.getContext();
+            final String unitId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(rawUnitId)
+                    ? rawUnitId.trim()
+                    : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
+
+            com.friendbook.social.core.ConsentManager.ensureInitialized(ctx);
+            com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
+            android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                    "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
+
             try {
                 com.google.android.gms.ads.VideoOptions videoOptions =
                         new com.google.android.gms.ads.VideoOptions.Builder()
@@ -1750,74 +1717,73 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 com.google.android.gms.ads.AdLoader adLoader =
                         new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
                                 .forNativeAd(nativeAd -> {
+                                    if (mySeq != requestSeq) {
+                                        try { nativeAd.destroy(); } catch (Throwable ignored) {}
+                                        return;
+                                    }
+                                    destroyCurrentAd();
+                                    currentNativeAd = nativeAd;
                                     com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
                                     nativeAd.setOnPaidEventListener(adValue ->
                                             com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
 
-                                    // Keep filled ad in slot cache so it is NEVER wasted if user scrolled!
-                                    com.google.android.gms.ads.nativead.NativeAd prev = cache.get(slotOrdinal);
-                                    if (prev != null && prev != nativeAd) {
-                                        try { prev.destroy(); } catch (Throwable ignored) {}
-                                    }
-                                    cache.put(slotOrdinal, nativeAd);
-
-                                    if (boundSlotOrdinal == slotOrdinal) {
-                                        cancelRetry();
-                                        // Expand BEFORE setNativeAd so GMA viewability registers the impression!
-                                        expand(ctx);
-                                        populateNativeAdView(nativeAd, ctx);
-                                        nativeAdView.requestLayout();
-                                    }
+                                    // Expand BEFORE setNativeAd so Google Mobile Ads viewability registers impression
+                                    expand(ctx);
+                                    populateNativeAdView(nativeAd, ctx);
+                                    nativeAdView.requestLayout();
                                 })
                                 .withAdListener(new com.google.android.gms.ads.AdListener() {
                                     @Override
+                                    public void onAdLoaded() {
+                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                                                "[FeedNative] Ad loaded successfully (slot=" + slotOrdinal
+                                                        + ", unitId=" + unitId + ")");
+                                    }
+
+                                    @Override
                                     public void onAdImpression() {
+                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                                                "[FeedNative] Ad impression recorded (slot=" + slotOrdinal
+                                                        + ", unitId=" + unitId + ")");
                                         com.friendbook.social.core.AdsConfig.recordAdImpression(ctx);
                                     }
 
                                     @Override
                                     public void onAdClicked() {
+                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                                                "[FeedNative] Ad clicked (slot=" + slotOrdinal
+                                                        + ", unitId=" + unitId + ")");
                                         com.friendbook.social.core.AdsConfig.recordAdClick(ctx);
                                     }
 
                                     @Override
-                                    public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError err) {
-                                        // Error 3 (No-Fill due to "Requires review") or network failure:
-                                        // Hide container completely (no blank space) & retry after 60 seconds!
-                                        com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, err.getCode());
-                                        if (boundSlotOrdinal == slotOrdinal) {
+                                    public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError adError) {
+                                        android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                                                "[FeedNative] Ad failed to load! errorCode=" + adError.getCode()
+                                                        + ", message=" + adError.getMessage()
+                                                        + ", domain=" + adError.getDomain()
+                                                        + ", slot=" + slotOrdinal
+                                                        + ", unitId=" + unitId
+                                                        + ", responseInfo=" + adError.getResponseInfo());
+                                        com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, adError.getCode());
+                                        if (mySeq == requestSeq) {
+                                            destroyCurrentAd();
                                             collapse();
-                                            scheduleRetry(unitId, slotOrdinal, cache, NO_FILL_RETRY_MS);
                                         }
                                     }
                                 })
                                 .withNativeAdOptions(adOptions)
                                 .build();
 
-                // Pure production AdRequest on real device — ZERO test IDs!
+                // Fresh production AdRequest — zero test IDs, zero cached ad reuse
                 adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
             } catch (Throwable t) {
+                android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
+                        "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                 com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
+                destroyCurrentAd();
                 collapse();
-                scheduleRetry(unitId, slotOrdinal, cache, NO_FILL_RETRY_MS);
             }
-        }
-
-        private void scheduleRetry(
-                final String unitId,
-                final int slotOrdinal,
-                final android.util.SparseArray<com.google.android.gms.ads.nativead.NativeAd> cache,
-                long delayMs) {
-            cancelRetry();
-            pendingRetry = () -> {
-                pendingRetry = null;
-                if (boundSlotOrdinal == slotOrdinal
-                        && getAdapterPosition() != RecyclerView.NO_POSITION
-                        && itemView.isAttachedToWindow()) {
-                    bindOrRequestNativeAd(unitId, slotOrdinal, cache);
-                }
-            };
-            retryHandler.postDelayed(pendingRetry, delayMs);
         }
 
         private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
@@ -1885,8 +1851,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void onRecycled() {
-            cancelRetry();
-            boundSlotOrdinal = -1;
+            requestSeq++;
+            destroyCurrentAd();
         }
     }
 

@@ -42,52 +42,55 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Verify Firebase config present
+      - name: Verify Firebase config & Production AdMob IDs
         run: |
           test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
+          grep -q "ca-app-pub-3387480177023669~1513026594" app/src/main/AndroidManifest.xml || (echo "::error::Missing real AdMob APPLICATION_ID in AndroidManifest.xml" && exit 1)
+          if grep -rq "3940256099942544" app/; then
+            echo "::error::Test AdMob ID detected in app/ — forbidden in production build!"
+            exit 1
+          fi
 
-      - name: Build debug APK
-        id: dbg
+      - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
+        id: rel
         run: |
           set +e
-          gradle assembleDebug --console=plain > build-debug.log 2>&1
+          gradle bundleRelease assembleRelease --console=plain > build-release.log 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Surface compiler errors as annotations
-        if: steps.dbg.outputs.exit != '0'
+        if: steps.rel.outputs.exit != '0'
         run: |
           echo "===== javac error blocks (with symbol details) ====="
-          grep -A8 -E "\.java:[0-9]+: error:" build-debug.log | head -120 | while IFS= read -r line; do
+          grep -A8 -E "\.java:[0-9]+: error:" build-release.log | head -120 | while IFS= read -r line; do
             echo "::error::${line:0:250}"
           done
           echo "===== failing source lines ====="
-          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-debug.log | sort -u | while IFS= read -r hit; do
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-release.log | sort -u | while IFS= read -r hit; do
             f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
             content=$(sed -n "${ln}p" "$f")
             echo "::error file=$f,line=$ln,title=source::${content:0:250}"
           done
           echo "===== aapt/resource errors ====="
-          grep -Ei "aapt|resource|merge|duplicate" build-debug.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
+          grep -Ei "aapt|resource|merge|duplicate" build-release.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
             echo "::error::$line"
           done
           echo "===== gradle tail (as warnings so we can read them) ====="
-          grep -vE "^$" build-debug.log | tail -60 | while IFS= read -r line; do
+          grep -vE "^$" build-release.log | tail -60 | while IFS= read -r line; do
             echo "::warning::${line:0:300}"
           done
 
-      - name: Fail if debug build failed
-        if: steps.dbg.outputs.exit != '0'
+      - name: Fail if release build failed
+        if: steps.rel.outputs.exit != '0'
         run: exit 1
 
-      - name: Build Signed Google Play Store AAB + Signed Release APK
+      - name: Package Signed Release APK, Play Store AAB & Website Bundle
         run: |
-          gradle bundleRelease assembleRelease --console=plain --stacktrace
           ls -lh app/build/outputs/bundle/release/
           ls -lh app/build/outputs/apk/release/
           cp app/build/outputs/bundle/release/app-release.aab friendbook-playstore.aab
           cp app/build/outputs/apk/release/app-release.apk friendbook.apk
-          cp app/build/outputs/apk/debug/app-debug.apk friendbook-debug.apk
           cp friendbook.apk docs/friendbook.apk
           (cd docs && zip -r ../friendbook-website.zip .)
           ls -lh friendbook-playstore.aab friendbook.apk friendbook-website.zip
@@ -98,13 +101,7 @@ jobs:
           name: FriendBook-playstore-aab
           path: friendbook-playstore.aab
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FriendBook-debug-apk
-          path: friendbook-debug.apk
-
-      - name: Upload release APK
+      - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
         with:
           name: FriendBook-release-apk
@@ -116,20 +113,20 @@ jobs:
           name: FriendBook-Website-Bundle-ZIP
           path: friendbook-website.zip
 
-      - name: Publish Signed Google Play AAB + APK & Website Bundle to Releases
+      - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
           VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
           TAG="v${VER}"
-          TITLE="friendbook ${TAG} (Google Play Signed AAB + Signed APK)"
-          NOTES="Google Play Store ready signed Android App Bundle (\`friendbook-playstore.aab\`, \`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) + Official Signed APK (\`friendbook.apk\`) with Pro Live Studio, Reels Discovery Algorithm, Messenger Group Chats, Full Community Post Groups, Scoped Global App Moderators, Zero-White friendbook Team Crown-F Icon & Free Booster Removal."
+          TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
+          NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-debug.apk friendbook-website.zip --clobber
+            gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-website.zip --clobber
             gh release edit "$TAG" --latest --title "$TITLE" --notes "$NOTES"
           else
-            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-debug.apk friendbook-website.zip \
+            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-website.zip \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"
