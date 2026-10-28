@@ -205,10 +205,18 @@ public class StoriesAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         if (holder instanceof CreateVH) {
             CreateVH ch = (CreateVH) holder;
             String myPhoto = Fb.myPhoto();
-            if (myPhoto != null && !myPhoto.isEmpty()) {
+            if (Ui.hasRealPhoto(myPhoto)) {
+                ch.topPhoto.setPadding(0, 0, 0, 0);
+                ch.topPhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                ch.topPhoto.setBackgroundColor(0xFFE4E6EB);
                 Ui.img(c, ch.topPhoto, myPhoto);
             } else {
-                Ui.avatar(c, ch.topPhoto, null);
+                try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(ch.topPhoto); } catch (Throwable ignored) {}
+                int p = Ui.dp(c, 16);
+                ch.topPhoto.setPadding(p, Ui.dp(c, 12), p, Ui.dp(c, 22));
+                ch.topPhoto.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                ch.topPhoto.setBackgroundColor(0xFFE4E6EB);
+                ch.topPhoto.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
             }
             ch.itemView.setOnClickListener(v -> {
                 if (listener != null) listener.onCreate();

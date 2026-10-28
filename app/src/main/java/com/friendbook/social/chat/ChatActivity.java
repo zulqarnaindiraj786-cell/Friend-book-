@@ -110,6 +110,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
         bar.addView(back);
         barAvatar = new ImageView(this);
+        Ui.avatar(this, barAvatar, isTeamChat ? Ui.TEAM_AVATAR_TOKEN : peerPhoto);
         int s = Ui.dp(this, 40);
         LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
         avp.leftMargin = Ui.dp(this, 2);
