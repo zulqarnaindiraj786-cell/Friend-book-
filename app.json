@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "friendbook",
+    "slug": "friendbook",
+    "version": "2.5.2",
+    "privacyPolicyUrl": "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view",
+    "android": {
+      "package": "com.friendbook.social",
+      "versionCode": 26,
+      "privacyPolicyUrl": "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view",
+      "termsOfServiceUrl": "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view",
+      "childSafetyPolicyUrl": "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view"
+    }
+  }
+}

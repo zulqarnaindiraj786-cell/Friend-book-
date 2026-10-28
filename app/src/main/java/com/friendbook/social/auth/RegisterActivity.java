@@ -128,12 +128,9 @@ public class RegisterActivity extends Activity {
         TextView readTermsLink = Ui.tvBold(this,
                 "📄 Read Full Terms, Privacy Policy & Child Safety Standards", 11.5f, Ui.BLUE);
         readTermsLink.setPadding(0, Ui.dp(this, 4), 0, 0);
-        readTermsLink.setOnClickListener(v -> Ui.info(this,
-                "friendbook Terms, UGC & Child Safety Policy",
-                "1. Zero-Tolerance UGC Policy: Uploading sexually explicit photos/videos, nudity, graphic violence, hate speech, harassment, or illegal content is strictly prohibited. Violating posts are automatically deleted and offending accounts are permanently suspended.\n\n"
-                        + "2. Zero-Tolerance Child Safety (CSAE): friendbook enforces strict zero tolerance against Child Sexual Abuse & Exploitation (CSAE/CSAM). Any violation is immediately removed and reported to relevant authorities.\n\n"
-                        + "3. Reporting & Blocking: Every post, reel, story, and message includes 1-tap Report (🚩) and Block User (🚫) controls.\n\n"
-                        + "4. Privacy & Data Control: Your email defaults to 'Only me' for maximum privacy, and you can freely change privacy settings or delete your account anytime in Settings."));
+        readTermsLink.setOnClickListener(v -> Ui.openPolicyInApp(this,
+                "Privacy Policy & Terms",
+                com.friendbook.social.core.AdsConfig.GOOGLE_DOCS_POLICY_URL));
         termsCol.addView(readTermsLink);
         termsBox.addView(termsCol, tclp);
         root.addView(termsBox);
