@@ -64,7 +64,7 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **Post ⋯ extras** — Share to other apps, "Why am I seeing this?" explainer
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
-- **Package:** `com.friendbook`
+- **Package:** `com.friendbook.social`
 - **App name:** friendbook
 - **Firebase project:** `friendbook-17551` (config in `app/google-services.json`)
 - **CI:** GitHub Actions builds the APK automatically (see `.github/workflows/build-apk.yml`)

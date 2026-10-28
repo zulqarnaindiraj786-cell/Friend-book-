@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace 'com.friendbook'
+    namespace 'com.friendbook.social'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.friendbook'
+        applicationId 'com.friendbook.social'
         minSdk 24
         targetSdk 35
-        versionCode 22
-        versionName '2.3.0'
+        versionCode 23
+        versionName '2.4.0'
     }
 
     signingConfigs {
@@ -35,6 +35,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
+            signingConfig signingConfigs.release
             minifyEnabled false
         }
     }
@@ -53,7 +54,10 @@ dependencies {
     implementation 'com.google.firebase:firebase-storage'
     implementation 'com.google.firebase:firebase-config'
 
-    // 🔐 Direct Google Sign-In + Firebase OAuth Custom Tabs
+    // 🔐 Direct Google Sign-In (Android Credential Manager + Play Services Auth + Firebase OAuth)
+    implementation 'androidx.credentials:credentials:1.3.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
     implementation 'com.google.android.gms:play-services-auth:21.2.0'
     implementation 'androidx.browser:browser:1.8.0'
 

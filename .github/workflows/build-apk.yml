@@ -124,7 +124,7 @@ jobs:
           VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
           TAG="v${VER}"
           TITLE="friendbook ${TAG} (Google Play Signed AAB + Signed APK)"
-          NOTES="Google Play Store ready signed Android App Bundle (\`friendbook-playstore.aab\`, \`versionCode ${VCODE}\`, \`com.friendbook\` ${TAG}) + Official Signed APK (\`friendbook.apk\`) with Pro Live Studio, Reels Discovery Algorithm, Messenger Group Chats, Full Community Post Groups, Scoped Global App Moderators, Zero-White friendbook Team Crown-F Icon & Free Booster Removal."
+          NOTES="Google Play Store ready signed Android App Bundle (\`friendbook-playstore.aab\`, \`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) + Official Signed APK (\`friendbook.apk\`) with Pro Live Studio, Reels Discovery Algorithm, Messenger Group Chats, Full Community Post Groups, Scoped Global App Moderators, Zero-White friendbook Team Crown-F Icon & Free Booster Removal."
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-debug.apk friendbook-website.zip --clobber
             gh release edit "$TAG" --latest --title "$TITLE" --notes "$NOTES"

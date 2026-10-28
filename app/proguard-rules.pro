@@ -5,7 +5,7 @@
 -keep class com.bumptech.glide.** { *; }
 -dontwarn com.bumptech.glide.**
 # Firestore model reflection (we map manually, but keep names safe)
--keep class com.friendbook.models.** { *; }
+-keep class com.friendbook.social.models.** { *; }
 
 # Google AdMob Native Advanced & UMP GDPR Consent SDK keep rules (Release APK safety)
 -keep class com.google.android.gms.ads.** { *; }
