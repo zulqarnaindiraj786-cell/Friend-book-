@@ -37,8 +37,9 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
   👑 top-gifter badge live. `lives`, `lives/*/chat`, `gifts` collections
 - **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
   + 5 reels), Stars balance with Rs value, fan Subscriptions toggle + price, live subscriber count
-- **📢 Google AdMob banners** — real App ID `ca-app-pub-3387480177023669~5696528190`, live banner unit
-  `ca-app-pub-3387480177023669/2691090902` shown every 3 posts in Home (fresh load per bind);
+- **📢 Google AdMob Production Native Ads** — real App ID `ca-app-pub-3387480177023669~1513026594`,
+  Feed Native unit `ca-app-pub-3387480177023669/4957447582`, and Reels Native unit
+  `ca-app-pub-3387480177023669/6468085788` (loaded fresh per bind via `AdLoader.Builder`, Release APK/AAB only);
   admin-editable banner ID + on/off via Firestore `config/ads` (Settings → AdMob Settings, owner only),
   plus Firebase Remote Config `ads_enabled` kill switch
 - **🔐 friendbook recovery** — forgot password → Gmail me 6-digit OTP code → verify →

@@ -336,7 +336,7 @@ public class MenuFragment extends Fragment {
                 }));
         body.addView(logout);
 
-        TextView ver = Ui.tv(a, "friendbook for Android · v2.4.0", 11, Ui.sub(a));
+        TextView ver = Ui.tv(a, "friendbook for Android · v2.5.0", 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
         ver.setPadding(0, Ui.dp(a, 14), 0, 0);
         body.addView(ver);

@@ -487,9 +487,9 @@ public class SettingsActivity extends Activity {
                 "Permanently delete your friendbook account, profile & content", this::deleteAccount));
         body.addView(rowI(Icons.HELP, "Help & Support Center", "FAQs · troubleshooting · contact support",
                 this::helpDialog));
-        body.addView(rowI(Icons.INFO, "About", "friendbook 2.4.0 · com.friendbook.social", () -> Ui.info(this,
+        body.addView(rowI(Icons.INFO, "About", "friendbook 2.5.0 · com.friendbook.social", () -> Ui.info(this,
                 "About friendbook",
-                "friendbook for Android\nVersion 2.4.0 (build 23)\nPackage: com.friendbook.social\n\n"
+                "friendbook for Android\nVersion 2.5.0 (build 24)\nPackage: com.friendbook.social\n\n"
                         + "Core friendbook features:\n"
                         + "• News Feed (Top, Most Recent, Favorites, PYMK, Colored Posts, Polls, Life Events, Q&A)\n"
                         + "• Stories (Photo, Video, Aa Text Stories, Reactions, Archive & Profile Highlights)\n"

@@ -19,20 +19,16 @@ import com.friendbook.social.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
 /**
- * 📢 Real Production AdMob Native Advanced Dashboard (Google Play Store Ready):
- * - App ID:                    ca-app-pub-3387480177023669~5696528190
- * - Native Advanced Unit ID:   ca-app-pub-3387480177023669/5657602381 (friendbook native)
- * - Google Play Store URL:     https://play.google.com/store/apps/details?id=com.friendbook.social
- * - Official Website URL:      https://zulqarnaindiraj786-cell.github.io/Friend-book-
- * - Placement:                 After every 5 posts in RecyclerView (`native_ad_layout.xml`)
- * - app-ads.txt:               https://zulqarnaindiraj786-cell.github.io/Friend-book-/app-ads.txt
- *                              -> google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
- * - Live Telemetry:            Requests, Impressions, Match Rate %, Error Code 3 count & Est. eCPM ($0.17+)
+ * 📢 Real Production AdMob Native Ads Dashboard (`com.friendbook.social`):
+ * - App ID:        ca-app-pub-3387480177023669~1513026594
+ * - Feed Native:   ca-app-pub-3387480177023669/4957447582
+ * - Reels Native:  ca-app-pub-3387480177023669/6468085788
+ * - app-ads.txt:   google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0
  */
 public class AdMobSettingsActivity extends Activity {
 
-    private EditText nativeEdit;
-    private EditText interstitialEdit;
+    private EditText feedNativeEdit;
+    private EditText reelsNativeEdit;
     private Switch enabledSwitch;
     private TextView previewT, statsT;
     private ListenerRegistration reg;
@@ -41,11 +37,11 @@ public class AdMobSettingsActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         if (!Admin.isAdmin()) { Ui.toast(this, "Admins only"); finish(); return; }
-        Ui.statusBarBlue(this);
+        Ui.statusBarLight(this);
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
-        root.addView(Ui.pageBar(this, "📢 Real AdMob Native Advanced"));
+        root.addView(Ui.pageBar(this, "📢 Real Production AdMob Ads"));
         root.addView(Ui.divider(this));
 
         ScrollView sv = new ScrollView(this);
@@ -54,16 +50,16 @@ public class AdMobSettingsActivity extends Activity {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        // 1. Live Earnings, Match Rate & eCPM ($0.17+ Growth) Card
+        // 1. Live Production Ad Telemetry Card
         LinearLayout statsCard = Ui.col(this);
         statsCard.setBackground(Ui.roundStroke(this, Ui.card(this), 14, Ui.BLUE, 1));
         Ui.pad(statsCard, 14, 12, 14, 12);
-        statsCard.addView(Ui.tvBold(this, "💰 Real-Time Match Rate & eCPM Monitor ($0.17+ Target)", 13, Ui.BLUE));
+        statsCard.addView(Ui.tvBold(this, "💰 Production AdMob Telemetry (Logcat tag: FriendBookAds)", 13, Ui.BLUE));
         statsT = Ui.tvBold(this, AdsConfig.statsSummary(this), 12.5f, Ui.txt(this));
         statsT.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 4));
         statsCard.addView(statsT);
         statsCard.addView(Ui.tv(this,
-                "Google Play Store ready with real-device guard, 1-req/30s rate limiter, 60s No-Fill backoff & verified app-ads.txt.",
+                "Pure production mode: zero test IDs, fresh AdLoader.Builder request on every Feed & Reels slot, Logcat error-code logging enabled.",
                 11, Ui.sub(this)));
         body.addView(statsCard, Ui.lpw(-2));
 
@@ -106,30 +102,32 @@ public class AdMobSettingsActivity extends Activity {
         cpa.topMargin = Ui.dp(this, 10);
         body.addView(adsTxtCard, cpa);
 
-        // 4. Native Advanced Unit ("friendbook native") — Every 5 Posts
+        // 4. Feed Native & Reels Native Production Ad Units
         LinearLayout card2 = Ui.col(this);
         card2.setBackground(Ui.round(this, Ui.card(this), 14));
         Ui.pad(card2, 14, 12, 14, 14);
         card2.addView(Ui.tvBold(this,
-                "Native Advanced Ad Unit (" + AdsConfig.NATIVE_UNIT_NAME + " · After Every 5 Posts)",
+                "Feed Native Ad Unit (" + AdsConfig.NATIVE_UNIT_NAME + ")",
                 13, Ui.sub(this)));
-        nativeEdit = Ui.input(this, AdsConfig.DEFAULT_NATIVE_ID);
-        nativeEdit.setText(AdsConfig.nativeId());
+        feedNativeEdit = Ui.input(this, AdsConfig.FEED_NATIVE_ID);
+        feedNativeEdit.setText(AdsConfig.feedNativeId());
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
         ep.setMargins(0, Ui.dp(this, 6), 0, Ui.dp(this, 12));
-        card2.addView(nativeEdit, ep);
+        card2.addView(feedNativeEdit, ep);
 
-        card2.addView(Ui.tvBold(this, "Optional Production Interstitial Ad Unit ID", 13, Ui.sub(this)));
-        interstitialEdit = Ui.input(this, "Optional: ca-app-pub-3387480177023669/...");
-        interstitialEdit.setText(AdsConfig.interstitialId());
+        card2.addView(Ui.tvBold(this,
+                "Reels Native Ad Unit (" + AdsConfig.REELS_UNIT_NAME + ")",
+                13, Ui.sub(this)));
+        reelsNativeEdit = Ui.input(this, AdsConfig.REELS_NATIVE_ID);
+        reelsNativeEdit.setText(AdsConfig.reelsNativeId());
         LinearLayout.LayoutParams iep = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
         iep.setMargins(0, Ui.dp(this, 6), 0, 0);
-        card2.addView(interstitialEdit, iep);
+        card2.addView(reelsNativeEdit, iep);
 
         LinearLayout switchRow = Ui.row(this);
         switchRow.setGravity(Gravity.CENTER_VERTICAL);
         switchRow.setPadding(0, Ui.dp(this, 12), 0, 0);
-        TextView onT = Ui.tvBold(this, "Enable In-Feed Native Ads (Every 5 Posts)", 13, Ui.txt(this));
+        TextView onT = Ui.tvBold(this, "Enable Real Production Feed & Reels Native Ads", 13, Ui.txt(this));
         switchRow.addView(onT, new LinearLayout.LayoutParams(0, -2, 1));
         enabledSwitch = new Switch(this);
         enabledSwitch.setChecked(AdsConfig.isMasterSwitchEnabled());
@@ -145,21 +143,21 @@ public class AdMobSettingsActivity extends Activity {
         previewT.setPadding(0, Ui.dp(this, 10), 0, 0);
         body.addView(previewT);
 
-        TextView save = Ui.btn(this, "💾 Save Real Production Native ID");
+        TextView save = Ui.btn(this, "💾 Save Production Native Ad IDs");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
         sp.setMargins(0, Ui.dp(this, 10), 0, 0);
         save.setOnClickListener(v -> {
-            String nId = nativeEdit.getText().toString().trim();
-            String iId = interstitialEdit.getText().toString().trim();
-            if (!AdsConfig.isRealProductionUnit(nId)) {
-                Ui.toast(this, "Enter a real production Native Ad Unit ID starting with " + AdsConfig.PUBLISHER_PREFIX);
+            String fId = feedNativeEdit.getText().toString().trim();
+            String rId = reelsNativeEdit.getText().toString().trim();
+            if (!AdsConfig.isRealProductionUnit(fId)) {
+                Ui.toast(this, "Enter a real production Feed Native ID starting with " + AdsConfig.PUBLISHER_PREFIX);
                 return;
             }
-            if (!iId.isEmpty() && !AdsConfig.isRealProductionUnit(iId)) {
-                Ui.toast(this, "Interstitial ID must start with " + AdsConfig.PUBLISHER_PREFIX + " (or leave blank)");
+            if (!AdsConfig.isRealProductionUnit(rId)) {
+                Ui.toast(this, "Enter a real production Reels Native ID starting with " + AdsConfig.PUBLISHER_PREFIX);
                 return;
             }
-            AdsConfig.save(nId, iId, enabledSwitch.isChecked(), this);
+            AdsConfig.save(fId, rId, enabledSwitch.isChecked(), this);
         });
         body.addView(save, sp);
 
@@ -169,13 +167,13 @@ public class AdMobSettingsActivity extends Activity {
         gdprBtn.setOnClickListener(v -> ConsentManager.showPrivacyOptionsForm(this));
         body.addView(gdprBtn, gp);
 
-        TextView reset = Ui.btnGrey(this, "↩ Reset to Default friendbook native ID");
+        TextView reset = Ui.btnGrey(this, "↩ Reset to Default Production IDs");
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
         rp.setMargins(0, Ui.dp(this, 8), 0, 0);
         reset.setOnClickListener(v -> {
             AdsConfig.reset(this);
-            nativeEdit.setText(AdsConfig.DEFAULT_NATIVE_ID);
-            interstitialEdit.setText("");
+            feedNativeEdit.setText(AdsConfig.FEED_NATIVE_ID);
+            reelsNativeEdit.setText(AdsConfig.REELS_NATIVE_ID);
             enabledSwitch.setChecked(true);
         });
         body.addView(reset, rp);
@@ -190,17 +188,19 @@ public class AdMobSettingsActivity extends Activity {
         reg = Fb.db().collection("config").document("ads")
                 .addSnapshotListener((d, err) -> {
                     if (d != null && d.exists()) {
-                        String id = d.getString("native_unit_v2");
-                        String iId = d.getString("interstitialId");
-                        Boolean en = d.getBoolean("nativeEnabled");
-                        String activeNative = AdsConfig.isRealProductionUnit(id) ? id : AdsConfig.DEFAULT_NATIVE_ID;
-                        nativeEdit.setText(activeNative);
-                        if (iId != null && AdsConfig.isRealProductionUnit(iId)) interstitialEdit.setText(iId);
+                        String fId = d.getString("feed_native_unit_v3");
+                        String rId = d.getString("reels_native_unit_v3");
+                        Boolean en = d.getBoolean("ads_enabled_v3");
+                        String activeFeed = AdsConfig.isRealProductionUnit(fId) ? fId : AdsConfig.FEED_NATIVE_ID;
+                        String activeReels = AdsConfig.isRealProductionUnit(rId) ? rId : AdsConfig.REELS_NATIVE_ID;
+                        feedNativeEdit.setText(activeFeed);
+                        reelsNativeEdit.setText(activeReels);
                         if (en != null) enabledSwitch.setChecked(en);
-                        previewT.setText("Live Native Advanced (every 5 posts): "
-                                + (en == null || en ? "ON" : "OFF") + " — " + activeNative);
+                        previewT.setText("Production Ads: " + (en == null || en ? "ON" : "OFF")
+                                + "\nFeed: " + activeFeed + "\nReels: " + activeReels);
                     } else {
-                        previewT.setText("Live Native Advanced (every 5 posts): ON — " + AdsConfig.DEFAULT_NATIVE_ID);
+                        previewT.setText("Production Ads: ON\nFeed: " + AdsConfig.FEED_NATIVE_ID
+                                + "\nReels: " + AdsConfig.REELS_NATIVE_ID);
                     }
                 });
     }

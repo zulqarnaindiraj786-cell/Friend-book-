@@ -2,6 +2,7 @@ package com.friendbook.social.core;
 
 import android.app.Activity;
 import android.content.Context;
+import android.util.Log;
 
 import com.google.android.gms.ads.MobileAds;
 import com.google.android.ump.ConsentInformation;
@@ -11,107 +12,112 @@ import com.google.android.ump.UserMessagingPlatform;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 🛡️ Google UMP GDPR Consent + Safe MobileAds Initializer (`com.friendbook.social`):
- * - Runs ONLY on real physical Android devices (emulators are blocked via AdsConfig.isRealDevice()).
- * - Works seamlessly both WITH a configured GDPR message AND in "Requires review" / direct APK state
- *   (falls back safely so real Native Ad requests are never deadlocked if no UMP form is configured yet).
- * - Signals `isAdsSdkReady()` only after `MobileAds.initialize(...)` completes so the first Native Ad
- *   request never races ahead of adapter initialization.
+ * 🛡️ Google UMP GDPR Consent + Production MobileAds Initializer (`com.friendbook.social`):
+ * - Uses ONLY real production mode (zero debug geography, zero test device hashes, zero test ad mode).
+ * - Guarantees `MobileAds.initialize(...)` runs cleanly so real Feed & Reels Native Ads load reliably.
  */
 public final class ConsentManager {
 
     private static final AtomicBoolean mobileAdsInitStarted = new AtomicBoolean(false);
-    private static final AtomicBoolean mobileAdsReady = new AtomicBoolean(false);
-    private static volatile boolean fallbackAllowAds = false;
+    private static volatile boolean mobileAdsReady = false;
 
     private ConsentManager() {}
 
+    /** Initializes Google Mobile Ads SDK immediately from Application.onCreate() or Activity startup. */
+    public static void ensureInitialized(final Context context) {
+        if (context == null) return;
+        initializeMobileAdsOnce(context.getApplicationContext(), null);
+    }
+
+    /** Gathers UMP GDPR consent (where required) and ensures MobileAds SDK is initialized. */
     public static void gatherConsentAndInitAds(final Activity activity, final Runnable onAdsReady) {
         if (activity == null || activity.isFinishing()) return;
-        // Block emulator traffic completely to protect AdMob match rate & account health
-        if (!AdsConfig.isRealDevice()) {
-            return;
-        }
-        try {
-            final Context appCtx = activity.getApplicationContext();
-            final ConsentInformation consentInfo = UserMessagingPlatform.getConsentInformation(appCtx);
+        final Context appCtx = activity.getApplicationContext();
 
+        // Always ensure MobileAds SDK is initialized so real ad requests are never blocked
+        initializeMobileAdsOnce(appCtx, onAdsReady);
+
+        try {
             ConsentRequestParameters params = new ConsentRequestParameters.Builder()
                     .setTagForUnderAgeOfConsent(false)
                     .build();
 
+            final ConsentInformation consentInfo = UserMessagingPlatform.getConsentInformation(activity);
             consentInfo.requestConsentInfoUpdate(
                     activity,
                     params,
-                    () -> UserMessagingPlatform.loadAndShowConsentFormIfRequired(
-                            activity,
-                            loadAndShowError -> {
-                                if (loadAndShowError != null || consentInfo.canRequestAds()) {
-                                    fallbackAllowAds = true;
-                                    initializeMobileAdsOnce(appCtx, onAdsReady);
+                    () -> {
+                        if (activity.isFinishing() || activity.isDestroyed()) return;
+                        UserMessagingPlatform.loadAndShowConsentFormIfRequired(
+                                activity,
+                                loadAndShowError -> {
+                                    if (loadAndShowError != null) {
+                                        Log.w(AdsConfig.LOG_TAG, "UMP consent form notice: code="
+                                                + loadAndShowError.getErrorCode() + " msg="
+                                                + loadAndShowError.getMessage());
+                                    }
+                                    AdsConfig.notifyChange();
+                                    if (onAdsReady != null) onAdsReady.run();
                                 }
-                            }
-                    ),
-                    requestConsentError -> {
-                        // In "Requires review" or if publisher hasn't created a GDPR form in AdMob yet,
-                        // UMP returns a config/network error — allow standard AdMob serving safely!
-                        fallbackAllowAds = true;
-                        initializeMobileAdsOnce(appCtx, onAdsReady);
-                    }
+                        );
+                    },
+                    requestConsentError -> Log.w(AdsConfig.LOG_TAG, "UMP consent update notice: code="
+                            + requestConsentError.getErrorCode() + " msg="
+                            + requestConsentError.getMessage())
             );
-
-            if (consentInfo.canRequestAds()) {
-                initializeMobileAdsOnce(appCtx, onAdsReady);
-            }
         } catch (Throwable t) {
-            fallbackAllowAds = true;
-            initializeMobileAdsOnce(activity.getApplicationContext(), onAdsReady);
+            Log.w(AdsConfig.LOG_TAG, "UMP check skipped: " + t.getMessage());
         }
     }
 
-    public static boolean canRequestAds(Context context) {
-        if (context == null || !AdsConfig.isRealDevice()) return false;
-        if (!mobileAdsReady.get()) return false;
-        if (fallbackAllowAds) return true;
+    /** Returns true if EEA/UK GDPR privacy options entry point should be shown in Settings. */
+    public static boolean isPrivacyOptionsRequired(Context context) {
+        if (context == null) return false;
         try {
-            return UserMessagingPlatform.getConsentInformation(context.getApplicationContext()).canRequestAds();
+            ConsentInformation ci = UserMessagingPlatform.getConsentInformation(context);
+            return ci.getPrivacyOptionsRequirementStatus()
+                    == ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED;
         } catch (Throwable t) {
-            return true;
+            return false;
+        }
+    }
+
+    /** Opens Google UMP Privacy Options form so EEA/UK users can update ad consent anytime. */
+    public static void showPrivacyOptionsForm(Activity activity) {
+        showPrivacyOptionsForm(activity, null);
+    }
+
+    /** Opens Google UMP Privacy Options form so EEA/UK users can update ad consent anytime. */
+    public static void showPrivacyOptionsForm(Activity activity, Runnable onDone) {
+        if (activity == null || activity.isFinishing()) return;
+        try {
+            UserMessagingPlatform.showPrivacyOptionsForm(activity, formError -> {
+                if (onDone != null) onDone.run();
+            });
+        } catch (Throwable t) {
+            if (onDone != null) onDone.run();
         }
     }
 
     public static boolean isAdsSdkReady() {
-        return mobileAdsReady.get();
-    }
-
-    public static void showPrivacyOptionsForm(final Activity activity) {
-        if (activity == null || activity.isFinishing()) return;
-        try {
-            UserMessagingPlatform.showPrivacyOptionsForm(activity, formError -> {
-                if (formError != null) {
-                    Ui.toast(activity, "Standard AdMob privacy active");
-                } else {
-                    Ui.toast(activity, "Ad privacy preferences saved ✓");
-                }
-            });
-        } catch (Throwable t) {
-            Ui.toast(activity, "GDPR consent not required in your region");
-        }
+        return mobileAdsReady;
     }
 
     private static void initializeMobileAdsOnce(final Context appCtx, final Runnable onAdsReady) {
-        if (!AdsConfig.isRealDevice()) return;
         if (mobileAdsInitStarted.compareAndSet(false, true)) {
             try {
                 MobileAds.initialize(appCtx, initializationStatus -> {
-                    mobileAdsReady.set(true);
+                    mobileAdsReady = true;
+                    Log.i(AdsConfig.LOG_TAG, "MobileAds SDK initialized (App ID: "
+                            + AdsConfig.APP_ID + ", Feed: " + AdsConfig.FEED_NATIVE_ID
+                            + ", Reels: " + AdsConfig.REELS_NATIVE_ID + ")");
                     AdsConfig.notifyChange();
                     if (onAdsReady != null) onAdsReady.run();
                 });
             } catch (Throwable t) {
-                mobileAdsInitStarted.set(false);
+                Log.e(AdsConfig.LOG_TAG, "MobileAds.initialize failed: " + t.getMessage(), t);
             }
-        } else if (mobileAdsReady.get() && onAdsReady != null) {
+        } else if (mobileAdsReady && onAdsReady != null) {
             onAdsReady.run();
         }
     }
