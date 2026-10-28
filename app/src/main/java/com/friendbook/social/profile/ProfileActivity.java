@@ -104,7 +104,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private int activeTab = 0;
 
     private LinearLayout allTabBox, reelsBox, photosBox, friendsBox, aboutBox;
-    private LinearLayout personalDetailsCard, highlightsWrap, highlightsRow, viewAsBanner, lockBanner;
+    private LinearLayout personalDetailsCard, highlightsWrap, highlightsRow, friendsPreviewCard, emptyPostsBox, viewAsBanner, lockBanner;
     private View tabsRow;
     private TextView pinnedTag, searchFilterBanner;
     private FeedAdapter postsAdapter;
@@ -113,9 +113,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private ReelsGridAdapter reelsAdapter;
 
     private final List<Models.Post> allLoadedPosts = new ArrayList<>();
-    private ListenerRegistration userReg, friendsReg, outReg, inReg, postsReg, reelsReg;
+    private ListenerRegistration userReg, friendsReg, ownerFriendsReg, outReg, inReg, postsReg, reelsReg;
     private Presence.Handle presenceH;
     private final List<String> friendIds = new ArrayList<>();
+    private final List<String> ownerFriendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
 
     private final FastCache.ReactionObserver reactionObserver = (postId, myReact, total) -> {
@@ -197,7 +198,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         FrameLayout coverFrame = new FrameLayout(this);
         cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        cover.setBackgroundColor(0xFFD0D7DE);
+        cover.setBackgroundColor(0xFF90949C);
         coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, Ui.dp(this, 168)));
 
         FrameLayout coverCamWrap = new FrameLayout(this);
@@ -230,6 +231,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         whiteRing.setBackground(Ui.circle(Ui.card(this)));
         int innerAv = Ui.dp(this, 98);
         avatar = new ImageView(this);
+        Ui.avatarLarge(this, avatar, null);
         whiteRing.addView(avatar, new FrameLayout.LayoutParams(innerAv, innerAv, Gravity.CENTER));
         avWrap.addView(whiteRing, new FrameLayout.LayoutParams(avSize, avSize));
 
@@ -424,6 +426,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         highlightsWrap.addView(hsv);
         allTabBox.addView(highlightsWrap);
 
+        friendsPreviewCard = Ui.col(this);
+        friendsPreviewCard.setBackgroundColor(Ui.card(this));
+        Ui.pad(friendsPreviewCard, 14, 12, 14, 14);
+        friendsPreviewCard.setVisibility(View.GONE);
+        allTabBox.addView(friendsPreviewCard);
+
         allTabBox.addView(gap());
 
         if (mine) {
@@ -498,6 +506,25 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postsAdapter.showFooter = false;
         postsRv.setAdapter(postsAdapter);
         allTabBox.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
+
+        emptyPostsBox = Ui.col(this);
+        emptyPostsBox.setBackgroundColor(Ui.card(this));
+        Ui.pad(emptyPostsBox, 16, 16, 16, 36);
+        emptyPostsBox.addView(Ui.tvBold(this, "Posts", 18, Ui.txt(this)));
+        LinearLayout emptyCenter = Ui.col(this);
+        emptyCenter.setGravity(Gravity.CENTER);
+        Ui.pad(emptyCenter, 12, 26, 12, 12);
+        TextView folderIc = Ui.tv(this, "📁", 54, Ui.BLUE);
+        folderIc.setGravity(Gravity.CENTER);
+        emptyCenter.addView(folderIc);
+        TextView noPostsTv = Ui.tvBold(this, "No Posts or Tags", 20, Ui.txt(this));
+        noPostsTv.setGravity(Gravity.CENTER);
+        noPostsTv.setPadding(0, Ui.dp(this, 10), 0, 0);
+        emptyCenter.addView(noPostsTv);
+        emptyPostsBox.addView(emptyCenter, new LinearLayout.LayoutParams(-1, -2));
+        emptyPostsBox.setVisibility(View.GONE);
+        allTabBox.addView(emptyPostsBox, new LinearLayout.LayoutParams(-1, -2));
+
         body.addView(allTabBox);
 
         // 8. TAB 1 ("Reels"): 3-Column User Reels Grid
@@ -570,7 +597,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         "📖 View active story"
                 }, w -> {
                     if (w == 0) {
-                        openFullscreenImage(user != null ? user.photoUrl : null,
+                        String dp = (user != null && Ui.hasRealPhoto(user.photoUrl))
+                                ? user.photoUrl : Ui.DEFAULT_AVATAR_TOKEN;
+                        openFullscreenImage(dp,
                                 (user != null ? user.displayName + "'s Profile Picture" : "Profile Picture"), false);
                     } else if (w == 1) {
                         pickImage(REQ_PICK_AVATAR);
@@ -591,7 +620,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
             } else {
                 boolean guarded = user != null && user.profilePicGuard;
-                openFullscreenImage(user != null ? user.photoUrl : null,
+                String dp = (user != null && Ui.hasRealPhoto(user.photoUrl))
+                        ? user.photoUrl : Ui.DEFAULT_AVATAR_TOKEN;
+                openFullscreenImage(dp,
                         (user != null ? user.displayName + "'s Profile Picture" : "Profile Picture"),
                         guarded);
             }
@@ -764,7 +795,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         }
                         computeFriendState();
                         renderFriendsTab();
-                        for (String f : friendIds) ensureUser(f);
+                    });
+            ownerFriendsReg = Fb.db().collection("friends").whereArrayContains("participants", uid)
+                    .addSnapshotListener((snap, err) -> {
+                        ownerFriendIds.clear();
+                        if (snap != null) {
+                            for (DocumentSnapshot d : snap) {
+                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
+                                if (!parts.contains(uid)) continue;
+                                for (String p : parts) if (!p.equals(uid)) ownerFriendIds.add(p);
+                            }
+                        }
+                        renderFriendsTab();
+                        for (String f : ownerFriendIds) ensureUser(f);
                     });
             outReg = Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending")
@@ -794,13 +837,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
                     .addSnapshotListener((snap, err) -> {
                         friendIds.clear();
+                        ownerFriendIds.clear();
                         if (snap != null) {
                             for (DocumentSnapshot d : snap)
                                 for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                    if (!p.equals(me)) friendIds.add(p);
+                                    if (!p.equals(me)) {
+                                        friendIds.add(p);
+                                        ownerFriendIds.add(p);
+                                    }
                         }
                         renderFriendsTab();
-                        for (String f : friendIds) ensureUser(f);
+                        for (String f : ownerFriendIds) ensureUser(f);
                     });
         }
         startPostsWatcher();
@@ -865,6 +912,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 && pin.equals(shown.get(0).id);
         if (pinnedTag != null) pinnedTag.setVisibility(hasPin ? View.VISIBLE : View.GONE);
         postsAdapter.setPosts(shown);
+        if (emptyPostsBox != null) {
+            emptyPostsBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void startReelsWatcher() {
@@ -889,6 +939,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         FastCache.removeReactionObserver(reactionObserver);
         if (userReg != null) userReg.remove();
         if (friendsReg != null) friendsReg.remove();
+        if (ownerFriendsReg != null) ownerFriendsReg.remove();
         if (outReg != null) outReg.remove();
         if (inReg != null) inReg.remove();
         if (postsReg != null) postsReg.remove();
@@ -956,10 +1007,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (guardBadge != null) {
             guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
         }
-        if (user.coverUrl != null && !user.coverUrl.isEmpty()) {
+        if (Ui.hasRealPhoto(user.coverUrl)) {
             Ui.img(this, cover, user.coverUrl);
         } else {
-            cover.setImageDrawable(Ui.gradient(0xFF2851A3, 0xFF1877F2, 0));
+            try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
+            cover.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF90949C));
         }
 
         coverCamBtn.setVisibility(mine && !viewAsPublic ? View.VISIBLE : View.GONE);
@@ -1683,17 +1735,66 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 || ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && "friends".equals(friendState) && !viewAsPublic);
         if (!canSeeFriends) {
             friendsAdapter.setData(rows);
+            if (friendsPreviewCard != null) friendsPreviewCard.setVisibility(View.GONE);
             return;
         }
-        for (String fid : friendIds) {
+        List<Models.User> friendUsers = new ArrayList<>();
+        for (String fid : ownerFriendIds) {
             Models.User u = userCache.get(fid);
+            if (u == null) u = FastCache.getUser(fid);
             if (u == null) continue;
+            friendUsers.add(u);
             UsersAdapter.Row r = new UsersAdapter.Row();
             r.user = u;
             r.subtitle = u.isOnline ? "🟢 Active now" : "Friend";
             rows.add(r);
         }
         friendsAdapter.setData(rows);
+
+        if (friendsPreviewCard != null) {
+            friendsPreviewCard.removeAllViews();
+            if (friendUsers.isEmpty()) {
+                friendsPreviewCard.setVisibility(View.GONE);
+            } else {
+                friendsPreviewCard.setVisibility(View.VISIBLE);
+                LinearLayout topRow = Ui.row(this);
+                topRow.setGravity(Gravity.CENTER_VERTICAL);
+                topRow.addView(Ui.tvBold(this, "Friends", 17.5f, Ui.txt(this)),
+                        new LinearLayout.LayoutParams(0, -2, 1));
+                TextView seeAll = Ui.tv(this, "See all", 15f, Ui.BLUE);
+                seeAll.setOnClickListener(v -> showTab(3));
+                topRow.addView(seeAll);
+                friendsPreviewCard.addView(topRow);
+
+                LinearLayout strip = Ui.row(this);
+                strip.setGravity(Gravity.TOP);
+                strip.setPadding(0, Ui.dp(this, 12), 0, 0);
+                int maxShow = Math.min(4, friendUsers.size());
+                for (int i = 0; i < maxShow; i++) {
+                    final Models.User fu = friendUsers.get(i);
+                    LinearLayout item = Ui.col(this);
+                    item.setGravity(Gravity.CENTER_HORIZONTAL);
+                    int avSz = Ui.dp(this, 72);
+                    FrameLayout ring = new FrameLayout(this);
+                    ring.setBackground(Ui.roundStroke(this, Ui.card(this), 36, 0xFFC2C5CA, 1));
+                    ImageView av = new ImageView(this);
+                    Ui.avatar(this, av, fu.photoUrl);
+                    ring.addView(av, new FrameLayout.LayoutParams(avSz - Ui.dp(this, 2), avSz - Ui.dp(this, 2), Gravity.CENTER));
+                    item.addView(ring, new LinearLayout.LayoutParams(avSz, avSz));
+
+                    TextView fn = Ui.tvBold(this,
+                            fu.displayName != null && !fu.displayName.isEmpty() ? fu.displayName : "User",
+                            12.5f, Ui.txt(this));
+                    fn.setGravity(Gravity.CENTER);
+                    fn.setMaxLines(2);
+                    fn.setPadding(Ui.dp(this, 2), Ui.dp(this, 6), Ui.dp(this, 2), 0);
+                    item.addView(fn, new LinearLayout.LayoutParams(-1, -2));
+                    item.setOnClickListener(v -> openProfile(fu.uid));
+                    strip.addView(item, new LinearLayout.LayoutParams(0, -2, 1f));
+                }
+                friendsPreviewCard.addView(strip);
+            }
+        }
     }
 
     private void ensureUser(String fuid) {

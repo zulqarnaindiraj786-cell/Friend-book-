@@ -46,6 +46,17 @@ public class Ui {
     public static final int ORANGE = 0xFFF7B928;
     public static final String TEAM_AVATAR_TOKEN = "friendbook_team_logo";
     public static final String TEAM_USER_ID = "friendbook_team";
+    public static final String DEFAULT_AVATAR_TOKEN = "default_avatar";
+
+    /** Returns true only when `url` is a real non-empty photo URL (never null, blank, "null", or placeholder). */
+    public static boolean hasRealPhoto(String url) {
+        if (url == null) return false;
+        String s = url.trim();
+        return !s.isEmpty()
+                && !"null".equalsIgnoreCase(s)
+                && !"undefined".equalsIgnoreCase(s)
+                && !DEFAULT_AVATAR_TOKEN.equalsIgnoreCase(s);
+    }
 
     public static boolean isTeamIdentity(String url, String nameOrId) {
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) return true;
@@ -226,6 +237,10 @@ public class Ui {
     }
 
     public static void avatar(Context c, ImageView iv, String url) {
+        if (c == null || iv == null) return;
+        iv.setPadding(0, 0, 0, 0);
+        iv.setBackground(null);
+        iv.clearColorFilter();
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())
@@ -237,23 +252,29 @@ public class Ui {
                     .into(iv);
             return;
         }
-        Drawable ph = circle(inputBg(c));
-        if (url == null || url.isEmpty()) {
-            iv.setImageDrawable(ph);
+        int defRes = com.friendbook.social.R.drawable.ic_default_avatar;
+        if (!hasRealPhoto(url)) {
+            try { Glide.with(c.getApplicationContext()).clear(iv); } catch (Throwable ignored) {}
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setImageResource(defRes);
             return;
         }
-        String fastUrl = optimizeImageUrl(c, url, true);
+        String fastUrl = optimizeImageUrl(c, url.trim(), true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .circleCrop()
                 .override(240, 240)
                 .dontAnimate()
-                .placeholder(ph).error(ph)
+                .placeholder(defRes).error(defRes)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .into(iv);
     }
 
-    /** High-definition large circular DP for Profile hero header (never blurry!). */
+    /** High-definition large circular DP for Profile hero header (shows crisp default person silhouette if no DP!). */
     public static void avatarLarge(Context c, ImageView iv, String url) {
+        if (c == null || iv == null) return;
+        iv.setPadding(0, 0, 0, 0);
+        iv.setBackground(null);
+        iv.clearColorFilter();
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())
@@ -265,24 +286,27 @@ public class Ui {
                     .into(iv);
             return;
         }
-        Drawable ph = circle(inputBg(c));
-        if (url == null || url.isEmpty()) {
-            iv.setImageDrawable(ph);
+        int defRes = com.friendbook.social.R.drawable.ic_default_avatar;
+        if (!hasRealPhoto(url)) {
+            try { Glide.with(c.getApplicationContext()).clear(iv); } catch (Throwable ignored) {}
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setImageResource(defRes);
             return;
         }
-        String hdUrl = url;
-        int idx = url.indexOf("/image/upload/");
+        String cleanUrl = url.trim();
+        String hdUrl = cleanUrl;
+        int idx = cleanUrl.indexOf("/image/upload/");
         if (idx >= 0) {
-            String after = url.substring(idx + "/image/upload/".length());
+            String after = cleanUrl.substring(idx + "/image/upload/".length());
             if (!after.startsWith("w_") && !after.startsWith("f_") && !after.startsWith("q_") && !after.startsWith("c_")) {
-                hdUrl = url.substring(0, idx + "/image/upload/".length()) + "w_512,h_512,c_fill,g_auto,f_webp,q_auto:best/" + after;
+                hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_512,h_512,c_fill,g_auto,f_webp,q_auto:best/" + after;
             }
         }
         Glide.with(c.getApplicationContext()).load(hdUrl)
                 .circleCrop()
                 .override(512, 512)
                 .dontAnimate()
-                .placeholder(ph).error(ph)
+                .placeholder(defRes).error(defRes)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .into(iv);
     }
@@ -377,15 +401,22 @@ public class Ui {
     }
 
     public static void imgFit(Context c, ImageView iv, String url) {
-        Drawable ph = round(c, inputBg(c), 0);
-        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        String hdUrl = hdImageUrl(url);
+        if (c == null || iv == null) return;
+        if (!hasRealPhoto(url)) {
+            try { Glide.with(c.getApplicationContext()).clear(iv); } catch (Throwable ignored) {}
+            iv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
+            return;
+        }
+        Drawable transparentPh = new ColorDrawable(Color.TRANSPARENT);
+        String hdUrl = hdImageUrl(url.trim());
         Prefs.recordBytes(c, 55_000L, 125_000L);
         Glide.with(c.getApplicationContext()).load(hdUrl)
                 .fitCenter()
                 .dontAnimate()
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(ph).error(ph).into(iv);
+                .placeholder(transparentPh)
+                .error(com.friendbook.social.R.drawable.ic_default_avatar)
+                .into(iv);
     }
 
     public static String formatBytes(long bytes) {

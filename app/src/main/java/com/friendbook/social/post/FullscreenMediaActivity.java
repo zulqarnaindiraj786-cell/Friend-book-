@@ -74,8 +74,14 @@ public class FullscreenMediaActivity extends Activity {
         } else {
             final ImageView iv = new ImageView(this);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            root.addView(iv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-            Ui.imgFit(this, iv, url);
+            if (!Ui.hasRealPhoto(url)) {
+                int dpSz = Ui.dp(this, 260);
+                root.addView(iv, new FrameLayout.LayoutParams(dpSz, dpSz, Gravity.CENTER));
+                iv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
+            } else {
+                root.addView(iv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                Ui.imgFit(this, iv, url);
+            }
 
             final ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this,
                     new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -159,17 +165,20 @@ public class FullscreenMediaActivity extends Activity {
         titleTv.setSingleLine(true);
         topOverlay.addView(titleTv, new LinearLayout.LayoutParams(0, -2, 1));
 
-        if (!guarded && url != null && !url.isEmpty()) {
+        final boolean hasRealUrl = Ui.hasRealPhoto(url);
+        if (!guarded && hasRealUrl) {
             TextView saveBtn = Ui.roundChip(this, "⬇ Save", 0x44FFFFFF, Color.WHITE, 12);
             Ui.pad(saveBtn, 10, 5, 10, 5);
             saveBtn.setOnClickListener(v -> downloadPhoto(url));
             topOverlay.addView(saveBtn);
         }
 
-        TextView moreBtn = Ui.tvBold(this, "•••", 18, Color.WHITE);
-        Ui.pad(moreBtn, 12, 4, 6, 4);
-        moreBtn.setOnClickListener(v -> showMoreMenu(v, url, guarded));
-        topOverlay.addView(moreBtn);
+        if (hasRealUrl) {
+            TextView moreBtn = Ui.tvBold(this, "•••", 18, Color.WHITE);
+            Ui.pad(moreBtn, 12, 4, 6, 4);
+            moreBtn.setOnClickListener(v -> showMoreMenu(v, url, guarded));
+            topOverlay.addView(moreBtn);
+        }
 
         root.addView(topOverlay, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
@@ -182,7 +191,9 @@ public class FullscreenMediaActivity extends Activity {
             guardNote.setPadding(0, 0, 0, Ui.dp(this, 6));
             bottomOverlay.addView(guardNote);
         } else {
-            TextView zoomHint = Ui.tv(this, "Pinch or double-tap to zoom full HD photo", 11.5f, 0xBBFFFFFF);
+            TextView zoomHint = Ui.tv(this,
+                    hasRealUrl ? "Pinch or double-tap to zoom full HD photo" : "Default profile picture",
+                    11.5f, 0xBBFFFFFF);
             zoomHint.setGravity(Gravity.CENTER);
             bottomOverlay.addView(zoomHint);
         }

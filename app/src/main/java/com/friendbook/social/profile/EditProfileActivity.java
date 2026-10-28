@@ -65,6 +65,7 @@ public class EditProfileActivity extends Activity {
         FrameLayout coverWrap = new FrameLayout(this);
         cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        cover.setBackgroundColor(0xFF90949C);
         coverWrap.addView(cover, new FrameLayout.LayoutParams(-1, Ui.dp(this, 150)));
         TextView coverBtn = Ui.btnGrey(this, "🖼 Change cover");
         FrameLayout.LayoutParams cbp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
@@ -78,6 +79,7 @@ public class EditProfileActivity extends Activity {
         avRow.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(avRow, 14, 16, 14, 4);
         avatar = new ImageView(this);
+        Ui.avatar(this, avatar, null);
         int s = Ui.dp(this, 84);
         avRow.addView(avatar, new LinearLayout.LayoutParams(s, s));
         TextView avBtn = Ui.btnGrey(this, "📷 Change photo");
@@ -192,8 +194,11 @@ public class EditProfileActivity extends Activity {
                     avatarUrl = u.photoUrl;
                     coverUrl = u.coverUrl;
                     Ui.avatar(this, avatar, avatarUrl);
-                    if (!coverUrl.isEmpty()) Ui.img(this, cover, coverUrl);
-                    else cover.setBackground(Ui.round(this, Ui.div(this), 0));
+                    if (Ui.hasRealPhoto(coverUrl)) {
+                        Ui.img(this, cover, coverUrl);
+                    } else {
+                        cover.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF90949C));
+                    }
 
                     if (loadedOnce) return;
                     loadedOnce = true;

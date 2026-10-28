@@ -83,7 +83,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         hero.addView(banner, new FrameLayout.LayoutParams(-1, Ui.dp(this, 130)));
 
         avatarIv = new ImageView(this);
-        avatarIv.setBackground(Ui.roundStroke(this, Color.WHITE, 46, Ui.card(this), 3));
+        Ui.avatar(this, avatarIv, null);
         FrameLayout.LayoutParams ap = new FrameLayout.LayoutParams(
                 Ui.dp(this, 88), Ui.dp(this, 88), Gravity.BOTTOM | Gravity.START);
         ap.setMargins(Ui.dp(this, 16), 0, 0, Ui.dp(this, 10));
