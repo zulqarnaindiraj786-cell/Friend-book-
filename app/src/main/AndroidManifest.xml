@@ -27,6 +27,10 @@
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-3387480177023669~1513026594"/>
 
+        <meta-data
+            android:name="privacy_policy_url"
+            android:value="@string/privacy_policy_url"/>
+
         <activity android:name="com.friendbook.social.SplashActivity"
             android:icon="@mipmap/ic_friendbook_crown"
             android:roundIcon="@mipmap/ic_friendbook_crown_round"
@@ -109,6 +113,9 @@
         <activity android:name="com.friendbook.social.settings.SessionsActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.settings.TimeSpentActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.settings.ArchiveTrashActivity" android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.settings.PolicyWebViewActivity"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize" />
         <activity android:name="com.friendbook.social.social.PageDetailActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.friends.BirthdaysActivity" android:screenOrientation="portrait" />
 

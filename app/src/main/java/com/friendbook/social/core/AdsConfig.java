@@ -47,12 +47,17 @@ public class AdsConfig {
 
     public static final String DEFAULT_INTERSTITIAL_ID = "";
 
-    /** Official Developer Website, Privacy Policy, Child Safety, Account Deletion & app-ads.txt URLs. */
+    /** Official Google Docs Policy URL (Privacy Policy, Terms of Service & Zero-Tolerance CSAE Policy). */
+    public static final String GOOGLE_DOCS_POLICY_URL =
+            "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view";
+
+    /** Official Developer Website (for app-ads.txt verification) & Google Docs Policy URLs. */
     public static final String OFFICIAL_WEBSITE_URL = "https://zulqarnaindiraj786-cell.github.io/Friend-book-";
     public static final String APP_ADS_TXT_URL = OFFICIAL_WEBSITE_URL + "/app-ads.txt";
-    public static final String PRIVACY_POLICY_URL = OFFICIAL_WEBSITE_URL + "/privacy-policy.html";
-    public static final String DELETE_ACCOUNT_URL = OFFICIAL_WEBSITE_URL + "/delete-account.html";
-    public static final String CHILD_SAFETY_URL = OFFICIAL_WEBSITE_URL + "/child-safety.html";
+    public static final String PRIVACY_POLICY_URL = GOOGLE_DOCS_POLICY_URL;
+    public static final String TERMS_OF_SERVICE_URL = GOOGLE_DOCS_POLICY_URL;
+    public static final String CHILD_SAFETY_URL = GOOGLE_DOCS_POLICY_URL;
+    public static final String DELETE_ACCOUNT_URL = GOOGLE_DOCS_POLICY_URL;
     public static final String PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.friendbook.social";
     public static final String APP_ADS_TXT_RECORD =
             "google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0";

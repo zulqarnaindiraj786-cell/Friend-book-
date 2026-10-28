@@ -605,7 +605,23 @@ public class Ui {
         return t;
     }
 
-    /** Open URL cleanly in the user's system browser (100% WebView-free for AdMob policy safety). */
+    /** Opens a policy/legal document directly inside the app via PolicyWebViewActivity (no external browser or login). */
+    public static void openPolicyInApp(Context c, String title, String url) {
+        if (c == null) return;
+        String target = (url == null || url.trim().isEmpty())
+                ? AdsConfig.GOOGLE_DOCS_POLICY_URL : url.trim();
+        try {
+            Intent i = new Intent(c, com.friendbook.social.settings.PolicyWebViewActivity.class);
+            i.putExtra("title", title == null ? "Privacy Policy" : title);
+            i.putExtra("url", target);
+            if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+        } catch (Exception e) {
+            toast(c, "Couldn't open policy document");
+        }
+    }
+
+    /** Open URL cleanly in the user's system browser. */
     public static void openUrl(Context c, String url) {
         if (url == null || url.trim().isEmpty()) return;
         String u = url.trim();

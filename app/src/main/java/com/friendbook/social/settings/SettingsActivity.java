@@ -409,44 +409,22 @@ public class SettingsActivity extends Activity {
 
         // ============ 7. COMMUNITY STANDARDS, CHILD SAFETY & LEGAL ============
         body.addView(header("Community standards, child safety & legal"));
-        body.addView(rowI(Icons.TERMS, "Terms of Service", "Rules for using friendbook", () -> Ui.info(this,
-                "Terms of Service",
-                "1. You must be at least 13 years old and use your authentic identity or respectful alias.\n"
-                        + "2. You own the content you share and grant friendbook permission to display it to the audience you select.\n"
-                        + "3. Explicit nudity, sexual content, graphic violence, hate speech, spam, fraud or CSAE leads to automatic content deletion & permanent account ban.\n"
-                        + "4. Community badges & creator milestones are earned 100% free via platform guidelines.")));
+        body.addView(rowI(Icons.TERMS, "Terms of Service", "Rules for using friendbook",
+                () -> Ui.openPolicyInApp(this, "Terms of Service",
+                        com.friendbook.social.core.AdsConfig.TERMS_OF_SERVICE_URL)));
         body.addView(rowI(Icons.SHIELD, "Privacy Policy (Data & Ads Policy)",
-                "Firebase, Cloudinary & Google AdMob / GDPR disclosure", () -> {
-                    Ui.choose(this, "Privacy Policy", new String[]{
-                            "📖 Read in-app Privacy Summary",
-                            "🌐 Open Full Web Privacy Policy"
-                    }, w -> {
-                        if (w == 1) {
-                            Ui.openUrl(this, com.friendbook.social.core.AdsConfig.PRIVACY_POLICY_URL);
-                        } else {
-                            Ui.info(this, "Privacy Policy",
-                                    "• Account & posts are stored securely in Firebase Authentication & Cloud Firestore.\n"
-                                            + "• Photos, videos & voice notes are stored over encrypted HTTPS on Cloudinary / Firebase Storage.\n"
-                                            + "• friendbook displays Sponsored Native Ads powered by Google AdMob (Publisher pub-3387480177023669), which may use the Android Advertising ID in accordance with your GDPR / UMP privacy choices.\n"
-                                            + "• EU/UK/EEA & eligible users can review or withdraw ad personalization consent anytime via Settings → Ad Privacy & GDPR Consent.\n"
-                                            + "• You can export or permanently delete your account & all personal data anytime from Settings → Delete Account.");
-                        }
-                    });
-                }));
+                "Firebase, Cloudinary & Google AdMob / GDPR disclosure",
+                () -> Ui.openPolicyInApp(this, "Privacy Policy",
+                        com.friendbook.social.core.AdsConfig.PRIVACY_POLICY_URL)));
         body.addView(rowI(Icons.SHIELD, "Child Safety Standards (Zero-Tolerance CSAE)",
                 "Google Play CSAE declaration & 1-tap emergency report", () -> {
                     Ui.choose(this, "🛡 Child Safety Standards (CSAE Policy)", new String[]{
                             "📜 View Zero-Tolerance CSAE Policy",
-                            "🚨 Report Child Safety / CSAE Concern Immediately",
-                            "🌐 Open Published Child Safety Web Standards"
+                            "🚨 Report Child Safety / CSAE Concern Immediately"
                     }, w -> {
                         if (w == 0) {
-                            Ui.info(this, "Zero-Tolerance Child Safety Standards",
-                                    "friendbook maintains an absolute ZERO-TOLERANCE policy against Child Sexual Abuse and Exploitation (CSAE) and Child Sexual Abuse Material (CSAM).\n\n"
-                                            + "• On-device automated media & text screening blocks and deletes unsafe content immediately.\n"
-                                            + "• Every post, reel, story, profile, and message provides instant in-app reporting.\n"
-                                            + "• Confirmed CSAE violations result in immediate content deletion, permanent account termination, and reporting to NCMEC / law enforcement.\n"
-                                            + "• Child Safety Point of Contact: zulqarnaindiraj786@gmail.com");
+                            Ui.openPolicyInApp(this, "Zero-Tolerance CSAE Policy",
+                                    com.friendbook.social.core.AdsConfig.CHILD_SAFETY_URL);
                         } else if (w == 1) {
                             EditText details = Ui.multi(this, "Describe the account, post, or safety concern…", 3);
                             LinearLayout box = Ui.col(this);
@@ -469,8 +447,6 @@ public class SettingsActivity extends Activity {
                                     })
                                     .setNegativeButton("Cancel", null)
                                     .show();
-                        } else {
-                            Ui.openUrl(this, com.friendbook.social.core.AdsConfig.CHILD_SAFETY_URL);
                         }
                     });
                 }));
@@ -487,9 +463,9 @@ public class SettingsActivity extends Activity {
                 "Permanently delete your friendbook account, profile & content", this::deleteAccount));
         body.addView(rowI(Icons.HELP, "Help & Support Center", "FAQs · troubleshooting · contact support",
                 this::helpDialog));
-        body.addView(rowI(Icons.INFO, "About", "friendbook 2.5.1 · com.friendbook.social", () -> Ui.info(this,
+        body.addView(rowI(Icons.INFO, "About", "friendbook 2.5.2 · com.friendbook.social", () -> Ui.info(this,
                 "About friendbook",
-                "friendbook for Android\nVersion 2.5.1 (build 25)\nPackage: com.friendbook.social\n\n"
+                "friendbook for Android\nVersion 2.5.2 (build 26)\nPackage: com.friendbook.social\n\n"
                         + "Core friendbook features:\n"
                         + "• News Feed (Top, Most Recent, Favorites, PYMK, Colored Posts, Polls, Life Events, Q&A)\n"
                         + "• Stories (Photo, Video, Aa Text Stories, Reactions, Archive & Profile Highlights)\n"
@@ -1369,8 +1345,7 @@ public class SettingsActivity extends Activity {
                                 finishAffinity();
                             })
                             .addOnFailureListener(e -> Ui.info(this, "Re-authentication needed",
-                                    "For security, log out, sign back in once, and tap Delete Account again — or submit a web deletion request at:\n"
-                                            + com.friendbook.social.core.AdsConfig.DELETE_ACCOUNT_URL));
+                                    "For security, please log out, sign back in once, and tap Delete Account again."));
                 });
     }
 }
