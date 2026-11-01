@@ -180,6 +180,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
 
         RecyclerView rv = new RecyclerView(this);
         rv.setLayoutManager(new LinearLayoutManager(this));
+        rv.setItemAnimator(null);
         rv.setNestedScrollingEnabled(false);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;

@@ -83,9 +83,24 @@ public class ReelsFragment extends Fragment {
     private ProgressBar uploadStatusBar;
     private final List<Models.Reel> fromReels = new ArrayList<>();
     private final List<Models.Reel> fromPosts = new ArrayList<>();
+    /** Locks Reel ordering during active viewing so Like/Reactions/Comments NEVER jump videos up or down! */
+    private final List<String> sessionReelOrderIds = new ArrayList<>();
+    /** Protects fresh local Reel reaction taps from in-flight snapshot overwrites. */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> LOCAL_REEL_TAP_TS =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private String initialReelId;
     private boolean followingOnlyMode = false;
     private TextView forYouPill, followingPill;
+
+    static boolean isReelReactionInFlight(String reelId) {
+        if (reelId == null) return false;
+        Long ts = LOCAL_REEL_TAP_TS.get(reelId);
+        return ts != null && (System.currentTimeMillis() - ts) < 4500L;
+    }
+
+    static void markReelReactionTap(String reelId) {
+        if (reelId != null) LOCAL_REEL_TAP_TS.put(reelId, System.currentTimeMillis());
+    }
 
     private final ReelUploadManager.Listener bgUploadListener =
             (active, percent, sentBytes, totalBytes, message, succeeded, error) -> {
@@ -125,6 +140,9 @@ public class ReelsFragment extends Fragment {
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
         // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes!
         pager.setOffscreenPageLimit(2);
+        if (pager.getChildAt(0) instanceof RecyclerView) {
+            ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
+        }
         adapter = new ReelAdapter(a);
         pager.setAdapter(adapter);
         root.addView(pager, new FrameLayout.LayoutParams(-1, -1));
@@ -296,11 +314,60 @@ public class ReelsFragment extends Fragment {
             }
             if (!filtered.isEmpty()) candidates = filtered;
         }
-        List<Models.Reel> merged = FeedAlgorithm.rankReels(act, candidates, initialReelId);
-        // Always keep live optimistic upload at slot 0 so creator sees their own Reel instantly!
-        if (optimistic != null) {
-            merged.remove(optimistic);
-            merged.add(0, optimistic);
+        List<Models.Reel> merged;
+        if (!forceReset && !sessionReelOrderIds.isEmpty()) {
+            // ⚡ Anti-Jump Session Order Lock:
+            // Keep EVERY currently loaded Reel in its exact frozen slot so Like / Love / Haha / Wow / Sad / Angry
+            // or Comments NEVER reorder or jump the active video up or down!
+            Map<String, Models.Reel> byId = new LinkedHashMap<>();
+            for (Models.Reel r : candidates) {
+                if (r != null && r.id != null) byId.put(r.id, r);
+            }
+            // Preserve local optimistic reaction state for any Reel with an in-flight reaction tap
+            for (Models.Reel existing : adapter.rawReels()) {
+                if (existing != null && existing.id != null && isReelReactionInFlight(existing.id)) {
+                    Models.Reel snapReel = byId.get(existing.id);
+                    if (snapReel != null) {
+                        snapReel.likes = existing.likes;
+                        snapReel.reactions = new HashMap<>(existing.reactions);
+                        snapReel.likedBy = new ArrayList<>(existing.likedBy);
+                    }
+                }
+            }
+            merged = new ArrayList<>(candidates.size());
+            List<String> updatedOrder = new ArrayList<>(candidates.size());
+            if (optimistic != null && optimistic.id != null && !sessionReelOrderIds.contains(optimistic.id)) {
+                merged.add(optimistic);
+                updatedOrder.add(optimistic.id);
+                byId.remove(optimistic.id);
+            }
+            for (String lockedId : sessionReelOrderIds) {
+                Models.Reel r = byId.remove(lockedId);
+                if (r != null) {
+                    merged.add(r);
+                    updatedOrder.add(r.id);
+                }
+            }
+            // Append any newly arrived Reels/Video Posts strictly at the END so current ViewPager2 index never shifts!
+            for (Models.Reel leftover : candidates) {
+                if (leftover != null && leftover.id != null && byId.containsKey(leftover.id)) {
+                    merged.add(leftover);
+                    updatedOrder.add(leftover.id);
+                    byId.remove(leftover.id);
+                }
+            }
+            sessionReelOrderIds.clear();
+            sessionReelOrderIds.addAll(updatedOrder);
+        } else {
+            sessionReelOrderIds.clear();
+            merged = FeedAlgorithm.rankReels(act, candidates, initialReelId);
+            if (optimistic != null) {
+                merged.remove(optimistic);
+                merged.add(0, optimistic);
+            }
+            for (Models.Reel r : merged) {
+                if (r != null && r.id != null) sessionReelOrderIds.add(r.id);
+            }
         }
 
         if (emptyState != null) {
@@ -437,23 +504,54 @@ public class ReelsFragment extends Fragment {
                 for (int i = 0; i < data.size(); i++) {
                     data.set(i, incoming.get(i));
                 }
-                if (pager != null && pager.getChildAt(0) instanceof RecyclerView) {
-                    RecyclerView rv = (RecyclerView) pager.getChildAt(0);
-                    for (int i = 0; i < rv.getChildCount(); i++) {
-                        RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
-                        if (h instanceof VH) {
-                            VH vh = (VH) h;
-                            int ap = vh.getAdapterPosition();
-                            Models.Reel updated = reelAtPosition(ap);
-                            if (updated != null) vh.updateMetaInPlace(updated);
-                        }
-                    }
+                refreshVisibleHoldersInPlace(pager);
+                return;
+            }
+            // Prefix-append fast path: when new Reels/VideoPosts arrive at the end, append without touching active Reel!
+            if (!forceReset && !data.isEmpty() && incoming.size() > data.size()
+                    && data.size() >= REELS_PER_AD && isPrefixMatch(data, incoming)) {
+                int oldAdapterCount = getItemCount();
+                for (int i = 0; i < data.size(); i++) {
+                    data.set(i, incoming.get(i));
+                }
+                for (int i = data.size(); i < incoming.size(); i++) {
+                    data.add(incoming.get(i));
+                }
+                refreshVisibleHoldersInPlace(pager);
+                int newAdapterCount = getItemCount();
+                if (newAdapterCount > oldAdapterCount) {
+                    notifyItemRangeInserted(oldAdapterCount, newAdapterCount - oldAdapterCount);
                 }
                 return;
             }
             data.clear();
             data.addAll(incoming);
             notifyDataSetChanged();
+        }
+
+        private void refreshVisibleHoldersInPlace(ViewPager2 pager) {
+            if (pager != null && pager.getChildAt(0) instanceof RecyclerView) {
+                RecyclerView rv = (RecyclerView) pager.getChildAt(0);
+                for (int i = 0; i < rv.getChildCount(); i++) {
+                    RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
+                    if (h instanceof VH) {
+                        VH vh = (VH) h;
+                        int ap = vh.getAdapterPosition();
+                        Models.Reel updated = reelAtPosition(ap);
+                        if (updated != null) vh.updateMetaInPlace(updated);
+                    }
+                }
+            }
+        }
+
+        private static boolean isPrefixMatch(List<Models.Reel> prefix, List<Models.Reel> full) {
+            if (prefix.isEmpty() || full.size() < prefix.size()) return false;
+            for (int i = 0; i < prefix.size(); i++) {
+                String idA = prefix.get(i) != null ? prefix.get(i).id : null;
+                String idB = full.get(i) != null ? full.get(i).id : null;
+                if (idA == null || !idA.equals(idB)) return false;
+            }
+            return true;
         }
 
         private static boolean sameIdSequence(List<Models.Reel> a, List<Models.Reel> b) {
@@ -1556,9 +1654,21 @@ public class ReelsFragment extends Fragment {
                 String myRx = (me != null && reel.reactions != null) ? reel.reactions.get(me) : null;
                 if (myRx == null && me != null && reel.likedBy != null && reel.likedBy.contains(me)) myRx = "love";
                 likeIcon.setText(myRx != null ? Reactions.emojiFor(myRx) : "🤍");
-                likeBtnBox.setBackground(Ui.roundStroke(itemView.getContext(),
-                        myRx != null ? 0x66F02849 : 0x66000000, 22,
-                        myRx != null ? 0xAAF02849 : 0x33FFFFFF, 1));
+                int rxBg = 0x66000000;
+                int rxStroke = 0x33FFFFFF;
+                if (myRx != null) {
+                    if ("like".equals(myRx)) {
+                        rxBg = 0x771877F2;
+                        rxStroke = 0xFF1877F2;
+                    } else if ("love".equals(myRx)) {
+                        rxBg = 0x66F02849;
+                        rxStroke = 0xCCF02849;
+                    } else {
+                        rxBg = 0x66E09B00;
+                        rxStroke = 0xCCE09B00;
+                    }
+                }
+                likeBtnBox.setBackground(Ui.roundStroke(itemView.getContext(), rxBg, 22, rxStroke, 1));
                 int totalLikes = Math.max(reel.likes, reel.reactions != null ? reel.reactions.size() : 0);
                 likeCount.setText(totalLikes > 0 ? Format.count(totalLikes) : "Like");
                 commentCount.setText(reel.comments > 0 ? Format.count(reel.comments) : "Comment");
@@ -1579,50 +1689,110 @@ public class ReelsFragment extends Fragment {
                 ).start();
             }
 
-            private void applyReelReaction(String type, boolean onlyAdd) {
+            private void applyReelReaction(String requestedType, boolean onlyAdd) {
                 String me = Fb.uid();
                 if (me == null || reel == null) return;
                 if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
-                String prev = reel.reactions.get(me);
+                String prev = reel.reactions != null ? reel.reactions.get(me) : null;
+                if (prev == null && reel.likedBy != null && reel.likedBy.contains(me)) prev = "love";
                 if (onlyAdd && prev != null) {
                     renderCounts();
                     return;
                 }
-                if (type == null) {
+                // Tapping or re-selecting the exact same reaction toggles it off cleanly
+                final String nextType = (!onlyAdd && prev != null && prev.equals(requestedType))
+                        ? null : requestedType;
+
+                markReelReactionTap(reel.id);
+                if (nextType == null) {
                     reel.reactions.remove(me);
                     reel.likedBy.remove(me);
                     if (prev != null && reel.likes > 0) reel.likes--;
                 } else {
-                    reel.reactions.put(me, type);
+                    reel.reactions.put(me, nextType);
                     if (!reel.likedBy.contains(me)) reel.likedBy.add(me);
                     if (prev == null) reel.likes++;
                 }
+                reel.likes = Math.max(reel.likes, reel.reactions.size());
                 renderCounts();
 
-                String col = reel.collectionName();
-                int delta = (prev == null && type != null) ? 1 : (prev != null && type == null ? -1 : 0);
-                Map<String, Object> up = new HashMap<>();
-                if (reel.isFromPost) {
-                    Map<String, Object> rxMap = new HashMap<>();
-                    if (type == null) {
-                        rxMap.put(me, FieldValue.delete());
-                    } else {
-                        rxMap.put(me, Fb.map("type", type, "name", Fb.myName(), "photo", Fb.myPhoto()));
-                    }
-                    up.put("reactions", rxMap);
-                } else {
-                    Map<String, Object> rxMap = new HashMap<>();
-                    rxMap.put(me, type == null ? FieldValue.delete() : type);
-                    up.put("reactions", rxMap);
-                    up.put("likedBy", type == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                }
-                if (delta != 0) up.put("likes", FieldValue.increment(delta));
-                Fb.db().collection(col).document(reel.id).set(up, SetOptions.merge());
+                final Context ctx = itemView.getContext();
+                final int delta = (prev == null && nextType != null) ? 1 : (prev != null && nextType == null ? -1 : 0);
 
-                if (type != null && prev == null && !me.equals(reel.authorId)) {
-                    FeedAlgorithm.recordCreatorAffinity(itemView.getContext(), reel.authorId, 6);
+                if (reel.isFromPost) {
+                    // Video Post in Reels: sync posts/{id}.reactionsMap + posts/{id}/reactions/{me} + FastCache!
+                    com.friendbook.social.core.FastCache.markLocalReactionTap(reel.id);
+                    List<String> activeTypes = new ArrayList<>();
+                    for (String t : Reactions.TYPES) {
+                        if (reel.reactions.containsValue(t)) activeTypes.add(t);
+                    }
+                    com.friendbook.social.core.FastCache.setReactionTypes(reel.id, activeTypes);
+                    com.friendbook.social.core.FastCache.setReactionState(ctx, reel.id, nextType, reel.likes, true);
+
+                    com.google.firebase.firestore.DocumentReference postRef =
+                            Fb.db().collection("posts").document(reel.id);
+                    com.google.firebase.firestore.DocumentReference subRef =
+                            postRef.collection("reactions").document(me);
+
+                    if (nextType == null) {
+                        subRef.delete();
+                        Map<String, Object> dot = new HashMap<>();
+                        dot.put("reactionsMap." + me, FieldValue.delete());
+                        if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+                        postRef.update(dot).addOnFailureListener(err -> {
+                            if (delta != 0) {
+                                Map<String, Object> up = new HashMap<>();
+                                up.put("likes", FieldValue.increment(delta));
+                                postRef.set(up, SetOptions.merge());
+                            }
+                        });
+                    } else {
+                        final Map<String, Object> rxEntry = new HashMap<>();
+                        rxEntry.put("userId", me);
+                        rxEntry.put("userName", Fb.myName());
+                        rxEntry.put("userPhoto", Fb.myPhoto());
+                        rxEntry.put("userTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
+                        rxEntry.put("type", nextType);
+                        rxEntry.put("createdAt", System.currentTimeMillis());
+                        subRef.set(rxEntry);
+
+                        Map<String, Object> dot = new HashMap<>();
+                        dot.put("reactionsMap." + me, rxEntry);
+                        if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+                        postRef.update(dot).addOnFailureListener(err -> {
+                            Map<String, Object> nested = new HashMap<>();
+                            Map<String, Object> rmap = new HashMap<>();
+                            rmap.put(me, rxEntry);
+                            nested.put("reactionsMap", rmap);
+                            if (delta != 0) nested.put("likes", FieldValue.increment(delta));
+                            postRef.set(nested, SetOptions.merge());
+                        });
+                    }
+                } else {
+                    // Native Reel in reels/{id}: atomic dot-path update with merge fallback
+                    com.google.firebase.firestore.DocumentReference reelRef =
+                            Fb.db().collection("reels").document(reel.id);
+                    Map<String, Object> dot = new HashMap<>();
+                    dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);
+                    dot.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                    if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+                    reelRef.update(dot).addOnFailureListener(err -> {
+                        Map<String, Object> fallback = new HashMap<>();
+                        if (nextType != null) {
+                            Map<String, Object> rxMap = new HashMap<>();
+                            rxMap.put(me, nextType);
+                            fallback.put("reactions", rxMap);
+                        }
+                        fallback.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                        if (delta != 0) fallback.put("likes", FieldValue.increment(delta));
+                        reelRef.set(fallback, SetOptions.merge());
+                    });
+                }
+
+                if (nextType != null && prev == null && !me.equals(reel.authorId)) {
+                    FeedAlgorithm.recordCreatorAffinity(ctx, reel.authorId, 6);
                     Notify.send(reel.authorId, "reel_like",
-                            Fb.myName() + " reacted " + Reactions.emojiFor(type) + " to your reel", reel.id);
+                            Fb.myName() + " reacted " + Reactions.emojiFor(nextType) + " to your reel", reel.id);
                 }
             }
 

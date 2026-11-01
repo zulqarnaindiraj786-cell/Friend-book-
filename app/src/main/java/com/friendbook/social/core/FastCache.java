@@ -58,6 +58,7 @@ public final class FastCache {
     private static final Map<String, String> MY_REACTIONS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> REACTION_TOTALS = new ConcurrentHashMap<>();
     private static final Map<String, String> REACTION_EMOJIS = new ConcurrentHashMap<>();
+    private static final Map<String, List<String>> REACTION_TYPES = new ConcurrentHashMap<>();
     private static final Map<String, Long> LOCAL_REACTION_TS = new ConcurrentHashMap<>();
     private static final Set<String> REACTION_FETCHED = Collections.synchronizedSet(new HashSet<>());
     private static final Set<String> REVEALED_PHOTOS = Collections.synchronizedSet(new HashSet<>());
@@ -120,6 +121,7 @@ public final class FastCache {
         MY_REACTIONS.clear();
         REACTION_TOTALS.clear();
         REACTION_EMOJIS.clear();
+        REACTION_TYPES.clear();
         LOCAL_REACTION_TS.clear();
         REACTION_FETCHED.clear();
         REVEALED_PHOTOS.clear();
@@ -280,21 +282,59 @@ public final class FastCache {
         Integer v = REACTION_TOTALS.get(postId);
         if (v == null) return Math.max(0, fallback);
         Long lastLocal = LOCAL_REACTION_TS.get(postId);
-        boolean inFlight = lastLocal != null && (System.currentTimeMillis() - lastLocal) < 4000L;
-        if (!inFlight && !REACTION_FETCHED.contains(postId) && fallback > v) {
-            return fallback;
+        boolean inFlight = lastLocal != null && (System.currentTimeMillis() - lastLocal) < 4500L;
+        if (inFlight) {
+            return Math.max(0, v);
+        }
+        if (fallback >= 0 && fallback != v && !REACTION_FETCHED.contains(postId)) {
+            return Math.max(fallback, v);
         }
         return Math.max(0, v);
     }
 
+    /** Returns ordered distinct reaction types active on this post (e.g. ["love", "haha"]), or empty list. */
+    public static List<String> getReactionTypes(String postId) {
+        if (postId == null) return Collections.emptyList();
+        List<String> list = REACTION_TYPES.get(postId);
+        return list == null ? Collections.emptyList() : new ArrayList<>(list);
+    }
+
+    public static void setReactionTypes(String postId, List<String> types) {
+        if (postId == null) return;
+        if (types == null || types.isEmpty()) {
+            REACTION_TYPES.remove(postId);
+            REACTION_EMOJIS.remove(postId);
+            return;
+        }
+        List<String> clean = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        for (String t : types) {
+            if (t == null || t.isEmpty() || clean.contains(t)) continue;
+            clean.add(t);
+            if (clean.size() <= 3) {
+                sb.append(com.friendbook.social.post.Reactions.emojiFor(t));
+            }
+        }
+        if (clean.isEmpty()) {
+            REACTION_TYPES.remove(postId);
+            REACTION_EMOJIS.remove(postId);
+        } else {
+            REACTION_TYPES.put(postId, clean);
+            REACTION_EMOJIS.put(postId, sb.toString());
+        }
+    }
+
     public static String getReactionEmojis(String postId) {
-        if (postId == null) return "👍";
+        if (postId == null) return "";
         String s = REACTION_EMOJIS.get(postId);
-        return (s == null || s.isEmpty()) ? "👍" : s;
+        return s == null ? "" : s;
     }
 
     public static void setReactionEmojis(String postId, String emojis) {
-        if (postId != null && emojis != null && !emojis.isEmpty()) {
+        if (postId == null) return;
+        if (emojis == null || emojis.isEmpty()) {
+            REACTION_EMOJIS.remove(postId);
+        } else {
             REACTION_EMOJIS.put(postId, emojis);
         }
     }
@@ -309,18 +349,21 @@ public final class FastCache {
         return ts != null && (System.currentTimeMillis() - ts) < 4500L;
     }
 
-    /** Seeds cold-start reaction state from embedded post.reactionsMap without blocking subcollection sync. */
+    /**
+     * Hydrates reaction state from embedded post.reactionsMap (both cold start AND live Firestore snapshots)
+     * whenever no local optimistic tap is in flight — ensuring multi-user reactions & reaction type switches
+     * (love, haha, wow, sad, angry, like) stay 100% accurate with zero stuck icons!
+     */
     public static void seedReactionFromPostMap(String postId, String myReaction, int total) {
         if (postId == null || isLocalReactionInFlight(postId)) return;
         int cleanTotal = Math.max(0, total);
-        Integer existing = REACTION_TOTALS.get(postId);
-        if (existing == null || !REACTION_FETCHED.contains(postId)) {
-            REACTION_TOTALS.put(postId, cleanTotal);
-        }
-        if (!MY_REACTIONS.containsKey(postId)) {
-            MY_REACTIONS.put(postId, (myReaction == null || myReaction.isEmpty()) ? "none" : myReaction);
-        } else if (myReaction != null && !myReaction.isEmpty() && !REACTION_FETCHED.contains(postId)) {
+        REACTION_TOTALS.put(postId, cleanTotal);
+        if (myReaction != null && !myReaction.isEmpty()) {
             MY_REACTIONS.put(postId, myReaction);
+        } else if (cleanTotal == 0) {
+            MY_REACTIONS.put(postId, "none");
+        } else if (!MY_REACTIONS.containsKey(postId)) {
+            MY_REACTIONS.put(postId, "none");
         }
     }
 
@@ -683,6 +726,23 @@ public final class FastCache {
             for (String u : p.mediaUrls) m.put(u);
             o.put("mediaUrls", m);
         }
+        if (p.reactionsMap != null && !p.reactionsMap.isEmpty()) {
+            JSONObject rxJson = new JSONObject();
+            int rc = 0;
+            for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) continue;
+                JSONObject sub = new JSONObject();
+                Object t = e.getValue().get("type");
+                sub.put("type", t == null ? "like" : String.valueOf(t));
+                Object un = e.getValue().get("userName");
+                if (un != null) sub.put("userName", String.valueOf(un));
+                Object up = e.getValue().get("userPhoto");
+                if (up != null) sub.put("userPhoto", String.valueOf(up));
+                rxJson.put(e.getKey(), sub);
+                if (++rc >= 120) break;
+            }
+            o.put("reactionsMap", rxJson);
+        }
         return o;
     }
 
@@ -724,6 +784,22 @@ public final class FastCache {
                 String u = m.optString(i, "");
                 if (!u.isEmpty()) p.mediaUrls.add(u);
             }
+        }
+        JSONObject rxJson = o.optJSONObject("reactionsMap");
+        if (rxJson != null) {
+            java.util.Iterator<String> it = rxJson.keys();
+            while (it.hasNext()) {
+                String uid = it.next();
+                JSONObject subObj = rxJson.optJSONObject(uid);
+                if (uid != null && subObj != null) {
+                    Map<String, Object> sub = new java.util.HashMap<>();
+                    sub.put("type", subObj.optString("type", "like"));
+                    sub.put("userName", subObj.optString("userName", ""));
+                    sub.put("userPhoto", subObj.optString("userPhoto", ""));
+                    p.reactionsMap.put(uid, sub);
+                }
+            }
+            if (p.reactionsMap.size() > p.likes) p.likes = p.reactionsMap.size();
         }
         return p;
     }
