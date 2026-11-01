@@ -456,30 +456,33 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         });
     }
 
-    /** 0ms optimistic reaction update + multi-user Firestore sync via CommentsEngine! */
+    /** 0ms optimistic reaction update + multi-user Firestore sync strictly per `currentUserId` (`Fb.uid()`)! */
     private void toggleCommentReaction(Models.Comment c, String type) {
         String me = Fb.uid();
-        if (me == null || c == null || c.id == null) return;
+        if (me == null || me.isEmpty() || c == null || c.id == null) return;
         if (c.reactions == null) c.reactions = new HashMap<>();
+        if (c.likedBy == null) c.likedBy = new ArrayList<>();
         String prev = c.reactions.get(me);
 
         Map<String, String> nextMap = new HashMap<>(c.reactions);
-        int delta = 0;
-        if (type == null) {
-            if (prev != null) { nextMap.remove(me); delta = -1; }
-        } else if (type.equals(prev)) {
+        List<String> nextLikedBy = new ArrayList<>(c.likedBy);
+        final String nextType;
+        if (type == null || type.equals(prev)) {
+            nextType = null;
             nextMap.remove(me);
-            delta = -1;
+            nextLikedBy.remove(me);
         } else {
-            nextMap.put(me, type);
-            if (prev == null) delta = 1;
+            nextType = Models.normalizeReactionType(type, "like");
+            nextMap.put(me, nextType);
+            if (!nextLikedBy.contains(me)) nextLikedBy.add(me);
         }
         c.reactions = nextMap;
-        c.likes = Math.max(nextMap.size(), Math.max(0, c.likes + delta));
+        c.likedBy = nextLikedBy;
+        c.likes = nextMap.size();
         notifyDataSetChanged(); // Instant 0ms UI update!
 
         String cid = counterId != null ? counterId : c.postId;
-        CommentsEngine.updateCommentReaction(counterCollection, cid, c);
+        CommentsEngine.updateCommentReaction(counterCollection, cid, c, me, nextType);
     }
 
     private void editDialog(Models.Comment c) {

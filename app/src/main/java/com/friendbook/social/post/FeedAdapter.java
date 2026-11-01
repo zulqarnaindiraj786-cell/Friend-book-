@@ -136,10 +136,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (payload-only — ZERO height/scroll jump!). */
     public void onFastReactionUpdate(String postId, String mine, int total) {
         if (postId == null) return;
+        String me = Fb.uid();
         for (int i = 0; i < posts.size(); i++) {
             Models.Post p = posts.get(i);
             if (p != null && postId.equals(p.id)) {
                 p.likes = total;
+                if (me != null && !me.isEmpty()) {
+                    if (p.reactionsMap == null) p.reactionsMap = new HashMap<>();
+                    if (mine == null || mine.isEmpty()) {
+                        p.reactionsMap.remove(me);
+                    } else {
+                        Map<String, Object> entry = p.reactionsMap.get(me);
+                        if (entry == null) entry = new HashMap<>();
+                        entry.put("userId", me);
+                        entry.put("type", mine);
+                        p.reactionsMap.put(me, entry);
+                    }
+                }
                 notifyItemChanged(offset() + slotForPostIndex(i), "REACTION_ONLY");
                 return;
             }
@@ -279,7 +292,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 PostVH vh = (PostVH) h;
                 Reactions.hydrateFromPostInstant(p);
                 int totalLikes = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
-                String myReact = com.friendbook.social.core.FastCache.getMyReaction(p.id);
+                String myReact = Reactions.resolveCurrentUserReaction(p);
                 renderReactionBar(activity, vh, p, myReact, totalLikes);
                 if (payloads.contains("META_ONLY")) {
                     bindInlineComments(activity, vh, p);
@@ -449,7 +462,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     Ui.haptic(v);
                     Reactions.tapLike(activity, p);
                     renderReactionBar(activity, vh, p,
-                            com.friendbook.social.core.FastCache.getMyReaction(p.id),
+                            Reactions.resolveCurrentUserReaction(p),
                             com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
                     animateLikePop(vh);
                 });
@@ -598,7 +611,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Ui.haptic(v);
             Reactions.tapLike(c, p);
             renderReactionBar(c, vh, p,
-                    com.friendbook.social.core.FastCache.getMyReaction(p.id),
+                    Reactions.resolveCurrentUserReaction(p),
                     com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
             animateLikePop(vh);
         });
@@ -606,7 +619,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Reactions.show(vh.like, type -> {
                 Reactions.apply(c, p, type);
                 renderReactionBar(c, vh, p,
-                        com.friendbook.social.core.FastCache.getMyReaction(p.id),
+                        Reactions.resolveCurrentUserReaction(p),
                         com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
                 animateLikePop(vh);
             });
@@ -847,12 +860,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         @Override public boolean onDoubleTap(android.view.MotionEvent e) {
                             if (Prefs.doubleTapToLike(c)) {
                                 Ui.haptic(vh.image);
-                                String curRx = com.friendbook.social.core.FastCache.getMyReaction(p.id);
+                                String curRx = Reactions.resolveCurrentUserReaction(p);
                                 if (!"love".equals(curRx)) {
                                     Reactions.apply(c, p, "love");
                                 }
                                 renderReactionBar(c, vh, p,
-                                        com.friendbook.social.core.FastCache.getMyReaction(p.id),
+                                        Reactions.resolveCurrentUserReaction(p),
                                         com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
                                 animateLikePop(vh);
                                 Ui.toast(c, "❤️ Loved!");
@@ -897,10 +910,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // ---------- ⚡ 0.0ms Instant Reaction & Counter Render + Exact Subcollection Sync ----------
         if (vh.reactReg != null) { vh.reactReg.remove(); vh.reactReg = null; }
         vh.itemView.setTag(p.id);
-        // Hydrate embedded post.reactionsMap BEFORE reading getMyReaction so already-liked posts render SOLID BLUE in 0.0ms!
+        // Hydrate embedded post.reactionsMap BEFORE reading currentUserId's reaction!
         Reactions.hydrateFromPostInstant(p);
         int totalLikes = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
-        String myReact = com.friendbook.social.core.FastCache.getMyReaction(p.id);
+        String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
 
@@ -1000,12 +1013,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private void renderReactionBar(Context c, PostVH vh, Models.Post p, String mine, int total) {
+        String currentUid = Fb.uid();
+        if (currentUid == null || currentUid.isEmpty()) {
+            mine = null;
+        }
         boolean hideCounts = Prefs.hideReactionCounts(c)
                 || (Fb.me != null && Fb.me.hideReactionCounts);
         boolean iReacted = mine != null && !mine.isEmpty();
         int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
 
-        // 1. Left clickable reactions summary: exact active badges ([🔵👍] and/or ❤️😂😮😢😡) + "2" or "You and 2 others"
+        // 1. Separate Total Count Summary Row above the buttons:
+        //    Shows total count ("1", "5", or "You and 4 others") separately from the user's own reaction button!
         if (effectiveTotal > 0) {
             List<String> activeTypes = com.friendbook.social.core.FastCache.getReactionTypes(p.id);
             if (activeTypes.isEmpty() && p.reactionsMap != null && !p.reactionsMap.isEmpty()) {
@@ -1051,7 +1069,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     summaryLabel = "You and " + Format.count(effectiveTotal - 1) + " others";
                 }
             } else {
-                summaryLabel = hideCounts ? "" : Format.count(effectiveTotal);
+                summaryLabel = hideCounts ? "Reactions" : Format.count(effectiveTotal);
             }
             vh.tagSummary.setText(summaryLabel);
             vh.tagSummary.setVisibility(summaryLabel.isEmpty() ? View.GONE : View.VISIBLE);
@@ -1081,43 +1099,43 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         // 3. Three Rounded Pill Capsule Buttons (#F0F2F5 Light / inputBg Dark):
+        //    STRICT PER-USER RULE:
+        //    - If `currentUserId` has NOT reacted (`!iReacted`) -> 100% UNCOLORED neutral outline button!
+        //    - If `currentUserId` HAS reacted (`iReacted`) -> ONLY `currentUserId`'s own reaction is colored!
         int pillBg = Ui.inputBg(c);
-        int iconTint = Ui.txt(c);
+        int neutralTint = Ui.sub(c);
 
-        // Pill 1: LIKE (Hollow dark outline thumb when NOT liked -> SOLID #1877F2 BLUE thumb when LIKED!)
-        vh.like.setBackground(Ui.round(c, pillBg, 20));
         if (!iReacted) {
+            vh.like.setBackground(Ui.round(c, pillBg, 20));
             vh.likeIcon.setVisibility(View.VISIBLE);
             vh.likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
-            vh.likeIcon.setColorFilter(iconTint);
+            vh.likeIcon.setColorFilter(neutralTint);
             vh.likeEmojiTv.setVisibility(View.GONE);
-            if (!hideCounts && effectiveTotal > 0) {
-                vh.likeTxt.setText(Format.count(effectiveTotal));
-                vh.likeTxt.setTextColor(iconTint);
-                vh.likeTxt.setTypeface(android.graphics.Typeface.DEFAULT);
-                vh.likeTxt.setVisibility(View.VISIBLE);
-            } else {
-                vh.likeTxt.setText("");
-                vh.likeTxt.setVisibility(View.GONE);
-            }
+            vh.likeTxt.setText("Like");
+            vh.likeTxt.setTextColor(neutralTint);
+            vh.likeTxt.setTypeface(android.graphics.Typeface.DEFAULT);
+            vh.likeTxt.setVisibility(View.VISIBLE);
         } else if ("like".equals(mine)) {
+            vh.like.setBackground(Ui.roundStroke(c, 0x1A1877F2, 20, 0x551877F2, 1));
             vh.likeIcon.setVisibility(View.VISIBLE);
             vh.likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_filled);
             vh.likeIcon.clearColorFilter(); // Pure solid #1877F2 blue vector thumb!
             vh.likeEmojiTv.setVisibility(View.GONE);
-            String cntTxt = hideCounts ? "Liked" : Format.count(effectiveTotal);
-            vh.likeTxt.setText(cntTxt);
-            vh.likeTxt.setTextColor(iconTint);
-            vh.likeTxt.setTypeface(android.graphics.Typeface.DEFAULT);
+            vh.likeTxt.setText("Like");
+            vh.likeTxt.setTextColor(Ui.BLUE);
+            vh.likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
             vh.likeTxt.setVisibility(View.VISIBLE);
         } else {
-            // Non-like reaction (❤️ Love, 😂 Haha, 😮 Wow, 😢 Sad, 😡 Angry)
+            // Current user's own non-like reaction (❤️ Love, 😂 Haha, 😮 Wow, 😢 Sad, 😡 Angry)
+            int rxColor = Reactions.colorFor(mine);
+            int tintBg = (rxColor & 0x00FFFFFF) | 0x1A000000;
+            int tintStroke = (rxColor & 0x00FFFFFF) | 0x55000000;
+            vh.like.setBackground(Ui.roundStroke(c, tintBg, 20, tintStroke, 1));
             vh.likeIcon.setVisibility(View.GONE);
             vh.likeEmojiTv.setText(Reactions.emojiFor(mine));
             vh.likeEmojiTv.setVisibility(View.VISIBLE);
-            String cntTxt = hideCounts ? Reactions.labelFor(mine) : Format.count(effectiveTotal);
-            vh.likeTxt.setText(cntTxt);
-            vh.likeTxt.setTextColor(Reactions.colorFor(mine));
+            vh.likeTxt.setText(Reactions.labelFor(mine));
+            vh.likeTxt.setTextColor(rxColor);
             vh.likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
             vh.likeTxt.setVisibility(View.VISIBLE);
         }

@@ -655,6 +655,8 @@ public class SettingsActivity extends Activity {
                     Ui.toast(this, "Already signed in as " + target.name);
                 } else {
                     Presence.goOffline();
+                    com.friendbook.social.core.FastCache.clearAll(this);
+                    com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
                     Fb.auth().signOut();
                     Fb.me = null;
                     Prefs.setUnlockedSession(this, false);
@@ -1310,6 +1312,7 @@ public class SettingsActivity extends Activity {
                     Fb.myName(), Fb.myPhoto());
         }
         Presence.goOffline();
+        com.friendbook.social.core.FastCache.clearAll(this);
         com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
         Fb.auth().signOut();
         Fb.me = null;

@@ -69,16 +69,65 @@ public final class FastCache {
     private static volatile List<Models.ChatRoom> CHATS = new ArrayList<>();
     private static volatile List<Models.Notif> NOTIFS = new ArrayList<>();
     private static volatile Models.User CACHED_ME = null;
+    private static volatile Context APP_CTX = null;
+    private static volatile String ACTIVE_UID = "";
     private static volatile boolean initialized = false;
     private static volatile int ramHits = 0;
+
+    /** Builds a strictly user-scoped key ("<uid>:<postId>") so User A's reaction NEVER leaks to User B! */
+    private static String userPostKey(String uid, String postId) {
+        if (uid == null || uid.isEmpty() || postId == null || postId.isEmpty()) return null;
+        return uid + ":" + postId;
+    }
+
+    /** Ensures in-memory per-user reaction maps match the currently authenticated Firebase user (`Fb.uid()`). */
+    public static synchronized String ensureUserScope() {
+        String curUid = Fb.uid();
+        String safeUid = curUid == null ? "" : curUid;
+        if (!safeUid.equals(ACTIVE_UID)) {
+            MY_REACTIONS.clear();
+            LOCAL_REACTION_TS.clear();
+            REACTION_FETCHED.clear();
+            ACTIVE_UID = safeUid;
+            if (!safeUid.isEmpty() && APP_CTX != null) {
+                try {
+                    SharedPreferences sp = APP_CTX.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+                    String reactRaw = sp.getString("my_reactions_json_" + safeUid, null);
+                    if (reactRaw != null && !reactRaw.isEmpty()) {
+                        JSONObject o = new JSONObject(reactRaw);
+                        java.util.Iterator<String> it = o.keys();
+                        while (it.hasNext()) {
+                            String postId = it.next();
+                            String v = o.optString(postId, "");
+                            if (postId != null && !postId.isEmpty() && !v.isEmpty()) {
+                                MY_REACTIONS.put(safeUid + ":" + postId, v);
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) { }
+            }
+        }
+        return safeUid.isEmpty() ? null : safeUid;
+    }
 
     // ===================== BOOTSTRAP =====================
 
     public static synchronized void init(Context ctx) {
-        if (initialized || ctx == null) return;
+        if (ctx != null && APP_CTX == null) {
+            APP_CTX = ctx.getApplicationContext();
+        }
+        if (initialized || ctx == null) {
+            ensureUserScope();
+            return;
+        }
         initialized = true;
         Context app = ctx.getApplicationContext();
+        APP_CTX = app;
         SharedPreferences sp = app.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        // Remove legacy unscoped reaction cache so old cross-account reactions never show up!
+        if (sp.contains("my_reactions_json")) {
+            sp.edit().remove("my_reactions_json").apply();
+        }
         try {
             String meRaw = sp.getString("me_json", null);
             if (meRaw != null && !meRaw.isEmpty()) {
@@ -102,18 +151,7 @@ public final class FastCache {
             }
         } catch (Throwable ignored) { }
 
-        try {
-            String reactRaw = sp.getString("my_reactions_json", null);
-            if (reactRaw != null && !reactRaw.isEmpty()) {
-                JSONObject o = new JSONObject(reactRaw);
-                java.util.Iterator<String> it = o.keys();
-                while (it.hasNext()) {
-                    String k = it.next();
-                    String v = o.optString(k, "");
-                    if (!v.isEmpty()) MY_REACTIONS.put(k, v);
-                }
-            }
-        } catch (Throwable ignored) { }
+        ensureUserScope();
     }
 
     public static void clearAll(Context ctx) {
@@ -130,8 +168,10 @@ public final class FastCache {
         CHATS = new ArrayList<>();
         NOTIFS = new ArrayList<>();
         CACHED_ME = null;
-        if (ctx != null) {
-            ctx.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        ACTIVE_UID = "";
+        Context target = ctx != null ? ctx.getApplicationContext() : APP_CTX;
+        if (target != null) {
+            target.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                     .edit().clear().apply();
         }
     }
@@ -184,14 +224,16 @@ public final class FastCache {
         List<Models.Post> copy = new ArrayList<>(posts);
         FEED = copy;
         long now = System.currentTimeMillis();
+        String uid = ensureUserScope();
         for (Models.Post p : copy) {
             if (p != null && p.id != null) {
-                Long lastLocal = LOCAL_REACTION_TS.get(p.id);
-                boolean inFlight = lastLocal != null && (now - lastLocal) < 4000L;
+                String uKey = userPostKey(uid, p.id);
+                Long lastLocal = uKey == null ? null : LOCAL_REACTION_TS.get(uKey);
+                boolean inFlight = lastLocal != null && (now - lastLocal) < 4500L;
                 if (!inFlight) {
                     Integer prev = REACTION_TOTALS.get(p.id);
                     int incoming = Math.max(0, p.likes);
-                    if (prev == null || !REACTION_FETCHED.contains(p.id) || incoming > prev) {
+                    if (prev == null || (uKey != null && !REACTION_FETCHED.contains(uKey)) || incoming != prev) {
                         REACTION_TOTALS.put(p.id, incoming);
                     }
                 }
@@ -273,7 +315,10 @@ public final class FastCache {
 
     public static String getMyReaction(String postId) {
         if (postId == null) return null;
-        String r = MY_REACTIONS.get(postId);
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        if (uKey == null) return null;
+        String r = MY_REACTIONS.get(uKey);
         return (r == null || r.isEmpty() || "none".equals(r)) ? null : r;
     }
 
@@ -281,13 +326,15 @@ public final class FastCache {
         if (postId == null) return Math.max(0, fallback);
         Integer v = REACTION_TOTALS.get(postId);
         if (v == null) return Math.max(0, fallback);
-        Long lastLocal = LOCAL_REACTION_TS.get(postId);
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        Long lastLocal = uKey == null ? null : LOCAL_REACTION_TS.get(uKey);
         boolean inFlight = lastLocal != null && (System.currentTimeMillis() - lastLocal) < 4500L;
         if (inFlight) {
             return Math.max(0, v);
         }
-        if (fallback >= 0 && fallback != v && !REACTION_FETCHED.contains(postId)) {
-            return Math.max(fallback, v);
+        if (fallback >= 0 && fallback != v && (uKey == null || !REACTION_FETCHED.contains(uKey))) {
+            return Math.max(0, fallback);
         }
         return Math.max(0, v);
     }
@@ -340,51 +387,65 @@ public final class FastCache {
     }
 
     public static void markLocalReactionTap(String postId) {
-        if (postId != null) LOCAL_REACTION_TS.put(postId, System.currentTimeMillis());
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        if (uKey != null) LOCAL_REACTION_TS.put(uKey, System.currentTimeMillis());
     }
 
     public static boolean isLocalReactionInFlight(String postId) {
-        if (postId == null) return false;
-        Long ts = LOCAL_REACTION_TS.get(postId);
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        if (uKey == null) return false;
+        Long ts = LOCAL_REACTION_TS.get(uKey);
         return ts != null && (System.currentTimeMillis() - ts) < 4500L;
     }
 
     /**
-     * Hydrates reaction state from embedded post.reactionsMap (both cold start AND live Firestore snapshots)
-     * whenever no local optimistic tap is in flight — ensuring multi-user reactions & reaction type switches
-     * (love, haha, wow, sad, angry, like) stay 100% accurate with zero stuck icons!
+     * Hydrates reaction state from embedded post.reactionsMap strictly for `currentUserId` (`Fb.uid()`).
+     * If `currentUserId` has NOT reacted on this post, `MY_REACTIONS` for `currentUserId` is explicitly set
+     * to `"none"` so another user's reaction NEVER shows colored!
      */
     public static void seedReactionFromPostMap(String postId, String myReaction, int total) {
         if (postId == null || isLocalReactionInFlight(postId)) return;
         int cleanTotal = Math.max(0, total);
         REACTION_TOTALS.put(postId, cleanTotal);
-        if (myReaction != null && !myReaction.isEmpty()) {
-            MY_REACTIONS.put(postId, myReaction);
-        } else if (cleanTotal == 0) {
-            MY_REACTIONS.put(postId, "none");
-        } else if (!MY_REACTIONS.containsKey(postId)) {
-            MY_REACTIONS.put(postId, "none");
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        if (uKey == null) return;
+        if (myReaction != null && !myReaction.isEmpty() && !"none".equals(myReaction)) {
+            MY_REACTIONS.put(uKey, myReaction);
+        } else {
+            MY_REACTIONS.put(uKey, "none");
         }
     }
 
     public static boolean isReactionSynced(String postId) {
-        return postId != null && REACTION_FETCHED.contains(postId);
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        return uKey != null && REACTION_FETCHED.contains(uKey);
     }
 
     public static void markReactionSynced(String postId) {
-        if (postId != null) REACTION_FETCHED.add(postId);
+        String uid = ensureUserScope();
+        String uKey = userPostKey(uid, postId);
+        if (uKey != null) REACTION_FETCHED.add(uKey);
     }
 
     public static void setReactionState(Context ctx, String postId, String myReaction, int total, boolean notify) {
         if (postId == null) return;
+        if (ctx != null && APP_CTX == null) APP_CTX = ctx.getApplicationContext();
         int cleanTotal = Math.max(0, total);
         REACTION_TOTALS.put(postId, cleanTotal);
-        if (myReaction == null || myReaction.isEmpty()) {
-            MY_REACTIONS.put(postId, "none");
-        } else {
-            MY_REACTIONS.put(postId, myReaction);
+        final String uid = ensureUserScope();
+        final String uKey = userPostKey(uid, postId);
+        if (uKey != null) {
+            if (myReaction == null || myReaction.isEmpty() || "none".equals(myReaction)) {
+                MY_REACTIONS.put(uKey, "none");
+            } else {
+                MY_REACTIONS.put(uKey, myReaction);
+            }
+            REACTION_FETCHED.add(uKey);
         }
-        REACTION_FETCHED.add(postId);
         // Update post object in FEED if present
         for (Models.Post p : FEED) {
             if (p != null && postId.equals(p.id)) {
@@ -392,20 +453,23 @@ public final class FastCache {
                 break;
             }
         }
-        if (ctx != null) {
-            final Context app = ctx.getApplicationContext();
+        final Context app = ctx != null ? ctx.getApplicationContext() : APP_CTX;
+        if (app != null && uid != null && !uid.isEmpty()) {
+            final String prefix = uid + ":";
             IO.execute(() -> {
                 try {
                     JSONObject o = new JSONObject();
                     int c = 0;
                     for (Map.Entry<String, String> e : MY_REACTIONS.entrySet()) {
-                        if (e.getValue() != null && !"none".equals(e.getValue())) {
-                            o.put(e.getKey(), e.getValue());
+                        String k = e.getKey();
+                        String v = e.getValue();
+                        if (k != null && k.startsWith(prefix) && v != null && !"none".equals(v)) {
+                            o.put(k.substring(prefix.length()), v);
                             if (++c >= 400) break;
                         }
                     }
                     app.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                            .edit().putString("my_reactions_json", o.toString()).apply();
+                            .edit().putString("my_reactions_json_" + uid, o.toString()).apply();
                 } catch (Throwable ignored) { }
             });
         }

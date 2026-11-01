@@ -22,11 +22,15 @@ import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.VideoView;
 
+import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
+import com.google.firebase.firestore.ListenerRegistration;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,7 +38,7 @@ import java.util.Map;
  * - Shows 100% FULL uncropped HD profile pictures (DP), cover photos & post photos!
  * - Interactive Pinch-to-Zoom (1x–5x) + Pan + Double-Tap 2.5x Zoom!
  * - Profile Picture Guard (🛡️) protection (blocks screenshots & downloads for guarded DPs).
- * - Save to Phone, Share, Set as DP/Cover, and bottom Like / Comment / Share bar!
+ * - Save to Phone, Share, Set as DP/Cover, and live per-user Like / Reactions / Comment / Share bar!
  */
 public class FullscreenMediaActivity extends Activity {
 
@@ -43,13 +47,30 @@ public class FullscreenMediaActivity extends Activity {
     private float lastTouchX, lastTouchY;
     private boolean dragging = false;
 
+    private String postId;
+    private Models.Post livePost;
+    private ListenerRegistration postReg;
+    private TextView totalCountSummaryTv;
+    private LinearLayout likePillBox;
+    private ImageView likeOutlineIv;
+    private TextView likeEmojiTv;
+    private TextView likeLabelTv;
+    private TextView commentBtn;
+
+    private final FastCache.ReactionObserver reactionObserver = (pid, mine, total) -> {
+        if (pid != null && pid.equals(postId)) {
+            if (livePost != null) livePost.likes = total;
+            renderPostReactionBar();
+        }
+    };
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         String type = getIntent().getStringExtra("type");
         final String url = getIntent().getStringExtra("url");
         final String title = getIntent().getStringExtra("title");
-        final String postId = getIntent().getStringExtra("post_id");
+        this.postId = getIntent().getStringExtra("post_id");
         final boolean guarded = getIntent().getBooleanExtra("guarded", false);
 
         if (guarded) {
@@ -199,17 +220,61 @@ public class FullscreenMediaActivity extends Activity {
         }
 
         if (postId != null && !postId.isEmpty()) {
+            livePost = new Models.Post();
+            livePost.id = postId;
+
+            // Separate Total Count Summary Row above buttons (shows total reactions & comments separately!)
+            totalCountSummaryTv = Ui.tvBold(this, "", 12.5f, 0xEEFFFFFF);
+            totalCountSummaryTv.setPadding(Ui.dp(this, 4), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 2));
+            totalCountSummaryTv.setVisibility(View.GONE);
+            totalCountSummaryTv.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
+            bottomOverlay.addView(totalCountSummaryTv);
+
             LinearLayout actRow = Ui.row(this);
             actRow.setPadding(0, Ui.dp(this, 8), 0, 0);
-            TextView likeBtn = pillBtn("👍 Like");
-            TextView commentBtn = pillBtn("💬 Comments");
+
+            // Reaction Pill: UNCOLORED outline unless `currentUserId` (`Fb.uid()`) has reacted!
+            likePillBox = Ui.row(this);
+            likePillBox.setGravity(Gravity.CENTER);
+            likePillBox.setBackground(Ui.round(this, 0x38FFFFFF, 20));
+            Ui.pad(likePillBox, 8, 8, 8, 8);
+
+            likeOutlineIv = new ImageView(this);
+            likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+            likeOutlineIv.setColorFilter(Color.WHITE);
+            likePillBox.addView(likeOutlineIv, new LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)));
+
+            likeEmojiTv = Ui.tv(this, "", 15f, Color.WHITE);
+            likeEmojiTv.setIncludeFontPadding(false);
+            likeEmojiTv.setVisibility(View.GONE);
+            likePillBox.addView(likeEmojiTv);
+
+            likeLabelTv = Ui.tvBold(this, "Like", 13, Color.WHITE);
+            likeLabelTv.setPadding(Ui.dp(this, 6), 0, 0, 0);
+            likePillBox.addView(likeLabelTv);
+
+            commentBtn = pillBtn("💬 Comment");
             TextView shareBtn = pillBtn("↗ Share");
 
-            likeBtn.setOnClickListener(v -> {
-                Models.Post p = new Models.Post();
-                p.id = postId;
-                Reactions.tapLike(this, p);
-                Ui.toast(this, "👍 Liked!");
+            likePillBox.setOnClickListener(v -> {
+                Ui.haptic(v);
+                if (livePost == null) {
+                    livePost = new Models.Post();
+                    livePost.id = postId;
+                }
+                Reactions.tapLike(this, livePost);
+                renderPostReactionBar();
+            });
+            likePillBox.setOnLongClickListener(v -> {
+                if (livePost == null) {
+                    livePost = new Models.Post();
+                    livePost.id = postId;
+                }
+                Reactions.show(likePillBox, picked -> {
+                    Reactions.apply(this, livePost, picked);
+                    renderPostReactionBar();
+                });
+                return true;
             });
             commentBtn.setOnClickListener(v -> {
                 Intent ci = new Intent(this, PostDetailActivity.class);
@@ -222,14 +287,116 @@ public class FullscreenMediaActivity extends Activity {
             p1.rightMargin = Ui.dp(this, 8);
             LinearLayout.LayoutParams p2 = new LinearLayout.LayoutParams(0, -2, 1);
             p2.rightMargin = Ui.dp(this, 8);
-            actRow.addView(likeBtn, p1);
+            actRow.addView(likePillBox, p1);
             actRow.addView(commentBtn, p2);
             actRow.addView(shareBtn, new LinearLayout.LayoutParams(0, -2, 1));
             bottomOverlay.addView(actRow);
+            renderPostReactionBar();
         }
 
         root.addView(bottomOverlay, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContentView(root);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (postId != null && !postId.isEmpty()) {
+            FastCache.addReactionObserver(reactionObserver);
+            postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
+                if (d == null || !d.exists()) return;
+                livePost = Models.Post.fromDoc(d);
+                Reactions.syncPostReactions(this, livePost);
+                renderPostReactionBar();
+            });
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        FastCache.removeReactionObserver(reactionObserver);
+        if (postReg != null) {
+            postReg.remove();
+            postReg = null;
+        }
+    }
+
+    private void renderPostReactionBar() {
+        if (postId == null || likePillBox == null || livePost == null) return;
+        Reactions.hydrateFromPostInstant(livePost);
+        String currentUid = Fb.uid();
+        String myReact = (currentUid != null && !currentUid.isEmpty())
+                ? Reactions.resolveCurrentUserReaction(livePost) : null;
+        boolean iReacted = myReact != null && !myReact.isEmpty();
+        int total = FastCache.getReactionTotal(postId, livePost.likes);
+        int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
+
+        // 1. Separate Total Count Summary Row (never colors the reaction button for another user!)
+        if (totalCountSummaryTv != null) {
+            StringBuilder sb = new StringBuilder();
+            if (effectiveTotal > 0) {
+                List<String> types = FastCache.getReactionTypes(postId);
+                if (types.isEmpty() && livePost.reactionsMap != null) {
+                    types = Reactions.computeTopTypesFromMap(livePost.reactionsMap);
+                }
+                int shown = 0;
+                for (String t : types) {
+                    sb.append(Reactions.emojiFor(t));
+                    if (++shown >= 3) break;
+                }
+                if (shown > 0) sb.append(" ");
+                if (iReacted) {
+                    sb.append(effectiveTotal == 1 ? "You"
+                            : (effectiveTotal == 2 ? "You and 1 other"
+                            : ("You and " + Format.count(effectiveTotal - 1) + " others")));
+                } else {
+                    sb.append(Format.count(effectiveTotal))
+                            .append(effectiveTotal == 1 ? " reaction" : " reactions");
+                }
+            }
+            if (livePost.comments > 0) {
+                if (sb.length() > 0) sb.append("  ·  ");
+                sb.append(Format.count(livePost.comments))
+                        .append(livePost.comments == 1 ? " comment" : " comments");
+            }
+            totalCountSummaryTv.setText(sb.toString());
+            totalCountSummaryTv.setVisibility(sb.length() > 0 ? View.VISIBLE : View.GONE);
+        }
+
+        if (commentBtn != null) {
+            commentBtn.setText(livePost.comments > 0
+                    ? ("💬 " + Format.count(livePost.comments)) : "💬 Comment");
+        }
+
+        // 2. Reaction Button: Colored ONLY when `currentUserId` has reacted; 100% neutral otherwise!
+        if (!iReacted) {
+            likePillBox.setBackground(Ui.round(this, 0x38FFFFFF, 20));
+            likeOutlineIv.setVisibility(View.VISIBLE);
+            likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+            likeOutlineIv.setColorFilter(Color.WHITE);
+            likeEmojiTv.setVisibility(View.GONE);
+            likeLabelTv.setText("Like");
+            likeLabelTv.setTextColor(Color.WHITE);
+        } else if ("like".equals(myReact)) {
+            likePillBox.setBackground(Ui.roundStroke(this, 0x551877F2, 20, 0xFF1877F2, 1));
+            likeOutlineIv.setVisibility(View.VISIBLE);
+            likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_filled);
+            likeOutlineIv.clearColorFilter();
+            likeEmojiTv.setVisibility(View.GONE);
+            likeLabelTv.setText("Like");
+            likeLabelTv.setTextColor(0xFF66B2FF);
+        } else {
+            int rxColor = Reactions.colorFor(myReact);
+            int bg = (rxColor & 0x00FFFFFF) | 0x44000000;
+            int stroke = (rxColor & 0x00FFFFFF) | 0xCC000000;
+            likePillBox.setBackground(Ui.roundStroke(this, bg, 20, stroke, 1));
+            likeOutlineIv.setVisibility(View.GONE);
+            likeEmojiTv.setText(Reactions.emojiFor(myReact));
+            likeEmojiTv.setVisibility(View.VISIBLE);
+            likeLabelTv.setText(Reactions.labelFor(myReact));
+            likeLabelTv.setTextColor("love".equals(myReact) ? 0xFFFF6B81 : 0xFFFFD666);
+        }
     }
 
     private TextView pillBtn(String txt) {

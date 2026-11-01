@@ -410,6 +410,7 @@ public class MenuFragment extends Fragment {
                 return;
             }
             Presence.goOffline();
+            com.friendbook.social.core.FastCache.clearAll(a);
             com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(a);
             Fb.auth().signOut();
             Fb.me = null;
