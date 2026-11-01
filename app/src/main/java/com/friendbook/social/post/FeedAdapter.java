@@ -1103,6 +1103,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         //    - If `currentUserId` has NOT reacted (`!iReacted`) -> 100% UNCOLORED neutral outline button!
         //    - If `currentUserId` HAS reacted (`iReacted`) -> ONLY `currentUserId`'s own reaction is colored!
         int pillBg = Ui.inputBg(c);
+        int iconTint = Ui.txt(c);
         int neutralTint = Ui.sub(c);
 
         if (!iReacted) {
