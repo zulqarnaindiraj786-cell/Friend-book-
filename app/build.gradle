@@ -12,8 +12,8 @@ android {
         buildConfigField 'String', 'SUPABASE_URL', '"' + (System.getenv('SUPABASE_URL') ?: 'https://yferhqhgonbcgdewxlfs.supabase.co').replace('"', '') + '"'
         minSdk 24
         targetSdk 36
-        versionCode 42
-        versionName '2.8.10'
+        versionCode 43
+        versionName '2.8.11'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -56,6 +56,7 @@ android {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     implementation platform('com.google.firebase:firebase-bom:33.5.1')
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-firestore'

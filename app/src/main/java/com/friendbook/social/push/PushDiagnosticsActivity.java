@@ -28,6 +28,16 @@ public class PushDiagnosticsActivity extends Activity {
         check.setOnClickListener(v -> request("status"));
         TextView test = Ui.btn(this, "Send a test notification to myself"); root.addView(test);
         test.setOnClickListener(v -> request("self_test"));
+        TextView preview = Ui.btn(this, "Preview friendbook notification sound (local)"); root.addView(preview);
+        preview.setOnClickListener(v -> {
+            if (Fb.uid() == null) { status.setText("Sign in first."); return; }
+            java.util.Map<String, String> d = new java.util.HashMap<>();
+            d.put("toUserId", Fb.uid()); d.put("fromUserId", Fb.uid()); d.put("type", "push_test");
+            d.put("eventId", "sound_preview_" + java.util.UUID.randomUUID());
+            d.put("title", "friendbook"); d.put("body", "Your new notification chime — local preview only.");
+            PushManager.show(this, d);
+            status.setText("Local notification requested. Android permission, channel mute and DND still apply. This does not test remote push.");
+        });
         root.addView(Ui.tv(this, "A successful server response means FCM accepted the request, not that the phone displayed it. "
                 + "Check permission, channel sound, Google Play Services and battery restrictions. Android Force stop blocks push until reopening.", 13, Ui.sub(this)));
         setContentView(root); localStatus();

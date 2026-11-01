@@ -11,7 +11,7 @@ import java.util.*;
 
 /** Private, multi-device registrations; account-scoped data-only pushes in every app state. */
 public final class PushManager {
-    public static final String CHANNEL = "friendbook_social_v1";
+    public static final String CHANNEL = "friendbook_chime_v2";
     public static void init(Context c) {
         channel(c);
         FCMTokenManager.init(c);
@@ -25,14 +25,21 @@ public final class PushManager {
         NotificationManagerCompat.from(c).cancelAll();
         c.getSharedPreferences("push_target", 0).edit().clear().apply();
     }
+    public static android.net.Uri sound(Context c) {
+        return android.net.Uri.parse("android.resource://" + c.getPackageName() + "/raw/friendbook_chime");
+    }
     public static void channel(Context c) {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel n = new NotificationChannel(CHANNEL, "friendbook notifications", NotificationManager.IMPORTANCE_HIGH);
+            NotificationManager manager = c.getSystemService(NotificationManager.class);
+            if (manager.getNotificationChannel(CHANNEL) != null) return; // Never override the user's channel settings.
+            NotificationChannel old = manager.getNotificationChannel("friendbook_social_v1");
+            int importance = old == null ? NotificationManager.IMPORTANCE_HIGH : old.getImportance();
+            NotificationChannel n = new NotificationChannel(CHANNEL, "friendbook notifications", importance);
             n.setDescription("Messages, requests, reactions, comments and friends' posts");
-            n.enableVibration(true);
-            n.setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+            n.enableVibration(old == null || old.shouldVibrate());
+            n.setSound(old != null && old.getSound() == null ? null : sound(c),
                     new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION).build());
-            c.getSystemService(NotificationManager.class).createNotificationChannel(n);
+            manager.createNotificationChannel(n);
         }
     }
     public static synchronized void show(Context c, Map<String, String> d) {
@@ -60,7 +67,7 @@ public final class PushManager {
                 .setContentText(d.getOrDefault("body", "New notification"))
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(d.getOrDefault("body", "New notification")))
                 .setPriority(NotificationCompat.PRIORITY_HIGH).setAutoCancel(true).setContentIntent(pi)
-                .setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI)
+                .setSound(sound(c))
                 .setCategory(type.equals("message") ? NotificationCompat.CATEGORY_MESSAGE : NotificationCompat.CATEGORY_SOCIAL);
         if (Prefs.notifVibrate(c)) b.setVibrate(new long[]{0, 200, 100, 200});
         try {

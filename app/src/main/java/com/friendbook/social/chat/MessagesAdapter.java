@@ -50,6 +50,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final Activity activity;
     private final Actions actions;
     private final List<Models.Message> data = new ArrayList<>();
+    private List<List<Object>> renderKeys = new ArrayList<>();
     private String peerPhoto = "";
     private boolean isGroup = false;
     private final List<String> groupAdminIds = new ArrayList<>();
@@ -74,36 +75,47 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     }
 
     public void setGroupMeta(boolean group, List<String> admins, Map<String, String> names, Map<String, String> photos) {
+        if (isGroup == group && groupAdminIds.equals(admins == null ? java.util.Collections.emptyList() : admins)
+                && groupNames.equals(names == null ? java.util.Collections.emptyMap() : names)
+                && groupPhotos.equals(photos == null ? java.util.Collections.emptyMap() : photos)) return;
         this.isGroup = group;
         this.groupAdminIds.clear();
         if (admins != null) this.groupAdminIds.addAll(admins);
-        this.groupNames = names != null ? names : new HashMap<>();
-        this.groupPhotos = photos != null ? photos : new HashMap<>();
+        this.groupNames = names != null ? new HashMap<>(names) : new HashMap<>();
+        this.groupPhotos = photos != null ? new HashMap<>(photos) : new HashMap<>();
         notifyDataSetChanged();
     }
 
     public void setData(List<Models.Message> list) {
-        data.clear();
-        data.addAll(list);
-        notifyDataSetChanged();
+        final List<Models.Message> before = new ArrayList<>(data);
+        final List<Models.Message> after = new ArrayList<>(list);
+        final List<List<Object>> oldKeys = renderKeys;
+        final List<List<Object>> newKeys = MessageRenderState.keys(after, Fb.uid());
+        androidx.recyclerview.widget.DiffUtil.DiffResult diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(
+                new androidx.recyclerview.widget.DiffUtil.Callback() {
+                    @Override public int getOldListSize() { return before.size(); }
+                    @Override public int getNewListSize() { return after.size(); }
+                    @Override public boolean areItemsTheSame(int oldPos, int newPos) {
+                        return java.util.Objects.equals(before.get(oldPos).id, after.get(newPos).id);
+                    }
+                    @Override public boolean areContentsTheSame(int oldPos, int newPos) {
+                        return oldPos < oldKeys.size() && oldKeys.get(oldPos).equals(newKeys.get(newPos));
+                    }
+                }, false);
+        data.clear(); data.addAll(after); renderKeys = newKeys;
+        diff.dispatchUpdatesTo(this);
     }
 
     public void appendOptimistic(Models.Message m) {
         if (m == null || m.id == null) return;
-        for (int i = 0; i < data.size(); i++) {
-            if (m.id.equals(data.get(i).id)) {
-                data.set(i, m);
-                notifyItemChanged(i);
-                return;
-            }
+        List<Models.Message> next = new ArrayList<>(data);
+        for (int i = 0; i < next.size(); i++) {
+            if (m.id.equals(next.get(i).id)) { next.set(i, m); setData(next); return; }
         }
-        int prevLast = data.size() - 1;
-        data.add(m);
-        if (prevLast >= 0) notifyItemChanged(prevLast);
-        notifyItemInserted(data.size() - 1);
+        next.add(m); setData(next);
     }
 
-    public List<Models.Message> all() { return data; }
+    public List<Models.Message> all() { return new ArrayList<>(data); }
 
     @Override
     public int getItemViewType(int position) {

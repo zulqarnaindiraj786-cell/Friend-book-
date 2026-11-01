@@ -64,7 +64,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private long peerLastSeen = 0L;
     private boolean typingSent;
     private long lastTypingPush;
-    private boolean busy;
     private boolean initialScrollDone = false;
     private boolean forceScrollBottom = false;
     private boolean unreadResetOnce = false;
@@ -243,6 +242,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         lm.setStackFromEnd(true);
         rv.setLayoutManager(lm);
         rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(20);
         adapter = new MessagesAdapter(this, this);
         rv.setAdapter(adapter);
         rv.addOnLayoutChangeListener((v, l, t, r, bo, ol, ot, or2, obo) -> {
@@ -523,7 +523,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             });
         }
 
-        // messages (realtime via onSnapshot)
+        // Parse only changed documents, not 200 message bodies on every receipt/typing update.
+        messageSnapshots.clear();
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
@@ -539,19 +540,29 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     Set<String> hidden = hiddenMsgs();
                     List<DocumentSnapshot> toMark = new ArrayList<>();
                     String me = Fb.uid();
+                    java.util.Set<String> changedIds = new java.util.HashSet<>();
+                    for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
+                        String id = change.getDocument().getId();
+                        if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+                            messageSnapshots.remove(id);
+                        } else {
+                            changedIds.add(id);
+                            messageSnapshots.put(id, Models.Message.fromDoc(change.getDocument()));
+                        }
+                    }
                     for (DocumentSnapshot d : snap) {
-                        Models.Message m = Models.Message.fromDoc(d);
+                        Models.Message m = messageSnapshots.get(d.getId());
+                        if (m == null) { m = Models.Message.fromDoc(d); messageSnapshots.put(d.getId(), m); }
                         if (hidden.contains(m.id)) continue;
                         list.add(m);
-                        if (me != null && me.equals(m.receiverId) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
+                        if (changedIds.contains(m.id) && me != null && me.equals(m.receiverId) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
                             boolean needsSeen = !m.isSeen && Prefs.readReceipts(this);
                             boolean needsDeliv = !m.isDelivered;
                             if (needsSeen || needsDeliv) toMark.add(d);
                         }
                     }
-                    list.sort((a2, b2) -> Long.compare(a2.createdAt, b2.createdAt));
                     adapter.setData(list);
-                    if (nearBottom && !list.isEmpty()) {
+                    if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
                         initialScrollDone = true;
                         forceScrollBottom = false;
                         rv.scrollToPosition(list.size() - 1);
@@ -587,6 +598,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         MessagesAdapter.stopVoice();
         if (recording) { stopRecording(false); }
     }
+
+    private final Map<String, Models.Message> messageSnapshots = new HashMap<>();
 
     private Set<String> hiddenMsgs() {
         return Prefs.hiddenMsgs(this, chatId);
@@ -706,6 +719,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isDeleted", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
+        Models.Message optimistic = new Models.Message();
+        optimistic.id = msgRef.getId(); optimistic.senderId = me; optimistic.receiverId = peerId;
+        optimistic.type = "voice"; optimistic.voiceUrl = url; optimistic.voiceDurationSec = durSec;
+        optimistic.createdAt = now; optimistic.text = "";
+        adapter.appendOptimistic(optimistic);
+        rv.scrollToPosition(adapter.getItemCount() - 1);
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
         forceScrollBottom = true;
         WriteBatch batch = Fb.db().batch();
@@ -770,10 +789,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void sendSticker(String emoji) {
-        if (busy) return;
         String me = Fb.uid();
         if (me == null) return;
-        busy = true;
         long now = System.currentTimeMillis();
         com.google.firebase.firestore.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
@@ -806,8 +823,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         batch.commit()
-                .addOnSuccessListener(x -> { busy = false; com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId()); })
-                .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Queued offline — will sync automatically"); });
+                .addOnSuccessListener(x -> { com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId()); })
+                .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
