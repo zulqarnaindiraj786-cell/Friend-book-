@@ -711,7 +711,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+        batch.commit().addOnSuccessListener(x -> com.friendbook.social.push.OneSignalPush.message(chatId, msgRef.getId()))
+                .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
 
     // ---------- chat theme ----------
@@ -805,7 +806,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         batch.commit()
-                .addOnSuccessListener(x -> busy = false)
+                .addOnSuccessListener(x -> { busy = false; com.friendbook.social.push.OneSignalPush.message(chatId, msgRef.getId()); })
                 .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 
@@ -878,7 +879,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnFailureListener(e ->
+        batch.commit().addOnSuccessListener(x -> com.friendbook.social.push.OneSignalPush.message(chatId, msgRef.getId())).addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));
     }
 

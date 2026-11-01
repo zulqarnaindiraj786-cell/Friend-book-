@@ -16,14 +16,9 @@ public final class PushManager {
     public static final String CHANNEL = "friendbook_social_v1";
     public static void init(Context c) {
         channel(c);
-        Fb.auth().addAuthStateListener(a -> sync(c));
+        OneSignalPush.init(c);
     }
-    public static void sync(Context c) {
-        String uid = Fb.uid();
-        if (uid == null) return;
-        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> save(c, token))
-                .addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Token registration failed", e));
-    }
+    public static void sync(Context c) { OneSignalPush.sync(); }
     public static void save(Context c, String token) {
         String uid = Fb.uid();
         if (uid == null) return;
@@ -39,6 +34,7 @@ public final class PushManager {
                 .addOnFailureListener(e -> android.util.Log.e("FriendBookPush", "Token save failed", e));
     }
     public static void unregister(Context c) {
+        OneSignalPush.logout();
         String uid = Fb.uid();
         String device = c.getSharedPreferences("push", 0).getString("device", "");
         if (uid != null && !device.isEmpty())

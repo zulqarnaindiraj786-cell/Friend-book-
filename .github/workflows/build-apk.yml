@@ -54,6 +54,8 @@ jobs:
 
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
         run: |
           set +e
           gradle bundleRelease assembleRelease --console=plain > build-release.log 2>&1
