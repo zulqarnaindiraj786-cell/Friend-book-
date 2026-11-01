@@ -25,6 +25,15 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isModerator', false) == true;
     }
 
+    // FCM registrations are private, owner-only, never readable by other app users.
+    match /pushDevices/{uid}/devices/{deviceId} {
+      allow read, delete: if isMe(uid);
+      allow create, update: if isMe(uid)
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt', 'platform'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() < 4096;
+    }
+
     // ---- users ----
     match /users/{uid} {
       allow read: if signedIn();

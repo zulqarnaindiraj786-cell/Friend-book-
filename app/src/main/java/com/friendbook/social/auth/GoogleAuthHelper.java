@@ -464,7 +464,8 @@ public final class GoogleAuthHelper {
         boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
         if (banned && !Admin.isOwnerEmail(email)) {
             sAuthInFlight = false;
-            Fb.auth().signOut();
+            com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
             signOutGoogle(a);
             setBusy(btnView, labelTv, false);
             Ui.info(a, "Account suspended",
@@ -490,14 +491,16 @@ public final class GoogleAuthHelper {
                             completeExistingSignIn(a, uid, email, fallbackName, googlePhoto, d);
                         } else {
                             sAuthInFlight = false;
-                            Fb.auth().signOut();
+                            com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
                             setBusy(btnView, labelTv, false);
                             Ui.toast(a, "Incorrect security PIN");
                         }
                     })
                     .setNegativeButton("Cancel", (dlg, w) -> {
                         sAuthInFlight = false;
-                        Fb.auth().signOut();
+                        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
                         setBusy(btnView, labelTv, false);
                     })
                     .show();

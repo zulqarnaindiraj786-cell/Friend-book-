@@ -155,5 +155,11 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <service android:name="com.friendbook.social.push.FriendMessagingService" android:exported="false">
+            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+        </service>
+        <activity android:name="com.friendbook.social.push.PushOpenActivity" android:exported="false" android:excludeFromRecents="true" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_friendbook" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="friendbook_social_v1" />
     </application>
 </manifest>

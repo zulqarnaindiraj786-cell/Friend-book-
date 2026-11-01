@@ -227,7 +227,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
                             Notify.send(author, "reel_comment", Fb.myName() + " commented on your reel", reelId);
                         }
                         if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "comment_reply", Fb.myName() + " replied to your comment", reelId);
+                            Notify.send(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", reelId);
                         }
                     } else {
                         Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");

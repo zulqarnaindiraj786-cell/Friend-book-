@@ -657,6 +657,7 @@ public class SettingsActivity extends Activity {
                     Presence.goOffline();
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
+                    com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                     Fb.auth().signOut();
                     Fb.me = null;
                     Prefs.setUnlockedSession(this, false);
@@ -1314,7 +1315,8 @@ public class SettingsActivity extends Activity {
         Presence.goOffline();
         com.friendbook.social.core.FastCache.clearAll(this);
         com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
-        Fb.auth().signOut();
+        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
         Fb.me = null;
         Prefs.setUnlockedSession(this, false);
         Intent i = new Intent(this, LoginActivity.class);

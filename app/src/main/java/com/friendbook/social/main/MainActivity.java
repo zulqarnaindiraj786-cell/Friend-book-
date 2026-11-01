@@ -745,6 +745,12 @@ public class MainActivity extends Activity {
                 ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
         }
+        if (getIntent().getBooleanExtra("push_friends", false)) {
+            getIntent().removeExtra("push_friends");
+            select(TAB_FRIENDS);
+        }
+        com.friendbook.social.push.PushManager.sync(this);
+        com.friendbook.social.push.PushOpenActivity.resumePending(this);
         refreshLiteUi();
         Fb.ensureMeFresh();
         Presence.init();

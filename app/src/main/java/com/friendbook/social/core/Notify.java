@@ -31,6 +31,7 @@ public class Notify {
         n.put("fromUserName", asTeam ? "friendbook Team" : Fb.myName());
         n.put("fromUserPhotoUrl", asTeam ? Ui.TEAM_AVATAR_TOKEN : Fb.myPhoto());
         n.put("type", type);
+        if (type != null && type.startsWith("reel_")) n.put("contentType", "reel");
         n.put("text", text);
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);

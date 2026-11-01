@@ -339,6 +339,7 @@ public class MenuFragment extends Fragment {
                     Presence.goOffline();
                     com.friendbook.social.core.FastCache.clearAll(a);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(a);
+                    com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                     Fb.auth().signOut();
                     Fb.me = null;
                     Prefs.setUnlockedSession(a, false);
@@ -412,7 +413,8 @@ public class MenuFragment extends Fragment {
             Presence.goOffline();
             com.friendbook.social.core.FastCache.clearAll(a);
             com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(a);
-            Fb.auth().signOut();
+            com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
             Fb.me = null;
             Prefs.setUnlockedSession(a, false);
             Intent i = new Intent(a, LoginActivity.class);

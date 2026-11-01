@@ -145,6 +145,7 @@ public class Fb {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
                         Presence.goOffline();
+                        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                         auth().signOut();
                         android.content.Context app = com.friendbook.social.App.instance;
                         if (app != null) {

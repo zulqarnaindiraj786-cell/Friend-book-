@@ -55,6 +55,7 @@ public class App extends Application implements SensorEventListener {
         instance = this;
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
+        com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
         // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
