@@ -792,7 +792,7 @@ public final class FastCache {
                 String uid = it.next();
                 JSONObject subObj = rxJson.optJSONObject(uid);
                 if (uid != null && subObj != null) {
-                    Map<String, Object> sub = new HashMap<>();
+                    Map<String, Object> sub = new java.util.HashMap<>();
                     sub.put("type", subObj.optString("type", "like"));
                     sub.put("userName", subObj.optString("userName", ""));
                     sub.put("userPhoto", subObj.optString("userPhoto", ""));
