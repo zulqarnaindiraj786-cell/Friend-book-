@@ -50,14 +50,14 @@ Deno.serve(async req => {
     if (input.type === "message" && validId(input.chatId) && validId(input.messageId)) {
       const [chat, m] = await Promise.all([doc(`chats/${input.chatId}`), doc(`chats/${input.chatId}/messages/${input.messageId}`)]);
       if (m.senderId !== actor || !chat.participants?.includes(actor) || !chat.participants?.includes(target) || m.isDeleted) return json({ error: "Forbidden event" }, 403);
-      if (Date.now() - Date.parse(m.createdAt) > 86400000 || !m.createdAt) return json({ error: "Expired event" }, 400);
+      if (!Number.isFinite(Date.parse(m.createdAt)) || Date.now() - Date.parse(m.createdAt) > 86400000) return json({ error: "Expired event" }, 400);
       event = `message_${input.chatId}_${input.messageId}_${target}`;
       message = String(m.text || "Sent an attachment").slice(0, 500);
       data = { type: "message", chatId: input.chatId, isGroup: String(chat.isGroup === true) };
     } else if (validId(input.notificationId)) {
       const n = await doc(`notifications/${input.notificationId}`);
       if (n.fromUserId !== actor || n.toUserId !== target) return json({ error: "Forbidden event" }, 403);
-      if (Date.now() - Date.parse(n.createdAt) > 86400000 || !n.createdAt) return json({ error: "Expired event" }, 400);
+      if (!Number.isFinite(Date.parse(n.createdAt)) || Date.now() - Date.parse(n.createdAt) > 86400000) return json({ error: "Expired event" }, 400);
       event = `notification_${input.notificationId}`;
       message = String(n.text || "New notification").slice(0, 500);
       data = { type: n.type, postId: n.postId || "", contentType: n.contentType || "", notificationId: input.notificationId, groupId: n.groupId || "" };
@@ -73,7 +73,7 @@ Deno.serve(async req => {
     const response = await fetch("https://api.onesignal.com/notifications", {
       method: "POST", headers: { Authorization: `Basic ${secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: APP_ID, include_external_user_ids: [target], headings: { en: title },
-        contents: { en: message }, data, small_icon: "ic_stat_friendbook", android_channel_id: "friendbook_social_v1" }),
+        contents: { en: message }, data, small_icon: "ic_stat_friendbook", existing_android_channel_id: "friendbook_social_v1" }),
       signal: AbortSignal.timeout(15000),
     });
     const result = await response.json();

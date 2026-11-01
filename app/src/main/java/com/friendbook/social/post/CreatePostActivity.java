@@ -924,7 +924,11 @@ public class CreatePostActivity extends Activity {
             com.friendbook.social.core.FastCache.prependFeedPost(this, optimistic);
         }
 
-        docRef.set(m).addOnFailureListener(e ->
+        docRef.set(m).addOnSuccessListener(v -> {
+            if ((groupId == null || groupId.isEmpty()) && (pageId == null || pageId.isEmpty())
+                    && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
+                com.friendbook.social.push.OneSignalPush.friendPost(docRef.getId());
+        }).addOnFailureListener(e ->
                 android.util.Log.e("CreatePost", "Background sync failed: " + e));
         Prefs.setPostDraft(this, "");
         if (groupId != null && groupNeedsApproval) {

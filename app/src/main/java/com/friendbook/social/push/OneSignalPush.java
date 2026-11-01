@@ -57,6 +57,19 @@ public final class OneSignalPush {
         catch (Exception e) { return; }
         invoke(target.toString(), String.valueOf(n.get("fromUserName")), String.valueOf(n.get("text")), data);
     }
+    public static void friendPost(String postId) {
+        String uid = Fb.uid();
+        if (uid == null) return;
+        Fb.db().collection("friends").whereArrayContains("participants", uid).get().addOnSuccessListener(friends -> {
+            java.util.Set<String> recipients = new java.util.HashSet<>();
+            for (com.google.firebase.firestore.DocumentSnapshot friend : friends) {
+                Object list = friend.get("participants");
+                if (list instanceof java.util.List) for (Object item : (java.util.List<?>) list)
+                    if (item instanceof String && !uid.equals(item)) recipients.add((String) item);
+            }
+            for (String to : recipients) com.friendbook.social.core.Notify.send(to, "friend_post", "shared a new post", postId);
+        });
+    }
     public static void message(String chatId, String messageId) {
         String uid = Fb.uid();
         if (uid == null) return;
