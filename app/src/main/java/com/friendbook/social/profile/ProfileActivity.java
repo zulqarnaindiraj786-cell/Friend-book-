@@ -827,7 +827,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     presenceT.setText("🟢 Active now");
                     presenceT.setVisibility(View.VISIBLE);
                 } else if (lastSeen > 0) {
-                    presenceT.setText("Active " + Format.ago(lastSeen) + " ago");
+                    presenceT.setText(Presence.formatActiveStatus(false, lastSeen));
                     presenceT.setVisibility(View.VISIBLE);
                 } else {
                     presenceT.setVisibility(View.GONE);

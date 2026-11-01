@@ -44,6 +44,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private int section = SEC_REQUESTS;
 
     private final List<Models.FriendRequest> incoming = new ArrayList<>();
+    private final Set<String> dismissedReqIds = new HashSet<>();
     private final Set<String> outgoing = new HashSet<>();
     private final List<String> friendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
@@ -74,7 +75,14 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if (i > 0) p.leftMargin = Ui.dp(a, 8);
             tabRow.addView(t, p);
             tabs[i] = t;
-            t.setOnClickListener(v -> { section = sec; refreshTabs(); render(); });
+            t.setOnClickListener(v -> {
+                section = sec;
+                if (sec == SEC_REQUESTS) {
+                    com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
+                }
+                refreshTabs();
+                render();
+            });
         }
         root.addView(tabRow);
 
@@ -103,19 +111,37 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     }
 
     @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (!hidden) {
+            com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
+        }
+    }
+
+    @Override
     public void onStart() {
         super.onStart();
+        if (!isHidden()) {
+            com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
+        }
         String me = Fb.uid();
         if (me == null) return;
 
         inReg = Fb.db().collection("friend_requests").whereEqualTo("toUid", me)
                 .addSnapshotListener((snap, err) -> {
                     incoming.clear();
+                    List<String> allIds = new ArrayList<>();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.FriendRequest r = Models.FriendRequest.fromDoc(d);
-                            if ("pending".equals(r.status)) incoming.add(r);
+                            if ("pending".equals(r.status) && !dismissedReqIds.contains(r.id)) {
+                                incoming.add(r);
+                                allIds.add(r.id);
+                            }
                         }
+                    }
+                    if (!isHidden() && getActivity() != null && !allIds.isEmpty()) {
+                        com.friendbook.social.core.Prefs.markFriendRequestsSeen(getActivity(), me, allIds);
                     }
                     incoming.sort((a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     tabs[SEC_REQUESTS].setText(incoming.isEmpty() ? "Requests"
@@ -271,11 +297,25 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         }
     }
 
+    private void removeRequestOptimistic(String reqId) {
+        if (reqId == null) return;
+        dismissedReqIds.add(reqId);
+        incoming.removeIf(req -> reqId.equals(req.id));
+        if (tabs[SEC_REQUESTS] != null) {
+            tabs[SEC_REQUESTS].setText(incoming.isEmpty() ? "Requests"
+                    : "Requests (" + incoming.size() + ")");
+        }
+        com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
+        render();
+    }
+
     @Override
     public void secondary(UsersAdapter.Row r) {
         if (getActivity() == null || r.user == null) return;
         if ("Delete".equals(r.secondaryLabel) && r.requestId != null) {
-            Fb.db().collection("friend_requests").document(r.requestId).delete();
+            String rid = r.requestId;
+            removeRequestOptimistic(rid);
+            Fb.db().collection("friend_requests").document(rid).delete();
             Ui.toast(getActivity(), "Request removed");
         } else if ("Unfriend".equals(r.secondaryLabel)) {
             unfriend(r.user);
@@ -323,9 +363,14 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void acceptRequest(UsersAdapter.Row r) {
         String me = Fb.uid();
         if (me == null || r.requestId == null) return;
+        String rid = r.requestId;
         String from = r.user.uid;
+        // ⚡ 0.0ms Optimistic UI removal + badge reset to 0!
+        removeRequestOptimistic(rid);
+        if (!friendIds.contains(from)) friendIds.add(from);
+
         WriteBatch batch = Fb.db().batch();
-        batch.update(Fb.db().collection("friend_requests").document(r.requestId),
+        batch.update(Fb.db().collection("friend_requests").document(rid),
                 "status", "accepted");
         batch.set(Fb.db().collection("friends").document(), Fb.map(
                 "participants", java.util.Arrays.asList(me, from),

@@ -49,15 +49,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean isTeamChat = false;
     private Models.ChatRoom groupRoom;
     private TextView presenceTv, nameTv;
+    private View peerOnlineDot;
     private View composerRoot;
     private TextView readOnlyBanner;
     private ImageView barTick;
     private ImageView barAvatar;
+    private ImageView voiceCallBtn, videoCallBtn, settingsBtn;
     private EditText input;
     private MessagesAdapter adapter;
     private RecyclerView rv;
     private ListenerRegistration msgReg, userReg, roomReg;
     private Presence.Handle presence, typingH;
+    private boolean peerOnline = false;
+    private long peerLastSeen = 0L;
     private boolean typingSent;
     private long lastTypingPush;
     private boolean busy;
@@ -76,7 +80,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        Ui.statusBarBlue(this);
+        Ui.statusBarLight(this);
         peerId = getIntent().getStringExtra("uid");
         peerName = getIntent().getStringExtra("name");
         String passedChatId = getIntent().getStringExtra("chat_id");
@@ -101,40 +105,83 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String prefill = getIntent().getStringExtra("prefill");
 
         LinearLayout root = Ui.col(this);
-        root.setBackgroundColor(Ui.bg(this));
+        root.setBackgroundColor(Ui.isDark(this) ? Ui.bg(this) : Color.WHITE);
 
-        // custom crisp white bar with presence & real vector back arrow
+        // Clean Messenger-style white header: <  [Avatar+GreenDot] Name / Active status   [Call] [Video] [Gear]
         LinearLayout bar = Ui.row(this);
-        bar.setBackground(Ui.barBg(this));
-        bar.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
-        ImageView back = Ui.backArrow(this, Ui.txt(this), v -> finish());
+        bar.setBackgroundColor(Ui.card(this));
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(Ui.dp(this, 4), Ui.dp(this, 7), Ui.dp(this, 6), Ui.dp(this, 7));
+
+        int headerIconTint = Ui.isDark(this) ? Color.WHITE : 0xFF1C1E21;
+        ImageView back = Ui.backArrow(this, headerIconTint, v -> finish());
         bar.addView(back);
+
+        android.widget.FrameLayout avatarWrap = new android.widget.FrameLayout(this);
+        int avPx = Ui.dp(this, 40);
         barAvatar = new ImageView(this);
         Ui.avatar(this, barAvatar, isTeamChat ? Ui.TEAM_AVATAR_TOKEN : peerPhoto);
-        int s = Ui.dp(this, 40);
-        LinearLayout.LayoutParams avp = new LinearLayout.LayoutParams(s, s);
-        avp.leftMargin = Ui.dp(this, 2);
-        bar.addView(barAvatar, avp);
+        avatarWrap.addView(barAvatar, new android.widget.FrameLayout.LayoutParams(avPx, avPx, Gravity.CENTER));
+
+        peerOnlineDot = new View(this);
+        android.graphics.drawable.GradientDrawable dotBg = new android.graphics.drawable.GradientDrawable();
+        dotBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        dotBg.setColor(0xFF31A24C);
+        dotBg.setStroke(Ui.dp(this, 2), Ui.card(this));
+        peerOnlineDot.setBackground(dotBg);
+        peerOnlineDot.setVisibility(View.GONE);
+        int dotPx = Ui.dp(this, 12);
+        android.widget.FrameLayout.LayoutParams dotLp =
+                new android.widget.FrameLayout.LayoutParams(dotPx, dotPx, Gravity.BOTTOM | Gravity.END);
+        avatarWrap.addView(peerOnlineDot, dotLp);
+
+        LinearLayout.LayoutParams avWrapLp = new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42));
+        avWrapLp.leftMargin = Ui.dp(this, 2);
+        bar.addView(avatarWrap, avWrapLp);
+
         LinearLayout nameCol = Ui.col(this);
         LinearLayout.LayoutParams ncp = new LinearLayout.LayoutParams(0, -2, 1);
         ncp.leftMargin = Ui.dp(this, 10);
-        nameTv = Ui.tvBold(this, peerName, 16, Ui.txt(this));
+        ncp.rightMargin = Ui.dp(this, 4);
+        nameTv = Ui.tvBold(this, peerName, 16.5f, Ui.txt(this));
+        nameTv.setSingleLine(true);
+        nameTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
         barTick = new ImageView(this);
-        int ts = Ui.dp(this, 17);
+        int ts = Ui.dp(this, 16);
         LinearLayout.LayoutParams tickp = new LinearLayout.LayoutParams(ts, ts);
-        tickp.leftMargin = Ui.dp(this, 5);
+        tickp.leftMargin = Ui.dp(this, 4);
         tickp.gravity = Gravity.CENTER_VERTICAL;
         LinearLayout nameRow = new LinearLayout(this);
-        nameRow.addView(nameTv);
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
+        nameRow.addView(nameTv, new LinearLayout.LayoutParams(-2, -2));
         nameRow.addView(barTick, tickp);
-        presenceTv = Ui.tv(this, "…", 12, Ui.sub(this));
+
+        presenceTv = Ui.tv(this, "", 12.5f, Ui.sub(this));
+        presenceTv.setSingleLine(true);
+        presenceTv.setVisibility(View.GONE);
         nameCol.addView(nameRow);
         nameCol.addView(presenceTv);
         bar.addView(nameCol, ncp);
-        TextView menu = Ui.tv(this, "⋮", 22, Ui.txt(this));
-        menu.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 8), 0);
-        bar.addView(menu);
+
+        // Top-right Voice Call, Video Call & Settings Gear icons (exact match to screenshot!)
+        voiceCallBtn = buildHeaderActionIcon(com.friendbook.social.core.Icons.CALL_FILLED, headerIconTint, 38, 8);
+        voiceCallBtn.setOnClickListener(v -> startChatCall(false));
+        bar.addView(voiceCallBtn);
+
+        videoCallBtn = buildHeaderActionIcon(com.friendbook.social.core.Icons.VIDEOCAM_FILLED, headerIconTint, 40, 8);
+        videoCallBtn.setOnClickListener(v -> startChatCall(true));
+        bar.addView(videoCallBtn);
+
+        settingsBtn = buildHeaderActionIcon(com.friendbook.social.core.Icons.SETTINGS_GEAR_FILLED, headerIconTint, 38, 8);
+        bar.addView(settingsBtn);
+
+        if (isTeamChat) {
+            voiceCallBtn.setVisibility(View.GONE);
+            videoCallBtn.setVisibility(View.GONE);
+        }
+
         root.addView(bar);
+        root.addView(Ui.divider(this));
 
         View.OnClickListener prof = v -> {
             if (isGroupChat) {
@@ -145,10 +192,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 startActivity(i);
             }
         };
-        barAvatar.setOnClickListener(prof);
-        nameTv.setOnClickListener(prof);
-        menu.setOnClickListener(v -> {
+        avatarWrap.setOnClickListener(prof);
+        nameCol.setOnClickListener(prof);
+        settingsBtn.setOnClickListener(v -> {
             PopupMenu pm = new PopupMenu(this, v);
+            if (!isTeamChat) {
+                pm.getMenu().add("📞 Audio call");
+                pm.getMenu().add("📹 Video call");
+            }
             if (isGroupChat) {
                 pm.getMenu().add("👥 Group Info & Admin Controls");
             } else if (!isTeamChat) {
@@ -164,7 +215,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if (!isGroupChat && !isTeamChat) pm.getMenu().add("🚫 Block user");
             pm.setOnMenuItemClickListener(item -> {
                 String t = item.getTitle().toString();
-                if (t.contains("Group Info")) {
+                if (t.contains("Audio call")) startChatCall(false);
+                else if (t.contains("Video call")) startChatCall(true);
+                else if (t.contains("Group Info")) {
                     startActivity(new Intent(this, GroupChatInfoActivity.class).putExtra("chat_id", chatId));
                 } else if (t.contains("profile")) prof.onClick(v);
                 else if (t.contains("nickname")) nicknameDialog();
@@ -183,6 +236,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
 
         rv = new RecyclerView(this);
+        rv.setBackgroundColor(Ui.isDark(this) ? Ui.bg(this) : Color.WHITE);
+        rv.setClipToPadding(false);
+        rv.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
         LinearLayoutManager lm = new LinearLayoutManager(this);
         lm.setStackFromEnd(true);
         rv.setLayoutManager(lm);
@@ -213,7 +269,40 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         setContentView(root);
     }
 
+    private ImageView buildHeaderActionIcon(int drawableRes, int tintColor, int boxDp, int padDp) {
+        ImageView iv = new ImageView(this);
+        int px = Ui.dp(this, boxDp);
+        int pad = Ui.dp(this, padDp);
+        iv.setLayoutParams(new LinearLayout.LayoutParams(px, px));
+        iv.setPadding(pad, pad, pad, pad);
+        iv.setImageResource(drawableRes);
+        iv.setColorFilter(tintColor);
+        return iv;
+    }
+
+    private void startChatCall(boolean isVideo) {
+        if (isTeamChat) return;
+        String display = nameTv != null && nameTv.getText() != null
+                ? nameTv.getText().toString() : peerName;
+        CallActivity.startOutgoing(
+                this,
+                chatId,
+                isGroupChat ? "" : peerId,
+                display,
+                peerPhoto,
+                isGroupChat,
+                isVideo);
+    }
+
+    @Override
+    public void onCallClick(Models.Message m) {
+        boolean vid = m != null && ("video".equalsIgnoreCase(m.callType)
+                || (m.text != null && m.text.toLowerCase().contains("video")));
+        startChatCall(vid);
+    }
+
     private View buildComposer() {
+        final int composerBlue = Prefs.chatBg(this);
         LinearLayout wrap = Ui.col(this);
         wrap.setBackgroundColor(Ui.card(this));
         wrap.addView(Ui.divider(this));
@@ -234,30 +323,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         replyBar.addView(closeReply);
         wrap.addView(replyBar);
 
-        // ⚡ friendbook 1-Tap Quick Emoji Bar
-        LinearLayout quickEmojiRow = Ui.row(this);
-        Ui.pad(quickEmojiRow, 8, 4, 8, 2);
-        String[] quickEmojis = {"❤️", "😂", "👍", "🔥", "😍", "😢", "👏", "🙏"};
-        for (final String em : quickEmojis) {
-            TextView et = Ui.tv(this, em, 18, Ui.txt(this));
-            et.setGravity(Gravity.CENTER);
-            et.setOnClickListener(v -> {
-                Ui.haptic(v);
-                int pos = Math.max(0, input.getSelectionStart());
-                input.getText().insert(pos, em);
-            });
-            quickEmojiRow.addView(et, new LinearLayout.LayoutParams(0, -2, 1));
-        }
-        wrap.addView(quickEmojiRow);
-
+        // Clean Messenger-style Bottom Bar: [Gallery] [Mic] [ Message ... 😊 ] [👍 / ➤]
         LinearLayout row = Ui.row(this);
-        Ui.pad(row, 8, 8, 10, 8);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        Ui.pad(row, 6, 7, 6, 8);
 
-        // friendbook outline icon buttons (2px stroke)
-        ImageView photo = com.friendbook.social.core.Icons.icon(
-                this, com.friendbook.social.core.Icons.IMAGE, 23,
-                com.friendbook.social.core.Icons.GRAY);
-        photo.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        ImageView photo = buildHeaderActionIcon(
+                com.friendbook.social.core.Icons.GALLERY_FILLED, composerBlue, 38, 7);
         photo.setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
             i.setType("image/*");
@@ -265,23 +337,26 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
         row.addView(photo);
 
-        ImageView sticker = com.friendbook.social.core.Icons.icon(
-                this, com.friendbook.social.core.Icons.SMILE, 23,
-                com.friendbook.social.core.Icons.GRAY);
-        sticker.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6));
-        sticker.setOnClickListener(v -> stickerSheet());
-        row.addView(sticker);
-
-        mic = com.friendbook.social.core.Icons.icon(
-                this, com.friendbook.social.core.Icons.MIC, 23,
-                com.friendbook.social.core.Icons.GRAY);
-        mic.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 4), Ui.dp(this, 6));
+        mic = buildHeaderActionIcon(
+                com.friendbook.social.core.Icons.MIC_FILLED, composerBlue, 38, 7);
         mic.setOnClickListener(v -> toggleVoiceRecording());
         row.addView(mic);
 
-        input = Ui.input(this, "Message…");
-        input.setBackground(Ui.round(this, Ui.inputBg(this), 22));
-        input.setMinHeight(Ui.dp(this, 40));
+        // Rounded #F0F2F5 Message pill with right-aligned blue Sticker/Smile icon inside!
+        LinearLayout pill = Ui.row(this);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        int pillBg = Ui.isDark(this) ? 0xFF2C2D30 : 0xFFF0F2F5;
+        pill.setBackground(Ui.round(this, pillBg, 22));
+        pill.setMinimumHeight(Ui.dp(this, 40));
+
+        input = new EditText(this);
+        input.setHint("Message");
+        input.setHintTextColor(Ui.sub(this));
+        input.setTextColor(Ui.txt(this));
+        input.setTextSize(15.5f);
+        input.setBackgroundColor(Color.TRANSPARENT);
+        input.setMaxLines(4);
+        input.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
         input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
         input.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
@@ -291,24 +366,29 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             }
             return false;
         });
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
-        ip.leftMargin = Ui.dp(this, 4);
-        ip.rightMargin = Ui.dp(this, 4);
-        row.addView(input, ip);
+        pill.addView(input, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        final ImageView send = com.friendbook.social.core.Icons.icon(
-                this, com.friendbook.social.core.Icons.SEND, 25,
-                com.friendbook.social.core.Icons.BLUE);
-        send.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        ImageView sticker = buildHeaderActionIcon(
+                com.friendbook.social.core.Icons.STICKER_SMILE_FILLED, composerBlue, 36, 7);
+        sticker.setOnClickListener(v -> stickerSheet());
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36));
+        stLp.rightMargin = Ui.dp(this, 3);
+        pill.addView(sticker, stLp);
+
+        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(0, -2, 1f);
+        pillLp.leftMargin = Ui.dp(this, 4);
+        pillLp.rightMargin = Ui.dp(this, 4);
+        row.addView(pill, pillLp);
+
+        final ImageView send = buildHeaderActionIcon(
+                com.friendbook.social.core.Icons.SEND_FILLED, composerBlue, 38, 7);
         send.setVisibility(View.GONE);
         row.addView(send);
 
-        final ImageView quick = com.friendbook.social.core.Icons.icon(
-                this, com.friendbook.social.core.Icons.LIKE, 25,
-                com.friendbook.social.core.Icons.BLUE);
-        quick.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        final ImageView quick = buildHeaderActionIcon(
+                com.friendbook.social.core.Icons.LIKE_FILLED, composerBlue, 38, 7);
         quick.setOnClickListener(v -> send(null, null, "👍"));
-        row.addView(quick, new LinearLayout.LayoutParams(-2, -2));
+        row.addView(quick);
 
         wrap.addView(row);
 
@@ -334,6 +414,26 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         return wrap;
     }
 
+    private void refreshPresenceText() {
+        if (presenceTv == null || isGroupChat || isTeamChat) return;
+        if (peerOnlineDot != null) {
+            peerOnlineDot.setVisibility(peerOnline ? View.VISIBLE : View.GONE);
+        }
+        if (typingOn) {
+            presenceTv.setText("typing…");
+            presenceTv.setVisibility(View.VISIBLE);
+            return;
+        }
+        String label = Presence.formatActiveStatus(peerOnline, peerLastSeen);
+        if (label.isEmpty()) {
+            presenceTv.setText("");
+            presenceTv.setVisibility(View.GONE);
+        } else {
+            presenceTv.setText(label);
+            presenceTv.setVisibility(View.VISIBLE);
+        }
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
@@ -342,13 +442,15 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
                         if (d == null || !d.exists()) { finish(); return; }
+                        CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         groupRoom = Models.ChatRoom.fromDoc(d);
                         peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())
                                 ? "Group Chat" : groupRoom.groupName;
                         peerPhoto = groupRoom.groupPhoto == null ? "" : groupRoom.groupPhoto;
                         nameTv.setText(peerName);
                         barTick.setVisibility(View.GONE);
-                        presenceTv.setText("👥 " + groupRoom.participants.size() + " members · Tap for Group Info");
+                        presenceTv.setText(groupRoom.participants.size() + " members");
+                        presenceTv.setVisibility(View.VISIBLE);
                         if (!peerPhoto.isEmpty()) {
                             barAvatar.setPadding(0, 0, 0, 0);
                             Ui.avatar(this, barAvatar, peerPhoto);
@@ -384,8 +486,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             Ui.avatar(this, barAvatar, Ui.TEAM_AVATAR_TOKEN);
             adapter.setPeerPhoto(Ui.TEAM_AVATAR_TOKEN);
             presenceTv.setText("Official friendbook Team");
+            presenceTv.setVisibility(View.VISIBLE);
         } else {
-            // peer profile (live)
+            // Listen for incoming Voice/Video Calls on this 1:1 chat doc too!
+            roomReg = Fb.db().collection("chats").document(chatId)
+                    .addSnapshotListener((d, err) -> {
+                        if (d != null && d.exists()) {
+                            CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
+                        }
+                    });
+
+            // Peer profile (live)
             userReg = Fb.db().collection("users").document(peerId)
                     .addSnapshotListener((d, err) -> {
                         if (d == null || !d.exists()) return;
@@ -400,19 +511,15 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         adapter.setPeerPhoto(peerPhoto);
                     });
 
-            // presence (RTDB + Firestore fallback)
+            // Live Presence (Firestore + RTDB merged + 30s live age refresh, never wiped by typing!)
             presence = Presence.watch(peerId, (online, lastSeen) -> {
-                if (typingOn) return;
-                if (online) {
-                    presenceTv.setText("🟢 Active now");
-                } else if (lastSeen > 0) {
-                    presenceTv.setText("Active " + Format.ago(lastSeen) + " ago");
-                } else presenceTv.setText("");
+                peerOnline = online;
+                peerLastSeen = lastSeen;
+                refreshPresenceText();
             });
             typingH = Presence.watchTyping(chatId, Fb.uid(), t -> {
                 typingOn = t;
-                if (t) presenceTv.setText("typing…");
-                else presenceTv.setText("");
+                refreshPresenceText();
             });
         }
 
@@ -510,7 +617,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             recorder.start();
             voiceStartMs = System.currentTimeMillis();
             recording = true;
-            com.friendbook.social.core.Icons.setTint(mic, 0xFFE41E3F); // red while recording
+            mic.setColorFilter(0xFFE41E3F); // red while recording
             mic.animate().scaleX(1.25f).scaleY(1.25f).setDuration(150).start();
             Ui.toast(this, "🎤 Recording… tap again to send");
         } catch (Exception e) {
@@ -522,7 +629,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void stopRecording(boolean send) {
         if (!recording) return;
         recording = false;
-        com.friendbook.social.core.Icons.setTint(mic, com.friendbook.social.core.Icons.GRAY);
+        mic.setColorFilter(Prefs.chatBg(this));
         mic.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
         int durSec = (int) Math.max(1, (System.currentTimeMillis() - voiceStartMs) / 1000);
         try { recorder.stop(); } catch (Throwable ignored) { }
@@ -609,10 +716,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     // ---------- chat theme ----------
     private void themePicker() {
-        String[] names = {"friendbook Blue", "Lover Red", "Kiwi Green", "Royal Purple",
-                "Sunset Orange", "Bubblegum Pink", "Ocean Teal", "Midnight"};
-        int[] colors = {0xFF1877F2, 0xFFE41E3F, 0xFF31A24C, 0xFF9360F7,
-                0xFFF5650D, 0xFFFF66C4, 0xFF2ABBA7, 0xFF1B2440};
+        String[] names = {"Classic Blue", "friendbook Blue", "Lover Red", "Kiwi Green",
+                "Royal Purple", "Sunset Orange", "Bubblegum Pink", "Ocean Teal", "Midnight"};
+        int[] colors = {0xFF0084FF, 0xFF1877F2, 0xFFE41E3F, 0xFF31A24C,
+                0xFF9360F7, 0xFFF5650D, 0xFFFF66C4, 0xFF2ABBA7, 0xFF1B2440};
         Ui.choose(this, "🎨 Chat theme (applies on this device)", names, w -> {
             Prefs.chatTheme(this, colors[w], -1);
             adapter.notifyDataSetChanged();

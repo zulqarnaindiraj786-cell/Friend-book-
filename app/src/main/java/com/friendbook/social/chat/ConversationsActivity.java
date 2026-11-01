@@ -49,7 +49,7 @@ public class ConversationsActivity extends Activity {
 
     private RecyclerView rv;
     private ConvAdapter adapter;
-    private ListenerRegistration reg;
+    private ListenerRegistration reg, usersReg;
     private LinearLayout activeRow, activeWrap;
     private TextView inboxTab, unreadTab, groupsTab, archiveTab, empty;
     private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 3 = Groups Only, 2 = Archived
@@ -205,8 +205,10 @@ public class ConversationsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        // Hydrate active/recent friendbook users so Active Now strip always shows people to chat with!
-        Fb.db().collection("users").limit(35).get().addOnSuccessListener(usnap -> {
+        // ⚡ 0.0ms Optimistic Message Badge Zeroing on opening Chat list!
+        com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
+        // Live snapshot listener on users so Active Now strip updates green online dots in real time!
+        usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
             if (isFinishing() || usnap == null) return;
             for (DocumentSnapshot ud : usnap) {
                 Models.User u = Models.User.fromDoc(ud);
@@ -225,6 +227,7 @@ public class ConversationsActivity extends Activity {
                         Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
                                 .getStringSet("hiddenChats", new HashSet<>());
                         for (DocumentSnapshot d : snap) {
+                            CallActivity.maybeHandleIncomingFromRoomDoc(ConversationsActivity.this, d);
                             if (hiddenChats.contains(d.getId())) continue;
                             Room r = new Room();
                             r.room = Models.ChatRoom.fromDoc(d);
@@ -333,6 +336,7 @@ public class ConversationsActivity extends Activity {
     protected void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        if (usersReg != null) usersReg.remove();
     }
 
     private void roomMenu(Room r) {

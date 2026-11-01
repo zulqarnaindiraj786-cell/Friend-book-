@@ -101,22 +101,41 @@ public class NotificationsFragment extends Fragment {
         return root;
     }
 
+    /** ⚡ 0.0ms Optimistic mark-all-read on in-memory & disk-cached notifications. */
+    public void markAllReadOptimisticNow() {
+        for (Models.Notif n : data) {
+            n.isRead = true;
+        }
+        if (unreadOnly) {
+            data.clear();
+        } else if (!data.isEmpty()) {
+            com.friendbook.social.core.FastCache.saveNotifications(data);
+        }
+        if (adapter != null) adapter.notifyDataSetChanged();
+        if (empty != null) empty.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+
     private void markAllReadReal() {
-        String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("notifications")
-                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .get().addOnSuccessListener(snap -> {
-                    if (snap == null) return;
-                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-                    for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
-                    batch.commit();
-                });
+        markAllReadOptimisticNow();
+        MainActivity.clearNotificationsBadgeNow();
+    }
+
+    @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (!hidden) {
+            markAllReadOptimisticNow();
+            MainActivity.clearNotificationsBadgeNow();
+        }
     }
 
     @Override
     public void onStart() {
         super.onStart();
+        if (!isHidden()) {
+            markAllReadOptimisticNow();
+            MainActivity.clearNotificationsBadgeNow();
+        }
         String me = Fb.uid();
         if (me == null) return;
         reg = Fb.db().collection("notifications").whereEqualTo("toUserId", me)

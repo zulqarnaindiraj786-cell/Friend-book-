@@ -84,7 +84,6 @@ public class Models {
             String ph = Format.str(m, "phone");
             u.phoneNumber = !pn.isEmpty() ? pn : ph;
             u.phone = !ph.isEmpty() ? ph : u.phoneNumber;
-            u.isOnline = Format.boolOf(m, "isOnline");
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.isModerator = Format.boolOf(m, "isModerator");
             u.banned = Format.boolOf(m, "banned");
@@ -95,7 +94,13 @@ public class Models {
             u.professionalMode = Format.boolOf(m, "professionalMode");
             u.hideReactionCounts = Format.boolOf(m, "hideReactionCounts");
             u.showActiveStatus = m == null || !m.containsKey("showActiveStatus") || Format.boolOf(m, "showActiveStatus");
-            u.lastSeen = Format.ts(m == null ? null : m.get("lastSeen"));
+            long lsTs = Format.ts(m == null ? null : m.get("lastSeen"));
+            long lsMs = (m != null && m.get("lastSeenMs") instanceof Number)
+                    ? ((Number) m.get("lastSeenMs")).longValue() : 0L;
+            u.lastSeen = u.showActiveStatus ? Math.max(lsTs, lsMs) : 0L;
+            boolean rawOnline = Format.boolOf(m, "isOnline");
+            u.isOnline = u.showActiveStatus && rawOnline && u.lastSeen > 0L
+                    && (System.currentTimeMillis() - u.lastSeen) <= com.friendbook.social.core.Presence.ONLINE_TTL_MS;
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");
@@ -543,6 +548,8 @@ public class Models {
     public static class Message {
         public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, type, voiceUrl;
         public String replyToText, replyToSender;
+        public String callType, callStatus;
+        public int callDurationSec;
         public boolean forwarded;
         public int voiceDurationSec;
         public boolean isSeen, isDelivered, isDeleted;
@@ -563,6 +570,9 @@ public class Models {
             m0.voiceUrl = Format.str(m, "voiceUrl");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");
+            m0.callType = Format.str(m, "callType");
+            m0.callStatus = Format.str(m, "callStatus");
+            m0.callDurationSec = Format.intOf(m, "callDurationSec");
             m0.forwarded = Format.boolOf(m, "forwarded");
             m0.voiceDurationSec = Format.intOf(m, "voiceDurationSec");
             m0.type = Format.strOr(m, "type", "text");
