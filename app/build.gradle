@@ -9,11 +9,11 @@ android {
 
     defaultConfig {
         applicationId 'com.friendbook.social'
-        buildConfigField 'String', 'SUPABASE_URL', '"' + (System.getenv('SUPABASE_URL') ?: '').replace('"', '') + '"'
+        buildConfigField 'String', 'SUPABASE_URL', '"' + (System.getenv('SUPABASE_URL') ?: 'https://yferhqhgonbcgdewxlfs.supabase.co').replace('"', '') + '"'
         minSdk 24
         targetSdk 36
-        versionCode 37
-        versionName '2.8.7'
+        versionCode 38
+        versionName '2.8.8'
         ndk {
             debugSymbolLevel 'FULL'
         }

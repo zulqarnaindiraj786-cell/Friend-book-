@@ -16,7 +16,7 @@ function decode(v: any): any {
 }
 Deno.serve(async req => {
   if (req.method !== "POST") return json({ error: "POST required" }, 405);
-  const secret = Deno.env.get("ONESIGNAL_REST_KEY");
+  const secret = Deno.env.get("ONESIGNAL_REST_API_KEY");
   const url = Deno.env.get("SUPABASE_URL");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!secret || !url || !serviceKey) return json({ error: "Push service not configured" }, 503);
@@ -71,8 +71,8 @@ Deno.serve(async req => {
     if (!claim.ok) return json({ error: "Delivery guard unavailable" }, 503);
     if (!(await claim.json())) return json({ skipped: "duplicate_or_rate_limited" });
     const response = await fetch("https://api.onesignal.com/notifications", {
-      method: "POST", headers: { Authorization: `Basic ${secret}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ app_id: APP_ID, include_external_user_ids: [target], headings: { en: title },
+      method: "POST", headers: { Authorization: `Key ${secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: APP_ID, include_aliases: { external_id: [target] }, target_channel: "push", headings: { en: title },
         contents: { en: message }, data, small_icon: "ic_stat_friendbook", existing_android_channel_id: "friendbook_social_v1" }),
       signal: AbortSignal.timeout(15000),
     });
