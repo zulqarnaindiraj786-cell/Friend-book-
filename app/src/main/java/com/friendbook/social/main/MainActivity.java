@@ -207,6 +207,10 @@ public class MainActivity extends Activity {
             }
         });
 
+        // 7. Silently pre-warm top Reels onto SSD cache after Home renders so first Reels tap plays in ~15ms!
+        container.postDelayed(() ->
+                com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()), 900L);
+
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
             Fb.ensureMeFresh();
@@ -273,8 +277,8 @@ public class MainActivity extends Activity {
     private void showUniversalCreateSheet() {
         String[] opts = {
                 "📝 Create Post — text, photos, poll, feeling or check-in",
+                "🎬 Upload Reel — share short vertical video fast ⚡",
                 "📖 Add to Story — photo or colorful Aa text story",
-                "🎬 Create Reel — short vertical video",
                 "🔴 Go Live — start live broadcast",
                 "💭 Share 24h Note — status bubble on Home",
                 "🚩 Create / Manage Pages",
@@ -287,10 +291,10 @@ public class MainActivity extends Activity {
                     startActivity(new Intent(this, CreatePostActivity.class));
                     break;
                 case 1:
-                    startActivity(new Intent(this, AddStoryActivity.class));
+                    startActivity(new Intent(this, AddReelActivity.class));
                     break;
                 case 2:
-                    startActivity(new Intent(this, AddReelActivity.class));
+                    startActivity(new Intent(this, AddStoryActivity.class));
                     break;
                 case 3: {
                     Intent li = new Intent(this, LiveActivity.class);

@@ -392,8 +392,8 @@ public class Models {
     }
 
     public static class Reel {
-        public String id, authorId, authorName, authorPhoto, videoUrl, caption;
-        public int likes, comments, shares;
+        public String id, authorId, authorName, authorPhoto, videoUrl, thumbUrl, caption;
+        public int likes, comments, shares, durationSec;
         public long createdAt;
         public boolean isFromPost; // true when sourced from posts (mediaType == "video")
         public List<String> likedBy = new ArrayList<>();
@@ -413,10 +413,12 @@ public class Models {
             r.authorName = Format.strOr(m, "authorName", "User");
             r.authorPhoto = Format.str(m, "authorPhotoUrl");
             r.videoUrl = Format.strOr(m, "videoUrl", Format.str(m, "mediaUrl"));
+            r.thumbUrl = Format.strOr(m, "thumbUrl", Format.str(m, "thumbnailUrl"));
             r.caption = Format.strOr(m, "caption", Format.str(m, "content"));
             r.likes = Format.intOf(m, "likes");
             r.comments = Format.intOf(m, "comments");
             r.shares = Format.intOf(m, "shares");
+            r.durationSec = Format.intOf(m, "durationSec");
             r.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             r.likedBy = Format.listOf(m, "likedBy");
             r.savedBy = Format.listOf(m, "savedBy");

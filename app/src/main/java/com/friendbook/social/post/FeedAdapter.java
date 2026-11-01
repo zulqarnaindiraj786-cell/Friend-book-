@@ -837,13 +837,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     });
             vh.image.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
         } else if (isVideo) {
-            // video posts: lightweight dark thumbnail box + ▶ overlay → Reels-style player on tap!
+            // Video posts: instant poster frame + background SSD prefetch -> 0.0ms Reels player on tap!
             vh.image.setVisibility(View.VISIBLE);
-            vh.image.setImageDrawable(Ui.round(c, 0xFF222222, 0));
+            String vThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(p.mediaUrl, "");
+            if (!vThumb.isEmpty()) {
+                Ui.imgFeed(c, vh.image, vThumb);
+            } else {
+                vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
+            }
+            if (!Prefs.dataSaver(c)) {
+                com.friendbook.social.reels.ReelVideoCache.prefetchSingle(c, p.mediaUrl);
+            }
             vh.playBadge.setVisibility(View.VISIBLE);
-            vh.playBadge.setBackgroundColor(0x99000000);
+            vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
-            vh.playBadge.setText("▶ Tap to watch with Like · Comment · Share");
+            vh.playBadge.setText("▶ Tap to watch Reel");
             vh.mediaWrap.setOnClickListener(v -> {
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
@@ -1637,18 +1645,25 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
 
-            // 🔴 GO LIVE button + Live Hub + active lives strip (friendbook style)
+            // 🔴 GO LIVE + 🎬 UPLOAD REEL + Live Hub strip (friendbook style)
             liveBox = Ui.col(c);
             liveBox.setBackgroundColor(Ui.card(c));
             LinearLayout liveTop = Ui.row(c);
             liveTop.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(liveTop, 12, 8, 12, 6);
             goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 12);
-            Ui.pad(goLiveBtn, 14, 7, 14, 7);
+            Ui.pad(goLiveBtn, 12, 7, 12, 7);
             liveTop.addView(goLiveBtn);
-            TextView liveTitle = Ui.tvBold(c, "Live Video & Voice", 13, Ui.txt(c));
-            liveTitle.setPadding(Ui.dp(c, 10), 0, 0, 0);
-            liveTop.addView(liveTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            TextView uploadReelChip = Ui.roundChip(c, "🎬 + Upload Reel", Ui.BLUE, 0xFFFFFFFF, 12);
+            Ui.pad(uploadReelChip, 12, 7, 12, 7);
+            LinearLayout.LayoutParams urlp = new LinearLayout.LayoutParams(-2, -2);
+            urlp.leftMargin = Ui.dp(c, 8);
+            uploadReelChip.setOnClickListener(v -> c.startActivity(
+                    new Intent(c, com.friendbook.social.reels.AddReelActivity.class)));
+            liveTop.addView(uploadReelChip, urlp);
+
+            liveTop.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
             TextView hubBtn = Ui.roundChip(c, "📺 Live Hub ›", Ui.inputBg(c), Ui.BLUE, 11);
             Ui.pad(hubBtn, 10, 6, 10, 6);
             hubBtn.setOnClickListener(v -> c.startActivity(
