@@ -81,19 +81,19 @@ public class Ui {
 
     /** Dynamic Play Store versionName straight from PackageInfo (single source of truth). */
     public static String appVersionName(Context c) {
-        if (c == null) return "2.8.13";
+        if (c == null) return "2.8.14";
         try {
             android.content.pm.PackageInfo pi = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
             if (pi != null && pi.versionName != null && !pi.versionName.isEmpty()) {
                 return pi.versionName;
             }
         } catch (Throwable ignored) { }
-        return "2.8.13";
+        return "2.8.14";
     }
 
     /** Dynamic Play Store versionCode straight from PackageInfo (single source of truth). */
     public static int appVersionCode(Context c) {
-        if (c == null) return 45;
+        if (c == null) return 46;
         try {
             android.content.pm.PackageInfo pi = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
             if (pi != null) {
@@ -103,7 +103,7 @@ public class Ui {
                 return pi.versionCode;
             }
         } catch (Throwable ignored) { }
-        return 45;
+        return 46;
     }
 
     // ---- dynamic colors ----

@@ -38,9 +38,10 @@ public final class PushGateway {
             return new Response(status, data);
         } finally { c.disconnect(); }
     }
-    public static String idToken() throws Exception {
+    public static String idToken() throws Exception { return idToken(false); }
+    public static String idToken(boolean forceRefresh) throws Exception {
         com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
         if (user == null) throw new IllegalStateException("Sign in required");
-        return Tasks.await(user.getIdToken(false), 15, TimeUnit.SECONDS).getToken();
+        return Tasks.await(user.getIdToken(forceRefresh), 15, TimeUnit.SECONDS).getToken();
     }
 }

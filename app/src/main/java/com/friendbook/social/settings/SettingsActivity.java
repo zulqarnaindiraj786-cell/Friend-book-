@@ -165,9 +165,6 @@ public class SettingsActivity extends Activity {
         body.addView(rowI(Icons.NOTIFICATIONS, "Notifications",
                 "Manage likes, comments, tags, requests, messages, birthdays & groups",
                 this::notificationsDialog));
-        body.addView(rowI(Icons.NOTIFICATIONS, "Push notification diagnostics",
-                "Check FCM registration, server status and send yourself a test",
-                () -> startActivity(new Intent(this, com.friendbook.social.push.PushDiagnosticsActivity.class))));
         body.addView(rowI(Icons.DATA_SAVER, "Data Saver & media quality",
                 "Photo: " + Prefs.photoQualityLabel(this).split(" ")[0]
                         + " · Autoplay: " + Prefs.autoplayModeLabel(this),
@@ -770,6 +767,16 @@ public class SettingsActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Notification settings")
                 .setView(sc)
+                .setNeutralButton("Preview sound", (d, w) -> {
+                    String uid = Fb.uid();
+                    if (uid == null) return;
+                    java.util.Map<String, String> preview = new java.util.HashMap<>();
+                    preview.put("toUserId", uid); preview.put("fromUserId", uid);
+                    preview.put("type", "push_test");
+                    preview.put("eventId", "sound_preview_" + java.util.UUID.randomUUID());
+                    preview.put("title", "friendbook"); preview.put("body", "Your friendbook notification sound");
+                    com.friendbook.social.push.PushManager.show(this, preview);
+                })
                 .setPositiveButton("Save", (d, w) -> {
                     Prefs.setNotifLikes(this, sLikes.isChecked());
                     Prefs.setNotifComments(this, sComms.isChecked());

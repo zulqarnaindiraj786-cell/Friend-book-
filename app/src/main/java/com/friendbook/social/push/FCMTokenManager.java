@@ -7,7 +7,26 @@ import org.json.JSONObject;
 /** Per-install, account-scoped token registration through a Firebase-authenticated gateway. */
 public final class FCMTokenManager {
     private static final java.util.concurrent.ExecutorService CLEANUP = java.util.concurrent.Executors.newSingleThreadExecutor();
-    public static void init(Context c) { Fb.auth().addAuthStateListener(a -> sync(c)); }
+    private static boolean initialized;
+    private static String activeUid;
+    public static synchronized void init(Context c) {
+        if (initialized) return;
+        initialized = true;
+        Context app = c.getApplicationContext();
+        com.google.firebase.messaging.FirebaseMessaging.getInstance().setAutoInitEnabled(true);
+        Fb.auth().addAuthStateListener(a -> {
+            String uid = a.getUid();
+            if (activeUid != null && !activeUid.equals(uid)) {
+                androidx.work.WorkManager.getInstance(app).cancelAllWorkByTag("fcm_user_" + activeUid);
+            }
+            activeUid = uid;
+            if (uid == null) {
+                androidx.work.WorkManager.getInstance(app).cancelUniqueWork("fcm_registration_maintenance");
+                return;
+            }
+            sync(app); // Cold start/restored session, sign-up, email login and Google login.
+        });
+    }
     public static synchronized String deviceId(Context c) {
         android.content.SharedPreferences p = c.getSharedPreferences("fcm_install", 0);
         String id = p.getString("device", "");
@@ -15,15 +34,39 @@ public final class FCMTokenManager {
         return id;
     }
     public static void sync(Context c) {
-        if (Fb.uid() == null) return;
-        try { PushDeliveryWorker.enqueue(new JSONObject().put("action", "register").put("device_id", deviceId(c))); }
-        catch (Exception ignored) { }
+        String uid = Fb.uid();
+        if (uid == null) return;
+        try {
+            JSONObject request = new JSONObject().put("action", "register").put("device_id", deviceId(c));
+            PushDeliveryWorker.enqueue(request);
+            // A long outage or OS scheduling delay must not require the user to register manually.
+            androidx.work.PeriodicWorkRequest maintenance = new androidx.work.PeriodicWorkRequest.Builder(
+                    PushDeliveryWorker.class, 12, java.util.concurrent.TimeUnit.HOURS)
+                    .setInputData(new androidx.work.Data.Builder().putString("uid", uid)
+                            .putString("body", request.toString()).build())
+                    .setConstraints(new androidx.work.Constraints.Builder()
+                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+                    .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, java.util.concurrent.TimeUnit.SECONDS)
+                    .addTag("fcm_user_" + uid).build();
+            androidx.work.WorkManager.getInstance(c.getApplicationContext()).enqueueUniquePeriodicWork(
+                    "fcm_registration_maintenance", androidx.work.ExistingPeriodicWorkPolicy.UPDATE, maintenance);
+        } catch (Exception e) {
+            android.util.Log.w("FriendBookPush", "Automatic FCM registration could not be queued", e);
+        }
+    }
+    public static void onTokenChanged(Context c) {
+        if (Fb.uid() == null) return; // The auth listener obtains the latest token after sign-in.
+        try {
+            PushDeliveryWorker.enqueue(new JSONObject().put("action", "register")
+                    .put("device_id", deviceId(c)), true);
+        } catch (Exception e) { android.util.Log.w("FriendBookPush", "Token refresh registration unavailable", e); }
     }
     public static void unregister(Context c) {
         // Capture the old session before the caller signs out; best effort cleanup only.
         com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
         if (user == null) return;
         androidx.work.WorkManager.getInstance(c).cancelAllWorkByTag("fcm_user_" + user.getUid());
+        androidx.work.WorkManager.getInstance(c).cancelUniqueWork("fcm_registration_maintenance");
         String id = deviceId(c);
         user.getIdToken(false).addOnSuccessListener(t -> CLEANUP.execute(() -> {
             try { PushGateway.call(new JSONObject().put("action", "unregister").put("device_id", id), t.getToken()); }

@@ -649,6 +649,7 @@ public class MainActivity extends Activity {
 
     private final android.os.Handler notificationPermissionHandler =
             new android.os.Handler(Looper.getMainLooper());
+    private boolean permissionHostResumed;
     private final Runnable notificationPermissionPrompt = () ->
             com.friendbook.social.push.NotificationPermissionPrompt.requestOnce(this);
 
@@ -695,6 +696,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        permissionHostResumed = false;
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         FeedAlgorithm.onAppBackgrounded(this);
         super.onPause();
@@ -703,6 +705,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
@@ -724,6 +727,15 @@ public class MainActivity extends Activity {
         // Delay until Main is visible; never show a permission dialog from background/PIN/login.
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
+        if (hasFocus && permissionHostResumed) {
+            notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
+        }
     }
 
     @Override

@@ -25,7 +25,7 @@ public class PushOpenActivity extends Activity {
         String post = getIntent().getStringExtra("postId");
         Intent target = new Intent(this, MainActivity.class);
         if ("push_test".equals(type)) {
-            target = new Intent(this, PushDiagnosticsActivity.class);
+            target = new Intent(this, MainActivity.class);
         } else if ("message".equals(type)) {
             target = new Intent(this, com.friendbook.social.chat.ChatActivity.class);
             target.putExtra("uid", getIntent().getStringExtra("fromUserId"));

@@ -18,7 +18,7 @@ public final class PushManager {
     }
     public static void sync(Context c) { FCMTokenManager.sync(c); }
     public static void save(Context c, String token) {
-        FCMTokenManager.sync(c);
+        FCMTokenManager.onTokenChanged(c);
     }
     public static void unregister(Context c) {
         FCMTokenManager.unregister(c);
