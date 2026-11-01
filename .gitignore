@@ -11,3 +11,10 @@ captures/
 .cxx/
 local.properties
 *.apk
+
+# Firebase admin credentials must only be deployed through the secret store.
+**/service_account*.json
+**/*firebase-adminsdk*.json
+**/service-account*.json
+node_modules/
+supabase/.test-build/

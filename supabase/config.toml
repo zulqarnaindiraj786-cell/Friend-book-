@@ -1,3 +1,7 @@
 [functions.send-onesignal-notification]
 # App uses Firebase Auth, verified cryptographically inside the handler, NOT Supabase Auth.
 verify_jwt = false
+
+[functions.send-fcm-notification]
+# Firebase ID tokens are verified cryptographically in the handler.
+verify_jwt = false

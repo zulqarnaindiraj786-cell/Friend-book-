@@ -7,15 +7,22 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
-import com.onesignal.Continue;
-import com.onesignal.OneSignal;
 
-/** One install-scoped prompt. OneSignal delegates to Android's native permission dialog. */
+/** One install-scoped Android 13+ native notification prompt. */
 public final class NotificationPermissionPrompt {
     private static final String PREFS = "notification_permission_install";
     private static final String ATTEMPTED = "prompt_attempted";
 
     private NotificationPermissionPrompt() { }
+
+    public static void onResult(Activity activity, int requestCode, int[] results) {
+        if (requestCode != 4401) return;
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("last_granted", granted).apply();
+        android.util.Log.i("FriendBookPush", granted ? "Notification permission allowed" : "Notification permission denied");
+        if (granted) FCMTokenManager.sync(activity);
+    }
 
     public static void requestOnce(Activity activity) {
         if (Build.VERSION.SDK_INT < 33 || activity.isFinishing() || activity.isDestroyed()
@@ -35,13 +42,7 @@ public final class NotificationPermissionPrompt {
             return;
         }
         try {
-            OneSignal.getNotifications().requestPermission(true, Continue.<Boolean>with(result -> {
-                boolean granted = result.isSuccess() && Boolean.TRUE.equals(result.getData());
-                prefs.edit().putBoolean("last_granted", granted).apply();
-                // Denial/cancellation/error is a valid outcome. Never loop, reopen settings, or block use.
-                android.util.Log.i("FriendBookPush", granted
-                        ? "Notification permission allowed" : "Notification permission denied or unavailable");
-            }));
+            activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 4401);
         } catch (RuntimeException e) {
             android.util.Log.w("FriendBookPush", "Notification permission request unavailable", e);
         }

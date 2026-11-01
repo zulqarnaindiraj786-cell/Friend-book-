@@ -7,8 +7,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import com.friendbook.social.R;
 import com.friendbook.social.core.*;
-import com.google.firebase.messaging.FirebaseMessaging;
-import com.google.firebase.firestore.FieldValue;
 import java.util.*;
 
 /** Private, multi-device registrations; account-scoped data-only pushes in every app state. */
@@ -16,29 +14,14 @@ public final class PushManager {
     public static final String CHANNEL = "friendbook_social_v1";
     public static void init(Context c) {
         channel(c);
-        OneSignalPush.init(c);
+        FCMTokenManager.init(c);
     }
-    public static void sync(Context c) { OneSignalPush.sync(); }
+    public static void sync(Context c) { FCMTokenManager.sync(c); }
     public static void save(Context c, String token) {
-        String uid = Fb.uid();
-        if (uid == null) return;
-        String device = c.getSharedPreferences("push", 0).getString("device", "");
-        if (device.isEmpty()) {
-            device = UUID.randomUUID().toString();
-            c.getSharedPreferences("push", 0).edit().putString("device", device).apply();
-        }
-        Map<String, Object> m = new HashMap<>();
-        m.put("token", token); m.put("updatedAt", FieldValue.serverTimestamp());
-        m.put("platform", "android");
-        Fb.db().collection("pushDevices").document(uid).collection("devices").document(device).set(m)
-                .addOnFailureListener(e -> android.util.Log.e("FriendBookPush", "Token save failed", e));
+        FCMTokenManager.sync(c);
     }
     public static void unregister(Context c) {
-        OneSignalPush.logout();
-        String uid = Fb.uid();
-        String device = c.getSharedPreferences("push", 0).getString("device", "");
-        if (uid != null && !device.isEmpty())
-            Fb.db().collection("pushDevices").document(uid).collection("devices").document(device).delete();
+        FCMTokenManager.unregister(c);
         NotificationManagerCompat.from(c).cancelAll();
         c.getSharedPreferences("push_target", 0).edit().clear().apply();
     }

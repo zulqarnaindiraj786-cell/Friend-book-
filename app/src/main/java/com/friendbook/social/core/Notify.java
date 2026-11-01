@@ -37,7 +37,7 @@ public class Notify {
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.OneSignalPush.notification(ref.getId(), n));
+                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
     }
 
     /**
@@ -57,7 +57,7 @@ public class Notify {
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.OneSignalPush.notification(ref.getId(), n));
+                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
 
         if (!alsoInChat) return;
         String chatId = "team_" + toUid;
@@ -110,7 +110,7 @@ public class Notify {
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.OneSignalPush.notification(ref.getId(), n));
+                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
     }
 
     /** Like/love/etc. on a post (respects local preference of the sender device). */

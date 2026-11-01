@@ -686,6 +686,12 @@ public class MainActivity extends Activity {
     private final Runnable notificationPermissionPrompt = () ->
             com.friendbook.social.push.NotificationPermissionPrompt.requestOnce(this);
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        com.friendbook.social.push.NotificationPermissionPrompt.onResult(this, requestCode, results);
+    }
+
     private void feedbackDialog() {
         if (active != TAB_HOME) return;
         LinearLayout box = Ui.col(this);
