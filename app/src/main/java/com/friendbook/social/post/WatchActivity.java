@@ -33,6 +33,8 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
     private ListenerRegistration reg;
     private SwipeRefreshLayout swipe;
     private final List<Models.Post> rawVideos = new ArrayList<>();
+    private final List<String> sessionOrderIds = new ArrayList<>();
+    private boolean forceReRank = true;
     private String mode = "all"; // all | popular | favorites
     private LinearLayout chipBar;
 
@@ -70,6 +72,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         rv.setAdapter(adapter);
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
+            forceReRank = true;
             FeedAlgorithm.nextRefreshGeneration(this);
             adapter.refreshSponsoredAds();
             listen();
@@ -106,6 +109,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
             Ui.pad(ch, 12, 6, 12, 6);
             ch.setOnClickListener(v -> {
                 mode = k;
+                forceReRank = true;
                 renderChips();
                 applyFilter();
             });
@@ -127,20 +131,56 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void applyFilter() {
-        List<Models.Post> out = new ArrayList<>();
+        List<Models.Post> filtered = new ArrayList<>();
         for (Models.Post p : rawVideos) {
             if ("favorites".equals(mode)
                     && (Fb.me == null || Fb.me.favoriteUids == null || !Fb.me.favoriteUids.contains(p.authorId))) {
                 continue;
             }
-            out.add(p);
+            filtered.add(p);
         }
-        if ("popular".equals(mode)) {
-            out.sort((a, b2) -> Integer.compare(b2.likes + b2.comments, a.likes + a.comments));
+        List<Models.Post> out;
+        if (!forceReRank && !sessionOrderIds.isEmpty()) {
+            java.util.Map<String, Models.Post> byId = new java.util.LinkedHashMap<>();
+            for (Models.Post p : filtered) {
+                if (p != null && p.id != null) byId.put(p.id, p);
+            }
+            out = new ArrayList<>(filtered.size());
+            List<String> updatedOrder = new ArrayList<>(filtered.size());
+            for (String existingId : sessionOrderIds) {
+                Models.Post p = byId.remove(existingId);
+                if (p != null) {
+                    out.add(p);
+                    updatedOrder.add(p.id);
+                }
+            }
+            for (Models.Post leftover : filtered) {
+                if (leftover != null && leftover.id != null && byId.containsKey(leftover.id)) {
+                    out.add(leftover);
+                    updatedOrder.add(leftover.id);
+                    byId.remove(leftover.id);
+                }
+            }
+            sessionOrderIds.clear();
+            sessionOrderIds.addAll(updatedOrder);
         } else {
-            out = FeedAlgorithm.rankWatchVideos(this, out);
+            if ("popular".equals(mode)) {
+                filtered.sort((a, b2) -> Integer.compare(b2.likes + b2.comments, a.likes + a.comments));
+                out = filtered;
+            } else {
+                out = FeedAlgorithm.rankWatchVideos(this, outListCopy(filtered));
+            }
+            sessionOrderIds.clear();
+            for (Models.Post p : out) {
+                if (p != null && p.id != null) sessionOrderIds.add(p.id);
+            }
+            forceReRank = false;
         }
         adapter.setPosts(out);
+    }
+
+    private static List<Models.Post> outListCopy(List<Models.Post> src) {
+        return new ArrayList<>(src);
     }
 
     @Override

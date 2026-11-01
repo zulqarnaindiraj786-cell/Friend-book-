@@ -216,6 +216,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         FrameLayout contentFrame = new FrameLayout(this);
         feedRv = new RecyclerView(this);
         feedRv.setLayoutManager(new LinearLayoutManager(this));
+        feedRv.setItemAnimator(null);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
         adapter.showFooter = false;

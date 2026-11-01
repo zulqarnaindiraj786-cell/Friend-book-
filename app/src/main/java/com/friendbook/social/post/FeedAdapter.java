@@ -96,7 +96,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             || oldP.comments != newP.comments
                             || oldP.shares != newP.shares
                             || (oldP.inlineComments == null ? 0 : oldP.inlineComments.size())
-                            != (newP.inlineComments == null ? 0 : newP.inlineComments.size());
+                            != (newP.inlineComments == null ? 0 : newP.inlineComments.size())
+                            || !sameReactionsSignature(oldP, newP);
                     if (metaChanged) {
                         notifyItemChanged(offset() + slotForPostIndex(i), "META_ONLY");
                     }
@@ -107,6 +108,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         posts.clear();
         posts.addAll(list);
         notifyDataSetChanged();
+    }
+
+    private static boolean sameReactionsSignature(Models.Post a, Models.Post b) {
+        Map<String, Map<String, Object>> ma = a == null ? null : a.reactionsMap;
+        Map<String, Map<String, Object>> mb = b == null ? null : b.reactionsMap;
+        int sa = ma == null ? 0 : ma.size();
+        int sb = mb == null ? 0 : mb.size();
+        if (sa != sb) return false;
+        if (sa == 0) return true;
+        for (Map.Entry<String, Map<String, Object>> e : ma.entrySet()) {
+            Map<String, Object> other = mb.get(e.getKey());
+            if (other == null) return false;
+            String ta = Format.strOr(e.getValue(), "type", "like");
+            String tb = Format.strOr(other, "type", "like");
+            if (!ta.equals(tb)) return false;
+        }
+        return true;
     }
 
     /** Exact adapter slot (excluding header) for a post index, accounting for Feed Native Ads. */
@@ -259,6 +277,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (idx >= 0 && idx < posts.size()) {
                 Models.Post p = posts.get(idx);
                 PostVH vh = (PostVH) h;
+                Reactions.hydrateFromPostInstant(p);
                 int totalLikes = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 String myReact = com.friendbook.social.core.FastCache.getMyReaction(p.id);
                 renderReactionBar(activity, vh, p, myReact, totalLikes);
@@ -828,7 +847,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         @Override public boolean onDoubleTap(android.view.MotionEvent e) {
                             if (Prefs.doubleTapToLike(c)) {
                                 Ui.haptic(vh.image);
-                                Reactions.apply(c, p, "love");
+                                String curRx = com.friendbook.social.core.FastCache.getMyReaction(p.id);
+                                if (!"love".equals(curRx)) {
+                                    Reactions.apply(c, p, "love");
+                                }
+                                renderReactionBar(c, vh, p,
+                                        com.friendbook.social.core.FastCache.getMyReaction(p.id),
+                                        com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
+                                animateLikePop(vh);
                                 Ui.toast(c, "❤️ Loved!");
                                 return true;
                             }
@@ -979,21 +1005,34 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean iReacted = mine != null && !mine.isEmpty();
         int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
 
-        // 1. Left clickable reactions summary: [🔵👍] + "2" (unliked) OR [🔵👍] + "You and 2 others" (liked)!
+        // 1. Left clickable reactions summary: exact active badges ([🔵👍] and/or ❤️😂😮😢😡) + "2" or "You and 2 others"
         if (effectiveTotal > 0) {
-            String em = com.friendbook.social.core.FastCache.getReactionEmojis(p.id);
-            StringBuilder extraEmojis = new StringBuilder();
-            if (em != null) {
-                for (String rType : new String[]{"love", "haha", "wow", "sad", "angry"}) {
-                    String sym = Reactions.emojiFor(rType);
-                    if (em.contains(sym) || rType.equals(mine)) {
-                        extraEmojis.append(sym);
-                    }
-                }
+            List<String> activeTypes = com.friendbook.social.core.FastCache.getReactionTypes(p.id);
+            if (activeTypes.isEmpty() && p.reactionsMap != null && !p.reactionsMap.isEmpty()) {
+                activeTypes = Reactions.computeTopTypesFromMap(p.reactionsMap);
             }
-            vh.reactBadgeIv.setVisibility(View.VISIBLE);
+            List<String> displayTypes = new ArrayList<>(activeTypes);
+            if (iReacted && !displayTypes.contains(mine)) {
+                displayTypes.add(0, mine);
+            }
+            if (displayTypes.isEmpty()) {
+                displayTypes.add(iReacted ? mine : "like");
+            }
+
+            boolean showThumbBadge = displayTypes.contains("like");
+            StringBuilder extraEmojis = new StringBuilder();
+            int emojiCount = showThumbBadge ? 1 : 0;
+            for (String rType : displayTypes) {
+                if ("like".equals(rType)) continue;
+                if (emojiCount >= 3) break;
+                extraEmojis.append(Reactions.emojiFor(rType));
+                emojiCount++;
+            }
+
+            vh.reactBadgeIv.setVisibility(showThumbBadge ? View.VISIBLE : View.GONE);
             if (extraEmojis.length() > 0) {
                 vh.extraReactsTv.setText(extraEmojis.toString());
+                vh.extraReactsTv.setPadding(showThumbBadge ? Ui.dp(c, 2) : 0, 0, 0, 0);
                 vh.extraReactsTv.setVisibility(View.VISIBLE);
             } else {
                 vh.extraReactsTv.setText("");
@@ -2091,27 +2130,33 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             blp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
             mediaWrap.addView(pageBadge, blp);
 
-            // ---- Pro Clickable Summary Row: Left=[🔵👍] "2" or "You and 2 others" | Right="2 comments" ----
+            // ---- Pro Clickable Summary Row: Left=[🔵👍 / ❤️😂] "2" or "You and 2 others" | Right="2 comments" ----
             summaryRow = Ui.row(c);
             summaryRow.setGravity(Gravity.CENTER_VERTICAL);
-            Ui.pad(summaryRow, 12, 8, 12, 5);
+            summaryRow.setMinimumHeight(Ui.dp(c, 32));
+            Ui.pad(summaryRow, 12, 6, 12, 4);
             summaryRow.setVisibility(View.GONE);
 
             reactSummaryWrap = Ui.row(c);
             reactSummaryWrap.setGravity(Gravity.CENTER_VERTICAL);
-            reactSummaryWrap.setPadding(0, Ui.dp(c, 2), Ui.dp(c, 12), Ui.dp(c, 2));
+            reactSummaryWrap.setMinimumHeight(Ui.dp(c, 22));
+            reactSummaryWrap.setPadding(0, 0, Ui.dp(c, 12), 0);
 
             reactBadgeIv = new ImageView(c);
             reactBadgeIv.setImageResource(com.friendbook.social.R.drawable.ic_reaction_like_badge);
             int badgeSz = Ui.dp(c, 18);
             reactSummaryWrap.addView(reactBadgeIv, new LinearLayout.LayoutParams(badgeSz, badgeSz));
 
-            extraReactsTv = Ui.tv(c, "", 13, Ui.txt(c));
+            extraReactsTv = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            extraReactsTv.setIncludeFontPadding(false);
+            extraReactsTv.setGravity(Gravity.CENTER_VERTICAL);
             extraReactsTv.setPadding(Ui.dp(c, 2), 0, 0, 0);
             extraReactsTv.setVisibility(View.GONE);
-            reactSummaryWrap.addView(extraReactsTv);
+            reactSummaryWrap.addView(extraReactsTv, new LinearLayout.LayoutParams(-2, Ui.dp(c, 20)));
 
             tagSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
+            tagSummary.setIncludeFontPadding(false);
+            tagSummary.setGravity(Gravity.CENTER_VERTICAL);
             tagSummary.setPadding(Ui.dp(c, 6), 0, 0, 0);
             reactSummaryWrap.addView(tagSummary);
 
@@ -2119,11 +2164,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View spacer = new View(c);
             summaryRow.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
             commentsSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
-            commentsSummary.setPadding(Ui.dp(c, 8), Ui.dp(c, 2), 0, Ui.dp(c, 2));
+            commentsSummary.setIncludeFontPadding(false);
+            commentsSummary.setPadding(Ui.dp(c, 8), 0, 0, 0);
             summaryRow.addView(commentsSummary);
             card.addView(summaryRow);
 
-            // ---- 3 Rounded Pill Capsule Buttons (Hollow Outline Unliked -> Solid #1877F2 Blue Liked!) ----
+            // ---- 3 Rounded Pill Capsule Buttons (Hollow Outline Unliked -> Solid #1877F2 Blue Liked / Emoji Reacted!) ----
             LinearLayout actions = Ui.row(c);
             Ui.pad(actions, 10, 4, 10, 10);
 
@@ -2131,10 +2177,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             likeIcon = new ImageView(c);
             likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
             like.addView(likeIcon, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
-            likeEmojiTv = Ui.tv(c, "", 17, Ui.txt(c));
+            likeEmojiTv = Ui.tv(c, "", 15.5f, Ui.txt(c));
+            likeEmojiTv.setIncludeFontPadding(false);
+            likeEmojiTv.setGravity(Gravity.CENTER);
             likeEmojiTv.setVisibility(View.GONE);
-            like.addView(likeEmojiTv);
+            like.addView(likeEmojiTv, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
             likeTxt = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            likeTxt.setIncludeFontPadding(false);
             likeTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
             likeTxt.setVisibility(View.GONE);
             like.addView(likeTxt);

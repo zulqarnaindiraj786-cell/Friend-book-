@@ -116,9 +116,30 @@ public class Reactions {
         pop.showAtLocation(anchor, Gravity.NO_GRAVITY, Math.max(Ui.dp(c, 8), loc[0]), y);
     }
 
+    /** Computes active reaction types ordered by frequency straight from post.reactionsMap. */
+    public static List<String> computeTopTypesFromMap(Map<String, Map<String, Object>> reactionsMap) {
+        if (reactionsMap == null || reactionsMap.isEmpty()) return new ArrayList<>();
+        Map<String, Integer> freq = new LinkedHashMap<>();
+        for (String t : TYPES) freq.put(t, 0);
+        for (Map.Entry<String, Map<String, Object>> e : reactionsMap.entrySet()) {
+            if (e.getValue() == null) continue;
+            String t = Format.strOr(e.getValue(), "type", "like");
+            if (!freq.containsKey(t)) t = "like";
+            freq.put(t, freq.get(t) + 1);
+        }
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(freq.entrySet());
+        Collections.sort(entries, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : entries) {
+            if (e.getValue() > 0) out.add(e.getKey());
+        }
+        return out;
+    }
+
     /** 1-tap Like toggle: removes existing reaction if any, otherwise adds "like". */
     public static void tapLike(Context c, Models.Post post) {
         if (post == null || post.id == null) return;
+        hydrateFromPostInstant(post);
         String prev = FastCache.getMyReaction(post.id);
         apply(c, post, prev != null ? null : "like");
     }
@@ -130,6 +151,7 @@ public class Reactions {
         String me = Fb.uid();
         if (me == null || post == null || post.id == null) return;
 
+        hydrateFromPostInstant(post);
         String prev = FastCache.getMyReaction(post.id);
         int curTotal = FastCache.getReactionTotal(post.id, post.likes);
 
@@ -153,14 +175,39 @@ public class Reactions {
         int nextTotal = Math.max(0, curTotal + delta);
         post.likes = nextTotal;
         FastCache.markLocalReactionTap(post.id);
-        if (nextType != null) {
-            String curEmojis = FastCache.getReactionEmojis(post.id);
-            String em = emojiFor(nextType);
-            if (!curEmojis.contains(em)) {
-                FastCache.setReactionEmojis(post.id, (em + curEmojis).substring(0, Math.min(6, (em + curEmojis).length())));
-            }
+
+        // Update post.reactionsMap FIRST so exact reaction types are computed with zero leftover icons!
+        if (post.reactionsMap == null) post.reactionsMap = new HashMap<>();
+        Map<String, Object> myData = null;
+        if (nextType == null) {
+            post.reactionsMap.remove(me);
+        } else {
+            myData = new HashMap<>();
+            myData.put("userId", me);
+            myData.put("userName", Fb.myName());
+            myData.put("userPhoto", Fb.myPhoto());
+            myData.put("userTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
+            myData.put("type", nextType);
+            myData.put("createdAt", System.currentTimeMillis());
+            post.reactionsMap.put(me, myData);
         }
-        // 0.0ms immediate UI update across FeedAdapter, ProfileActivity & PostDetailActivity!
+
+        if (nextTotal <= 0) {
+            FastCache.setReactionTypes(post.id, Collections.emptyList());
+        } else {
+            List<String> updatedTypes = computeTopTypesFromMap(post.reactionsMap);
+            if (updatedTypes.isEmpty()) {
+                // Legacy post where others reacted before reactionsMap existed
+                updatedTypes = new ArrayList<>();
+                if (nextType != null) updatedTypes.add(nextType);
+                if (nextTotal > (nextType != null ? 1 : 0) && !updatedTypes.contains("like")) {
+                    updatedTypes.add("like");
+                }
+            }
+            FastCache.setReactionTypes(post.id, updatedTypes);
+        }
+
+        // 0.0ms immediate UI update across FeedAdapter, WatchActivity, ProfileActivity & PostDetailActivity!
         FastCache.setReactionState(c, post.id, nextType, nextTotal, true);
 
         DocumentReference postRef = Fb.db().collection("posts").document(post.id);
@@ -178,15 +225,8 @@ public class Reactions {
                     postRef.set(up, SetOptions.merge());
                 }
             });
-            if (post.reactionsMap != null) post.reactionsMap.remove(me);
         } else {
-            Map<String, Object> data = new HashMap<>();
-            data.put("userId", me);
-            data.put("userName", Fb.myName());
-            data.put("userPhoto", Fb.myPhoto());
-            data.put("userTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
-            data.put("type", nextType);
-            data.put("createdAt", System.currentTimeMillis());
+            final Map<String, Object> data = myData;
             reactRef.set(data).addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
 
             Map<String, Object> dot = new HashMap<>();
@@ -200,8 +240,6 @@ public class Reactions {
                 if (delta != 0) nested.put("likes", FieldValue.increment(delta));
                 postRef.set(nested, SetOptions.merge());
             });
-            if (post.reactionsMap == null) post.reactionsMap = new HashMap<>();
-            post.reactionsMap.put(me, data);
 
             if (delta > 0 && post.authorId != null && !me.equals(post.authorId)) {
                 Notify.send(post.authorId, "like",
@@ -213,6 +251,7 @@ public class Reactions {
 
     /**
      * 0.0ms synchronous hydration from embedded post.reactionsMap BEFORE FeedAdapter binds UI!
+     * Also keeps live multi-user reactions & reaction-type switches (love, haha, wow, sad, angry) in sync.
      */
     public static void hydrateFromPostInstant(final Models.Post post) {
         if (post == null || post.id == null) return;
@@ -220,16 +259,16 @@ public class Reactions {
         if (post.reactionsMap != null && !post.reactionsMap.isEmpty()) {
             String me = Fb.uid();
             String myType = null;
-            StringBuilder em = new StringBuilder();
-            for (Map.Entry<String, Map<String, Object>> e : post.reactionsMap.entrySet()) {
-                String t = Format.strOr(e.getValue(), "type", "like");
-                String emoji = emojiFor(t);
-                if (em.indexOf(emoji) < 0 && em.length() < 6) em.append(emoji);
-                if (me != null && me.equals(e.getKey())) myType = t;
+            if (me != null && post.reactionsMap.containsKey(me)) {
+                myType = Format.strOr(post.reactionsMap.get(me), "type", "like");
             }
-            if (em.length() > 0) FastCache.setReactionEmojis(post.id, em.toString());
+            List<String> topTypes = computeTopTypesFromMap(post.reactionsMap);
+            FastCache.setReactionTypes(post.id, topTypes);
             int count = Math.max(post.likes, post.reactionsMap.size());
-            FastCache.seedReactionFromPostMap(post.id, myType, count);
+            FastCache.seedReactionFromPostMap(post.id, myType != null ? myType : "none", count);
+        } else if (post.likes <= 0) {
+            FastCache.setReactionTypes(post.id, Collections.emptyList());
+            FastCache.seedReactionFromPostMap(post.id, "none", 0);
         }
     }
 
@@ -265,26 +304,19 @@ public class Reactions {
                         String uid = d.getString("userId");
                         if (uid == null || uid.isEmpty()) uid = d.getId();
                         String t = d.getString("type");
-                        if (t == null || t.isEmpty()) t = "like";
-                        freq.put(t, (freq.get(t) == null ? 0 : freq.get(t)) + 1);
+                        if (t == null || t.isEmpty() || !freq.containsKey(t)) t = "like";
+                        freq.put(t, freq.get(t) + 1);
                         if (me != null && (me.equals(d.getId()) || me.equals(uid))) {
                             myType = t;
                         }
                     }
-                    // Build top 3 reaction emojis ordered by frequency
                     List<Map.Entry<String, Integer>> entries = new ArrayList<>(freq.entrySet());
                     Collections.sort(entries, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
-                    StringBuilder emojis = new StringBuilder();
-                    int added = 0;
+                    List<String> topTypes = new ArrayList<>();
                     for (Map.Entry<String, Integer> e : entries) {
-                        if (e.getValue() > 0) {
-                            emojis.append(emojiFor(e.getKey()));
-                            if (++added >= 3) break;
-                        }
+                        if (e.getValue() > 0) topTypes.add(e.getKey());
                     }
-                    if (emojis.length() > 0) {
-                        FastCache.setReactionEmojis(postId, emojis.toString());
-                    }
+                    FastCache.setReactionTypes(postId, topTypes);
                     int bestTotal = snap.size() < 250 ? realCount : Math.max(realCount, storedLikes);
                     // Self-heal posts/{postId}.likes when the subcollection count differs!
                     if (snap.size() < 250 && storedLikes != realCount) {

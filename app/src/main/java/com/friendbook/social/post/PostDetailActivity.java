@@ -63,6 +63,16 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private boolean busy;
     private int lastSyncedCommentCount = -1;
 
+    private final FastCache.ReactionObserver reactionObserver = (pid, mine, total) -> {
+        if (pid != null && pid.equals(postId)) {
+            if (postAdapter != null) postAdapter.onFastReactionUpdate(pid, mine, total);
+            if (whoReactedChip != null) {
+                String badge = (mine != null && !mine.isEmpty()) ? Reactions.emojiFor(mine) : "👍";
+                whoReactedChip.setText(total > 0 ? (badge + " " + total + " · Who reacted") : "👍 Who reacted");
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -95,6 +105,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
         RecyclerView postRv = new RecyclerView(this);
         postRv.setLayoutManager(new LinearLayoutManager(this));
+        postRv.setItemAnimator(null);
         postRv.setNestedScrollingEnabled(false);
         postAdapter = new FeedAdapter(this, this);
         postAdapter.showHeader = false;
@@ -144,6 +155,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         mainRv = new RecyclerView(this);
         mainRv.setBackgroundColor(Ui.card(this));
         mainRv.setLayoutManager(new LinearLayoutManager(this));
+        mainRv.setItemAnimator(null);
         commentsAdapter = new CommentsAdapter(this, this);
         commentsAdapter.counterCollection = "posts";
         commentsAdapter.counterId = postId;
@@ -274,6 +286,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     @Override
     protected void onStart() {
         super.onStart();
+        FastCache.addReactionObserver(reactionObserver);
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
             if (d == null || !d.exists()) { finish(); return; }
             post = Models.Post.fromDoc(d);
@@ -281,7 +294,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
             postAdapter.setPosts(Collections.singletonList(post));
             int likes = FastCache.getReactionTotal(postId, post.likes);
-            whoReactedChip.setText(likes > 0 ? ("👍 " + likes + " · Who liked") : "👍 Who liked");
+            String mine = FastCache.getMyReaction(postId);
+            String badge = (mine != null && !mine.isEmpty()) ? Reactions.emojiFor(mine) : "👍";
+            whoReactedChip.setText(likes > 0 ? (badge + " " + likes + " · Who reacted") : "👍 Who reacted");
         });
 
         // Multi-user real-time CommentsEngine: merges posts/{postId}.commentsMap + subcollection + root comments!
@@ -293,7 +308,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
             if (post != null && post.comments != rawComments.size()) {
                 post.comments = rawComments.size();
-                postAdapter.notifyDataSetChanged();
+                postAdapter.notifyItemChanged(0, "META_ONLY");
             }
         });
     }
@@ -301,6 +316,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     @Override
     protected void onStop() {
         super.onStop();
+        FastCache.removeReactionObserver(reactionObserver);
         if (postReg != null) postReg.remove();
         if (commentsHandle != null) commentsHandle.remove();
     }
