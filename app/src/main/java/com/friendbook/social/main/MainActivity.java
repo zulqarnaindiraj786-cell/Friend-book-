@@ -446,7 +446,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** ⚡ 0.0ms Optimistic Message Badge Zeroing (clears entire count on opening Chat list!). */
+    /** Dismiss ONLY the top Messages badge. Inbox unread counts and message receipts are untouched. */
     public static void clearMessagesBadgeNow() {
         String me = Fb.uid();
         MainActivity inst = activeInstance;
@@ -455,43 +455,9 @@ public class MainActivity extends Activity {
             inst.runOnUiThread(() -> Ui.setBadge(inst.msgBadge, 0));
         }
         if (me == null || ctx == null) return;
+        // Device/account-scoped badge acknowledgement, NOT a conversation read operation.
+        // ChatActivity remains responsible for marking only the conversation actually opened.
         Prefs.setChatBadgeClearedAt(ctx, me, System.currentTimeMillis());
-
-        java.util.Set<String> roomIds = new java.util.HashSet<>();
-        if (inst != null) {
-            synchronized (inst.currentUnreadChatIds) {
-                roomIds.addAll(inst.currentUnreadChatIds);
-                inst.currentUnreadChatIds.clear();
-            }
-        }
-        if (!roomIds.isEmpty()) {
-            com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-            int ops = 0;
-            for (String cid : roomIds) {
-                if (cid == null || cid.isEmpty()) continue;
-                batch.update(Fb.db().collection("chats").document(cid), "unreadCount." + me, 0);
-                if (++ops >= 450) break;
-            }
-            if (ops > 0) batch.commit();
-        } else {
-            Fb.db().collection("chats").whereArrayContains("participants", me).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap == null || snap.isEmpty()) return;
-                        com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-                        int ops = 0;
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            Object u = d.get("unreadCount");
-                            if (u instanceof Map) {
-                                Object n = ((Map<?, ?>) u).get(me);
-                                if (n instanceof Number && ((Number) n).intValue() > 0) {
-                                    batch.update(d.getReference(), "unreadCount." + me, 0);
-                                    if (++ops >= 450) break;
-                                }
-                            }
-                        }
-                        if (ops > 0) batch.commit();
-                    });
-        }
     }
 
     /** ⚡ 0.0ms Optimistic Bell Badge Zeroing + Automatic markAllAsRead! */

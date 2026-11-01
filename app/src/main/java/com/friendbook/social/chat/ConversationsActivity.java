@@ -205,7 +205,7 @@ public class ConversationsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        // ⚡ 0.0ms Optimistic Message Badge Zeroing on opening Chat list!
+        // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
         // Live snapshot listener on users so Active Now strip updates green online dots in real time!
         usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
