@@ -6,6 +6,7 @@ create table if not exists public.push_delivery_claims (
 );
 alter table public.push_delivery_claims enable row level security;
 revoke all on public.push_delivery_claims from anon, authenticated;
+grant all on public.push_delivery_claims to service_role;
 create or replace function public.claim_push(p_event text, p_actor text)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin

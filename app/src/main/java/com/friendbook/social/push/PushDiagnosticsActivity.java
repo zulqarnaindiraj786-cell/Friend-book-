@@ -45,7 +45,7 @@ public class PushDiagnosticsActivity extends Activity {
     @Override protected void onResume() { super.onResume(); if (status != null) localStatus(); }
     private void localStatus() {
         android.content.SharedPreferences p = getSharedPreferences("push_diagnostics", 0);
-        status.setText("Provider: Direct FCM\nSigned in: " + (Fb.uid() != null)
+        status.setText("Provider: Direct FCM\nServer: " + com.friendbook.social.BuildConfig.SUPABASE_URL + "\nSigned in: " + (Fb.uid() != null)
                 + "\nAndroid notifications enabled: " + androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
                 + "\nRegistration: " + p.getString("registration", "Not confirmed yet")
                 + "\nLast send: " + p.getString("last_send", "No result yet")

@@ -76,3 +76,11 @@ test('UNREGISTERED removes only the exact stale token', async () => {
   mock({fcmStatus:404}); const r=await handleRequest(request({action:'self_test'}),verify);
   assert.equal(r.status,409); assert.ok(calls.some(x=>x.url.includes('token=eq.test-token-value')&&x.init.method==='DELETE'));
 });
+test('status checks Google credentials and returns only safe registration metadata', async () => {
+  mock(); const r = await handleRequest(request({action:'status'}), verify);
+  assert.equal(r.status,200);
+  const data = await r.json();
+  assert.equal(data.google_oauth_verified,true);
+  assert.equal(data.registered_devices,1);
+  assert.equal(data.token,undefined); assert.equal(data.access_token,undefined);
+});

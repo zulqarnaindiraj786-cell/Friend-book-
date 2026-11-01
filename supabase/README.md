@@ -1,3 +1,5 @@
+> Current production route: **direct FCM on friendbook-push** (`iqtccjgpbtnfavbkbogr`). See [DIRECT_FCM.md](DIRECT_FCM.md) for deployment verification and device testing. The OneSignal instructions below are historical and are not used by the current Android build.
+
 # OneSignal production activation
 
 No OneSignal REST credential belongs in Gradle, Java, git, the APK or CI logs. The public App ID is `6921b7fa-7c0a-40e3-8dd9-e698429a038a`.

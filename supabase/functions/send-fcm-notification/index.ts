@@ -18,7 +18,8 @@ async function googleToken() {
   if (cachedToken && Date.now() < tokenUntil) return cachedToken;
   const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON");
   if (!raw) throw new Error("FCM_NOT_CONFIGURED");
-  const sa = JSON.parse(raw);
+  let sa;
+  try { sa = JSON.parse(raw); } catch { throw new Error("FCM_INVALID_JSON"); }
   if (sa.project_id !== PROJECT || !sa.private_key || !sa.client_email) throw new Error("FCM_PROJECT_MISMATCH");
   const key = await importPKCS8(sa.private_key, "RS256");
   const assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/firebase.messaging" })
@@ -76,9 +77,10 @@ export async function handleRequest(req: Request, verifySession = verifyFirebase
       return json({ registered: true, provider: "fcm" });
     }
     if (action === "status") {
+      await googleToken(); // Validate secret syntax, key/project and Google OAuth without revealing credentials.
       const devices = await rest(`fcm_device_tokens?user_id=eq.${actor}&select=device_id,updated_at`);
       return json({ provider: "fcm", project: PROJECT, registered_devices: devices.length,
-        server_configured: !!Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") });
+        server_configured: true, google_oauth_verified: true });
     }
     const target = action === "self_test" ? actor : body.target_user_id;
     if (!validId(target) || (action !== "self_test" && (!input || typeof input !== "object" || target === actor))) return json({ error: "INVALID_TARGET" }, 400);
@@ -164,7 +166,7 @@ export async function handleRequest(req: Request, verifySession = verifyFirebase
     return json({ provider: "fcm", accepted, duplicate, invalid, note: "FCM acceptance is not a device receipt" });
   } catch (error) {
     const code = error instanceof Error ? error.message : "INVALID_REQUEST";
-    const known = ["FCM_NOT_CONFIGURED", "FCM_PROJECT_MISMATCH", "FCM_OAUTH_FAILED", "TOKEN_STORE_UNAVAILABLE"];
+    const known = ["FCM_NOT_CONFIGURED", "FCM_INVALID_JSON", "FCM_PROJECT_MISMATCH", "FCM_OAUTH_FAILED", "TOKEN_STORE_UNAVAILABLE"];
     return json({ error: known.includes(code) ? code : "INVALID_OR_UNAVAILABLE_EVENT" }, known.includes(code) ? 503 : 400);
   }
 }
