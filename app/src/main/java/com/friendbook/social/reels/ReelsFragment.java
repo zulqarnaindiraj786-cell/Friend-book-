@@ -1249,7 +1249,7 @@ public class ReelsFragment extends Fragment {
                 Context c = itemView.getContext();
                 Ui.avatar(c, avatar, reel.authorPhoto);
                 nameT.setText(reel.authorName == null ? "User" : reel.authorName);
-                TickCache.bind(tick, reel.authorId, false, "none");
+                TickCache.attach(tick, reel.authorId);
 
                 boolean hasCap = reel.caption != null && !reel.caption.trim().isEmpty();
                 captionT.setText(hasCap ? reel.caption : "");
@@ -1560,9 +1560,9 @@ public class ReelsFragment extends Fragment {
                         myRx != null ? 0x66F02849 : 0x66000000, 22,
                         myRx != null ? 0xAAF02849 : 0x33FFFFFF, 1));
                 int totalLikes = Math.max(reel.likes, reel.reactions != null ? reel.reactions.size() : 0);
-                likeCount.setText(totalLikes > 0 ? Format.compact(totalLikes) : "Like");
-                commentCount.setText(reel.comments > 0 ? Format.compact(reel.comments) : "Comment");
-                shareCount.setText(reel.shares > 0 ? Format.compact(reel.shares) : "Share");
+                likeCount.setText(totalLikes > 0 ? Format.count(totalLikes) : "Like");
+                commentCount.setText(reel.comments > 0 ? Format.count(reel.comments) : "Comment");
+                shareCount.setText(reel.shares > 0 ? Format.count(reel.shares) : "Share");
 
                 boolean saved = me != null && reel.savedBy != null && reel.savedBy.contains(me);
                 saveBtnBox.setBackground(Ui.roundStroke(itemView.getContext(),
