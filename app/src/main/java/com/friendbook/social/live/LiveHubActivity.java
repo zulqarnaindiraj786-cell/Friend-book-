@@ -38,7 +38,7 @@ import java.util.Map;
 public class LiveHubActivity extends Activity {
 
     private static final String[] CATEGORIES = {
-            "🔥 All", "💬 Chatting", "🎮 Gaming", "🎵 Music",
+            "🔥 All", "⚔️ PK Battles", "💬 Chatting", "🎮 Gaming", "🎵 Music",
             "📚 Q&A", "🏏 Sports", "✨ Lifestyle", "🍳 Cooking", "💻 Tech"
     };
 
@@ -188,8 +188,11 @@ public class LiveHubActivity extends Activity {
 
         List<Map<String, Object>> filtered = new ArrayList<>();
         for (Map<String, Object> m : allActiveLives) {
-            if ("🔥 All".equals(selectedCategory)
-                    || selectedCategory.equalsIgnoreCase(Format.str(m, "category"))) {
+            if ("🔥 All".equals(selectedCategory)) {
+                filtered.add(m);
+            } else if ("⚔️ PK Battles".equals(selectedCategory)) {
+                if (Boolean.TRUE.equals(m.get("pkActive"))) filtered.add(m);
+            } else if (selectedCategory.equalsIgnoreCase(Format.str(m, "category"))) {
                 filtered.add(m);
             }
         }
@@ -271,10 +274,13 @@ public class LiveHubActivity extends Activity {
         }
 
         // Top badges inside preview
+        boolean pkActive = Boolean.TRUE.equals(m.get("pkActive"));
         LinearLayout badges = Ui.row(this);
         badges.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(badges, 10, 10, 10, 10);
-        TextView livePill = Ui.roundChip(this, "🔴 LIVE", 0xFFE41E3F, 0xFFFFFFFF, 11);
+        TextView livePill = Ui.roundChip(this,
+                pkActive ? "⚔️ PK BATTLE" : "🔴 LIVE",
+                pkActive ? 0xFFFE2C55 : 0xFFE41E3F, 0xFFFFFFFF, 11);
         Ui.pad(livePill, 10, 4, 10, 4);
         badges.addView(livePill);
 
