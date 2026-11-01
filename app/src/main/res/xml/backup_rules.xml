@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Prompt history must not survive an uninstall/reinstall via cloud restore. -->
+    <exclude domain="sharedpref" path="notification_permission_install.xml" />
+</full-backup-content>

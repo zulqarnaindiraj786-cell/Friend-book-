@@ -1,12 +1,9 @@
 package com.friendbook.social.main;
 
-import android.Manifest;
 import android.app.Activity;
 import android.app.Fragment;
 import android.app.FragmentTransaction;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.Gravity;
@@ -224,7 +221,6 @@ public class MainActivity extends Activity {
             Presence.init();
             startBadgeListeners();
             watchReferralsForFreeTick();
-            askNotifPermission();
             AdsConfig.startWatching();
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
@@ -685,12 +681,10 @@ public class MainActivity extends Activity {
                 });
     }
 
-    private void askNotifPermission() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 44);
-        }
-    }
+    private final android.os.Handler notificationPermissionHandler =
+            new android.os.Handler(Looper.getMainLooper());
+    private final Runnable notificationPermissionPrompt = () ->
+            com.friendbook.social.push.NotificationPermissionPrompt.requestOnce(this);
 
     private void feedbackDialog() {
         if (active != TAB_HOME) return;
@@ -729,6 +723,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         FeedAlgorithm.onAppBackgrounded(this);
         super.onPause();
     }
@@ -754,10 +749,14 @@ public class MainActivity extends Activity {
         refreshLiteUi();
         Fb.ensureMeFresh();
         Presence.init();
+        // Delay until Main is visible; never show a permission dialog from background/PIN/login.
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
+        notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
     }
 
     @Override
     protected void onDestroy() {
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
         if (referralReg != null) referralReg.remove();
