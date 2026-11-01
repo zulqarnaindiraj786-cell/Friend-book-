@@ -6,30 +6,38 @@ import android.app.Fragment;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.VideoView;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
 import com.friendbook.social.core.AdsConfig;
 import com.friendbook.social.core.ConsentManager;
+import com.friendbook.social.core.ContentSafetyEngine;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Format;
@@ -47,76 +55,113 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.SetOptions;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 🎬 friendbook Pro Reels Tab:
- * - Full-screen vertical swipe feed combining both `reels` AND video `posts`!
- * - High-contrast right-side action rail with Like (6 reactions + Who Liked!), Comments (all users!),
- *   Share (Feed / Story / Apps / Copy Link), Save, Sound toggle & Playback Speed!
- * - Bottom quick "Add a comment…" pill + Creator DP, Verified Tick, Follow & Original Audio bar!
+ * ⚡ friendbook Ultra-Fast Pro Reels Player:
+ * - Hardware TextureView + MediaPlayer + Persistent 240 MB SSD Cache (ReelVideoCache)
+ * - Instant 0.0ms first-frame JPEG poster thumbnail (zero black screen on swipe!)
+ * - Automatic 3-Reel lookahead background prefetching (pos + 1, pos + 2, pos + 3)
+ * - Non-destructive snapshot updates so Likes/Comments NEVER interrupt video playback
+ * - Crystal-clear high-visibility "＋ Upload Reel" button in top bar AND right action rail
+ * - Live background upload status pill + instant optimistic playback of user's own uploaded Reel
  */
 public class ReelsFragment extends Fragment {
 
     private ViewPager2 pager;
     private ReelAdapter adapter;
-    private LinearLayout emptyState;
-    private TextView forYouPill, followingPill;
-    private boolean followingOnlyMode = false;
     private ListenerRegistration reelsReg, videoPostsReg;
+    private LinearLayout emptyState;
+    private LinearLayout uploadStatusBanner;
+    private TextView uploadStatusText;
+    private ProgressBar uploadStatusBar;
     private final List<Models.Reel> fromReels = new ArrayList<>();
     private final List<Models.Reel> fromPosts = new ArrayList<>();
     private String initialReelId;
+    private boolean followingOnlyMode = false;
+    private TextView forYouPill, followingPill;
 
-    @Nullable
+    private final ReelUploadManager.Listener bgUploadListener =
+            (active, percent, sentBytes, totalBytes, message, succeeded, error) -> {
+                if (getActivity() == null) return;
+                if (uploadStatusBanner != null) {
+                    if (active) {
+                        uploadStatusBanner.setVisibility(View.VISIBLE);
+                        if (uploadStatusBar != null) uploadStatusBar.setProgress(Math.max(3, percent));
+                        if (uploadStatusText != null) {
+                            uploadStatusText.setText("⏫ " + (message != null && !message.isEmpty()
+                                    ? message : ("Uploading Reel… " + percent + "%")));
+                        }
+                        rebuildMergedFeed(false);
+                    } else {
+                        uploadStatusBanner.setVisibility(View.GONE);
+                        if (succeeded) {
+                            rebuildMergedFeed(true);
+                            if (pager != null) pager.setCurrentItem(0, false);
+                        } else if (error != null && !error.isEmpty()) {
+                            rebuildMergedFeed(true);
+                            Ui.toast(getActivity(), "Reel upload failed: " + error);
+                        }
+                    }
+                }
+            };
+
     @Override
-    public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
+    public View onCreateView(LayoutInflater inf, ViewGroup c, Bundle b) {
         Activity a = getActivity();
         if (getArguments() != null) {
             initialReelId = getArguments().getString("initial_reel_id");
         }
-
         FrameLayout root = new FrameLayout(a);
         root.setBackgroundColor(Color.BLACK);
 
         pager = new ViewPager2(a);
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
+        // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes!
+        pager.setOffscreenPageLimit(2);
         adapter = new ReelAdapter(a);
         pager.setAdapter(adapter);
         root.addView(pager, new FrameLayout.LayoutParams(-1, -1));
 
-        // Empty state when no reels/videos exist yet
+        // Empty-state prompt with unmistakable Upload Reel button
         emptyState = Ui.col(a);
         emptyState.setGravity(Gravity.CENTER);
         Ui.pad(emptyState, 28, 28, 28, 28);
         emptyState.setVisibility(View.GONE);
-        emptyState.addView(Ui.tv(a, "🎬", 48, Color.WHITE));
-        TextView et1 = Ui.tvBold(a, "Welcome to friendbook Reels", 18, Color.WHITE);
+        TextView ei = Ui.tv(a, "🎬", 56, Color.WHITE);
+        ei.setGravity(Gravity.CENTER);
+        emptyState.addView(ei);
+        TextView et1 = Ui.tvBold(a, "No Reels yet — upload the first one!", 19, Color.WHITE);
+        et1.setGravity(Gravity.CENTER);
         et1.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 4));
         emptyState.addView(et1);
-        TextView et2 = Ui.tv(a, "Share short vertical videos with music, reactions, comments & shares!", 13.5f, 0xBBFFFFFF);
+        TextView et2 = Ui.tv(a, "Share short vertical videos with instant playback, reactions, comments & shares!", 13.5f, 0xBBFFFFFF);
         et2.setGravity(Gravity.CENTER);
         emptyState.addView(et2);
-        TextView createNow = Ui.roundChip(a, "🎥  Create First Reel", Ui.BLUE, Color.WHITE, 14);
-        Ui.pad(createNow, 18, 10, 18, 10);
+        TextView createNow = Ui.tvBold(a, "🎬 ＋ Upload Reel", 15, Color.WHITE);
+        createNow.setBackground(Ui.roundStroke(a, 0xFFE41E3F, 22, 0xFFFFFFFF, 1));
+        Ui.pad(createNow, 22, 11, 22, 11);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
-        clp.topMargin = Ui.dp(a, 16);
+        clp.topMargin = Ui.dp(a, 18);
         createNow.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
         emptyState.addView(createNow, clp);
         root.addView(emptyState, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
-        // Top friendbook Reels Overlay Header
+        // Top Overlay Stack (Header + Live Background Upload Progress Pill)
+        LinearLayout topStack = Ui.col(a);
+        topStack.setElevation(Ui.dp(a, 28));
+
         LinearLayout bar = Ui.row(a);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(0x44000000);
-        bar.setElevation(Ui.dp(a, 24));
+        bar.setBackgroundColor(0x59000000);
         boolean showBack = getArguments() != null && getArguments().getBoolean("show_back", false);
-        Ui.pad(bar, showBack ? 8 : 16, showBack ? 28 : 12, 14, 10);
+        Ui.pad(bar, showBack ? 6 : 12, showBack ? 28 : 10, 12, 10);
 
         if (showBack) {
             ImageView backBtn = Ui.backArrow(a, Color.WHITE,
@@ -124,48 +169,72 @@ public class ReelsFragment extends Fragment {
             bar.addView(backBtn);
         }
 
-        TextView title = Ui.tvBold(a, "Reels", 20, Color.WHITE);
+        TextView title = Ui.tvBold(a, "Reels", 19, Color.WHITE);
         title.setShadowLayer(4f, 0f, 1f, 0xCC000000);
         bar.addView(title);
 
-        forYouPill = Ui.roundChip(a, "✨ For You", Ui.BLUE, Color.WHITE, 12);
+        forYouPill = Ui.roundChip(a, "For You", Ui.BLUE, Color.WHITE, 11.5f);
         Ui.pad(forYouPill, 9, 5, 9, 5);
         LinearLayout.LayoutParams fyp = new LinearLayout.LayoutParams(-2, -2);
-        fyp.leftMargin = Ui.dp(a, 8);
+        fyp.leftMargin = Ui.dp(a, 7);
         forYouPill.setOnClickListener(v -> {
             followingOnlyMode = false;
             updateFilterPills(a);
-            rebuildMergedFeed();
+            rebuildMergedFeed(true);
         });
         bar.addView(forYouPill, fyp);
 
-        followingPill = Ui.roundChip(a, "👥 Following", 0x55000000, Color.WHITE, 12);
+        followingPill = Ui.roundChip(a, "Following", 0x66000000, Color.WHITE, 11.5f);
         Ui.pad(followingPill, 9, 5, 9, 5);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-2, -2);
-        flp.leftMargin = Ui.dp(a, 5);
+        flp.leftMargin = Ui.dp(a, 4);
         followingPill.setOnClickListener(v -> {
             followingOnlyMode = true;
             updateFilterPills(a);
-            rebuildMergedFeed();
+            rebuildMergedFeed(true);
         });
         bar.addView(followingPill, flp);
-        bar.addView(new View(a), new LinearLayout.LayoutParams(0, 1, 1));
 
-        TextView refreshPill = Ui.roundChip(a, "↻ Fresh", 0x55000000, Color.WHITE, 13);
-        Ui.pad(refreshPill, 11, 6, 11, 6);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
-        rlp.rightMargin = Ui.dp(a, 8);
+        TextView refreshPill = Ui.tvBold(a, "↻", 15f, Color.WHITE);
+        refreshPill.setGravity(Gravity.CENTER);
+        refreshPill.setBackground(Ui.roundStroke(a, 0x66000000, 15, 0x44FFFFFF, 1));
+        int rSz = Ui.dp(a, 30);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rSz, rSz);
+        rlp.leftMargin = Ui.dp(a, 5);
         refreshPill.setOnClickListener(v -> {
             refreshWithAlgorithm();
-            Ui.toast(a, "🎬 Fresh reels & videos loaded");
+            Ui.toast(a, "🎬 Fresh reels loaded");
         });
         bar.addView(refreshPill, rlp);
 
-        TextView camPill = Ui.roundChip(a, "🎥 Create", 0x55000000, Color.WHITE, 13);
-        Ui.pad(camPill, 12, 6, 12, 6);
-        camPill.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
-        bar.addView(camPill);
-        root.addView(bar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        bar.addView(new View(a), new LinearLayout.LayoutParams(0, 1, 1f));
+
+        // ✨ UNMISTAKABLE HIGH-CONTRAST UPLOAD REEL BUTTON IN TOP-RIGHT!
+        TextView uploadReelPill = Ui.tvBold(a, "＋ Upload Reel", 12.5f, Color.WHITE);
+        uploadReelPill.setSingleLine(true);
+        uploadReelPill.setBackground(Ui.roundStroke(a, 0xFFE41E3F, 18, 0xCCFFFFFF, 1));
+        Ui.pad(uploadReelPill, 13, 7, 13, 7);
+        uploadReelPill.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
+        bar.addView(uploadReelPill);
+        topStack.addView(bar);
+
+        // Live Background Upload Banner (visible whenever ReelUploadManager is uploading)
+        uploadStatusBanner = Ui.col(a);
+        uploadStatusBanner.setBackground(Ui.roundStroke(a, 0xEE111827, 12, Ui.BLUE, 1));
+        Ui.pad(uploadStatusBanner, 12, 7, 12, 8);
+        uploadStatusBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ublp = new LinearLayout.LayoutParams(-1, -2);
+        ublp.setMargins(Ui.dp(a, 12), Ui.dp(a, 6), Ui.dp(a, 12), 0);
+        uploadStatusText = Ui.tvBold(a, "⏫ Uploading Reel…", 12f, Color.WHITE);
+        uploadStatusBanner.addView(uploadStatusText);
+        uploadStatusBar = new ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal);
+        uploadStatusBar.setMax(100);
+        LinearLayout.LayoutParams usblp = new LinearLayout.LayoutParams(-1, Ui.dp(a, 5));
+        usblp.topMargin = Ui.dp(a, 4);
+        uploadStatusBanner.addView(uploadStatusBar, usblp);
+        topStack.addView(uploadStatusBanner, ublp);
+
+        root.addView(topStack, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override
@@ -175,6 +244,8 @@ public class ReelsFragment extends Fragment {
                 if (cur != null && cur.id != null) {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
                 }
+                int rIdx = adapter.reelIndexForPos(position);
+                ReelVideoCache.prefetchWindow(getActivity(), adapter.rawReels(), Math.max(0, rIdx));
             }
         });
         return root;
@@ -184,20 +255,27 @@ public class ReelsFragment extends Fragment {
     public void refreshWithAlgorithm() {
         Activity a = getActivity();
         if (a == null) return;
-        initialReelId = null; // allow full dynamic rotation after initial deep-link view
+        initialReelId = null;
         FeedAlgorithm.nextRefreshGeneration(a);
-        rebuildMergedFeed();
+        rebuildMergedFeed(true);
         if (pager != null) pager.setCurrentItem(0, false);
     }
 
     private void updateFilterPills(Context a) {
         if (forYouPill == null || followingPill == null) return;
-        forYouPill.setBackground(Ui.round(a, !followingOnlyMode ? Ui.BLUE : 0x55000000, 16));
-        followingPill.setBackground(Ui.round(a, followingOnlyMode ? Ui.BLUE : 0x55000000, 16));
+        forYouPill.setBackground(Ui.round(a, !followingOnlyMode ? Ui.BLUE : 0x66000000, 16));
+        followingPill.setBackground(Ui.round(a, followingOnlyMode ? Ui.BLUE : 0x66000000, 16));
     }
 
-    private void rebuildMergedFeed() {
+    private void rebuildMergedFeed(boolean forceReset) {
+        Activity act = getActivity();
+        if (act == null || adapter == null) return;
+
         Map<String, Models.Reel> map = new LinkedHashMap<>();
+        Models.Reel optimistic = ReelUploadManager.getOptimisticReel();
+        if (optimistic != null && optimistic.videoUrl != null && !optimistic.videoUrl.isEmpty()) {
+            map.put(optimistic.id, optimistic);
+        }
         for (Models.Reel r : fromReels) {
             if (r != null && r.videoUrl != null && !r.videoUrl.isEmpty()) map.put(r.id, r);
         }
@@ -218,23 +296,37 @@ public class ReelsFragment extends Fragment {
             }
             if (!filtered.isEmpty()) candidates = filtered;
         }
-        List<Models.Reel> merged = FeedAlgorithm.rankReels(
-                getActivity(), candidates, initialReelId);
+        List<Models.Reel> merged = FeedAlgorithm.rankReels(act, candidates, initialReelId);
+        // Always keep live optimistic upload at slot 0 so creator sees their own Reel instantly!
+        if (optimistic != null) {
+            merged.remove(optimistic);
+            merged.add(0, optimistic);
+        }
 
         if (emptyState != null) {
             emptyState.setVisibility(merged.isEmpty() ? View.VISIBLE : View.GONE);
         }
-        adapter.setData(merged);
-        if (!isHidden() && !merged.isEmpty() && pager != null) {
-            pager.postDelayed(() -> {
+
+        boolean wasEmpty = adapter.rawReels().isEmpty();
+        adapter.setData(pager, merged, forceReset);
+
+        // Pre-warm first 4 Reels onto SSD cache immediately!
+        if (!merged.isEmpty()) {
+            int curReelIdx = pager != null ? Math.max(0, adapter.reelIndexForPos(pager.getCurrentItem())) : 0;
+            ReelVideoCache.prefetchWindow(act, merged, curReelIdx);
+        }
+
+        if (!isHidden() && !merged.isEmpty() && pager != null && (wasEmpty || forceReset)) {
+            pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
-            }, 180);
+            });
         }
     }
 
     @Override
     public void onStart() {
         super.onStart();
+        ReelUploadManager.addListener(bgUploadListener);
         reelsReg = Fb.db().collection("reels")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
                 .limit(60)
@@ -244,14 +336,14 @@ public class ReelsFragment extends Fragment {
                         Activity act = getActivity();
                         for (DocumentSnapshot d : snap) {
                             if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
-                                com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
+                                ContentSafetyEngine.autoDeleteContent(
                                         act, "reels", d.getId(), d.getString("authorId"),
                                         "policy_violation", "Safety flagged reel", null);
                                 continue;
                             }
                             Models.Reel r = Models.Reel.fromDoc(d);
                             if (r.videoUrl == null || r.videoUrl.isEmpty()) continue;
-                            if (com.friendbook.social.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                            if (ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
                                     act, "reels", r.id, r.authorId, r.caption, r.videoUrl, null)) {
                                 continue;
                             }
@@ -260,10 +352,9 @@ public class ReelsFragment extends Fragment {
                             fromReels.add(r);
                         }
                     }
-                    rebuildMergedFeed();
+                    rebuildMergedFeed(false);
                 });
 
-        // Also surface video posts seamlessly in Reels!
         videoPostsReg = Fb.db().collection("posts")
                 .whereEqualTo("mediaType", "video")
                 .limit(40)
@@ -275,7 +366,7 @@ public class ReelsFragment extends Fragment {
                             if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
                             Models.Post p = Models.Post.fromDoc(d);
                             if (p.mediaUrl == null || p.mediaUrl.isEmpty()) continue;
-                            if (com.friendbook.social.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                            if (ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
                                     act, "posts", p.id, p.authorId, p.content, p.mediaUrl, null)) {
                                 continue;
                             }
@@ -284,27 +375,38 @@ public class ReelsFragment extends Fragment {
                             fromPosts.add(Models.Reel.fromVideoPost(p));
                         }
                     }
-                    rebuildMergedFeed();
+                    rebuildMergedFeed(false);
                 });
+
+        if (!isHidden() && pager != null && adapter != null && adapter.getItemCount() > 0) {
+            pager.post(() -> {
+                if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
+            });
+        }
     }
 
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
-        if (adapter == null) return;
+        if (adapter == null || pager == null) return;
         if (hidden) {
-            adapter.stopAll();
-        } else if (pager != null) {
-            pager.post(() -> adapter.playOnly(pager, pager.getCurrentItem()));
+            adapter.pauseAll(pager);
+        } else {
+            pager.post(() -> {
+                adapter.playOnly(pager, pager.getCurrentItem());
+                int rIdx = adapter.reelIndexForPos(pager.getCurrentItem());
+                ReelVideoCache.prefetchWindow(getActivity(), adapter.rawReels(), Math.max(0, rIdx));
+            });
         }
     }
 
     @Override
     public void onStop() {
         super.onStop();
-        if (reelsReg != null) reelsReg.remove();
-        if (videoPostsReg != null) videoPostsReg.remove();
-        if (adapter != null) adapter.stopAll();
+        ReelUploadManager.removeListener(bgUploadListener);
+        if (reelsReg != null) { reelsReg.remove(); reelsReg = null; }
+        if (videoPostsReg != null) { videoPostsReg.remove(); videoPostsReg = null; }
+        if (adapter != null && pager != null) adapter.pauseAll(pager);
     }
 
     // ================== Reel Adapter (Reels + Production Reels Native Ads) ==================
@@ -313,19 +415,55 @@ public class ReelsFragment extends Fragment {
         private static final int VT_REEL = 0;
         private static final int VT_REEL_AD = 1;
         private static final int REELS_PER_AD = 4;
-        private static final int REEL_AD_STEP = REELS_PER_AD + 1; // 4 reels + 1 Reels Native Ad
+        private static final int REEL_AD_STEP = REELS_PER_AD + 1;
 
         private final Activity activity;
         private final List<Models.Reel> data = new ArrayList<>();
-        private int playingPos = -1;
+        private int playingPos = 0;
 
         ReelAdapter(Activity a) { this.activity = a; }
 
-        void setData(List<Models.Reel> list) {
+        List<Models.Reel> rawReels() { return data; }
+
+        /**
+         * Smart non-destructive update:
+         * - When Firestore snapshots fire for likes/comments/saves without changing the Reel ID order,
+         *   updates Models.Reel models in-place WITHOUT calling notifyDataSetChanged(), so the currently
+         *   playing video NEVER stutters, flashes black, or restarts!
+         */
+        void setData(ViewPager2 pager, List<Models.Reel> list, boolean forceReset) {
+            List<Models.Reel> incoming = list != null ? list : new ArrayList<>();
+            if (!forceReset && sameIdSequence(data, incoming)) {
+                for (int i = 0; i < data.size(); i++) {
+                    data.set(i, incoming.get(i));
+                }
+                if (pager != null && pager.getChildAt(0) instanceof RecyclerView) {
+                    RecyclerView rv = (RecyclerView) pager.getChildAt(0);
+                    for (int i = 0; i < rv.getChildCount(); i++) {
+                        RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
+                        if (h instanceof VH) {
+                            VH vh = (VH) h;
+                            int ap = vh.getAdapterPosition();
+                            Models.Reel updated = reelAtPosition(ap);
+                            if (updated != null) vh.updateMetaInPlace(updated);
+                        }
+                    }
+                }
+                return;
+            }
             data.clear();
-            if (list != null) data.addAll(list);
+            data.addAll(incoming);
             notifyDataSetChanged();
-            playingPos = -1;
+        }
+
+        private static boolean sameIdSequence(List<Models.Reel> a, List<Models.Reel> b) {
+            if (a.size() != b.size() || a.isEmpty()) return false;
+            for (int i = 0; i < a.size(); i++) {
+                String idA = a.get(i) != null ? a.get(i).id : null;
+                String idB = b.get(i) != null ? b.get(i).id : null;
+                if (idA == null || !idA.equals(idB)) return false;
+            }
+            return true;
         }
 
         private boolean adsActive() {
@@ -346,7 +484,7 @@ public class ReelsFragment extends Fragment {
             return ((pos + 1) % REEL_AD_STEP == 0) && ((pos / REEL_AD_STEP) < adCount());
         }
 
-        private int reelIndexForPos(int pos) {
+        int reelIndexForPos(int pos) {
             if (!adsActive() || data.size() < REELS_PER_AD) return pos;
             return pos - ((pos + 1) / REEL_AD_STEP);
         }
@@ -357,17 +495,20 @@ public class ReelsFragment extends Fragment {
             return (idx >= 0 && idx < data.size()) ? data.get(idx) : null;
         }
 
-        void stopAll() {
-            if (playingPos >= 0) {
-                playingPos = -1;
-                notifyDataSetChanged();
+        void pauseAll(ViewPager2 pager) {
+            playingPos = -1;
+            if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
+            RecyclerView rv = (RecyclerView) pager.getChildAt(0);
+            for (int i = 0; i < rv.getChildCount(); i++) {
+                RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
+                if (h instanceof VH) ((VH) h).pause();
             }
         }
 
         void playOnly(ViewPager2 pager, int pos) {
             playingPos = pos;
+            if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
             RecyclerView rv = (RecyclerView) pager.getChildAt(0);
-            if (rv == null) return;
             for (int i = 0; i < rv.getChildCount(); i++) {
                 RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
                 if (h instanceof VH) {
@@ -401,7 +542,10 @@ public class ReelsFragment extends Fragment {
                 ((ReelAdVH) h).loadFreshReelsNativeAd(AdsConfig.reelsNativeId(), adSlotOrdinal);
             } else if (h instanceof VH) {
                 Models.Reel r = reelAtPosition(position);
-                if (r != null) ((VH) h).bind(r);
+                if (r != null) {
+                    VH vh = (VH) h;
+                    vh.bind(r, position == playingPos);
+                }
             }
         }
 
@@ -409,7 +553,7 @@ public class ReelsFragment extends Fragment {
         public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
             super.onViewRecycled(h);
             if (h instanceof VH) {
-                ((VH) h).video.stopPlayback();
+                ((VH) h).releasePlayer();
             } else if (h instanceof ReelAdVH) {
                 ((ReelAdVH) h).onRecycled();
             }
@@ -435,7 +579,6 @@ public class ReelsFragment extends Fragment {
                 super(buildAdRoot(a));
                 FrameLayout root = (FrameLayout) itemView;
 
-                // Loading / fallback status box (shown before fresh NativeAd arrives)
                 loadingBox = Ui.col(a);
                 loadingBox.setGravity(Gravity.CENTER);
                 Ui.pad(loadingBox, 24, 24, 24, 24);
@@ -448,23 +591,20 @@ public class ReelsFragment extends Fragment {
                 loadingBox.addView(statusView);
                 root.addView(loadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-                // Google Mobile Ads compliant full-screen NativeAdView
                 nativeAdView = new com.google.android.gms.ads.nativead.NativeAdView(a);
                 nativeAdView.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-                nativeAdView.setPadding(0, Ui.dp(a, 58), 0, 0); // Keeps AdChoices clear of top Reels bar
+                nativeAdView.setPadding(0, Ui.dp(a, 58), 0, 0);
                 nativeAdView.setVisibility(View.GONE);
 
                 FrameLayout inner = new FrameLayout(a);
                 inner.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
 
-                // Full-screen MediaView (supports vertical 9:16 video & rich image ads)
                 mediaView = new com.google.android.gms.ads.nativead.MediaView(a);
                 mediaView.setImageScaleType(ImageView.ScaleType.FIT_CENTER);
                 FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
                 mlp.bottomMargin = Ui.dp(a, 150);
                 inner.addView(mediaView, mlp);
 
-                // Top-left "Sponsored" attribution badge
                 TextView badge = Ui.tvBold(a, "Sponsored", 11.5f, 0xFFFFD54F);
                 badge.setBackground(Ui.roundStroke(a, 0xAA000000, 12, 0x55FFD54F, 1));
                 Ui.pad(badge, 10, 4, 10, 4);
@@ -472,7 +612,6 @@ public class ReelsFragment extends Fragment {
                 blp.setMargins(Ui.dp(a, 14), Ui.dp(a, 8), 0, 0);
                 inner.addView(badge, blp);
 
-                // Bottom advertiser details + Call-To-Action card
                 LinearLayout bottomCard = Ui.col(a);
                 bottomCard.setBackground(Ui.roundStroke(a, 0xDD121418, 16, 0x33FFFFFF, 1));
                 Ui.pad(bottomCard, 14, 12, 14, 14);
@@ -536,7 +675,6 @@ public class ReelsFragment extends Fragment {
                 nativeAdView.addView(inner);
                 root.addView(nativeAdView);
 
-                // Register NativeAdView clickable assets
                 nativeAdView.setMediaView(mediaView);
                 nativeAdView.setHeadlineView(headlineView);
                 nativeAdView.setBodyView(bodyView);
@@ -657,7 +795,6 @@ public class ReelsFragment extends Fragment {
                                     .withNativeAdOptions(adOptions)
                                     .build();
 
-                    // Fresh production AdRequest — zero test IDs, zero reuse of old/failed ads
                     adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
                 } catch (Throwable t) {
                     android.util.Log.e(AdsConfig.LOG_TAG,
@@ -740,25 +877,75 @@ public class ReelsFragment extends Fragment {
             }
         }
 
+        // ================== Ultra-Fast TextureView + SSD Cache Reel ViewHolder ==================
+
         class VH extends RecyclerView.ViewHolder {
-            final VideoView video;
-            final FrameLayout likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
+            final TextureView textureView;
+            final ImageView posterView;
+            final ProgressBar bufferingSpinner;
+            final ProgressBar scrubBar;
+            final TextView pausedBadge;
+            final FrameLayout uploadRailBtnBox, likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
             final TextView likeIcon, likeCount, commentIcon, commentCount, shareIcon, shareCount;
             final TextView saveIcon, soundIcon, heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
             final ImageView avatar, tick;
-            android.media.MediaPlayer activeMp;
+
+            MediaPlayer activeMp;
+            Surface videoSurface;
+            boolean mpPrepared = false;
+            boolean wantPlay = false;
+            boolean userPaused = false;
+            boolean triedRawFallback = false;
+            int videoW = 0, videoH = 0;
+            String boundVideoUrl = "";
             boolean muted;
             float speed = 1.0f;
             Models.Reel reel;
+
+            private final Handler uiHandler = new Handler(Looper.getMainLooper());
+            private final Runnable progressTicker = new Runnable() {
+                @Override
+                public void run() {
+                    if (activeMp != null && mpPrepared && wantPlay && !userPaused) {
+                        try {
+                            int dur = activeMp.getDuration();
+                            int pos = activeMp.getCurrentPosition();
+                            if (dur > 0) {
+                                scrubBar.setProgress((int) ((pos * 1000L) / dur));
+                            }
+                        } catch (Throwable ignored) { }
+                        uiHandler.postDelayed(this, 120L);
+                    }
+                }
+            };
 
             VH(Activity a) {
                 super(buildRoot(a));
                 FrameLayout root = (FrameLayout) itemView;
                 muted = !Prefs.reelsStartWithSound(a);
 
-                video = new VideoView(a);
-                FrameLayout.LayoutParams vlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
-                root.addView(video, vlp);
+                // 1. Hardware-accelerated TextureView (zero SurfaceView black hole in ViewPager2!)
+                textureView = new TextureView(a);
+                textureView.setOpaque(false);
+                root.addView(textureView, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+
+                // 2. Instant 0.0ms Poster Thumbnail Overlay (hidden the exact ms video frame #1 renders)
+                posterView = new ImageView(a);
+                posterView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                root.addView(posterView, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+
+                // 3. Subtle center buffering indicator & pause indicator
+                bufferingSpinner = new ProgressBar(a);
+                bufferingSpinner.setVisibility(View.GONE);
+                int spSz = Ui.dp(a, 38);
+                root.addView(bufferingSpinner, new FrameLayout.LayoutParams(spSz, spSz, Gravity.CENTER));
+
+                pausedBadge = Ui.tvBold(a, "▶", 38, 0xDDFFFFFF);
+                pausedBadge.setGravity(Gravity.CENTER);
+                pausedBadge.setBackground(Ui.circle(0x66000000));
+                pausedBadge.setVisibility(View.GONE);
+                int pbSz = Ui.dp(a, 68);
+                root.addView(pausedBadge, new FrameLayout.LayoutParams(pbSz, pbSz, Gravity.CENTER));
 
                 // Giant animated heart burst on double-tap!
                 heartBurst = Ui.tv(a, "❤️", 82, Color.WHITE);
@@ -766,62 +953,77 @@ public class ReelsFragment extends Fragment {
                 heartBurst.setElevation(Ui.dp(a, 30));
                 root.addView(heartBurst, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-                // Right-Side friendbook Pro Action Rail (Like · Comment · Share · Save · Sound · •••)
+                // Right-Side Action Rail (Upload · Like · Comment · Share · Save · Sound · •••)
                 LinearLayout rail = Ui.col(a);
                 rail.setGravity(Gravity.CENTER_HORIZONTAL);
                 rail.setElevation(Ui.dp(a, 24));
                 FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-                rp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 62));
+                rp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 58));
                 rail.setLayoutParams(rp);
 
-                likeIcon = Ui.tv(a, "🤍", 24, Color.WHITE);
+                // Dedicated eye-catching "＋ Upload" circle button right on the thumb rail!
+                TextView upPlus = Ui.tvBold(a, "＋", 23, Color.WHITE);
+                upPlus.setGravity(Gravity.CENTER);
+                uploadRailBtnBox = new FrameLayout(a);
+                uploadRailBtnBox.setBackground(Ui.roundStroke(a, 0xFFE41E3F, 22, Color.WHITE, 1));
+                int upSz = Ui.dp(a, 44);
+                uploadRailBtnBox.setLayoutParams(new LinearLayout.LayoutParams(upSz, upSz));
+                uploadRailBtnBox.addView(upPlus, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                uploadRailBtnBox.setOnClickListener(v -> a.startActivity(new Intent(a, AddReelActivity.class)));
+                TextView uploadRailLabel = shadowLabel(a, "Upload");
+                uploadRailLabel.setOnClickListener(v -> a.startActivity(new Intent(a, AddReelActivity.class)));
+
+                likeIcon = Ui.tv(a, "🤍", 23, Color.WHITE);
                 likeIcon.setGravity(Gravity.CENTER);
                 likeBtnBox = circleAction(a, likeIcon);
                 likeCount = shadowLabel(a, "Like");
 
-                commentIcon = Ui.tv(a, "💬", 22, Color.WHITE);
+                commentIcon = Ui.tv(a, "💬", 21, Color.WHITE);
                 commentIcon.setGravity(Gravity.CENTER);
                 commentBtnBox = circleAction(a, commentIcon);
                 commentCount = shadowLabel(a, "Comment");
 
-                shareIcon = Ui.tvBold(a, "↗", 23, Color.WHITE);
+                shareIcon = Ui.tvBold(a, "↗", 22, Color.WHITE);
                 shareIcon.setGravity(Gravity.CENTER);
                 shareBtnBox = circleAction(a, shareIcon);
                 shareCount = shadowLabel(a, "Share");
 
-                saveIcon = Ui.tv(a, "🔖", 20, Color.WHITE);
+                saveIcon = Ui.tv(a, "🔖", 19, Color.WHITE);
                 saveIcon.setGravity(Gravity.CENTER);
                 saveBtnBox = circleAction(a, saveIcon);
 
-                soundIcon = Ui.tv(a, muted ? "🔇" : "🔊", 20, Color.WHITE);
+                soundIcon = Ui.tv(a, muted ? "🔇" : "🔊", 19, Color.WHITE);
                 soundIcon.setGravity(Gravity.CENTER);
                 soundBtnBox = circleAction(a, soundIcon);
 
-                TextView moreIcon = Ui.tvBold(a, "•••", 17, Color.WHITE);
+                TextView moreIcon = Ui.tvBold(a, "•••", 16, Color.WHITE);
                 moreIcon.setGravity(Gravity.CENTER);
                 moreBtnBox = circleAction(a, moreIcon);
 
+                rail.addView(uploadRailBtnBox);
+                rail.addView(uploadRailLabel);
+                rail.addView(spacer(a, 10));
                 rail.addView(likeBtnBox);
                 rail.addView(likeCount);
-                rail.addView(spacer(a, 12));
+                rail.addView(spacer(a, 10));
                 rail.addView(commentBtnBox);
                 rail.addView(commentCount);
-                rail.addView(spacer(a, 12));
+                rail.addView(spacer(a, 10));
                 rail.addView(shareBtnBox);
                 rail.addView(shareCount);
-                rail.addView(spacer(a, 12));
+                rail.addView(spacer(a, 10));
                 rail.addView(saveBtnBox);
-                rail.addView(spacer(a, 10));
+                rail.addView(spacer(a, 8));
                 rail.addView(soundBtnBox);
-                rail.addView(spacer(a, 10));
+                rail.addView(spacer(a, 8));
                 rail.addView(moreBtnBox);
                 root.addView(rail);
 
-                // Bottom Creator Info + Quick "Add a comment…" Bar
+                // Bottom Creator Info + Quick "Add a comment…" + Ultra-Thin Playback Scrub Bar
                 LinearLayout bottomCol = Ui.col(a);
                 bottomCol.setElevation(Ui.dp(a, 22));
                 bottomCol.setBackgroundColor(0x4D000000);
-                Ui.pad(bottomCol, 14, 10, 74, 12);
+                Ui.pad(bottomCol, 14, 10, 72, 10);
                 FrameLayout.LayoutParams bip = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
                 bottomCol.setLayoutParams(bip);
 
@@ -864,14 +1066,61 @@ public class ReelsFragment extends Fragment {
                 audioT.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 8));
                 bottomCol.addView(audioT);
 
-                // Quick Comment Input Pill right on the Reel!
                 quickCommentPill = Ui.tv(a, "💬  Add a comment…", 13, 0xEEFFFFFF);
                 quickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
                 Ui.pad(quickCommentPill, 14, 7, 14, 7);
                 bottomCol.addView(quickCommentPill, new LinearLayout.LayoutParams(-1, -2));
 
                 root.addView(bottomCol);
+
+                // Thin bottom playback progress bar
+                scrubBar = new ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal);
+                scrubBar.setMax(1000);
+                scrubBar.setProgress(0);
+                scrubBar.setElevation(Ui.dp(a, 26));
+                FrameLayout.LayoutParams sblp = new FrameLayout.LayoutParams(-1, Ui.dp(a, 3), Gravity.BOTTOM);
+                root.addView(scrubBar, sblp);
+
                 rail.bringToFront();
+
+                // TextureView lifecycle
+                textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                    @Override
+                    public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+                        if (videoSurface != null) {
+                            try { videoSurface.release(); } catch (Throwable ignored) {}
+                        }
+                        videoSurface = new Surface(surface);
+                        if (activeMp != null) {
+                            try {
+                                activeMp.setSurface(videoSurface);
+                                applyVideoTransform(width, height);
+                            } catch (Throwable ignored) {}
+                        } else if (reel != null) {
+                            prepareMediaPlayerAsync();
+                        }
+                    }
+
+                    @Override
+                    public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                        applyVideoTransform(width, height);
+                    }
+
+                    @Override
+                    public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                        if (activeMp != null) {
+                            try { activeMp.setSurface(null); } catch (Throwable ignored) {}
+                        }
+                        if (videoSurface != null) {
+                            try { videoSurface.release(); } catch (Throwable ignored) {}
+                            videoSurface = null;
+                        }
+                        return true;
+                    }
+
+                    @Override
+                    public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) { }
+                });
 
                 // Gestures: double-tap to ❤️ Like, single tap pause/play
                 GestureDetector gd = new GestureDetector(a, new GestureDetector.SimpleOnGestureListener() {
@@ -884,16 +1133,13 @@ public class ReelsFragment extends Fragment {
                         return true;
                     }
                     @Override public boolean onSingleTapConfirmed(MotionEvent e) {
-                        if (video.isPlaying()) {
-                            video.pause();
-                            Ui.toast(a, "⏸ Paused");
-                        } else {
-                            video.start();
-                        }
+                        togglePlayPause();
                         return true;
                     }
                 });
-                video.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
+                View.OnTouchListener videoTouch = (v, ev) -> gd.onTouchEvent(ev);
+                textureView.setOnTouchListener(videoTouch);
+                posterView.setOnTouchListener(videoTouch);
 
                 // Action Listeners
                 likeBtnBox.setOnClickListener(v -> {
@@ -913,7 +1159,7 @@ public class ReelsFragment extends Fragment {
                 });
 
                 View.OnClickListener openCommentsListener = v -> {
-                    if (reel == null) return;
+                    if (reel == null || (reel.id != null && reel.id.startsWith("local_uploading_"))) return;
                     Intent i = new Intent(v.getContext(), ReelCommentsActivity.class);
                     i.putExtra("reel_id", reel.id);
                     i.putExtra("author", reel.authorId);
@@ -964,34 +1210,25 @@ public class ReelsFragment extends Fragment {
 
             private FrameLayout circleAction(Context c, View inner) {
                 FrameLayout box = new FrameLayout(c);
-                box.setBackground(Ui.roundStroke(c, 0x66000000, 23, 0x33FFFFFF, 1));
-                int sz = Ui.dp(c, 46);
+                box.setBackground(Ui.roundStroke(c, 0x66000000, 22, 0x33FFFFFF, 1));
+                int sz = Ui.dp(c, 44);
                 box.setLayoutParams(new LinearLayout.LayoutParams(sz, sz));
                 box.addView(inner, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
                 return box;
             }
 
             private TextView shadowLabel(Context c, String txt) {
-                TextView t = Ui.tvBold(c, txt, 11.5f, Color.WHITE);
+                TextView t = Ui.tvBold(c, txt, 11f, Color.WHITE);
                 t.setGravity(Gravity.CENTER);
                 t.setShadowLayer(4f, 0f, 1f, 0xDD000000);
                 t.setPadding(0, Ui.dp(c, 2), 0, 0);
                 return t;
             }
 
-            private View spacer(Activity a, int h) {
-                View v = new View(a);
-                v.setLayoutParams(new LinearLayout.LayoutParams(1, Ui.dp(a, h)));
+            private View spacer(Context c, int dp) {
+                View v = new View(c);
+                v.setLayoutParams(new LinearLayout.LayoutParams(1, Ui.dp(c, dp)));
                 return v;
-            }
-
-            private void animateHeartBurst() {
-                heartBurst.setScaleX(0.4f);
-                heartBurst.setScaleY(0.4f);
-                heartBurst.setAlpha(1f);
-                heartBurst.animate().scaleX(1.35f).scaleY(1.35f).setDuration(220)
-                        .withEndAction(() -> heartBurst.animate().alpha(0f).setDuration(260).start())
-                        .start();
             }
 
             private static FrameLayout buildRoot(Activity a) {
@@ -1001,112 +1238,389 @@ public class ReelsFragment extends Fragment {
                 return f;
             }
 
-            void bind(Models.Reel r) {
-                reel = r;
-                String authorName = r.authorName != null && !r.authorName.isEmpty() ? r.authorName : "friendbook Creator";
-                nameT.setText(authorName);
-                TickCache.attach(tick, r.authorId);
-                boolean hasCap = r.caption != null && !r.caption.isEmpty();
-                captionT.setText(hasCap ? r.caption : "");
-                captionT.setVisibility(hasCap ? View.VISIBLE : View.GONE);
-                audioT.setText("🎵 Original audio · " + authorName);
+            void updateMetaInPlace(Models.Reel updated) {
+                this.reel = updated;
+                renderCreatorAndCaption();
+                renderCounts();
+            }
 
-                Ui.avatar(itemView.getContext(), avatar, r.authorPhoto);
+            private void renderCreatorAndCaption() {
+                if (reel == null) return;
+                Context c = itemView.getContext();
+                Ui.avatar(c, avatar, reel.authorPhoto);
+                nameT.setText(reel.authorName == null ? "User" : reel.authorName);
+                TickCache.bind(tick, reel.authorId, false, "none");
+
+                boolean hasCap = reel.caption != null && !reel.caption.trim().isEmpty();
+                captionT.setText(hasCap ? reel.caption : "");
+                captionT.setVisibility(hasCap ? View.VISIBLE : View.GONE);
+
+                audioT.setText("♫ Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));
 
                 String me = Fb.uid();
-                followT.setVisibility(me != null && me.equals(r.authorId) ? View.GONE : View.VISIBLE);
-                if (Fb.me != null && Fb.me.following != null && Fb.me.following.contains(r.authorId)) {
-                    followT.setText("Following ✓");
-                } else {
-                    followT.setText("Follow");
+                boolean isMe = me != null && me.equals(reel.authorId);
+                followT.setVisibility(isMe ? View.GONE : View.VISIBLE);
+                if (!isMe && Fb.me != null && Fb.me.following != null) {
+                    followT.setText(Fb.me.following.contains(reel.authorId) ? "Following ✓" : "Follow");
                 }
+            }
 
+            void bind(Models.Reel r, boolean autoPlayNow) {
+                boolean sameVideo = (this.reel != null && boundVideoUrl.equals(r.videoUrl) && activeMp != null);
+                this.reel = r;
+                this.userPaused = false;
+                this.wantPlay = autoPlayNow;
+                pausedBadge.setVisibility(View.GONE);
+
+                renderCreatorAndCaption();
                 renderCounts();
 
-                video.setVideoURI(Uri.parse(r.videoUrl));
-                video.setOnPreparedListener(mp -> {
+                if (sameVideo) {
+                    if (autoPlayNow) play();
+                    else pause();
+                    return;
+                }
+
+                releasePlayer();
+                boundVideoUrl = r.videoUrl != null ? r.videoUrl : "";
+                triedRawFallback = false;
+                scrubBar.setProgress(0);
+
+                // 0.0ms Instant Poster Frame so swiping NEVER shows a black screen!
+                Context c = itemView.getContext();
+                String thumbUrl = ReelVideoCache.deriveThumbUrl(r.videoUrl, r.thumbUrl);
+                if (!thumbUrl.isEmpty()) {
+                    posterView.setVisibility(View.VISIBLE);
+                    Ui.img(c, posterView, thumbUrl);
+                } else {
+                    posterView.setImageDrawable(null);
+                    posterView.setVisibility(View.GONE);
+                }
+
+                // Pre-prepare MediaPlayer right away if TextureView surface is ready (including offscreen pages!)
+                if (textureView.isAvailable()) {
+                    if (videoSurface == null && textureView.getSurfaceTexture() != null) {
+                        videoSurface = new Surface(textureView.getSurfaceTexture());
+                    }
+                    prepareMediaPlayerAsync();
+                }
+            }
+
+            private void prepareMediaPlayerAsync() {
+                if (reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
+                releasePlayerOnly();
+
+                final Context ctx = itemView.getContext();
+                final String targetUrl = reel.videoUrl;
+                mpPrepared = false;
+
+                File cached = ReelVideoCache.getCachedFile(ctx, targetUrl);
+                bufferingSpinner.setVisibility((cached == null && wantPlay) ? View.VISIBLE : View.GONE);
+
+                MediaPlayer mp = new MediaPlayer();
+                activeMp = mp;
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        mp.setAudioAttributes(new AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build());
+                    }
+                    mp.setLooping(true);
+                    float vol = muted ? 0f : 1f;
+                    mp.setVolume(vol, vol);
+                    if (videoSurface != null) {
+                        mp.setSurface(videoSurface);
+                    }
+
+                    mp.setOnVideoSizeChangedListener((player, width, height) -> {
+                        videoW = width;
+                        videoH = height;
+                        applyVideoTransform(textureView.getWidth(), textureView.getHeight());
+                    });
+
+                    mp.setOnInfoListener((player, what, extra) -> {
+                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                            posterView.setVisibility(View.GONE);
+                            bufferingSpinner.setVisibility(View.GONE);
+                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay) {
+                            bufferingSpinner.setVisibility(View.VISIBLE);
+                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                            bufferingSpinner.setVisibility(View.GONE);
+                        }
+                        return false;
+                    });
+
+                    mp.setOnPreparedListener(player -> {
+                        if (player != activeMp) return;
+                        mpPrepared = true;
+                        videoW = player.getVideoWidth();
+                        videoH = player.getVideoHeight();
+                        applyVideoTransform(textureView.getWidth(), textureView.getHeight());
+                        float v = muted ? 0f : 1f;
+                        player.setVolume(v, v);
+                        if (speed != 1.0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            try { player.setPlaybackParams(player.getPlaybackParams().setSpeed(speed)); }
+                            catch (Throwable ignored) {}
+                        }
+                        bufferingSpinner.setVisibility(View.GONE);
+                        if (wantPlay && !userPaused) {
+                            startPreparedPlayer();
+                        } else {
+                            // Seek to 1ms so offscreen TextureView already holds decoded frame #0!
+                            try { player.seekTo(1); } catch (Throwable ignored) {}
+                        }
+                    });
+
+                    mp.setOnErrorListener((player, what, extra) -> {
+                        bufferingSpinner.setVisibility(View.GONE);
+                        // Automatic fallback to raw untransformed URL if CDN transform failed
+                        if (!triedRawFallback && reel != null && reel.videoUrl != null) {
+                            triedRawFallback = true;
+                            prepareWithRawUrlFallback(ctx, reel.videoUrl);
+                            return true;
+                        }
+                        return true;
+                    });
+
+                    if (cached != null) {
+                        try (FileInputStream fis = new FileInputStream(cached)) {
+                            mp.setDataSource(fis.getFD());
+                        }
+                    } else if (targetUrl.startsWith("file:") || targetUrl.startsWith("content:")) {
+                        mp.setDataSource(ctx, Uri.parse(targetUrl));
+                    } else {
+                        String fastUrl = triedRawFallback
+                                ? targetUrl
+                                : ReelVideoCache.optimizeStreamUrl(ctx, targetUrl);
+                        mp.setDataSource(ctx, Uri.parse(fastUrl));
+                        // Cache in background so next loop / revisit plays from SSD!
+                        ReelVideoCache.prefetchSingle(ctx, targetUrl);
+                    }
+                    mp.prepareAsync();
+                } catch (Throwable t) {
+                    bufferingSpinner.setVisibility(View.GONE);
+                    if (!triedRawFallback && reel != null && reel.videoUrl != null) {
+                        triedRawFallback = true;
+                        prepareWithRawUrlFallback(ctx, reel.videoUrl);
+                    }
+                }
+            }
+
+            private void prepareWithRawUrlFallback(Context ctx, String rawUrl) {
+                releasePlayerOnly();
+                try {
+                    MediaPlayer mp = new MediaPlayer();
                     activeMp = mp;
                     mp.setLooping(true);
-                    try {
-                        mp.setVolume(muted ? 0f : 1f, muted ? 0f : 1f);
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && speed != 1.0f) {
-                            mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(speed));
+                    if (videoSurface != null) mp.setSurface(videoSurface);
+                    mp.setOnPreparedListener(player -> {
+                        if (player != activeMp) return;
+                        mpPrepared = true;
+                        videoW = player.getVideoWidth();
+                        videoH = player.getVideoHeight();
+                        applyVideoTransform(textureView.getWidth(), textureView.getHeight());
+                        float v = muted ? 0f : 1f;
+                        player.setVolume(v, v);
+                        if (wantPlay && !userPaused) startPreparedPlayer();
+                    });
+                    mp.setOnInfoListener((p, what, extra) -> {
+                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                            posterView.setVisibility(View.GONE);
+                            bufferingSpinner.setVisibility(View.GONE);
                         }
-                    } catch (Throwable ignored) {}
-                });
+                        return false;
+                    });
+                    mp.setDataSource(ctx, Uri.parse(rawUrl));
+                    mp.prepareAsync();
+                } catch (Throwable ignored) { }
+            }
+
+            private void applyVideoTransform(int viewW, int viewH) {
+                if (viewW <= 0 || viewH <= 0 || videoW <= 0 || videoH <= 0) return;
+                float viewRatio = (float) viewW / viewH;
+                float videoRatio = (float) videoW / videoH;
+                Matrix matrix = new Matrix();
+                float sx, sy;
+                // Portrait / vertical videos fill full screen (CENTER_CROP); landscape videos FIT_CENTER
+                boolean isVerticalVideo = videoH >= videoW * 0.95f;
+                if (isVerticalVideo) {
+                    if (videoRatio > viewRatio) {
+                        sx = videoRatio / viewRatio;
+                        sy = 1f;
+                    } else {
+                        sx = 1f;
+                        sy = viewRatio / videoRatio;
+                    }
+                } else {
+                    if (videoRatio > viewRatio) {
+                        sx = 1f;
+                        sy = viewRatio / videoRatio;
+                    } else {
+                        sx = videoRatio / viewRatio;
+                        sy = 1f;
+                    }
+                }
+                matrix.setScale(sx, sy, viewW / 2f, viewH / 2f);
+                textureView.setTransform(matrix);
+            }
+
+            private void startPreparedPlayer() {
+                if (activeMp == null || !mpPrepared) return;
+                try {
+                    float vol = muted ? 0f : 1f;
+                    activeMp.setVolume(vol, vol);
+                    if (!activeMp.isPlaying()) activeMp.start();
+                    pausedBadge.setVisibility(View.GONE);
+                    // Safety hide poster 90ms after start on devices that omit MEDIA_INFO_VIDEO_RENDERING_START
+                    uiHandler.postDelayed(() -> {
+                        if (wantPlay && activeMp != null && mpPrepared) {
+                            posterView.setVisibility(View.GONE);
+                            bufferingSpinner.setVisibility(View.GONE);
+                        }
+                    }, 90L);
+                    uiHandler.removeCallbacks(progressTicker);
+                    uiHandler.post(progressTicker);
+                } catch (Throwable ignored) { }
+            }
+
+            private void togglePlayPause() {
+                if (activeMp == null || !mpPrepared) return;
+                try {
+                    if (activeMp.isPlaying()) {
+                        userPaused = true;
+                        activeMp.pause();
+                        pausedBadge.setVisibility(View.VISIBLE);
+                        uiHandler.removeCallbacks(progressTicker);
+                    } else {
+                        userPaused = false;
+                        wantPlay = true;
+                        startPreparedPlayer();
+                    }
+                } catch (Throwable ignored) { }
+            }
+
+            void play() {
+                wantPlay = true;
+                userPaused = false;
+                pausedBadge.setVisibility(View.GONE);
+                if (activeMp != null && mpPrepared) {
+                    startPreparedPlayer();
+                } else if (activeMp == null && reel != null && textureView.isAvailable()) {
+                    if (videoSurface == null && textureView.getSurfaceTexture() != null) {
+                        videoSurface = new Surface(textureView.getSurfaceTexture());
+                    }
+                    prepareMediaPlayerAsync();
+                } else {
+                    bufferingSpinner.setVisibility(View.VISIBLE);
+                }
+            }
+
+            void pause() {
+                wantPlay = false;
+                uiHandler.removeCallbacks(progressTicker);
+                bufferingSpinner.setVisibility(View.GONE);
+                pausedBadge.setVisibility(View.GONE);
+                if (activeMp != null && mpPrepared) {
+                    try {
+                        if (activeMp.isPlaying()) activeMp.pause();
+                    } catch (Throwable ignored) { }
+                }
+            }
+
+            private void releasePlayerOnly() {
+                uiHandler.removeCallbacks(progressTicker);
+                mpPrepared = false;
+                if (activeMp != null) {
+                    final MediaPlayer toRelease = activeMp;
+                    activeMp = null;
+                    try { toRelease.setSurface(null); } catch (Throwable ignored) {}
+                    new Thread(() -> {
+                        try { toRelease.reset(); } catch (Throwable ignored) {}
+                        try { toRelease.release(); } catch (Throwable ignored) {}
+                    }, "reel-mp-release").start();
+                }
+            }
+
+            void releasePlayer() {
+                wantPlay = false;
+                boundVideoUrl = "";
+                bufferingSpinner.setVisibility(View.GONE);
+                pausedBadge.setVisibility(View.GONE);
+                releasePlayerOnly();
             }
 
             private void renderCounts() {
                 if (reel == null) return;
                 String me = Fb.uid();
-                String myReact = (me != null && reel.reactions != null) ? reel.reactions.get(me) : null;
-                if (myReact == null && me != null && reel.likedBy != null && reel.likedBy.contains(me)) {
-                    myReact = "love";
-                }
-                likeIcon.setText(myReact != null ? Reactions.emojiFor(myReact) : "🤍");
-                boolean hideCounts = Prefs.hideReactionCounts(itemView.getContext())
-                        || (Fb.me != null && Fb.me.hideReactionCounts);
+                String myRx = (me != null && reel.reactions != null) ? reel.reactions.get(me) : null;
+                if (myRx == null && me != null && reel.likedBy != null && reel.likedBy.contains(me)) myRx = "love";
+                likeIcon.setText(myRx != null ? Reactions.emojiFor(myRx) : "🤍");
+                likeBtnBox.setBackground(Ui.roundStroke(itemView.getContext(),
+                        myRx != null ? 0x66F02849 : 0x66000000, 22,
+                        myRx != null ? 0xAAF02849 : 0x33FFFFFF, 1));
                 int totalLikes = Math.max(reel.likes, reel.reactions != null ? reel.reactions.size() : 0);
-                likeCount.setText(hideCounts ? "Like" : (totalLikes > 0 ? Format.count(totalLikes) : "Like"));
+                likeCount.setText(totalLikes > 0 ? Format.compact(totalLikes) : "Like");
+                commentCount.setText(reel.comments > 0 ? Format.compact(reel.comments) : "Comment");
+                shareCount.setText(reel.shares > 0 ? Format.compact(reel.shares) : "Share");
 
-                int totalComments = Math.max(reel.comments, reel.inlineComments != null ? reel.inlineComments.size() : 0);
-                commentCount.setText(totalComments > 0 ? Format.count(totalComments) : "Comment");
-                shareCount.setText(reel.shares > 0 ? Format.count(reel.shares) : "Share");
-
-                boolean saved = me != null && ((reel.savedBy != null && reel.savedBy.contains(me))
-                        || (Fb.me != null && Fb.me.savedReelIds != null && Fb.me.savedReelIds.contains(reel.id)));
-                saveIcon.setText(saved ? "🔖" : "📑");
+                boolean saved = me != null && reel.savedBy != null && reel.savedBy.contains(me);
+                saveBtnBox.setBackground(Ui.roundStroke(itemView.getContext(),
+                        saved ? 0x881877F2 : 0x66000000, 22,
+                        saved ? 0xFF1877F2 : 0x33FFFFFF, 1));
             }
 
-            void play() {
-                if (reel == null) return;
-                Context ctx = itemView.getContext();
-                Prefs.trackMediaLoad(ctx, 420_000L);
-                if (!video.isPlaying()) {
-                    video.seekTo(0);
-                    video.start();
-                }
+            private void animateHeartBurst() {
+                heartBurst.setScaleX(0.3f);
+                heartBurst.setScaleY(0.3f);
+                heartBurst.setAlpha(1f);
+                heartBurst.animate().scaleX(1.3f).scaleY(1.3f).setDuration(200).withEndAction(() ->
+                        heartBurst.animate().scaleX(1f).scaleY(1f).alpha(0f).setStartDelay(220).setDuration(240).start()
+                ).start();
             }
 
-            void pause() {
-                if (video.isPlaying()) video.pause();
-            }
-
-            private void applyReelReaction(String type, boolean fromDoubleTap) {
-                if (reel == null) return;
+            private void applyReelReaction(String type, boolean onlyAdd) {
                 String me = Fb.uid();
-                if (me == null) return;
-                if (reel.reactions == null) reel.reactions = new HashMap<>();
+                if (me == null || reel == null) return;
+                if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
                 String prev = reel.reactions.get(me);
-                if (prev == null && reel.likedBy.contains(me)) prev = "love";
-                if (fromDoubleTap && prev != null) {
-                    Ui.haptic(itemView);
+                if (onlyAdd && prev != null) {
+                    renderCounts();
                     return;
                 }
-
-                int delta = 0;
                 if (type == null) {
                     reel.reactions.remove(me);
                     reel.likedBy.remove(me);
-                    if (prev != null) delta = -1;
+                    if (prev != null && reel.likes > 0) reel.likes--;
                 } else {
                     reel.reactions.put(me, type);
                     if (!reel.likedBy.contains(me)) reel.likedBy.add(me);
-                    if (prev == null) delta = 1;
+                    if (prev == null) reel.likes++;
                 }
-                reel.likes = Math.max(reel.reactions.size(), Math.max(0, reel.likes + delta));
-                renderCounts(); // 0ms instant visual feedback!
-                Ui.haptic(itemView);
+                renderCounts();
 
                 String col = reel.collectionName();
+                int delta = (prev == null && type != null) ? 1 : (prev != null && type == null ? -1 : 0);
                 Map<String, Object> up = new HashMap<>();
-                up.put("reactions", reel.reactions);
-                up.put("likedBy", type == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                if (reel.isFromPost) {
+                    Map<String, Object> rxMap = new HashMap<>();
+                    if (type == null) {
+                        rxMap.put(me, FieldValue.delete());
+                    } else {
+                        rxMap.put(me, Fb.map("type", type, "name", Fb.myName(), "photo", Fb.myPhoto()));
+                    }
+                    up.put("reactions", rxMap);
+                } else {
+                    Map<String, Object> rxMap = new HashMap<>();
+                    rxMap.put(me, type == null ? FieldValue.delete() : type);
+                    up.put("reactions", rxMap);
+                    up.put("likedBy", type == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                }
                 if (delta != 0) up.put("likes", FieldValue.increment(delta));
                 Fb.db().collection(col).document(reel.id).set(up, SetOptions.merge());
 
                 if (type != null && prev == null && !me.equals(reel.authorId)) {
-                    com.friendbook.social.core.FeedAlgorithm.recordCreatorAffinity(itemView.getContext(), reel.authorId, 6);
+                    FeedAlgorithm.recordCreatorAffinity(itemView.getContext(), reel.authorId, 6);
                     Notify.send(reel.authorId, "reel_like",
                             Fb.myName() + " reacted " + Reactions.emojiFor(type) + " to your reel", reel.id);
                 }
@@ -1115,6 +1629,7 @@ public class ReelsFragment extends Fragment {
             private void toggleSaveReel(Activity a) {
                 String me = Fb.uid();
                 if (reel == null || me == null) return;
+                if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
                 boolean already = reel.savedBy != null && reel.savedBy.contains(me);
                 if (already) reel.savedBy.remove(me);
                 else reel.savedBy.add(me);
@@ -1124,7 +1639,7 @@ public class ReelsFragment extends Fragment {
                 Fb.db().collection("users").document(me)
                         .set(Fb.map("savedReelIds", already ? FieldValue.arrayRemove(reel.id) : FieldValue.arrayUnion(reel.id)), SetOptions.merge());
                 if (!already) {
-                    com.friendbook.social.core.FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
+                    FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
                 }
                 Ui.toast(a, already ? "Removed from Saved Reels" : "Saved Reel 🔖");
             }
@@ -1144,6 +1659,10 @@ public class ReelsFragment extends Fragment {
 
             private void shareSheet(Activity a) {
                 if (reel == null) return;
+                if (reel.id != null && reel.id.startsWith("local_uploading_")) {
+                    Ui.toast(a, "⏳ Reel is finishing upload — ready to share in a moment!");
+                    return;
+                }
                 Ui.choose(a, "Share Reel", new String[]{
                         "📤 Share Reel to your News Feed",
                         "📖 Add Reel to your Story",
@@ -1202,6 +1721,7 @@ public class ReelsFragment extends Fragment {
             private void showMoreMenu(Activity a, View anchor) {
                 if (reel == null) return;
                 PopupMenu m = new PopupMenu(a, anchor);
+                m.getMenu().add(0, 10, 0, "🎬 Upload Your Own Reel");
                 m.getMenu().add(0, 1, 0, "👍 See who reacted");
                 m.getMenu().add(0, 2, 0, "⏩ Playback speed (" + speed + "x)");
                 m.getMenu().add(0, 3, 0, "⬇ Download Reel video");
@@ -1219,6 +1739,10 @@ public class ReelsFragment extends Fragment {
                 }
                 m.setOnMenuItemClickListener(it -> {
                     int id = it.getItemId();
+                    if (id == 10) {
+                        a.startActivity(new Intent(a, AddReelActivity.class));
+                        return true;
+                    }
                     if (id == 8) {
                         Fb.getUser(reel.authorId).addOnSuccessListener(u -> {
                             if (!com.friendbook.social.core.Admin.isAdmin() && com.friendbook.social.core.Admin.isProtectedStaff(u)) {
@@ -1236,7 +1760,7 @@ public class ReelsFragment extends Fragment {
                     } else if (id == 2) {
                         Ui.choose(a, "Playback speed", new String[]{"0.5x Slow", "1.0x Normal", "1.5x Fast", "2.0x Turbo"}, w -> {
                             speed = w == 0 ? 0.5f : (w == 1 ? 1.0f : (w == 2 ? 1.5f : 2.0f));
-                            if (activeMp != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            if (activeMp != null && mpPrepared && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 try { activeMp.setPlaybackParams(activeMp.getPlaybackParams().setSpeed(speed)); } catch (Throwable ignored) {}
                             }
                             Ui.toast(a, "Speed: " + speed + "x");
@@ -1283,7 +1807,7 @@ public class ReelsFragment extends Fragment {
                                     "createdAt", FieldValue.serverTimestamp()));
                             Prefs.hidePost(a, reel.id);
                             if (w == 0 || w == 1 || w == 2) {
-                                com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
+                                ContentSafetyEngine.autoDeleteContent(
                                         a, reel.collectionName(), reel.id, reel.authorId,
                                         w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
                                         reason, null);
