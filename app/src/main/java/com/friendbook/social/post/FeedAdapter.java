@@ -1468,11 +1468,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void followUser(String uid) {
         String me = Fb.uid();
         if (me == null || uid == null || uid.isEmpty()) return;
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("followers", FieldValue.arrayUnion(me)), SetOptions.merge());
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("following", FieldValue.arrayUnion(uid)), SetOptions.merge());
-        Notify.send(uid, "follow", "started following you");
+        Notify.follow(uid, true);
         Ui.toast(activity, "Following ✓");
     }
 

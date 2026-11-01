@@ -18,6 +18,20 @@ public class Notify {
         send(toUid, type, text, null);
     }
 
+    /** Commit both sides before creating a follow notification / calling the push gateway. */
+    public static void follow(String toUid, boolean following) {
+        String me = Fb.uid();
+        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
+        WriteBatch batch = Fb.db().batch();
+        batch.set(Fb.db().collection("users").document(toUid),
+                Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
+        batch.set(Fb.db().collection("users").document(me),
+                Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
+        batch.commit().addOnSuccessListener(v -> {
+            if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
+        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
+    }
+
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
         String me = Fb.uid();
@@ -36,8 +50,9 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
+        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+            if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
+        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Notification write failed; no push sent"));
     }
 
     /**

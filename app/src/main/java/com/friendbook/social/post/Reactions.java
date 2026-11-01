@@ -244,7 +244,12 @@ public class Reactions {
             });
         } else {
             final Map<String, Object> data = myData;
-            reactRef.set(data).addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
+            reactRef.set(data).addOnSuccessListener(v -> {
+                reconcileFromCollection(c, post.id, post.likes);
+                if (me.equals(Fb.uid()) && delta > 0 && post.authorId != null && !me.equals(post.authorId)) {
+                    Notify.send(post.authorId, "like", Fb.myName() + " liked your post", post.id);
+                }
+            });
 
             Map<String, Object> dot = new HashMap<>();
             dot.put("reactionsMap." + me, data);
@@ -258,11 +263,6 @@ public class Reactions {
                 postRef.set(nested, SetOptions.merge());
             });
 
-            if (delta > 0 && post.authorId != null && !me.equals(post.authorId)) {
-                Notify.send(post.authorId, "like",
-                        Fb.myName() + " reacted " + emojiFor(nextType) + " to your post",
-                        post.id);
-            }
         }
     }
 

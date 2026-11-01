@@ -84,3 +84,32 @@ test('status checks Google credentials and returns only safe registration metada
   assert.equal(data.registered_devices,1);
   assert.equal(data.token,undefined); assert.equal(data.access_token,undefined);
 });
+test('real social push ignores spoofed client receiver/title/body and uses persisted event', async () => {
+  mock();
+  const r=await handleRequest(request({target_user_id:'bob',receiverId:'victim',title:'Spoof',body:'Forged',data:{notificationId:'notice'}}),verify);
+  assert.equal(r.status,200);
+  const data=calls.find(x=>x.url.includes('fcm.googleapis.com')).body.message.data;
+  assert.equal(data.toUserId,'bob'); assert.equal(data.fromUserId,'alice');
+  assert.equal(data.title,'Alice'); assert.equal(data.body,'reacted to your post');
+  assert.equal(data.postId,'post123'); assert.equal(data.eventId,'notification_notice');
+});
+for (const type of ['like','comment','follow','friend_post']) {
+  test(`real ${type} notification is sent only after verified persisted event`, async () => {
+    mock(); const baseFetch=globalThis.fetch;
+    globalThis.fetch=async (url, init) => String(url).includes('/documents/notifications/')
+      ? ok(fields({fromUserId:'alice',toUserId:'bob',type,postId:'post123',text:`Alice ${type}`,createdAt:new Date().toISOString()}))
+      : baseFetch(url,init);
+    const r=await handleRequest(request({target_user_id:'bob',data:{notificationId:'notice'}}),verify);
+    assert.equal(r.status,200);
+    const data=calls.find(x=>x.url.includes('fcm.googleapis.com')).body.message.data;
+    assert.equal(data.type,type); assert.equal(data.toUserId,'bob');
+  });
+}
+test('a temporary Firestore read failure is visible rather than reported as accepted', async () => {
+  mock(); const baseFetch=globalThis.fetch;
+  globalThis.fetch=async (url,init) => String(url).includes('/documents/notifications/')
+    ? Response.json({error:{status:'UNAVAILABLE'}},{status:503}) : baseFetch(url,init);
+  const r=await handleRequest(request({target_user_id:'bob',data:{notificationId:'notice'}}),verify);
+  assert.equal(r.status,400); assert.equal((await r.json()).error,'INVALID_OR_UNAVAILABLE_EVENT');
+  assert.ok(!calls.some(x=>x.url.includes('fcm.googleapis.com')));
+});

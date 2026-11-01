@@ -1809,6 +1809,13 @@ public class ReelsFragment extends Fragment {
                 final Context ctx = itemView.getContext();
                 final int delta = (prev == null && nextType != null) ? 1 : (prev != null && nextType == null ? -1 : 0);
 
+                final String pushAuthor = reel.authorId;
+                final String pushReelId = reel.id;
+                Runnable notifyReaction = () -> {
+                    if (me.equals(Fb.uid()) && nextType != null && prev == null && !me.equals(pushAuthor)) {
+                        Notify.send(pushAuthor, "reel_like", Fb.myName() + " liked your reel", pushReelId);
+                    }
+                };
                 if (reel.isFromPost) {
                     // Video Post in Reels: sync posts/{id}.reactionsMap.<me> + posts/{id}/reactions/<me> + FastCache!
                     com.friendbook.social.core.FastCache.markLocalReactionTap(reel.id);
@@ -1849,7 +1856,7 @@ public class ReelsFragment extends Fragment {
                         rxEntry.put("userTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
                         rxEntry.put("type", nextType);
                         rxEntry.put("createdAt", System.currentTimeMillis());
-                        subRef.set(rxEntry);
+                        subRef.set(rxEntry).addOnSuccessListener(v -> notifyReaction.run());
 
                         Map<String, Object> dot = new HashMap<>();
                         dot.put("reactionsMap." + me, rxEntry);
@@ -1871,21 +1878,19 @@ public class ReelsFragment extends Fragment {
                     dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);
                     dot.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
                     dot.put("likes", reel.reactions.size());
-                    reelRef.update(dot).addOnFailureListener(err -> {
+                    reelRef.update(dot).addOnSuccessListener(v -> notifyReaction.run()).addOnFailureListener(err -> {
                         Map<String, Object> fallback = new HashMap<>();
                         Map<String, Object> rxMap = new HashMap<>();
                         rxMap.put(me, nextType == null ? FieldValue.delete() : nextType);
                         fallback.put("reactions", rxMap);
                         fallback.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
                         fallback.put("likes", reel.reactions.size());
-                        reelRef.set(fallback, SetOptions.merge());
+                        reelRef.set(fallback, SetOptions.merge()).addOnSuccessListener(v -> notifyReaction.run());
                     });
                 }
 
                 if (nextType != null && prev == null && !me.equals(reel.authorId)) {
                     FeedAlgorithm.recordCreatorAffinity(ctx, reel.authorId, 6);
-                    Notify.send(reel.authorId, "reel_like",
-                            Fb.myName() + " reacted " + Reactions.emojiFor(nextType) + " to your reel", reel.id);
                 }
             }
 
@@ -1911,12 +1916,8 @@ public class ReelsFragment extends Fragment {
                 if (reel == null) return;
                 String me = Fb.uid();
                 if (me == null) return;
-                Fb.db().collection("users").document(reel.authorId)
-                        .set(Fb.map("followers", FieldValue.arrayUnion(me)), SetOptions.merge());
-                Fb.db().collection("users").document(me)
-                        .set(Fb.map("following", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge());
+                Notify.follow(reel.authorId, true);
                 followT.setText("Following ✓");
-                Notify.send(reel.authorId, "follow", "started following you");
                 Ui.toast(itemView.getContext(), "Following " + reel.authorName + " ✓");
             }
 

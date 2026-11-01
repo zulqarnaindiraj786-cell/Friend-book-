@@ -18,11 +18,16 @@ public final class PushDeliveryWorker extends Worker {
         String uid = Fb.uid(); if (uid == null) return;
         String action = body.optString("action");
         String key = "register".equals(action) ? "register_" + uid : uid + "_" + body.toString();
-        OneTimeWorkRequest work = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
+        OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
                 .setInputData(new Data.Builder().putString("uid", uid).putString("body", body.toString()).build())
                 .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-                .addTag("fcm_user_" + uid).build();
+                .addTag("fcm_user_" + uid);
+        // Pre-Android 12 expedited workers require a visible foreground service.
+        // Use normal durable work there rather than creating a notification just to send a push.
+        if (android.os.Build.VERSION.SDK_INT >= 31)
+            builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST);
+        OneTimeWorkRequest work = builder.build();
         WorkManager.getInstance(App.instance).enqueueUniqueWork("fcm_" + key,
                 replaceRegistration && "register".equals(action) ? ExistingWorkPolicy.REPLACE : ExistingWorkPolicy.KEEP, work);
     }
@@ -49,7 +54,7 @@ public final class PushDeliveryWorker extends Worker {
                     .putLong("updated_at", System.currentTimeMillis()).apply();
             android.util.Log.i("FriendBookPush", outcome);
             if (response.status >= 200 && response.status < 300) return Result.success();
-            return PushRetryPolicy.shouldRetry(register, response.status, getRunAttemptCount())
+            return PushRetryPolicy.shouldRetry(register, response.status, getRunAttemptCount(), response.data.optString("error"))
                     ? Result.retry() : Result.failure();
         } catch (Exception e) {
             android.util.Log.w("FriendBookPush", "Push gateway retry pending: " + e.getClass().getSimpleName());

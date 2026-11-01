@@ -24,4 +24,10 @@ public class PushRetryPolicyTest {
         assertTrue(PushRetryPolicy.shouldRetry(false, 503, 7));
         assertFalse(PushRetryPolicy.shouldRetry(false, 503, 8));
     }
+    @Test public void ambiguousFirestoreReadFailureRetriesButNotForever() {
+        assertTrue(PushRetryPolicy.shouldRetry(false, 400, 0, "INVALID_OR_UNAVAILABLE_EVENT"));
+        assertFalse(PushRetryPolicy.shouldRetry(false, 400, 8, "INVALID_OR_UNAVAILABLE_EVENT"));
+        assertFalse(PushRetryPolicy.shouldRetry(false, 400, 0, "INVALID_TARGET"));
+        assertFalse(PushRetryPolicy.shouldRetry(false, 403, 0, "Forbidden event"));
+    }
 }

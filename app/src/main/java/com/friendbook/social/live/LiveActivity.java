@@ -2824,13 +2824,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void followHostNow() {
         String me = Fb.uid();
         if (me == null || hostId == null || hostId.equals(me)) return;
-        Fb.db().collection("users").document(hostId).update("followers", FieldValue.arrayUnion(me));
-        Fb.db().collection("users").document(me).update("following", FieldValue.arrayUnion(hostId));
+        Notify.follow(hostId, true);
         if (followHostBtn != null) {
             followHostBtn.setText("✓ Following");
             followHostBtn.setBackground(Ui.round(this, 0x55FFFFFF, 14));
         }
-        Notify.send(hostId, "follow", "started following you from your Live broadcast");
         postSystemChat("❤️ " + Fb.myName() + " followed " + hostNameStr + "!");
     }
 

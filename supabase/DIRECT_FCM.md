@@ -39,3 +39,7 @@ Permission is requested natively on Android 13+ after signed-in Main becomes foc
 ## Tests
 
 `npm ci --prefix supabase && npm test --prefix supabase` runs local mocked authentication/registration/ownership/routing/retry/stale-token/status tests. Live OAuth and FCM validate-only tests are additional checks, not substitutes for physical-device acceptance above.
+
+## Real social events: client-only v2.8.15 (47)
+
+No Blaze/Cloud Functions are installed. Native Java write-success hooks dispatch through the existing gateway; chat and friend-post recipient lookup now have durable retry, follow/reaction pushes wait for successful writes, and Android 12+ can expedite delivery work. Client `receiverId`/title/body are previews alongside the existing target/event contract, not permission to send arbitrary text. See [client-push acceptance and limitations](../docs/testing/client-push.md). This does not require a Supabase migration or Edge Function redeploy.

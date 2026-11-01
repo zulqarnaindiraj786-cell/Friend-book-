@@ -1358,11 +1358,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         boolean following = user.followers != null && user.followers.contains(me);
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)), SetOptions.merge());
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("following", following ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid)), SetOptions.merge());
-        if (!following) Notify.send(uid, "follow", "started following you");
+        Notify.follow(uid, !following);
     }
 
     private void message() {
