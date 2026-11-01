@@ -124,6 +124,10 @@
         <activity android:name="com.friendbook.social.bluetick.MonetizationActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.live.LiveHubActivity"
             android:screenOrientation="portrait" />
+        <activity android:name="com.friendbook.social.chat.CallActivity"
+            android:screenOrientation="portrait"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize" />
         <activity android:name="com.friendbook.social.live.LiveActivity"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"

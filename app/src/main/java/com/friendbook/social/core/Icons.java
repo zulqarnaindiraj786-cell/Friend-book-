@@ -81,6 +81,18 @@ public class Icons {
     public static final int LIVE = R.drawable.ic_live_outline;
     public static final int SMILE = R.drawable.ic_sticker_outline;
     public static final int GIFT = R.drawable.ic_gift_outline;
+    public static final int CALL_FILLED = R.drawable.ic_call_filled;
+    public static final int VIDEOCAM_FILLED = R.drawable.ic_videocam_filled;
+    public static final int SETTINGS_GEAR_FILLED = R.drawable.ic_settings_gear_filled;
+    public static final int GALLERY_FILLED = R.drawable.ic_gallery_filled;
+    public static final int MIC_FILLED = R.drawable.ic_mic_filled;
+    public static final int STICKER_SMILE_FILLED = R.drawable.ic_sticker_smile_filled;
+    public static final int SEND_FILLED = R.drawable.ic_send_filled;
+    public static final int LIKE_FILLED = R.drawable.ic_like_filled;
+    public static final int BACK = R.drawable.ic_back_arrow;
+    public static final int CLOSE = R.drawable.ic_close_filled;
+    public static final int CAM_SWITCH = R.drawable.ic_cam_switch_filled;
+    public static final int VOLUME_ON = R.drawable.ic_volume_up_filled;
 
     /** Native badge drawable for a tick level (untinted). */
     public static int badgeFor(String tickLevel) {

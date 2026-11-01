@@ -25,8 +25,14 @@ public class App extends Application implements SensorEventListener {
     private float lastX, lastY, lastZ;
     private boolean hasLast;
 
+    private int startedCount = 0;
     private int resumedCount = 0;
     private final Handler timeHandler = new Handler(Looper.getMainLooper());
+    private final Runnable deferredOffline = () -> {
+        if (startedCount <= 0) {
+            Presence.goOffline();
+        }
+    };
     private final Runnable timeTick = new Runnable() {
         @Override
         public void run() {
@@ -84,6 +90,11 @@ public class App extends Application implements SensorEventListener {
                 }
             }
             @Override public void onActivityStarted(Activity a) {
+                timeHandler.removeCallbacks(deferredOffline);
+                if (startedCount == 0 && Fb.uid() != null) {
+                    Presence.init();
+                }
+                startedCount++;
                 if (android.os.Build.VERSION.SDK_INT >= 36) {
                     android.view.View content = a.findViewById(android.R.id.content);
                     if (content != null && content.getTag(com.friendbook.social.R.id.activityMainRoot) == null) {
@@ -98,7 +109,13 @@ public class App extends Application implements SensorEventListener {
                     }
                 }
             }
-            @Override public void onActivityStopped(Activity a) { }
+            @Override public void onActivityStopped(Activity a) {
+                startedCount = Math.max(0, startedCount - 1);
+                if (startedCount == 0) {
+                    timeHandler.removeCallbacks(deferredOffline);
+                    timeHandler.postDelayed(deferredOffline, 1500L);
+                }
+            }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }
             @Override public void onActivityDestroyed(Activity a) { }
         });

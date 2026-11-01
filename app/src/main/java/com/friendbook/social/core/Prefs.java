@@ -418,7 +418,7 @@ public class Prefs {
     }
 
     // ---- chat theme (per-device): bubble colors for outgoing messages ----
-    public static int chatBg(Context c) { return p(c).getInt("chatBg", 0xFF1877F2); }
+    public static int chatBg(Context c) { return p(c).getInt("chatBg", 0xFF0084FF); }
     public static int chatTxt(Context c) { return p(c).getInt("chatTxt", 0xFFFFFFFF); }
     public static void setChatTheme(Context c, int bg, int txt) {
         p(c).edit().putInt("chatBg", bg).putInt("chatTxt", txt).apply();
@@ -545,4 +545,49 @@ public class Prefs {
     /** Start Reels with audio ON by default. */
     public static boolean reelsStartWithSound(Context c) { return p(c).getBoolean("reelsSoundDefault", true); }
     public static void setReelsStartWithSound(Context c, boolean v) { p(c).edit().putBoolean("reelsSoundDefault", v).apply(); }
+
+    // ---- 🔔 Top-Bar Badge Optimistic Seen-State Helpers (per-UID isolated) ----
+    public static Set<String> seenFriendReqIds(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return new HashSet<>();
+        return new HashSet<>(p(c).getStringSet("seenFreqIds_" + uid, new HashSet<>()));
+    }
+
+    public static void markFriendRequestsSeen(Context c, String uid, java.util.Collection<String> reqIds) {
+        if (uid == null || uid.isEmpty()) return;
+        Set<String> seen = seenFriendReqIds(c, uid);
+        if (reqIds != null) {
+            for (String id : reqIds) {
+                if (id != null && !id.isEmpty()) seen.add(id);
+            }
+        }
+        p(c).edit()
+                .putStringSet("seenFreqIds_" + uid, seen)
+                .putLong("freqClearedAt_" + uid, System.currentTimeMillis())
+                .apply();
+    }
+
+    public static long friendRequestsClearedAt(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return 0L;
+        return p(c).getLong("freqClearedAt_" + uid, 0L);
+    }
+
+    public static long chatBadgeClearedAt(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return 0L;
+        return p(c).getLong("chatBadgeClearedAt_" + uid, 0L);
+    }
+
+    public static void setChatBadgeClearedAt(Context c, String uid, long tsMs) {
+        if (uid == null || uid.isEmpty()) return;
+        p(c).edit().putLong("chatBadgeClearedAt_" + uid, tsMs).apply();
+    }
+
+    public static long notifBadgeClearedAt(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return 0L;
+        return p(c).getLong("notifBadgeClearedAt_" + uid, 0L);
+    }
+
+    public static void setNotifBadgeClearedAt(Context c, String uid, long tsMs) {
+        if (uid == null || uid.isEmpty()) return;
+        p(c).edit().putLong("notifBadgeClearedAt_" + uid, tsMs).apply();
+    }
 }
