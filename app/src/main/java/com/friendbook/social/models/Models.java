@@ -250,18 +250,71 @@ public class Models {
             Object rxm = m == null ? null : m.get("reactionsMap");
             if (rxm instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) rxm).entrySet()) {
-                    if (e.getKey() != null && e.getValue() instanceof Map) {
+                    if (e.getKey() == null || e.getValue() == null) continue;
+                    String uidKey = String.valueOf(e.getKey()).trim();
+                    if (uidKey.isEmpty()) continue;
+                    if (e.getValue() instanceof Map) {
                         Map<String, Object> sub = new HashMap<>();
                         for (Map.Entry<?, ?> se : ((Map<?, ?>) e.getValue()).entrySet()) {
                             if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
                         }
-                        p.reactionsMap.put(String.valueOf(e.getKey()), sub);
+                        String norm = normalizeReactionType(sub.get("type"), "like");
+                        sub.put("type", norm);
+                        sub.put("userId", uidKey);
+                        p.reactionsMap.put(uidKey, sub);
+                    } else if (e.getValue() instanceof String) {
+                        String norm = normalizeReactionType(e.getValue(), "like");
+                        Map<String, Object> sub = new HashMap<>();
+                        sub.put("userId", uidKey);
+                        sub.put("type", norm);
+                        p.reactionsMap.put(uidKey, sub);
                     }
                 }
-                if (p.reactionsMap.size() > p.likes) p.likes = p.reactionsMap.size();
             }
+            // Also parse legacy `reactions` map on posts (keyed by userId) so older video/photo reactions stay per-user!
+            Object legacyRx = m == null ? null : m.get("reactions");
+            if (legacyRx instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) legacyRx).entrySet()) {
+                    if (e.getKey() == null || e.getValue() == null) continue;
+                    String uidKey = String.valueOf(e.getKey()).trim();
+                    if (uidKey.isEmpty() || p.reactionsMap.containsKey(uidKey)) continue;
+                    Map<String, Object> sub = new HashMap<>();
+                    sub.put("userId", uidKey);
+                    if (e.getValue() instanceof Map) {
+                        Map<?, ?> rawMap = (Map<?, ?>) e.getValue();
+                        sub.put("type", normalizeReactionType(rawMap.get("type"), "like"));
+                        Object nm = rawMap.get("userName") != null ? rawMap.get("userName") : rawMap.get("name");
+                        Object ph = rawMap.get("userPhoto") != null ? rawMap.get("userPhoto") : rawMap.get("photo");
+                        if (nm != null) sub.put("userName", String.valueOf(nm));
+                        if (ph != null) sub.put("userPhoto", String.valueOf(ph));
+                    } else {
+                        sub.put("type", normalizeReactionType(e.getValue(), "like"));
+                    }
+                    p.reactionsMap.put(uidKey, sub);
+                }
+            }
+            p.likes = Math.max(0, p.likes);
+            if (p.reactionsMap.size() > p.likes) p.likes = p.reactionsMap.size();
             return p;
         }
+    }
+
+    /** Normalizes any raw reaction object (String or Map) into a valid reaction type ("like".."angry"). */
+    public static String normalizeReactionType(Object raw, String defaultType) {
+        String s = null;
+        if (raw instanceof String) {
+            s = ((String) raw).trim().toLowerCase(java.util.Locale.US);
+        } else if (raw instanceof Map) {
+            Object t = ((Map<?, ?>) raw).get("type");
+            if (t != null) s = String.valueOf(t).trim().toLowerCase(java.util.Locale.US);
+        } else if (raw != null) {
+            s = String.valueOf(raw).trim().toLowerCase(java.util.Locale.US);
+        }
+        if ("like".equals(s) || "love".equals(s) || "haha".equals(s)
+                || "wow".equals(s) || "sad".equals(s) || "angry".equals(s)) {
+            return s;
+        }
+        return defaultType;
     }
 
     public static class Comment {
@@ -425,14 +478,32 @@ public class Models {
             Object rx = m == null ? null : m.get("reactions");
             if (rx instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) rx).entrySet()) {
-                    if (e.getValue() != null)
-                        r.reactions.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                    if (e.getKey() == null || e.getValue() == null) continue;
+                    String uidKey = String.valueOf(e.getKey()).trim();
+                    if (uidKey.isEmpty()) continue;
+                    String norm = normalizeReactionType(e.getValue(), "love");
+                    r.reactions.put(uidKey, norm);
+                }
+            }
+            Object rxm = m == null ? null : m.get("reactionsMap");
+            if (rxm instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rxm).entrySet()) {
+                    if (e.getKey() == null || e.getValue() == null) continue;
+                    String uidKey = String.valueOf(e.getKey()).trim();
+                    if (uidKey.isEmpty() || r.reactions.containsKey(uidKey)) continue;
+                    r.reactions.put(uidKey, normalizeReactionType(e.getValue(), "like"));
                 }
             }
             for (String u : r.likedBy) {
-                if (u != null && !u.isEmpty() && !r.reactions.containsKey(u)) r.reactions.put(u, "love");
+                if (u != null && !u.trim().isEmpty() && !r.reactions.containsKey(u.trim())) {
+                    r.reactions.put(u.trim(), "love");
+                }
             }
-            r.likes = Math.max(r.likes, r.reactions.size());
+            if (m != null && (m.containsKey("reactions") || m.containsKey("likedBy") || m.containsKey("reactionsMap"))) {
+                r.likes = r.reactions.size();
+            } else {
+                r.likes = Math.max(0, r.likes);
+            }
             r.inlineComments = Comment.parseEmbeddedComments(r.id, m, null);
             if (r.inlineComments.size() > r.comments) r.comments = r.inlineComments.size();
             return r;
@@ -447,7 +518,7 @@ public class Models {
             r.authorPhoto = p.authorPhoto;
             r.videoUrl = p.mediaUrl;
             r.caption = p.content;
-            r.likes = p.likes;
+            r.likes = Math.max(0, p.likes);
             r.comments = p.comments;
             r.shares = p.shares;
             r.createdAt = p.createdAt;
@@ -455,9 +526,14 @@ public class Models {
             r.inlineComments = p.inlineComments != null ? new ArrayList<>(p.inlineComments) : new ArrayList<>();
             if (p.reactionsMap != null) {
                 for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {
-                    String t = Format.strOr(e.getValue(), "type", "like");
-                    r.reactions.put(e.getKey(), t);
-                    r.likedBy.add(e.getKey());
+                    if (e.getKey() == null || e.getKey().trim().isEmpty()) continue;
+                    String uidKey = e.getKey().trim();
+                    String t = normalizeReactionType(e.getValue(), "like");
+                    r.reactions.put(uidKey, t);
+                    if (!r.likedBy.contains(uidKey)) r.likedBy.add(uidKey);
+                }
+                if (!r.reactions.isEmpty()) {
+                    r.likes = Math.max(r.likes, r.reactions.size());
                 }
             }
             return r;

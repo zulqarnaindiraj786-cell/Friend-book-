@@ -136,23 +136,36 @@ public class Reactions {
         return out;
     }
 
-    /** 1-tap Like toggle: removes existing reaction if any, otherwise adds "like". */
+    /** Returns ONLY the reaction given by `currentUserId` (`Fb.uid()`), or `null` if `currentUserId` has not reacted. */
+    public static String resolveCurrentUserReaction(Models.Post post) {
+        String me = Fb.uid();
+        if (me == null || me.isEmpty() || post == null || post.id == null) return null;
+        if (!FastCache.isLocalReactionInFlight(post.id)
+                && post.reactionsMap != null && !post.reactionsMap.isEmpty()) {
+            Map<String, Object> mineMap = post.reactionsMap.get(me);
+            if (mineMap == null) return null;
+            return Models.normalizeReactionType(mineMap.get("type"), "like");
+        }
+        return FastCache.getMyReaction(post.id);
+    }
+
+    /** 1-tap Like toggle: removes `currentUserId`'s reaction if present, otherwise immediately adds "like". */
     public static void tapLike(Context c, Models.Post post) {
         if (post == null || post.id == null) return;
         hydrateFromPostInstant(post);
-        String prev = FastCache.getMyReaction(post.id);
+        String prev = resolveCurrentUserReaction(post);
         apply(c, post, prev != null ? null : "like");
     }
 
     /**
-     * ⚡ 0.0ms Optimistic Reaction Apply / Switch / Remove + Server Count Reconciliation.
+     * ⚡ 0.0ms Optimistic Reaction Apply / Switch / Remove strictly scoped to `currentUserId` (`Fb.uid()`).
      */
     public static void apply(Context c, Models.Post post, String type) {
         String me = Fb.uid();
-        if (me == null || post == null || post.id == null) return;
+        if (me == null || me.isEmpty() || post == null || post.id == null) return;
 
         hydrateFromPostInstant(post);
-        String prev = FastCache.getMyReaction(post.id);
+        String prev = resolveCurrentUserReaction(post);
         int curTotal = FastCache.getReactionTotal(post.id, post.likes);
 
         final String nextType;
@@ -162,21 +175,17 @@ public class Reactions {
                 nextType = null;
                 delta = -1;
             } else {
-                nextType = type;
+                nextType = Models.normalizeReactionType(type, "like");
                 delta = 0;
             }
         } else if (type != null) {
-            nextType = type;
+            nextType = Models.normalizeReactionType(type, "like");
             delta = 1;
         } else {
             return;
         }
 
-        int nextTotal = Math.max(0, curTotal + delta);
-        post.likes = nextTotal;
-        FastCache.markLocalReactionTap(post.id);
-
-        // Update post.reactionsMap FIRST so exact reaction types are computed with zero leftover icons!
+        // Update post.reactionsMap FIRST under `currentUserId` (`me`) so total & types stay 100% per-user!
         if (post.reactionsMap == null) post.reactionsMap = new HashMap<>();
         Map<String, Object> myData = null;
         if (nextType == null) {
@@ -192,12 +201,15 @@ public class Reactions {
             post.reactionsMap.put(me, myData);
         }
 
+        int nextTotal = Math.max(post.reactionsMap.size(), Math.max(0, curTotal + delta));
+        post.likes = nextTotal;
+        FastCache.markLocalReactionTap(post.id);
+
         if (nextTotal <= 0) {
             FastCache.setReactionTypes(post.id, Collections.emptyList());
         } else {
             List<String> updatedTypes = computeTopTypesFromMap(post.reactionsMap);
             if (updatedTypes.isEmpty()) {
-                // Legacy post where others reacted before reactionsMap existed
                 updatedTypes = new ArrayList<>();
                 if (nextType != null) updatedTypes.add(nextType);
                 if (nextTotal > (nextType != null ? 1 : 0) && !updatedTypes.contains("like")) {
@@ -207,7 +219,7 @@ public class Reactions {
             FastCache.setReactionTypes(post.id, updatedTypes);
         }
 
-        // 0.0ms immediate UI update across FeedAdapter, WatchActivity, ProfileActivity & PostDetailActivity!
+        // 0.0ms immediate UI update strictly for `currentUserId` across Feed, Fullscreen Photo, Watch, Profile & Detail!
         FastCache.setReactionState(c, post.id, nextType, nextTotal, true);
 
         DocumentReference postRef = Fb.db().collection("posts").document(post.id);
@@ -217,13 +229,18 @@ public class Reactions {
             reactRef.delete().addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
             Map<String, Object> dot = new HashMap<>();
             dot.put("reactionsMap." + me, FieldValue.delete());
+            dot.put("reactions." + me, FieldValue.delete());
             if (delta != 0) dot.put("likes", FieldValue.increment(delta));
             postRef.update(dot).addOnFailureListener(err -> {
-                if (delta != 0) {
-                    Map<String, Object> up = new HashMap<>();
-                    up.put("likes", FieldValue.increment(delta));
-                    postRef.set(up, SetOptions.merge());
-                }
+                Map<String, Object> up = new HashMap<>();
+                Map<String, Object> rmDel = new HashMap<>();
+                rmDel.put(me, FieldValue.delete());
+                up.put("reactionsMap", rmDel);
+                Map<String, Object> rxDel = new HashMap<>();
+                rxDel.put(me, FieldValue.delete());
+                up.put("reactions", rxDel);
+                if (delta != 0) up.put("likes", FieldValue.increment(delta));
+                postRef.set(up, SetOptions.merge());
             });
         } else {
             final Map<String, Object> data = myData;
@@ -251,16 +268,17 @@ public class Reactions {
 
     /**
      * 0.0ms synchronous hydration from embedded post.reactionsMap BEFORE FeedAdapter binds UI!
-     * Also keeps live multi-user reactions & reaction-type switches (love, haha, wow, sad, angry) in sync.
+     * Strictly checks `currentUserId = Fb.uid()`: if `currentUserId` has NOT reacted, sets `"none"` (uncolored)!
      */
     public static void hydrateFromPostInstant(final Models.Post post) {
         if (post == null || post.id == null) return;
+        FastCache.ensureUserScope();
         if (FastCache.isLocalReactionInFlight(post.id)) return;
+        String currentUserId = Fb.uid();
         if (post.reactionsMap != null && !post.reactionsMap.isEmpty()) {
-            String me = Fb.uid();
             String myType = null;
-            if (me != null && post.reactionsMap.containsKey(me)) {
-                myType = Format.strOr(post.reactionsMap.get(me), "type", "like");
+            if (currentUserId != null && !currentUserId.isEmpty() && post.reactionsMap.containsKey(currentUserId)) {
+                myType = Models.normalizeReactionType(post.reactionsMap.get(currentUserId), "like");
             }
             List<String> topTypes = computeTopTypesFromMap(post.reactionsMap);
             FastCache.setReactionTypes(post.id, topTypes);
@@ -269,6 +287,9 @@ public class Reactions {
         } else if (post.likes <= 0) {
             FastCache.setReactionTypes(post.id, Collections.emptyList());
             FastCache.seedReactionFromPostMap(post.id, "none", 0);
+        } else if (!FastCache.isReactionSynced(post.id)) {
+            // Legacy post with likes > 0 but no reactionsMap yet: keep uncolored until subcollection verifies `currentUserId`!
+            FastCache.seedReactionFromPostMap(post.id, "none", post.likes);
         }
     }
 

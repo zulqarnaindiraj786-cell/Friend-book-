@@ -269,16 +269,25 @@ public class CommentsEngine {
         return local;
     }
 
-    /** Updates reactions on a comment across BOTH parent doc `commentsMap` and `comments`. */
-    public static void updateCommentReaction(String collection, String docId, Models.Comment c) {
-        if (c == null || c.id == null || docId == null || docId.isEmpty()) return;
+    /** Updates reactions on a comment per `userId` across parent doc `commentsMap`, subcollection, and `comments`. */
+    public static void updateCommentReaction(String collection, String docId, Models.Comment c,
+                                             String userId, String nextType) {
+        if (c == null || c.id == null || docId == null || docId.isEmpty()
+                || userId == null || userId.isEmpty()) return;
+        Object rxVal = nextType == null ? FieldValue.delete() : nextType;
+        Object likedByVal = nextType == null ? FieldValue.arrayRemove(userId) : FieldValue.arrayUnion(userId);
+
         Map<String, Object> dot = new HashMap<>();
-        dot.put("commentsMap." + c.id + ".reactions", c.reactions != null ? c.reactions : new HashMap<>());
+        dot.put("commentsMap." + c.id + ".reactions." + userId, rxVal);
+        dot.put("commentsMap." + c.id + ".likedBy", likedByVal);
         dot.put("commentsMap." + c.id + ".likes", c.likes);
         Fb.db().collection(collection).document(docId).update(dot);
 
         Map<String, Object> up = new HashMap<>();
-        up.put("reactions", c.reactions);
+        Map<String, Object> rxSub = new HashMap<>();
+        rxSub.put(userId, rxVal);
+        up.put("reactions", rxSub);
+        up.put("likedBy", likedByVal);
         up.put("likes", c.likes);
         Fb.db().collection("comments").document(c.id).set(up, SetOptions.merge());
         Fb.db().collection(collection).document(docId).collection("comments").document(c.id).set(up, SetOptions.merge());

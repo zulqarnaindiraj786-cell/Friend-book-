@@ -67,8 +67,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (pid != null && pid.equals(postId)) {
             if (postAdapter != null) postAdapter.onFastReactionUpdate(pid, mine, total);
             if (whoReactedChip != null) {
-                String badge = (mine != null && !mine.isEmpty()) ? Reactions.emojiFor(mine) : "👍";
-                whoReactedChip.setText(total > 0 ? (badge + " " + total + " · Who reacted") : "👍 Who reacted");
+                whoReactedChip.setText(total > 0
+                        ? (total + (total == 1 ? " reaction · See all" : " reactions · See all"))
+                        : "See reactions");
             }
         }
     };
@@ -294,9 +295,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
             postAdapter.setPosts(Collections.singletonList(post));
             int likes = FastCache.getReactionTotal(postId, post.likes);
-            String mine = FastCache.getMyReaction(postId);
-            String badge = (mine != null && !mine.isEmpty()) ? Reactions.emojiFor(mine) : "👍";
-            whoReactedChip.setText(likes > 0 ? (badge + " " + likes + " · Who reacted") : "👍 Who reacted");
+            whoReactedChip.setText(likes > 0
+                    ? (likes + (likes == 1 ? " reaction · See all" : " reactions · See all"))
+                    : "See reactions");
         });
 
         // Multi-user real-time CommentsEngine: merges posts/{postId}.commentsMap + subcollection + root comments!

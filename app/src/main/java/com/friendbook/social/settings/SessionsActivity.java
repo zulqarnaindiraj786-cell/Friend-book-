@@ -64,7 +64,10 @@ public class SessionsActivity extends Activity {
         logoutAll.setOnClickListener(v -> Ui.confirm(this, "Log out everywhere?",
                 "Aapko dobara login karna parega — is phone pe bhi.",
                 "Log out", () -> {
+                    com.friendbook.social.core.FastCache.clearAll(this);
+                    com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
                     Fb.auth().signOut();
+                    Fb.me = null;
                     finishAffinity();
                 }));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 44));

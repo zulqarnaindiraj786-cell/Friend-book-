@@ -85,7 +85,8 @@ public class ReelsFragment extends Fragment {
     private final List<Models.Reel> fromPosts = new ArrayList<>();
     /** Locks Reel ordering during active viewing so Like/Reactions/Comments NEVER jump videos up or down! */
     private final List<String> sessionReelOrderIds = new ArrayList<>();
-    /** Protects fresh local Reel reaction taps from in-flight snapshot overwrites. */
+    private String activeReelUid = "";
+    /** Protects fresh local Reel reaction taps strictly per `(currentUserId, reelId)` from snapshot overwrites. */
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> LOCAL_REEL_TAP_TS =
             new java.util.concurrent.ConcurrentHashMap<>();
     private String initialReelId;
@@ -93,13 +94,31 @@ public class ReelsFragment extends Fragment {
     private TextView forYouPill, followingPill;
 
     static boolean isReelReactionInFlight(String reelId) {
-        if (reelId == null) return false;
-        Long ts = LOCAL_REEL_TAP_TS.get(reelId);
+        String uid = Fb.uid();
+        if (uid == null || uid.isEmpty() || reelId == null || reelId.isEmpty()) return false;
+        Long ts = LOCAL_REEL_TAP_TS.get(uid + ":" + reelId);
         return ts != null && (System.currentTimeMillis() - ts) < 4500L;
     }
 
     static void markReelReactionTap(String reelId) {
-        if (reelId != null) LOCAL_REEL_TAP_TS.put(reelId, System.currentTimeMillis());
+        String uid = Fb.uid();
+        if (uid != null && !uid.isEmpty() && reelId != null && !reelId.isEmpty()) {
+            LOCAL_REEL_TAP_TS.put(uid + ":" + reelId, System.currentTimeMillis());
+        }
+    }
+
+    /** Returns ONLY `currentUserId`'s reaction on this Reel, or `null` if `currentUserId` has not reacted. */
+    static String resolveMyReelReaction(Models.Reel reel) {
+        String me = Fb.uid();
+        if (me == null || me.isEmpty() || reel == null) return null;
+        String myRx = reel.reactions != null ? reel.reactions.get(me) : null;
+        if (myRx != null && !myRx.isEmpty()) {
+            return Models.normalizeReactionType(myRx, "love");
+        }
+        if (!reel.isFromPost && reel.likedBy != null && reel.likedBy.contains(me)) {
+            return "love";
+        }
+        return null;
     }
 
     private final ReelUploadManager.Listener bgUploadListener =
@@ -313,6 +332,11 @@ public class ReelsFragment extends Fragment {
                 if (r.authorId != null && circle.contains(r.authorId)) filtered.add(r);
             }
             if (!filtered.isEmpty()) candidates = filtered;
+        }
+        String curUid = Fb.uid() == null ? "" : Fb.uid();
+        if (!curUid.equals(activeReelUid)) {
+            activeReelUid = curUid;
+            sessionReelOrderIds.clear();
         }
         List<Models.Reel> merged;
         if (!forceReset && !sessionReelOrderIds.isEmpty()) {
@@ -984,6 +1008,7 @@ public class ReelsFragment extends Fragment {
             final ProgressBar scrubBar;
             final TextView pausedBadge;
             final FrameLayout uploadRailBtnBox, likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
+            final ImageView likeOutlineIv;
             final TextView likeIcon, likeCount, commentIcon, commentCount, shareIcon, shareCount;
             final TextView saveIcon, soundIcon, heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
             final ImageView avatar, tick;
@@ -1071,9 +1096,19 @@ public class ReelsFragment extends Fragment {
                 TextView uploadRailLabel = shadowLabel(a, "Upload");
                 uploadRailLabel.setOnClickListener(v -> a.startActivity(new Intent(a, AddReelActivity.class)));
 
-                likeIcon = Ui.tv(a, "🤍", 23, Color.WHITE);
+                likeOutlineIv = new ImageView(a);
+                likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+                likeOutlineIv.setColorFilter(Color.WHITE);
+                likeIcon = Ui.tv(a, "", 22, Color.WHITE);
                 likeIcon.setGravity(Gravity.CENTER);
-                likeBtnBox = circleAction(a, likeIcon);
+                likeIcon.setVisibility(View.GONE);
+                likeBtnBox = new FrameLayout(a);
+                likeBtnBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
+                int lkSz = Ui.dp(a, 44);
+                likeBtnBox.setLayoutParams(new LinearLayout.LayoutParams(lkSz, lkSz));
+                int lkIconSz = Ui.dp(a, 22);
+                likeBtnBox.addView(likeOutlineIv, new FrameLayout.LayoutParams(lkIconSz, lkIconSz, Gravity.CENTER));
+                likeBtnBox.addView(likeIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
                 likeCount = shadowLabel(a, "Like");
 
                 commentIcon = Ui.tv(a, "💬", 21, Color.WHITE);
@@ -1239,13 +1274,12 @@ public class ReelsFragment extends Fragment {
                 textureView.setOnTouchListener(videoTouch);
                 posterView.setOnTouchListener(videoTouch);
 
-                // Action Listeners
+                // Action Listeners: 1-tap adds/removes ONLY currentUserId's reaction; long-press picks any of 6!
                 likeBtnBox.setOnClickListener(v -> {
                     if (reel == null) return;
-                    String me = Fb.uid();
-                    String cur = (me != null && reel.reactions != null) ? reel.reactions.get(me) : null;
-                    if (cur == null && me != null && reel.likedBy.contains(me)) cur = "love";
-                    applyReelReaction(cur != null ? null : "love", false);
+                    Ui.haptic(v);
+                    String cur = resolveMyReelReaction(reel);
+                    applyReelReaction(cur != null ? null : "like", false);
                 });
                 likeBtnBox.setOnLongClickListener(v -> {
                     if (reel == null) return false;
@@ -1372,6 +1406,7 @@ public class ReelsFragment extends Fragment {
 
                 renderCreatorAndCaption();
                 renderCounts();
+                hydrateLegacyPostReelReactionsIfNeeded(r);
 
                 if (sameVideo) {
                     if (autoPlayNow) play();
@@ -1648,34 +1683,86 @@ public class ReelsFragment extends Fragment {
                 releasePlayerOnly();
             }
 
+            /** Reconciles subcollection reactions (`posts/{id}/reactions`) for legacy Video Posts with empty `reactionsMap`. */
+            private void hydrateLegacyPostReelReactionsIfNeeded(final Models.Reel target) {
+                if (target == null || !target.isFromPost || target.id == null || target.id.isEmpty()) return;
+                if (target.reactions != null && !target.reactions.isEmpty()) return;
+                if (target.likes <= 0 || isReelReactionInFlight(target.id)) return;
+                final String targetId = target.id;
+                Fb.db().collection("posts").document(targetId).collection("reactions")
+                        .limit(200)
+                        .get()
+                        .addOnSuccessListener(snap -> {
+                            if (snap == null || isReelReactionInFlight(targetId)) return;
+                            Map<String, String> loaded = new HashMap<>();
+                            List<String> uids = new ArrayList<>();
+                            for (DocumentSnapshot d : snap.getDocuments()) {
+                                String uid = d.getString("userId");
+                                if (uid == null || uid.trim().isEmpty()) uid = d.getId();
+                                if (uid == null || uid.trim().isEmpty()) continue;
+                                uid = uid.trim();
+                                String t = Models.normalizeReactionType(d.getString("type"), "like");
+                                loaded.put(uid, t);
+                                uids.add(uid);
+                            }
+                            target.reactions = loaded;
+                            target.likedBy = uids;
+                            if (snap.size() < 200) {
+                                target.likes = loaded.size();
+                            } else {
+                                target.likes = Math.max(target.likes, loaded.size());
+                            }
+                            if (reel != null && targetId.equals(reel.id)) {
+                                reel.reactions = loaded;
+                                reel.likedBy = uids;
+                                reel.likes = target.likes;
+                                renderCounts();
+                            }
+                        });
+            }
+
             private void renderCounts() {
                 if (reel == null) return;
+                Context c = itemView.getContext();
                 String me = Fb.uid();
-                String myRx = (me != null && reel.reactions != null) ? reel.reactions.get(me) : null;
-                if (myRx == null && me != null && reel.likedBy != null && reel.likedBy.contains(me)) myRx = "love";
-                likeIcon.setText(myRx != null ? Reactions.emojiFor(myRx) : "🤍");
-                int rxBg = 0x66000000;
-                int rxStroke = 0x33FFFFFF;
-                if (myRx != null) {
-                    if ("like".equals(myRx)) {
-                        rxBg = 0x771877F2;
-                        rxStroke = 0xFF1877F2;
-                    } else if ("love".equals(myRx)) {
-                        rxBg = 0x66F02849;
-                        rxStroke = 0xCCF02849;
-                    } else {
-                        rxBg = 0x66E09B00;
-                        rxStroke = 0xCCE09B00;
-                    }
+                String myRx = resolveMyReelReaction(reel);
+
+                // STRICT PER-USER RULE:
+                // - If `currentUserId` has NOT reacted (`myRx == null`) -> 100% UNCOLORED white outline icon & neutral circle!
+                // - If `currentUserId` HAS reacted (`myRx != null`) -> ONLY `currentUserId`'s own reaction is colored!
+                if (myRx == null) {
+                    likeOutlineIv.setVisibility(View.VISIBLE);
+                    likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+                    likeOutlineIv.setColorFilter(Color.WHITE);
+                    likeIcon.setText("");
+                    likeIcon.setVisibility(View.GONE);
+                    likeBtnBox.setBackground(Ui.roundStroke(c, 0x66000000, 22, 0x33FFFFFF, 1));
+                } else if ("like".equals(myRx)) {
+                    likeOutlineIv.setVisibility(View.VISIBLE);
+                    likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_filled);
+                    likeOutlineIv.clearColorFilter();
+                    likeIcon.setText("");
+                    likeIcon.setVisibility(View.GONE);
+                    likeBtnBox.setBackground(Ui.roundStroke(c, 0x771877F2, 22, 0xFF1877F2, 1));
+                } else {
+                    likeOutlineIv.setVisibility(View.GONE);
+                    likeIcon.setText(Reactions.emojiFor(myRx));
+                    likeIcon.setVisibility(View.VISIBLE);
+                    int rxBg = "love".equals(myRx) ? 0x66F02849 : 0x66E09B00;
+                    int rxStroke = "love".equals(myRx) ? 0xCCF02849 : 0xCCE09B00;
+                    likeBtnBox.setBackground(Ui.roundStroke(c, rxBg, 22, rxStroke, 1));
                 }
-                likeBtnBox.setBackground(Ui.roundStroke(itemView.getContext(), rxBg, 22, rxStroke, 1));
-                int totalLikes = Math.max(reel.likes, reel.reactions != null ? reel.reactions.size() : 0);
+
+                // Total Count shown separately right underneath the reaction button!
+                int mapSize = reel.reactions != null ? reel.reactions.size() : 0;
+                int totalLikes = Math.max(reel.likes, mapSize);
+                if (myRx != null && totalLikes < 1) totalLikes = 1;
                 likeCount.setText(totalLikes > 0 ? Format.count(totalLikes) : "Like");
                 commentCount.setText(reel.comments > 0 ? Format.count(reel.comments) : "Comment");
                 shareCount.setText(reel.shares > 0 ? Format.count(reel.shares) : "Share");
 
                 boolean saved = me != null && reel.savedBy != null && reel.savedBy.contains(me);
-                saveBtnBox.setBackground(Ui.roundStroke(itemView.getContext(),
+                saveBtnBox.setBackground(Ui.roundStroke(c,
                         saved ? 0x881877F2 : 0x66000000, 22,
                         saved ? 0xFF1877F2 : 0x33FFFFFF, 1));
             }
@@ -1691,17 +1778,20 @@ public class ReelsFragment extends Fragment {
 
             private void applyReelReaction(String requestedType, boolean onlyAdd) {
                 String me = Fb.uid();
-                if (me == null || reel == null) return;
+                if (me == null || me.isEmpty() || reel == null) return;
                 if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
-                String prev = reel.reactions != null ? reel.reactions.get(me) : null;
-                if (prev == null && reel.likedBy != null && reel.likedBy.contains(me)) prev = "love";
+                if (reel.reactions == null) reel.reactions = new HashMap<>();
+                if (reel.likedBy == null) reel.likedBy = new ArrayList<>();
+
+                String prev = resolveMyReelReaction(reel);
                 if (onlyAdd && prev != null) {
                     renderCounts();
                     return;
                 }
-                // Tapping or re-selecting the exact same reaction toggles it off cleanly
-                final String nextType = (!onlyAdd && prev != null && prev.equals(requestedType))
-                        ? null : requestedType;
+                // Tapping or re-selecting the exact same reaction toggles ONLY `currentUserId`'s reaction off cleanly
+                final String nextType = (!onlyAdd && prev != null && (requestedType == null || prev.equals(requestedType)))
+                        ? null
+                        : (requestedType == null ? null : Models.normalizeReactionType(requestedType, "like"));
 
                 markReelReactionTap(reel.id);
                 if (nextType == null) {
@@ -1713,14 +1803,14 @@ public class ReelsFragment extends Fragment {
                     if (!reel.likedBy.contains(me)) reel.likedBy.add(me);
                     if (prev == null) reel.likes++;
                 }
-                reel.likes = Math.max(reel.likes, reel.reactions.size());
+                reel.likes = Math.max(reel.reactions.size(), Math.max(0, reel.likes));
                 renderCounts();
 
                 final Context ctx = itemView.getContext();
                 final int delta = (prev == null && nextType != null) ? 1 : (prev != null && nextType == null ? -1 : 0);
 
                 if (reel.isFromPost) {
-                    // Video Post in Reels: sync posts/{id}.reactionsMap + posts/{id}/reactions/{me} + FastCache!
+                    // Video Post in Reels: sync posts/{id}.reactionsMap.<me> + posts/{id}/reactions/<me> + FastCache!
                     com.friendbook.social.core.FastCache.markLocalReactionTap(reel.id);
                     List<String> activeTypes = new ArrayList<>();
                     for (String t : Reactions.TYPES) {
@@ -1738,13 +1828,18 @@ public class ReelsFragment extends Fragment {
                         subRef.delete();
                         Map<String, Object> dot = new HashMap<>();
                         dot.put("reactionsMap." + me, FieldValue.delete());
+                        dot.put("reactions." + me, FieldValue.delete());
                         if (delta != 0) dot.put("likes", FieldValue.increment(delta));
                         postRef.update(dot).addOnFailureListener(err -> {
-                            if (delta != 0) {
-                                Map<String, Object> up = new HashMap<>();
-                                up.put("likes", FieldValue.increment(delta));
-                                postRef.set(up, SetOptions.merge());
-                            }
+                            Map<String, Object> up = new HashMap<>();
+                            Map<String, Object> rmDel = new HashMap<>();
+                            rmDel.put(me, FieldValue.delete());
+                            up.put("reactionsMap", rmDel);
+                            Map<String, Object> rxDel = new HashMap<>();
+                            rxDel.put(me, FieldValue.delete());
+                            up.put("reactions", rxDel);
+                            if (delta != 0) up.put("likes", FieldValue.increment(delta));
+                            postRef.set(up, SetOptions.merge());
                         });
                     } else {
                         final Map<String, Object> rxEntry = new HashMap<>();
@@ -1769,22 +1864,20 @@ public class ReelsFragment extends Fragment {
                         });
                     }
                 } else {
-                    // Native Reel in reels/{id}: atomic dot-path update with merge fallback
+                    // Native Reel in reels/{id}: atomic per-userId dot-path update with FieldValue.delete() merge fallback
                     com.google.firebase.firestore.DocumentReference reelRef =
                             Fb.db().collection("reels").document(reel.id);
                     Map<String, Object> dot = new HashMap<>();
                     dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);
                     dot.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                    if (delta != 0) dot.put("likes", FieldValue.increment(delta));
+                    dot.put("likes", reel.reactions.size());
                     reelRef.update(dot).addOnFailureListener(err -> {
                         Map<String, Object> fallback = new HashMap<>();
-                        if (nextType != null) {
-                            Map<String, Object> rxMap = new HashMap<>();
-                            rxMap.put(me, nextType);
-                            fallback.put("reactions", rxMap);
-                        }
+                        Map<String, Object> rxMap = new HashMap<>();
+                        rxMap.put(me, nextType == null ? FieldValue.delete() : nextType);
+                        fallback.put("reactions", rxMap);
                         fallback.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                        if (delta != 0) fallback.put("likes", FieldValue.increment(delta));
+                        fallback.put("likes", reel.reactions.size());
                         reelRef.set(fallback, SetOptions.merge());
                     });
                 }
