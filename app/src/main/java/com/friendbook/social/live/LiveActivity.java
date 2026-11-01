@@ -57,6 +57,7 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
+import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -83,6 +84,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private static final int REQ_LIVE_PERMS = 701;
     private static final int REQ_COHOST_PERMS = 702;
+    private static final int REQ_PK_GUEST_PERMS = 703;
 
     private static final String[] FILTER_NAMES = {
             "✨ Natural", "☀️ Warm", "❄️ Cool", "🌸 Rose",
@@ -106,12 +108,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private boolean isEnded;
     private boolean viewerCountJoined;
 
-    // Engines (main + optional Co-Host local engine when viewer joins stage)
+    // Engines (main + optional Co-Host / PK Guest local engine when viewer joins stage)
     private LiveStreamEngine engine;
     private LiveStreamEngine coHostLocalEngine;
+    private LiveStreamEngine pkGuestEngine;
 
     // Stage Views
     private FrameLayout rootStage;
+    private View pkStageBackdrop;
     private TextureView cameraTexture;
     private ImageView remoteVideoView;
     private LinearLayout fallbackStage;
@@ -120,6 +124,34 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private View filterOverlayView;
     private View ringLightOverlay;
     private FrameLayout floatingHeartsLayer;
+    private FrameLayout giftFxLayer;
+
+    // 2-User TikTok Split-Screen PK Battle Stage Views
+    private FrameLayout pkStageOverlay;
+    private View pkRedBar;
+    private View pkBlueBar;
+    private TextView pkScoreATv;
+    private TextView pkScoreBTv;
+    private TextView pkTimerPillTv;
+    private FrameLayout pkLeftPane;
+    private FrameLayout pkRightPane;
+    private ImageView pkLeftRemoteImg;
+    private ImageView pkRightRemoteImg;
+    private TextureView pkRightGuestTexture;
+    private LinearLayout pkLeftFallbackBox;
+    private LinearLayout pkRightFallbackBox;
+    private ImageView pkLeftAvatar;
+    private ImageView pkRightAvatar;
+    private TextView pkLeftNameBadge;
+    private TextView pkRightNameBadge;
+    private TextView pkLeftMuteBtn;
+    private TextView pkRightMuteBtn;
+    private TextView pkLeftResultStamp;
+    private TextView pkRightResultStamp;
+    private LinearLayout pkResultBanner;
+    private TextView pkWinnerHeadlineTv;
+    private TextView pkRematchBtn;
+    private TextView pkExitPkBtn;
 
     // Co-Host PIP Card (Top-Right under header)
     private FrameLayout coHostCard;
@@ -163,7 +195,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private EditText commentInput;
     private LinearLayout bottomComposerBar;
 
-    // Right Action Rail Buttons
+    // Right Action Rail & TikTok Bottom Controls
     private TextView btnMic;
     private TextView btnVideoPause;
     private TextView btnSpeaker;
@@ -171,8 +203,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private TextView btnRingLight;
     private TextView btnFilter;
     private TextView btnCoHost;
+    private TextView btnPkRail;
     private TextView btnQa;
     private TextView btnPoll;
+    private TextView likesBadgeTv;
 
     // Broadcast Settings & Room State
     private int currentFilterIdx = 0;
@@ -184,6 +218,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private boolean giftsEnabled = true;
     private boolean qaEnabled = true;
     private boolean coHostAllowed = true;
+    private boolean pkInvitesEnabled = true;
     private String blockedKeywordsCsv = "";
     private long lastCommentSentMs = 0L;
 
@@ -192,17 +227,43 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private long frameSeqOut = 0L;
     private long audioSeqOut = 0L;
     private long coHostSeqOut = 0L;
+    private long pkSeqOut = 0L;
     private long lastHostVideoUpdateMs = 0L;
     private long lastCoHostMediaPushMs = 0L;
+    private long lastPkMediaPushMs = 0L;
     private int peakViewers = 1;
     private int currentViewers = 1;
     private int totalUniqueViewers = 1;
     private int totalLikes = 0;
     private int totalComments = 0;
     private int totalStarsReceived = 0;
+    private int totalGiftsCount = 0;
+    private int pkWinsCount = 0;
+    private int pkPlayedCount = 0;
     private String hostNameStr = "Host";
     private String hostPhotoStr = "";
     private String liveTitleStr = "";
+
+    // 2-User TikTok Live Match / PK Battle State
+    private boolean pkBattleActive = false;
+    private boolean pkVictoryPhase = false;
+    private boolean isMePkGuest = false;
+    private String pkBattleId = "";
+    private String pkRole = ""; // "A", "B", or "viewer"
+    private String pkHostAUid = "";
+    private String pkHostAName = "";
+    private String pkHostAPhoto = "";
+    private String pkLiveIdA = "";
+    private String pkHostBUid = "";
+    private String pkHostBName = "";
+    private String pkHostBPhoto = "";
+    private String pkLiveIdB = "";
+    private int pkScoreA = 0;
+    private int pkScoreB = 0;
+    private long pkEndsAtMs = 0L;
+    private int pkDurationSec = 180;
+    private String lastHandledPkInviteId = "";
+    private String lastScoredPkRoundKey = "";
 
     // Co-Host, Moderation, Q&A, Polls & Leaderboard State
     private String activeCoHostUid = "";
@@ -230,6 +291,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // Listeners & Timers
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
+    private ListenerRegistration pkBattleReg;
+    private ListenerRegistration pkMediaAReg;
+    private ListenerRegistration pkMediaBReg;
+    private String subscribedPkBattleId = "";
     private DatabaseReference rtdbStreamRef;
     private ValueEventListener rtdbStreamListener;
 
@@ -248,6 +313,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 } else {
                     timerTv.setText(String.format(Locale.US, "%02d:%02d", mm, ss));
                 }
+                tickPkCountdown();
                 uiHandler.postDelayed(this, 1000L);
             }
         }
@@ -310,6 +376,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         rootStage = new FrameLayout(this);
         rootStage.setBackgroundColor(0xFF0B0C10);
 
+        // 0. PK Studio Dark Backdrop
+        pkStageBackdrop = new View(this);
+        pkStageBackdrop.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF0E101A, 0xFF141828, 0xFF090A10}));
+        pkStageBackdrop.setVisibility(View.GONE);
+        rootStage.addView(pkStageBackdrop, new FrameLayout.LayoutParams(-1, -1));
+
         // 1. Local Camera2 TextureView (Host)
         cameraTexture = new TextureView(this);
         cameraTexture.setVisibility(isHost ? View.VISIBLE : View.GONE);
@@ -346,6 +420,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         Ui.pad(stageStatusTv, 20, 14, 20, 4);
         fallbackStage.addView(stageStatusTv);
         rootStage.addView(fallbackStage, new FrameLayout.LayoutParams(-1, -1));
+
+        // 3B. 2-User TikTok Split-Screen Live Match / PK Battle Stage
+        buildPkBattleStageOverlay();
+        rootStage.addView(pkStageOverlay);
 
         // 4. Studio Visual Filter Tint Layer
         filterOverlayView = new View(this);
@@ -385,6 +463,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         floatingHeartsLayer.setClickable(false);
         rootStage.addView(floatingHeartsLayer, new FrameLayout.LayoutParams(-1, -1));
 
+        // 9B. TikTok Gift Combo Banner & Celebration FX Layer
+        giftFxLayer = new FrameLayout(this);
+        giftFxLayer.setClickable(false);
+        rootStage.addView(giftFxLayer, new FrameLayout.LayoutParams(-1, -1));
+
         // 10. Pre-Live Setup Studio Overlay + Live Broadcast HUD Overlay
         preLiveOverlay = buildPreLiveStudioOverlay();
         rootStage.addView(preLiveOverlay, new FrameLayout.LayoutParams(-1, -1));
@@ -412,6 +495,197 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         rootStage.addView(countdownTv, new FrameLayout.LayoutParams(-1, -1));
 
         setContentView(rootStage);
+    }
+
+    private static final int PK_STAGE_TOP_DP = 76;
+    private static final int PK_SCORE_BAR_H_DP = 24;
+    private static final int PK_VIDEO_H_DP = 290;
+
+    private void buildPkBattleStageOverlay() {
+        pkStageOverlay = new FrameLayout(this);
+        pkStageOverlay.setVisibility(View.GONE);
+        FrameLayout.LayoutParams rootLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        rootLp.topMargin = Ui.dp(this, PK_STAGE_TOP_DP);
+        pkStageOverlay.setLayoutParams(rootLp);
+
+        LinearLayout stack = Ui.col(this);
+        pkStageOverlay.addView(stack, new FrameLayout.LayoutParams(-1, -2));
+
+        // 1. Dynamic Red-vs-Blue PK Gift Score Bar (24dp)
+        FrameLayout barFrame = new FrameLayout(this);
+        LinearLayout barSplit = Ui.row(this);
+        pkRedBar = new View(this);
+        pkRedBar.setBackgroundColor(0xFFFE2C55);
+        pkBlueBar = new View(this);
+        pkBlueBar.setBackgroundColor(0xFF00B2FF);
+        barSplit.addView(pkRedBar, new LinearLayout.LayoutParams(0, -1, 1f));
+        barSplit.addView(pkBlueBar, new LinearLayout.LayoutParams(0, -1, 1f));
+        barFrame.addView(barSplit, new FrameLayout.LayoutParams(-1, -1));
+
+        pkScoreATv = Ui.tvBold(this, "🔥 0", 11.5f, 0xFFFFFFFF);
+        Ui.pad(pkScoreATv, 10, 0, 10, 0);
+        pkScoreATv.setGravity(Gravity.CENTER_VERTICAL);
+        barFrame.addView(pkScoreATv, new FrameLayout.LayoutParams(-2, -1, Gravity.START | Gravity.CENTER_VERTICAL));
+
+        pkScoreBTv = Ui.tvBold(this, "0 ⚡", 11.5f, 0xFFFFFFFF);
+        Ui.pad(pkScoreBTv, 10, 0, 10, 0);
+        pkScoreBTv.setGravity(Gravity.CENTER_VERTICAL);
+        barFrame.addView(pkScoreBTv, new FrameLayout.LayoutParams(-2, -1, Gravity.END | Gravity.CENTER_VERTICAL));
+
+        TextView barCenterBadge = Ui.tvBold(this, "⚡ PK ⚡", 10f, 0xFFFFEB3B);
+        barCenterBadge.setBackground(Ui.round(this, 0xCC000000, 10));
+        Ui.pad(barCenterBadge, 7, 1, 7, 1);
+        barFrame.addView(barCenterBadge, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+        stack.addView(barFrame, new LinearLayout.LayoutParams(-1, Ui.dp(this, PK_SCORE_BAR_H_DP)));
+
+        // 2. 50/50 Side-by-Side Dual Video Stage (290dp)
+        FrameLayout stageWrap = new FrameLayout(this);
+        LinearLayout splitRow = Ui.row(this);
+
+        // Left 50% Pane (Side A — Red)
+        pkLeftPane = new FrameLayout(this);
+        pkLeftFallbackBox = Ui.col(this);
+        pkLeftFallbackBox.setGravity(Gravity.CENTER);
+        pkLeftFallbackBox.setBackgroundColor(0xFF171A26);
+        pkLeftAvatar = new ImageView(this);
+        Ui.avatar(this, pkLeftAvatar, null);
+        pkLeftFallbackBox.addView(pkLeftAvatar, new LinearLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 64)));
+        pkLeftPane.addView(pkLeftFallbackBox, new FrameLayout.LayoutParams(-1, -1));
+
+        pkLeftRemoteImg = new ImageView(this);
+        pkLeftRemoteImg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        pkLeftRemoteImg.setVisibility(View.GONE);
+        pkLeftPane.addView(pkLeftRemoteImg, new FrameLayout.LayoutParams(-1, -1));
+
+        pkLeftNameBadge = Ui.tvBold(this, "🔴 Host A", 11f, 0xFFFFFFFF);
+        pkLeftNameBadge.setSingleLine(true);
+        pkLeftNameBadge.setEllipsize(TextUtils.TruncateAt.END);
+        pkLeftNameBadge.setBackground(Ui.round(this, 0xAA000000, 10));
+        Ui.pad(pkLeftNameBadge, 8, 3, 8, 3);
+        FrameLayout.LayoutParams lnLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+        lnLp.setMargins(Ui.dp(this, 6), 0, Ui.dp(this, 24), Ui.dp(this, 6));
+        pkLeftPane.addView(pkLeftNameBadge, lnLp);
+
+        pkLeftMuteBtn = Ui.roundChip(this, "🔊", 0x99000000, 0xFFFFFFFF, 11);
+        Ui.pad(pkLeftMuteBtn, 7, 4, 7, 4);
+        pkLeftMuteBtn.setOnClickListener(v -> {
+            boolean m = !engine.isPrimaryHostAudioMuted();
+            engine.setPrimaryHostAudioMuted(m);
+            pkLeftMuteBtn.setText(m ? "🔇" : "🔊");
+            Ui.toast(this, m ? "Muted Side A audio" : "Unmuted Side A audio");
+        });
+        FrameLayout.LayoutParams lmLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        lmLp.setMargins(0, 0, Ui.dp(this, 6), Ui.dp(this, 6));
+        pkLeftPane.addView(pkLeftMuteBtn, lmLp);
+
+        pkLeftResultStamp = Ui.tvBold(this, "", 15f, 0xFFFFFFFF);
+        pkLeftResultStamp.setBackground(Ui.round(this, 0xDD000000, 14));
+        Ui.pad(pkLeftResultStamp, 12, 6, 12, 6);
+        pkLeftResultStamp.setVisibility(View.GONE);
+        pkLeftPane.addView(pkLeftResultStamp, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+        // Center 2dp Divider
+        View centerLine = new View(this);
+        centerLine.setBackgroundColor(0x99FFFFFF);
+
+        // Right 50% Pane (Side B — Blue)
+        pkRightPane = new FrameLayout(this);
+        pkRightFallbackBox = Ui.col(this);
+        pkRightFallbackBox.setGravity(Gravity.CENTER);
+        pkRightFallbackBox.setBackgroundColor(0xFF131B29);
+        pkRightAvatar = new ImageView(this);
+        Ui.avatar(this, pkRightAvatar, null);
+        pkRightFallbackBox.addView(pkRightAvatar, new LinearLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 64)));
+        pkRightPane.addView(pkRightFallbackBox, new FrameLayout.LayoutParams(-1, -1));
+
+        pkRightRemoteImg = new ImageView(this);
+        pkRightRemoteImg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        pkRightRemoteImg.setVisibility(View.GONE);
+        pkRightPane.addView(pkRightRemoteImg, new FrameLayout.LayoutParams(-1, -1));
+
+        pkRightGuestTexture = new TextureView(this);
+        pkRightGuestTexture.setVisibility(View.GONE);
+        pkRightPane.addView(pkRightGuestTexture, new FrameLayout.LayoutParams(-1, -1));
+
+        pkRightNameBadge = Ui.tvBold(this, "🔵 Host B", 11f, 0xFFFFFFFF);
+        pkRightNameBadge.setSingleLine(true);
+        pkRightNameBadge.setEllipsize(TextUtils.TruncateAt.END);
+        pkRightNameBadge.setBackground(Ui.round(this, 0xAA000000, 10));
+        Ui.pad(pkRightNameBadge, 8, 3, 8, 3);
+        FrameLayout.LayoutParams rnLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+        rnLp.setMargins(Ui.dp(this, 6), 0, Ui.dp(this, 24), Ui.dp(this, 6));
+        pkRightPane.addView(pkRightNameBadge, rnLp);
+
+        pkRightMuteBtn = Ui.roundChip(this, "🔊", 0x99000000, 0xFFFFFFFF, 11);
+        Ui.pad(pkRightMuteBtn, 7, 4, 7, 4);
+        pkRightMuteBtn.setOnClickListener(v -> {
+            boolean m = !engine.isCoHostAudioMuted();
+            engine.setCoHostAudioMuted(m);
+            pkRightMuteBtn.setText(m ? "🔇" : "🔊");
+            Ui.toast(this, m ? "Muted Side B audio" : "Unmuted Side B audio");
+        });
+        FrameLayout.LayoutParams rmLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        rmLp.setMargins(0, 0, Ui.dp(this, 6), Ui.dp(this, 6));
+        pkRightPane.addView(pkRightMuteBtn, rmLp);
+
+        pkRightResultStamp = Ui.tvBold(this, "", 15f, 0xFFFFFFFF);
+        pkRightResultStamp.setBackground(Ui.round(this, 0xDD000000, 14));
+        Ui.pad(pkRightResultStamp, 12, 6, 12, 6);
+        pkRightResultStamp.setVisibility(View.GONE);
+        pkRightPane.addView(pkRightResultStamp, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+        splitRow.addView(pkLeftPane, new LinearLayout.LayoutParams(0, -1, 1f));
+        splitRow.addView(centerLine, new LinearLayout.LayoutParams(Ui.dp(this, 2), -1));
+        splitRow.addView(pkRightPane, new LinearLayout.LayoutParams(0, -1, 1f));
+        stageWrap.addView(splitRow, new FrameLayout.LayoutParams(-1, -1));
+
+        // Top-Center PK Countdown Pill (`⚔️ PK 03:00`)
+        pkTimerPillTv = Ui.tvBold(this, "⚔️ PK 03:00", 12f, 0xFFFFFFFF);
+        pkTimerPillTv.setBackground(Ui.roundStroke(this, 0xCC0D0F18, 14, 0xFFFFD54F, 1));
+        Ui.pad(pkTimerPillTv, 11, 4, 11, 4);
+        FrameLayout.LayoutParams tmLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        tmLp.topMargin = Ui.dp(this, 6);
+        stageWrap.addView(pkTimerPillTv, tmLp);
+
+        // Center VS Clash Emblem
+        TextView vsBadge = Ui.tvBold(this, "VS", 12f, 0xFFFFFFFF);
+        GradientDrawable vsBg = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0xFFFE2C55, 0xFF00B2FF});
+        vsBg.setCornerRadius(Ui.dp(this, 16));
+        vsBg.setStroke(Ui.dp(this, 1.5f), 0xFFFFFFFF);
+        vsBadge.setBackground(vsBg);
+        Ui.pad(vsBadge, 9, 4, 9, 4);
+        stageWrap.addView(vsBadge, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+        stack.addView(stageWrap, new LinearLayout.LayoutParams(-1, Ui.dp(this, PK_VIDEO_H_DP)));
+
+        // 3. PK Match Result / Winner Showcase Banner (shown when timer ends!)
+        pkResultBanner = Ui.row(this);
+        pkResultBanner.setGravity(Gravity.CENTER_VERTICAL);
+        pkResultBanner.setBackground(Ui.roundStroke(this, 0xEE141824, 14, 0xFFFFD54F, 1));
+        Ui.pad(pkResultBanner, 12, 8, 12, 8);
+        pkResultBanner.setVisibility(View.GONE);
+
+        pkWinnerHeadlineTv = Ui.tvBold(this, "🏆 PK Match Complete!", 12.5f, 0xFFFFD54F);
+        pkResultBanner.addView(pkWinnerHeadlineTv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        pkRematchBtn = Ui.roundChip(this, "🔄 Rematch", 0xFFFE2C55, 0xFFFFFFFF, 11);
+        Ui.pad(pkRematchBtn, 10, 5, 10, 5);
+        pkRematchBtn.setOnClickListener(v -> startPkRematchNow());
+        pkResultBanner.addView(pkRematchBtn);
+
+        pkExitPkBtn = Ui.roundChip(this, "✕ Exit PK", 0x44FFFFFF, 0xFFFFFFFF, 11);
+        Ui.pad(pkExitPkBtn, 10, 5, 10, 5);
+        LinearLayout.LayoutParams exLp = new LinearLayout.LayoutParams(-2, -2);
+        exLp.leftMargin = Ui.dp(this, 6);
+        pkExitPkBtn.setOnClickListener(v -> endActivePkBattle());
+        pkResultBanner.addView(pkExitPkBtn, exLp);
+
+        LinearLayout.LayoutParams rbLp = new LinearLayout.LayoutParams(-1, -2);
+        rbLp.setMargins(Ui.dp(this, 10), Ui.dp(this, 6), Ui.dp(this, 10), 0);
+        stack.addView(pkResultBanner, rbLp);
     }
 
     private void buildCoHostPipCard() {
@@ -475,7 +749,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     @Override
                     public boolean onDoubleTap(MotionEvent e) {
                         if (isLiveStarted) {
-                            sendReaction("❤️");
+                            sendHeartLike();
                         }
                         return true;
                     }
@@ -534,11 +808,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             Ui.toast(this, next ? "Front mirror ON" : "Front mirror OFF");
         }));
         sideRail.addView(studioSideItem("💡", "Light", v -> toggleRingLightOrTorch()));
-        sideRail.addView(studioSideItem("✨", "Beauty", v -> {
-            boolean b = engine.toggleBeautyBoost();
-            Ui.toast(this, b ? "✨ Studio brightness boost ON" : "Studio brightness normal");
-        }));
-        sideRail.addView(studioSideItem("🎨", "Filter", v -> cycleVisualFilter()));
+        sideRail.addView(studioSideItem("✨", "Beauty", v -> openBeautyAndFilterStudioDrawer()));
+        sideRail.addView(studioSideItem("🎨", "Filter", v -> openBeautyAndFilterStudioDrawer()));
         sideRail.addView(studioSideItem("⚙️", "Settings", v -> showHostSettingsSheet()));
 
         FrameLayout.LayoutParams srLp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
@@ -787,15 +1058,18 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         Ui.pad(rail, 4, 4, 8, 4);
 
         if (isHost) {
+            btnPkRail = circleBtnSpaced("⚔️", v -> openPkChallengeSheet());
+            rail.addView(btnPkRail);
             rail.addView(circleBtnSpaced("🔄", v -> engine.flipCamera()));
+            btnFilter = circleBtnSpaced("✨", v -> openBeautyAndFilterStudioDrawer());
+            rail.addView(btnFilter);
             btnMic = circleBtnSpaced("🎙️", v -> toggleHostMic());
             rail.addView(btnMic);
             btnVideoPause = circleBtnSpaced("📹", v -> toggleHostCameraPause());
             rail.addView(btnVideoPause);
             btnRingLight = circleBtnSpaced("💡", v -> toggleRingLightOrTorch());
             rail.addView(btnRingLight);
-            btnFilter = circleBtnSpaced("🎨", v -> cycleVisualFilter());
-            rail.addView(btnFilter);
+            rail.addView(circleBtnSpaced("👥", v -> openInviteFriendsSheet()));
             btnCoHost = circleBtnSpaced("🙋", v -> showCoHostManagerSheet());
             rail.addView(btnCoHost);
             btnQa = circleBtnSpaced("❓", v -> showQaDrawerSheet());
@@ -805,13 +1079,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             rail.addView(circleBtnSpaced("📤", v -> showShareAndInviteSheet()));
             rail.addView(circleBtnSpaced("⚙️", v -> showHostSettingsSheet()));
         } else {
+            rail.addView(circleBtnSpaced("❤️", v -> sendHeartLike()));
+            rail.addView(circleBtnSpaced("🎁", v -> showSendGiftSheet()));
+            rail.addView(circleBtnSpaced("👥", v -> openInviteFriendsSheet()));
             btnSpeaker = circleBtnSpaced("🔊", v -> toggleViewerSpeaker());
             rail.addView(btnSpeaker);
             btnCoHost = circleBtnSpaced("🙋", v -> requestOrLeaveCoHostStage());
             rail.addView(btnCoHost);
+            btnPkRail = circleBtnSpaced("⚔️", v -> viewerRequestPkBattle());
+            rail.addView(btnPkRail);
             btnQa = circleBtnSpaced("❓", v -> showAskQuestionDialog());
             rail.addView(btnQa);
-            rail.addView(circleBtnSpaced("⭐", v -> showSendGiftSheet()));
             rail.addView(circleBtnSpaced("📤", v -> showShareAndInviteSheet()));
             rail.addView(circleBtnSpaced("⚙️", v -> showViewerSettingsSheet()));
         }
@@ -868,19 +1146,40 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         bottomComposerBar.addView(commentInput, new LinearLayout.LayoutParams(0, -2, 1f));
 
         TextView sendBtn = Ui.roundChip(this, "Send", Ui.BLUE, 0xFFFFFFFF, 12);
-        Ui.pad(sendBtn, 14, 9, 14, 9);
+        Ui.pad(sendBtn, 12, 9, 12, 9);
         sendBtn.setOnClickListener(v -> sendChatMessage());
         LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(-2, -2);
-        sbLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+        sbLp.setMargins(Ui.dp(this, 5), 0, 0, 0);
         bottomComposerBar.addView(sendBtn, sbLp);
 
-        if (!isHost) {
-            TextView giftQuick = Ui.roundChip(this, "⭐ Gift", 0xFFFF9800, 0xFFFFFFFF, 12);
-            Ui.pad(giftQuick, 12, 9, 12, 9);
+        if (isHost) {
+            TextView pkQuick = Ui.roundChip(this, "⚔️ PK", 0xFFFE2C55, 0xFFFFFFFF, 12);
+            Ui.pad(pkQuick, 11, 9, 11, 9);
+            pkQuick.setOnClickListener(v -> openPkChallengeSheet());
+            LinearLayout.LayoutParams pkLp = new LinearLayout.LayoutParams(-2, -2);
+            pkLp.setMargins(Ui.dp(this, 5), 0, 0, 0);
+            bottomComposerBar.addView(pkQuick, pkLp);
+
+            TextView invQuick = Ui.roundChip(this, "👥 Invite", 0x66000000, 0xFFFFFFFF, 12);
+            Ui.pad(invQuick, 10, 9, 10, 9);
+            invQuick.setOnClickListener(v -> openInviteFriendsSheet());
+            LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(-2, -2);
+            ivLp.setMargins(Ui.dp(this, 5), 0, 0, 0);
+            bottomComposerBar.addView(invQuick, ivLp);
+        } else {
+            TextView giftQuick = Ui.roundChip(this, "🎁 Gift", 0xFFFE2C55, 0xFFFFFFFF, 12);
+            Ui.pad(giftQuick, 11, 9, 11, 9);
             giftQuick.setOnClickListener(v -> showSendGiftSheet());
             LinearLayout.LayoutParams gqLp = new LinearLayout.LayoutParams(-2, -2);
-            gqLp.setMargins(Ui.dp(this, 6), 0, 0, 0);
+            gqLp.setMargins(Ui.dp(this, 5), 0, 0, 0);
             bottomComposerBar.addView(giftQuick, gqLp);
+
+            likesBadgeTv = Ui.roundChip(this, "❤️ 0", 0x66000000, 0xFFFFFFFF, 12);
+            Ui.pad(likesBadgeTv, 10, 9, 10, 9);
+            likesBadgeTv.setOnClickListener(v -> sendHeartLike());
+            LinearLayout.LayoutParams lkLp = new LinearLayout.LayoutParams(-2, -2);
+            lkLp.setMargins(Ui.dp(this, 5), 0, 0, 0);
+            bottomComposerBar.addView(likesBadgeTv, lkLp);
         }
 
         bottomZone.addView(bottomComposerBar, new LinearLayout.LayoutParams(-1, -2));
@@ -927,6 +1226,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.attachCameraPreview(cameraTexture, true);
             } else if (reqCode == REQ_COHOST_PERMS) {
                 activateLocalCoHostStreaming();
+            } else if (reqCode == REQ_PK_GUEST_PERMS) {
+                activateLocalPkGuestStreaming();
             }
         }
     }
@@ -944,6 +1245,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
         } else if (requestCode == REQ_COHOST_PERMS && camOk) {
             activateLocalCoHostStreaming();
+        } else if (requestCode == REQ_PK_GUEST_PERMS && camOk) {
+            activateLocalPkGuestStreaming();
         }
     }
 
@@ -1018,6 +1321,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         doc.put("giftsEnabled", giftsEnabled);
         doc.put("qaEnabled", qaEnabled);
         doc.put("coHostAllowed", coHostAllowed);
+        doc.put("pkInvitesEnabled", pkInvitesEnabled);
+        doc.put("pkActive", false);
+        doc.put("pkBattleId", "");
         doc.put("blockedKeywords", blockedKeywordsCsv);
         doc.put("pinnedComment", "");
         doc.put("viewerIds", new ArrayList<>(activeViewerIds));
@@ -1092,7 +1398,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 rtdbStreamListener = new ValueEventListener() {
                     @Override
                     public void onDataChange(@NonNull DataSnapshot snapshot) {
-                        if (isFinishing() || isEnded || !snapshot.exists()) return;
+                        if (isFinishing() || isEnded || pkBattleActive || !snapshot.exists()) return;
                         String vB64 = snapshot.child("v").getValue(String.class);
                         Long vSeq = snapshot.child("vs").getValue(Long.class);
                         if (vB64 != null && !vB64.isEmpty()) {
@@ -1132,6 +1438,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("cameraPaused", false);
             upd.put("filterIndex", currentFilterIdx);
             Fb.db().collection("lives").document(liveId).update(upd);
+
+            // Also publish to shared 2-User PK Battle Media Channel when PK is active!
+            if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
+                String mediaDocId = "pkmedia_" + pkBattleId + "_" + ("B".equals(pkRole) ? "b" : "a");
+                Map<String, Object> pkV = new HashMap<>();
+                pkV.put("v", base64Webp);
+                pkV.put("vs", seq);
+                pkV.put("ts", now);
+                Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge());
+            }
         }
     }
 
@@ -1151,6 +1467,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("audioSeq", seq);
             upd.put("audioLevel", voiceLevel);
             Fb.db().collection("lives").document(liveId).update(upd);
+
+            if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
+                String mediaDocId = "pkmedia_" + pkBattleId + "_" + ("B".equals(pkRole) ? "b" : "a");
+                Map<String, Object> pkA = new HashMap<>();
+                pkA.put("a", base64Ulaw);
+                pkA.put("as", seq);
+                Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge());
+            }
         }
     }
 
@@ -1170,6 +1494,24 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     @Override
     public void onDecodedRemoteVideo(Bitmap bitmap, boolean isCoHost) {
         if (isFinishing() || isEnded || bitmap == null) return;
+        if (pkBattleActive) {
+            if (!isCoHost) {
+                // Side A (Left 50% Pane)
+                if (!(isHost && "A".equals(pkRole))) {
+                    pkLeftRemoteImg.setVisibility(View.VISIBLE);
+                    pkLeftRemoteImg.setImageBitmap(bitmap);
+                    pkLeftFallbackBox.setVisibility(View.GONE);
+                }
+            } else {
+                // Side B (Right 50% Pane)
+                if (!(isHost && "B".equals(pkRole)) && !isMePkGuest) {
+                    pkRightRemoteImg.setVisibility(View.VISIBLE);
+                    pkRightRemoteImg.setImageBitmap(bitmap);
+                    pkRightFallbackBox.setVisibility(View.GONE);
+                }
+            }
+            return;
+        }
         if (isCoHost) {
             coHostCard.setVisibility(View.VISIBLE);
             coHostRemoteImage.setVisibility(View.VISIBLE);
@@ -1262,6 +1604,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         giftsEnabled = m.get("giftsEnabled") == null || Boolean.TRUE.equals(m.get("giftsEnabled"));
         qaEnabled = m.get("qaEnabled") == null || Boolean.TRUE.equals(m.get("qaEnabled"));
         coHostAllowed = m.get("coHostAllowed") == null || Boolean.TRUE.equals(m.get("coHostAllowed"));
+        pkInvitesEnabled = m.get("pkInvitesEnabled") == null || Boolean.TRUE.equals(m.get("pkInvitesEnabled"));
         blockedKeywordsCsv = Format.str(m, "blockedKeywords");
 
         commentInput.setEnabled(commentsEnabled || isHost || isMeModerator());
@@ -1287,7 +1630,19 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         viewerCountTv.setText("👁 " + Format.count(currentViewers));
 
         totalStarsReceived = Math.max(Format.intOf(m, "stars"), Format.intOf(m, "totalStars"));
-        hostTopSub.setText("⭐ " + Format.count(totalStarsReceived) + " Stars");
+        int docLikes = Format.intOf(m, "likesCount");
+        if (docLikes > totalLikes) totalLikes = docLikes;
+        if (likesBadgeTv != null) likesBadgeTv.setText("❤️ " + Format.count(totalLikes));
+        hostTopSub.setText("⭐ " + Format.count(totalStarsReceived) + "  ·  ❤️ " + Format.count(totalLikes));
+
+        // 2-User Split-Screen PK Battle Room Sync
+        boolean docPkActive = Boolean.TRUE.equals(m.get("pkActive"));
+        String docPkId = Format.str(m, "pkBattleId");
+        if (docPkActive && !docPkId.isEmpty()) {
+            subscribeToPkBattle(docPkId);
+        } else if (!docPkActive && !isHost && pkBattleActive) {
+            teardownPkStageUi();
+        }
 
         // Filter Sync
         int remoteFilter = Format.intOf(m, "filterIndex");
@@ -1296,8 +1651,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             filterOverlayView.setBackgroundColor(FILTER_OVERLAYS[currentFilterIdx]);
         }
 
-        // Viewer Decodes Real-Time Host Video + Real-Time Host Audio!
-        if (!isHost) {
+        // Viewer Decodes Real-Time Host Video + Real-Time Host Audio (when not in split-screen PK)!
+        if (!isHost && !pkBattleActive) {
             boolean hostCamPaused = Boolean.TRUE.equals(m.get("cameraPaused"));
             if (hostCamPaused) {
                 remoteVideoView.setVisibility(View.GONE);
@@ -1386,6 +1741,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             String text = Format.str(m, "text");
             boolean isNewPacket = processedPacketIds.add(id);
 
+            // Immediately hide permanently blocked users from Live Chat!
+            if (!uid.isEmpty() && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(uid)) {
+                continue;
+            }
+
             if (!uid.isEmpty()) {
                 viewerNames.put(uid, name);
                 if (!photo.isEmpty()) viewerPhotos.put(uid, photo);
@@ -1401,20 +1761,41 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
                     totalLikes++;
+                    if (likesBadgeTv != null) likesBadgeTv.setText("❤️ " + Format.count(totalLikes));
                     if (!uid.equals(Fb.uid())) {
                         spawnFloatingEmoji(text.isEmpty() ? "❤️" : text);
                     }
                 }
             } else if ("gift".equals(type)) {
                 int stars = Format.intOf(m, "stars");
+                String gEmoji = Format.strOr(m, "giftEmoji", "🎁");
+                String gName = Format.strOr(m, "giftName", "Gift");
                 if (isNewPacket && stars > 0) {
+                    totalGiftsCount++;
                     int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;
                     supporterStars.put(uid, prev + stars);
                     supporterNames.put(uid, name);
-                    spawnFloatingEmoji("⭐");
-                    spawnFloatingEmoji("🎉");
+                    spawnFloatingEmoji(gEmoji);
+                    if (giftFxLayer != null) {
+                        LivePkAndGiftsUi.playGiftBannerAnimation(
+                                this, giftFxLayer, photo, name, gEmoji, gName, stars);
+                    }
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "gift"));
+            } else if ("pk_invite".equals(type)) {
+                String targetUid = Format.str(m, "targetUid");
+                String pkId = Format.str(m, "pkBattleId");
+                int durS = Math.max(60, Format.intOf(m, "durationSec"));
+                if (isNewPacket && targetUid.equals(Fb.uid()) && !pkId.isEmpty()
+                        && !id.equals(lastHandledPkInviteId) && pkInvitesEnabled) {
+                    lastHandledPkInviteId = id;
+                    promptIncomingPkChallenge(pkId, uid, name, photo, durS);
+                }
+            } else if ("pk_req".equals(type)) {
+                if (isNewPacket && isHost && !uid.isEmpty() && !uid.equals(Fb.uid()) && pkInvitesEnabled) {
+                    promptViewerRequestedPk(uid, name, photo);
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, "⚔️ requested a PK Battle!", "system"));
             } else if ("qa".equals(type)) {
                 if (isNewPacket) {
                     qaItems.add(0, new ChatItem(id, uid, name, photo, text, "qa"));
@@ -1880,9 +2261,33 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         Fb.db().collection("lives").document(liveId).collection("chat").add(sys);
     }
 
+    private void sendHeartLike() {
+        spawnFloatingEmoji("❤️");
+        spawnFloatingEmoji("💖");
+        totalLikes++;
+        if (likesBadgeTv != null) likesBadgeTv.setText("❤️ " + Format.count(totalLikes));
+        if (liveId == null || isEnded) return;
+        // `likesCount` is explicitly allowed for any signed-in viewer in deployed firestore.rules!
+        Fb.db().collection("lives").document(liveId)
+                .update("likesCount", FieldValue.increment(1));
+        Map<String, Object> r = new HashMap<>();
+        r.put("type", "reaction");
+        r.put("uid", Fb.uid());
+        r.put("name", Fb.myName());
+        r.put("text", "❤️");
+        r.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+    }
+
     private void sendReaction(String emoji) {
+        if ("❤️".equals(emoji)) {
+            sendHeartLike();
+            return;
+        }
         spawnFloatingEmoji(emoji);
         if (liveId == null || isEnded) return;
+        Fb.db().collection("lives").document(liveId)
+                .update("likesCount", FieldValue.increment(1));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -1923,44 +2328,69 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void showSendGiftSheet() {
         if (!giftsEnabled) {
-            Ui.toast(this, "Host turned off Star gifts for this stream");
+            Ui.toast(this, "Host turned off Gifts for this stream");
             return;
         }
-        final int[] amounts = {10, 50, 100, 500};
-        final String[] names = {
-                "⭐ 10 Stars — Cheer",
-                "🌟 50 Stars — Super Heart",
-                "💫 100 Stars — Spotlight Boost",
-                "👑 500 Stars — Crown Supporter"
-        };
-        Ui.choose(this, "⭐ Send Community Stars to " + hostNameStr, names, which -> {
-            int stars = amounts[which];
-            // Matches deployed firestore.rules: `senderId == request.auth.uid` & `lives/{lid}` `stars`!
-            Fb.db().collection("lives").document(liveId)
-                    .update("stars", FieldValue.increment(stars));
+        String nameA = pkBattleActive && !pkHostAName.isEmpty() ? pkHostAName : hostNameStr;
+        String nameB = pkBattleActive ? pkHostBName : null;
+        boolean defaultSideB = pkBattleActive && liveId != null && liveId.equals(pkLiveIdB)
+                && !pkLiveIdA.equals(pkLiveIdB);
 
-            Map<String, Object> giftDoc = new HashMap<>();
-            giftDoc.put("senderId", Fb.uid());
-            giftDoc.put("senderName", Fb.myName());
-            giftDoc.put("toUid", hostId);
-            giftDoc.put("liveId", liveId);
-            giftDoc.put("stars", stars);
-            giftDoc.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("gifts").add(giftDoc);
+        LivePkAndGiftsUi.showGiftDrawer(this, nameA, pkBattleActive && !pkVictoryPhase, nameB, defaultSideB,
+                (gift, targetPkSideB) -> {
+                    int coins = gift.coins;
+                    String recipientUid = (pkBattleActive && targetPkSideB && !pkHostBUid.isEmpty())
+                            ? pkHostBUid : (pkBattleActive && !pkHostAUid.isEmpty() ? pkHostAUid : hostId);
+                    String recipientLiveId = (pkBattleActive && targetPkSideB && !pkLiveIdB.isEmpty())
+                            ? pkLiveIdB : (pkBattleActive && !pkLiveIdA.isEmpty() ? pkLiveIdA : liveId);
+                    String recipientName = (pkBattleActive && targetPkSideB && !pkHostBName.isEmpty())
+                            ? pkHostBName : nameA;
 
-            Map<String, Object> chatGift = new HashMap<>();
-            chatGift.put("type", "gift");
-            chatGift.put("uid", Fb.uid());
-            chatGift.put("name", Fb.myName());
-            chatGift.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
-            chatGift.put("stars", stars);
-            chatGift.put("text", "sent ⭐ " + stars + " Stars!");
-            chatGift.put("createdAtMs", System.currentTimeMillis());
-            Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
+                    if (recipientLiveId != null && !recipientLiveId.isEmpty()) {
+                        Fb.db().collection("lives").document(recipientLiveId)
+                                .update("stars", FieldValue.increment(coins));
+                    }
 
-            spawnFloatingEmoji("⭐");
-            Ui.toast(this, "Sent ⭐ " + stars + " Stars to " + hostNameStr + "!");
-        });
+                    // Boost PK Battle Score Bar in real time across BOTH rooms!
+                    if (pkBattleActive && !pkVictoryPhase && !pkBattleId.isEmpty()) {
+                        String scoreField = targetPkSideB ? "scoreB" : "scoreA";
+                        Fb.db().collection("chats").document("pkbattle_" + pkBattleId)
+                                .set(Fb.map(scoreField, FieldValue.increment(coins)), SetOptions.merge());
+                    }
+
+                    Map<String, Object> giftDoc = new HashMap<>();
+                    giftDoc.put("senderId", Fb.uid());
+                    giftDoc.put("senderName", Fb.myName());
+                    giftDoc.put("toUid", recipientUid);
+                    giftDoc.put("liveId", recipientLiveId);
+                    giftDoc.put("stars", coins);
+                    giftDoc.put("giftId", gift.id);
+                    giftDoc.put("giftName", gift.name);
+                    giftDoc.put("createdAt", FieldValue.serverTimestamp());
+                    Fb.db().collection("gifts").add(giftDoc);
+
+                    Map<String, Object> chatGift = new HashMap<>();
+                    chatGift.put("type", "gift");
+                    chatGift.put("uid", Fb.uid());
+                    chatGift.put("name", Fb.myName());
+                    chatGift.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+                    chatGift.put("stars", coins);
+                    chatGift.put("giftEmoji", gift.emoji);
+                    chatGift.put("giftName", gift.name);
+                    chatGift.put("text", "sent " + gift.emoji + " " + gift.name + " (⭐ " + coins + ")"
+                            + (pkBattleActive ? " to " + recipientName : "") + "!");
+                    chatGift.put("createdAtMs", System.currentTimeMillis());
+                    if (liveId != null) {
+                        Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
+                    }
+                    // Mirror gift celebration banner to opponent's room if battling across 2 Live rooms!
+                    if (pkBattleActive && !pkLiveIdA.isEmpty() && !pkLiveIdB.isEmpty() && !pkLiveIdA.equals(pkLiveIdB)) {
+                        String otherRoom = pkLiveIdA.equals(liveId) ? pkLiveIdB : pkLiveIdA;
+                        Fb.db().collection("lives").document(otherRoom).collection("chat").add(chatGift);
+                    }
+
+                    spawnFloatingEmoji(gift.emoji);
+                });
     }
 
     private void onChatItemClicked(ChatItem item) {
@@ -2010,6 +2440,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                             : ("🛡 " + item.name + " is now a Live Moderator!"));
                 });
 
+                opts.add("⚔️ Challenge " + item.name + " to Split-Screen PK Battle");
+                acts.add(() -> challengeViewerToPk(item.uid, item.name,
+                        viewerPhotos.getOrDefault(item.uid, ""), 180));
+
                 opts.add("🤝 Invite " + item.name + " as Split-Screen Co-Host");
                 acts.add(() -> {
                     Map<String, Object> upd = new HashMap<>();
@@ -2018,7 +2452,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     Fb.db().collection("lives").document(liveId).update(upd);
                 });
 
-                opts.add("🚫 Remove / Kick " + item.name + " from Live");
+                opts.add("👢 Remove / Kick " + item.name + " from Live");
                 acts.add(() -> {
                     kickedUserIds.add(item.uid);
                     Fb.db().collection("lives").document(liveId)
@@ -2026,6 +2460,20 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     Ui.toast(this, "Removed " + item.name + " from broadcast");
                 });
             }
+        }
+
+        if (!item.uid.equals(Fb.uid())) {
+            opts.add("🚫 Block " + item.name + " Permanently");
+            acts.add(() -> LivePkAndGiftsUi.blockUserPermanently(this, item.uid, item.name, () -> {
+                if (isHost && liveId != null) {
+                    mutedUserIds.add(item.uid);
+                    kickedUserIds.add(item.uid);
+                    Map<String, Object> modUpd = new HashMap<>();
+                    modUpd.put("mutedUserIds", new ArrayList<>(mutedUserIds));
+                    modUpd.put("kickedUserIds", new ArrayList<>(kickedUserIds));
+                    Fb.db().collection("lives").document(liveId).update(modUpd);
+                }
+            }));
         }
 
         Ui.choose(this, item.name, opts.toArray(new String[0]), w -> acts.get(w).run());
@@ -2105,20 +2553,62 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         restoreHudBtn.setVisibility(hide ? View.VISIBLE : View.GONE);
     }
 
+    private void openBeautyAndFilterStudioDrawer() {
+        LivePkAndGiftsUi.showBeautyAndFilterDrawer(
+                this,
+                engine.getBeautyLevel(),
+                currentFilterIdx,
+                FILTER_NAMES,
+                ringLightOn,
+                engine.isMirrorFront(),
+                new LivePkAndGiftsUi.BeautyFilterCallback() {
+                    @Override
+                    public void onBeautyChanged(int beautyLevel) {
+                        engine.setBeautyLevel(beautyLevel);
+                        Ui.toast(LiveActivity.this, "Beauty: " + engine.getBeautyLabel());
+                    }
+                    @Override
+                    public void onColorFilterChanged(int filterIndex) {
+                        currentFilterIdx = filterIndex;
+                        filterOverlayView.setBackgroundColor(FILTER_OVERLAYS[currentFilterIdx]);
+                        if (isHost && isLiveStarted && liveId != null) {
+                            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+                        }
+                    }
+                    @Override
+                    public void onToggleRingLight() {
+                        toggleRingLightOrTorch();
+                    }
+                    @Override
+                    public void onToggleMirror() {
+                        engine.setMirrorFront(!engine.isMirrorFront());
+                    }
+                });
+    }
+
+    private void openInviteFriendsSheet() {
+        if (liveId == null) {
+            Ui.toast(this, "Start your Live first to invite friends!");
+            return;
+        }
+        LivePkAndGiftsUi.showInviteFriendsDrawer(this, liveId, hostNameStr, liveTitleStr);
+    }
+
     private void showHostSettingsSheet() {
         String[] opts = {
                 "✏️ Edit Live Broadcast Title",
                 "🎬 Stream Quality (" + engine.getQualityLabel() + ")",
+                "✨ Beauty & Camera Filters (" + engine.getBeautyLabel() + ")",
                 engine.isMicMuted() ? "🎙️ Unmute Microphone" : "🔇 Mute Microphone",
                 engine.isCameraPaused() ? "▶️ Resume Camera Video" : "⏸ Pause Camera (Audio-Only Shield)",
                 engine.isMirrorFront() ? "🪞 Front Mirror: ON (Tap to flip)" : "🪞 Front Mirror: OFF (Tap to flip)",
                 ringLightOn ? "💡 Front Ring-Light: ON" : "💡 Front Ring-Light: OFF",
-                engine.isBeautyBoost() ? "✨ Studio Brightness Boost: ON" : "✨ Studio Brightness Boost: OFF",
-                "🎨 Studio Color Filter (" + FILTER_NAMES[currentFilterIdx] + ")",
                 commentsEnabled ? "💬 Turn OFF Live Comments" : "💬 Turn ON Live Comments",
                 slowModeEnabled ? "🐢 Disable Slow Mode (5s)" : "🐢 Enable Slow Mode (5s)",
                 "🛡️ Set Blocked Chat Keywords" + (blockedKeywordsCsv.isEmpty() ? "" : " (Active)"),
-                giftsEnabled ? "⭐ Turn OFF Star Gifts" : "⭐ Turn ON Star Gifts",
+                "🚫 Manage Muted & Removed Viewers (" + (mutedUserIds.size() + kickedUserIds.size()) + ")",
+                giftsEnabled ? "🎁 Turn OFF Live Gifts" : "🎁 Turn ON Live Gifts",
+                pkInvitesEnabled ? "⚔️ Turn OFF PK Battle Invites" : "⚔️ Turn ON PK Battle Invites",
                 qaEnabled ? "❓ Turn OFF Q&A Box" : "❓ Turn ON Q&A Box",
                 coHostAllowed ? "🙋 Turn OFF Co-Host Requests" : "🙋 Turn ON Co-Host Requests"
         };
@@ -2127,36 +2617,59 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             switch (which) {
                 case 0: promptEditLiveTitle(); break;
                 case 1: cycleStreamQuality(); break;
-                case 2: toggleHostMic(); break;
-                case 3: toggleHostCameraPause(); break;
-                case 4:
+                case 2: openBeautyAndFilterStudioDrawer(); break;
+                case 3: toggleHostMic(); break;
+                case 4: toggleHostCameraPause(); break;
+                case 5:
                     engine.setMirrorFront(!engine.isMirrorFront());
                     Ui.toast(this, engine.isMirrorFront() ? "Mirror ON" : "Mirror OFF");
                     break;
-                case 5: toggleRingLightOrTorch(); break;
-                case 6:
-                    boolean b = engine.toggleBeautyBoost();
-                    Ui.toast(this, b ? "✨ Brightness Boost ON" : "Brightness normal");
-                    break;
-                case 7: cycleVisualFilter(); break;
-                case 8:
+                case 6: toggleRingLightOrTorch(); break;
+                case 7:
                     commentsEnabled = !commentsEnabled;
                     syncHostSetting("commentsEnabled", commentsEnabled);
                     break;
-                case 9:
+                case 8:
                     slowModeEnabled = !slowModeEnabled;
                     syncHostSetting("slowMode", slowModeEnabled);
                     break;
-                case 10: promptBlockedKeywords(); break;
+                case 9: promptBlockedKeywords(); break;
+                case 10:
+                    LivePkAndGiftsUi.showModerationManagerDialog(this, mutedUserIds, kickedUserIds, viewerNames,
+                            new LivePkAndGiftsUi.ModerationActionCallback() {
+                                @Override
+                                public void onUnmuteUser(@NonNull String uid) {
+                                    mutedUserIds.remove(uid);
+                                    if (liveId != null) {
+                                        Fb.db().collection("lives").document(liveId)
+                                                .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                                    }
+                                    Ui.toast(LiveActivity.this, "Unmuted viewer");
+                                }
+                                @Override
+                                public void onUnkickUser(@NonNull String uid) {
+                                    kickedUserIds.remove(uid);
+                                    if (liveId != null) {
+                                        Fb.db().collection("lives").document(liveId)
+                                                .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                                    }
+                                    Ui.toast(LiveActivity.this, "Viewer allowed back");
+                                }
+                            });
+                    break;
                 case 11:
                     giftsEnabled = !giftsEnabled;
                     syncHostSetting("giftsEnabled", giftsEnabled);
                     break;
                 case 12:
+                    pkInvitesEnabled = !pkInvitesEnabled;
+                    syncHostSetting("pkInvitesEnabled", pkInvitesEnabled);
+                    break;
+                case 13:
                     qaEnabled = !qaEnabled;
                     syncHostSetting("qaEnabled", qaEnabled);
                     break;
-                case 13:
+                case 14:
                     coHostAllowed = !coHostAllowed;
                     syncHostSetting("coHostAllowed", coHostAllowed);
                     break;
@@ -2278,22 +2791,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void showShareAndInviteSheet() {
         String[] opts = {
-                "🔔 Invite My Followers Inside friendbook",
+                "👥 Invite Friends & Followers to Watch Live",
                 "📝 Share 'Watch Live Now' Card to Feed",
                 "📲 Share Live Invite via Other Apps"
         };
         Ui.choose(this, "📤 Share & Invite to Live", opts, which -> {
             if (which == 0) {
-                if (Fb.me == null || Fb.me.followers == null || Fb.me.followers.isEmpty()) {
-                    Ui.toast(this, "No followers to invite yet — share to Feed instead!");
-                    return;
-                }
-                int n = 0;
-                for (String uid : Fb.me.followers) {
-                    Notify.send(uid, "live_invite", "🔴 invited you to watch a Live broadcast: " + liveTitleStr, liveId);
-                    if (++n >= 30) break;
-                }
-                Ui.toast(this, "🔔 Invited " + n + " friend(s) to join Live!");
+                openInviteFriendsSheet();
             } else if (which == 1) {
                 Map<String, Object> post = new HashMap<>();
                 post.put("authorId", Fb.uid());
@@ -2345,6 +2849,543 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         });
     }
 
+    // ==================== 2-USER TIKTOK SPLIT-SCREEN LIVE MATCH / PK BATTLE ====================
+
+    private void openPkChallengeSheet() {
+        if (!isLiveStarted || liveId == null) {
+            Ui.toast(this, "Start your Live broadcast first!");
+            return;
+        }
+        LivePkAndGiftsUi.showPkChallengeDrawer(
+                this, liveId, pkBattleActive, viewerNames, viewerPhotos,
+                new LivePkAndGiftsUi.PkChallengeCallback() {
+                    @Override
+                    public void onChallengeLiveHost(@NonNull String targetLiveId,
+                                                    @NonNull String targetHostUid,
+                                                    @NonNull String targetHostName,
+                                                    @NonNull String targetHostPhoto,
+                                                    int durationSec) {
+                        challengeLiveHostToPk(targetLiveId, targetHostUid, targetHostName, targetHostPhoto, durationSec);
+                    }
+                    @Override
+                    public void onChallengeViewerOrFriend(@NonNull String targetUid,
+                                                          @NonNull String targetName,
+                                                          @NonNull String targetPhoto,
+                                                          int durationSec) {
+                        challengeViewerToPk(targetUid, targetName, targetPhoto, durationSec);
+                    }
+                    @Override
+                    public void onEndCurrentPk() {
+                        endActivePkBattle();
+                    }
+                });
+    }
+
+    private void viewerRequestPkBattle() {
+        if (isMePkGuest && pkBattleActive) {
+            Ui.confirm(this, "Leave PK Battle?", "Your split-screen camera & mic will turn off.",
+                    "Leave PK", this::endActivePkBattle);
+            return;
+        }
+        if (!pkInvitesEnabled) {
+            Ui.toast(this, "Host turned off PK Battle requests");
+            return;
+        }
+        if (liveId == null) return;
+        Map<String, Object> req = new HashMap<>();
+        req.put("type", "pk_req");
+        req.put("uid", Fb.uid());
+        req.put("name", Fb.myName());
+        req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        req.put("text", "challenged Host to a Split-Screen PK Battle!");
+        req.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
+        Ui.toast(this, "⚔️ PK Battle challenge sent to " + hostNameStr + "!");
+    }
+
+    private void promptViewerRequestedPk(final String vUid, final String vName, final String vPhoto) {
+        if (isFinishing() || pkBattleActive) {
+            Ui.toast(this, "⚔️ " + vName + " wants to battle next!");
+            return;
+        }
+        Ui.confirm(this, "⚔️ PK Challenge from " + vName + "!",
+                vName + " wants to join a 3-Minute Split-Screen Live PK Battle with you!",
+                "Start PK ⚔️", () -> challengeViewerToPk(vUid, vName, vPhoto, 180));
+    }
+
+    private void challengeLiveHostToPk(@NonNull String targetLiveId,
+                                       @NonNull String targetHostUid,
+                                       @NonNull String targetHostName,
+                                       @NonNull String targetHostPhoto,
+                                       int durationSec) {
+        String me = Fb.uid();
+        if (me == null || liveId == null) return;
+        String newPkId = liveId + "_" + System.currentTimeMillis();
+        pkDurationSec = durationSec;
+
+        Map<String, Object> pkDoc = new HashMap<>();
+        pkDoc.put("pkBattleId", newPkId);
+        pkDoc.put("status", "invited");
+        pkDoc.put("hostAUid", me);
+        pkDoc.put("hostAName", hostNameStr);
+        pkDoc.put("hostAPhoto", hostPhotoStr);
+        pkDoc.put("liveIdA", liveId);
+        pkDoc.put("hostBUid", targetHostUid);
+        pkDoc.put("hostBName", targetHostName);
+        pkDoc.put("hostBPhoto", targetHostPhoto);
+        pkDoc.put("liveIdB", targetLiveId);
+        pkDoc.put("durationSec", durationSec);
+        pkDoc.put("scoreA", 0);
+        pkDoc.put("scoreB", 0);
+        pkDoc.put("createdAtMs", System.currentTimeMillis());
+
+        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        subscribeToPkBattle(newPkId);
+
+        Map<String, Object> inv = new HashMap<>();
+        inv.put("type", "pk_invite");
+        inv.put("uid", me);
+        inv.put("name", hostNameStr);
+        inv.put("photo", hostPhotoStr);
+        inv.put("targetUid", targetHostUid);
+        inv.put("pkBattleId", newPkId);
+        inv.put("durationSec", durationSec);
+        inv.put("text", "challenged " + targetHostName + " to a PK Battle!");
+        inv.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(targetLiveId).collection("chat").add(inv);
+
+        Ui.toast(this, "⚔️ PK Challenge sent to " + targetHostName + " — waiting to accept...");
+    }
+
+    private void challengeViewerToPk(@NonNull String targetUid,
+                                     @NonNull String targetName,
+                                     @NonNull String targetPhoto,
+                                     int durationSec) {
+        String me = Fb.uid();
+        if (me == null || liveId == null) return;
+        String newPkId = liveId + "_" + System.currentTimeMillis();
+        pkDurationSec = durationSec;
+
+        Map<String, Object> pkDoc = new HashMap<>();
+        pkDoc.put("pkBattleId", newPkId);
+        pkDoc.put("status", "invited");
+        pkDoc.put("hostAUid", me);
+        pkDoc.put("hostAName", hostNameStr);
+        pkDoc.put("hostAPhoto", hostPhotoStr);
+        pkDoc.put("liveIdA", liveId);
+        pkDoc.put("hostBUid", targetUid);
+        pkDoc.put("hostBName", targetName);
+        pkDoc.put("hostBPhoto", targetPhoto);
+        pkDoc.put("liveIdB", liveId);
+        pkDoc.put("durationSec", durationSec);
+        pkDoc.put("scoreA", 0);
+        pkDoc.put("scoreB", 0);
+        pkDoc.put("createdAtMs", System.currentTimeMillis());
+
+        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        subscribeToPkBattle(newPkId);
+
+        Map<String, Object> inv = new HashMap<>();
+        inv.put("type", "pk_invite");
+        inv.put("uid", me);
+        inv.put("name", hostNameStr);
+        inv.put("photo", hostPhotoStr);
+        inv.put("targetUid", targetUid);
+        inv.put("pkBattleId", newPkId);
+        inv.put("durationSec", durationSec);
+        inv.put("text", "invited " + targetName + " to a Split-Screen PK Battle!");
+        inv.put("createdAtMs", System.currentTimeMillis());
+        Fb.db().collection("lives").document(liveId).collection("chat").add(inv);
+
+        Ui.toast(this, "⚔️ PK Invite sent to " + targetName + "!");
+    }
+
+    private void promptIncomingPkChallenge(final String incomingPkId,
+                                           final String challengerUid,
+                                           final String challengerName,
+                                           final String challengerPhoto,
+                                           final int durationSec) {
+        if (isFinishing() || isEnded) return;
+        int mins = Math.max(1, durationSec / 60);
+        new AlertDialog.Builder(this)
+                .setTitle("⚔️ Incoming TikTok PK Battle!")
+                .setMessage(challengerName + " challenged you to a " + mins
+                        + "-minute Split-Screen Live Video + Voice PK Match!\n\nAccept to go side-by-side live now?")
+                .setPositiveButton("⚔️ Accept PK", (d, w) -> acceptIncomingPkBattle(incomingPkId, durationSec))
+                .setNegativeButton("Decline", (d, w) -> Fb.db().collection("chats")
+                        .document("pkbattle_" + incomingPkId)
+                        .set(Fb.map("status", "declined"), SetOptions.merge()))
+                .show();
+    }
+
+    private void acceptIncomingPkBattle(@NonNull String incomingPkId, int durationSec) {
+        long now = System.currentTimeMillis();
+        long ends = now + Math.max(60, durationSec) * 1000L;
+        Map<String, Object> upd = new HashMap<>();
+        upd.put("status", "active");
+        upd.put("startedAtMs", now);
+        upd.put("endsAtMs", ends);
+        upd.put("scoreA", 0);
+        upd.put("scoreB", 0);
+        if (isHost && liveId != null) {
+            upd.put("liveIdB", liveId);
+        }
+        Fb.db().collection("chats").document("pkbattle_" + incomingPkId).set(upd, SetOptions.merge());
+        subscribeToPkBattle(incomingPkId);
+
+        if (isHost && liveId != null) {
+            Map<String, Object> liveUpd = new HashMap<>();
+            liveUpd.put("pkActive", true);
+            liveUpd.put("pkBattleId", incomingPkId);
+            Fb.db().collection("lives").document(liveId).update(liveUpd);
+        }
+    }
+
+    private void subscribeToPkBattle(@NonNull String targetPkId) {
+        if (targetPkId.isEmpty() || targetPkId.equals(subscribedPkBattleId)) return;
+        cleanupPkListeners();
+        subscribedPkBattleId = targetPkId;
+        pkBattleId = targetPkId;
+        engine.resetCoHostSequences();
+
+        pkBattleReg = Fb.db().collection("chats").document("pkbattle_" + targetPkId)
+                .addSnapshotListener((snap, err) -> {
+                    if (isFinishing() || isEnded || snap == null || !snap.exists()) return;
+                    onPkBattleDocSnapshot(snap);
+                });
+
+        pkMediaAReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_a")
+                .addSnapshotListener((snap, err) -> {
+                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
+                    if ("A".equals(pkRole)) return; // Don't decode our own Side A stream!
+                    Map<String, Object> m = snap.getData();
+                    if (m == null) return;
+                    String v = Format.str(m, "v");
+                    long vs = Format.longOf(m, "vs");
+                    if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, false);
+                    String a = Format.str(m, "a");
+                    long as = Format.longOf(m, "as");
+                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, false);
+                });
+
+        pkMediaBReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_b")
+                .addSnapshotListener((snap, err) -> {
+                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
+                    if ("B".equals(pkRole)) return; // Don't decode our own Side B stream!
+                    Map<String, Object> m = snap.getData();
+                    if (m == null) return;
+                    String v = Format.str(m, "v");
+                    long vs = Format.longOf(m, "vs");
+                    if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, true);
+                    String a = Format.str(m, "a");
+                    long as = Format.longOf(m, "as");
+                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, true);
+                });
+    }
+
+    private void onPkBattleDocSnapshot(@NonNull DocumentSnapshot snap) {
+        Map<String, Object> m = snap.getData();
+        if (m == null) return;
+        String status = Format.str(m, "status");
+        if ("declined".equals(status)) {
+            if (Fb.uid() != null && Fb.uid().equals(Format.str(m, "hostAUid"))) {
+                Ui.toast(this, "Opponent declined PK challenge");
+            }
+            teardownPkStageUi();
+            return;
+        }
+        if ("ended".equals(status)) {
+            teardownPkStageUi();
+            return;
+        }
+        if (!"active".equals(status) && !"victory".equals(status)) {
+            return;
+        }
+
+        String me = Fb.uid() == null ? "" : Fb.uid();
+        pkHostAUid = Format.str(m, "hostAUid");
+        pkHostAName = Format.strOr(m, "hostAName", "Host A");
+        pkHostAPhoto = Format.str(m, "hostAPhoto");
+        pkLiveIdA = Format.str(m, "liveIdA");
+        pkHostBUid = Format.str(m, "hostBUid");
+        pkHostBName = Format.strOr(m, "hostBName", "Host B");
+        pkHostBPhoto = Format.str(m, "hostBPhoto");
+        pkLiveIdB = Format.str(m, "liveIdB");
+        pkScoreA = Format.intOf(m, "scoreA");
+        pkScoreB = Format.intOf(m, "scoreB");
+        pkDurationSec = Math.max(60, Format.intOf(m, "durationSec"));
+        long newEndsAt = Format.longOf(m, "endsAtMs");
+
+        // Detect Rematch reset!
+        if (newEndsAt > System.currentTimeMillis() + 5000L && pkVictoryPhase) {
+            pkVictoryPhase = false;
+            pkLeftResultStamp.setVisibility(View.GONE);
+            pkRightResultStamp.setVisibility(View.GONE);
+            pkResultBanner.setVisibility(View.GONE);
+        }
+        pkEndsAtMs = newEndsAt;
+
+        if (me.equals(pkHostAUid)) pkRole = "A";
+        else if (me.equals(pkHostBUid)) pkRole = "B";
+        else pkRole = "viewer";
+
+        boolean wasActive = pkBattleActive;
+        pkBattleActive = true;
+
+        // Host A marks own live room `pkActive = true` as soon as B accepts!
+        if (!wasActive && isHost && liveId != null) {
+            Map<String, Object> lu = new HashMap<>();
+            lu.put("pkActive", true);
+            lu.put("pkBattleId", pkBattleId);
+            Fb.db().collection("lives").document(liveId).update(lu);
+            engine.startSpeakerPlayback();
+            postSystemChat("⚔️ PK BATTLE STARTED: " + pkHostAName + " VS " + pkHostBName + "!");
+        }
+
+        // If I am a Viewer who accepted PK (`!isHost && "B".equals(pkRole)`), start my PK Guest camera + mic!
+        if (!isHost && "B".equals(pkRole) && !isMePkGuest) {
+            isMePkGuest = true;
+            ensureLivePermissions(REQ_PK_GUEST_PERMS);
+        }
+
+        if (!wasActive) {
+            applyPkLayoutGeometry(true);
+        }
+
+        // Update PK Names, Avatars, Mute Buttons & Score Bar!
+        pkLeftNameBadge.setText("🔴 " + pkHostAName);
+        pkRightNameBadge.setText("🔵 " + pkHostBName);
+        Ui.avatar(this, pkLeftAvatar, pkHostAPhoto);
+        Ui.avatar(this, pkRightAvatar, pkHostBPhoto);
+        pkLeftMuteBtn.setVisibility("A".equals(pkRole) ? View.GONE : View.VISIBLE);
+        pkRightMuteBtn.setVisibility("B".equals(pkRole) ? View.GONE : View.VISIBLE);
+        liveBadgeTv.setText("⚔️ PK LIVE");
+
+        updatePkScoreBarUi();
+        tickPkCountdown();
+    }
+
+    private void applyPkLayoutGeometry(boolean enterPk) {
+        if (enterPk) {
+            pkStageBackdrop.setVisibility(View.VISIBLE);
+            pkStageOverlay.setVisibility(View.VISIBLE);
+            remoteVideoView.setVisibility(View.GONE);
+            fallbackStage.setVisibility(View.GONE);
+            coHostCard.setVisibility(View.GONE);
+
+            if (isHost) {
+                if ("A".equals(pkRole)) {
+                    pkLeftFallbackBox.setVisibility(View.GONE);
+                    pkLeftRemoteImg.setVisibility(View.GONE);
+                } else if ("B".equals(pkRole)) {
+                    pkRightFallbackBox.setVisibility(View.GONE);
+                    pkRightRemoteImg.setVisibility(View.GONE);
+                }
+                rootStage.post(() -> {
+                    if (!pkBattleActive || rootStage.getWidth() <= 0) return;
+                    int halfW = rootStage.getWidth() / 2;
+                    int vidH = Ui.dp(this, PK_VIDEO_H_DP);
+                    int topPx = Ui.dp(this, PK_STAGE_TOP_DP + PK_SCORE_BAR_H_DP);
+                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(halfW, vidH, Gravity.TOP | Gravity.START);
+                    lp.topMargin = topPx;
+                    lp.leftMargin = "B".equals(pkRole) ? halfW : 0;
+                    cameraTexture.setLayoutParams(lp);
+                });
+            }
+        } else {
+            pkStageBackdrop.setVisibility(View.GONE);
+            pkStageOverlay.setVisibility(View.GONE);
+            pkLeftRemoteImg.setVisibility(View.GONE);
+            pkRightRemoteImg.setVisibility(View.GONE);
+            pkLeftFallbackBox.setVisibility(View.VISIBLE);
+            pkRightFallbackBox.setVisibility(View.VISIBLE);
+            pkLeftResultStamp.setVisibility(View.GONE);
+            pkRightResultStamp.setVisibility(View.GONE);
+            pkResultBanner.setVisibility(View.GONE);
+            liveBadgeTv.setText("🔴 LIVE");
+
+            if (isHost) {
+                cameraTexture.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+                cameraTexture.setVisibility(engine.isCameraPaused() ? View.GONE : View.VISIBLE);
+            } else {
+                remoteVideoView.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    private void updatePkScoreBarUi() {
+        pkScoreATv.setText("🔥 " + Format.count(pkScoreA));
+        pkScoreBTv.setText(Format.count(pkScoreB) + " ⚡");
+        float wA = 1f;
+        float wB = 1f;
+        int sum = pkScoreA + pkScoreB;
+        if (sum > 0) {
+            float ratioA = Math.max(0.15f, Math.min(0.85f, (float) pkScoreA / (float) sum));
+            wA = ratioA * 100f;
+            wB = (1f - ratioA) * 100f;
+        }
+        pkRedBar.setLayoutParams(new LinearLayout.LayoutParams(0, -1, wA));
+        pkBlueBar.setLayoutParams(new LinearLayout.LayoutParams(0, -1, wB));
+    }
+
+    private void tickPkCountdown() {
+        if (!pkBattleActive || pkTimerPillTv == null || pkEndsAtMs <= 0L) return;
+        long remMs = pkEndsAtMs - System.currentTimeMillis();
+        if (remMs > 0L) {
+            long remSec = remMs / 1000L;
+            pkTimerPillTv.setText(String.format(Locale.US, "⚔️ PK %02d:%02d", remSec / 60L, remSec % 60L));
+        } else {
+            pkTimerPillTv.setText("🏁 PK 00:00");
+            if (!pkVictoryPhase) {
+                pkVictoryPhase = true;
+                declarePkMatchWinner();
+            }
+        }
+    }
+
+    private void declarePkMatchWinner() {
+        String roundKey = pkBattleId + "_" + pkEndsAtMs;
+        boolean firstScoreForRound = !roundKey.equals(lastScoredPkRoundKey);
+        if (firstScoreForRound) {
+            lastScoredPkRoundKey = roundKey;
+            pkPlayedCount++;
+            if (("A".equals(pkRole) && pkScoreA > pkScoreB)
+                    || ("B".equals(pkRole) && pkScoreB > pkScoreA)) {
+                pkWinsCount++;
+            }
+        }
+
+        pkLeftResultStamp.setVisibility(View.VISIBLE);
+        pkRightResultStamp.setVisibility(View.VISIBLE);
+        pkResultBanner.setVisibility(View.VISIBLE);
+        boolean canControl = "A".equals(pkRole) || "B".equals(pkRole) || isHost;
+        pkRematchBtn.setVisibility(canControl ? View.VISIBLE : View.GONE);
+        pkExitPkBtn.setVisibility(canControl ? View.VISIBLE : View.GONE);
+
+        if (pkScoreA > pkScoreB) {
+            pkLeftResultStamp.setText("👑 VICTORY");
+            pkLeftResultStamp.setBackground(Ui.round(this, 0xEEFFB300, 14));
+            pkRightResultStamp.setText("😢 DEFEAT");
+            pkRightResultStamp.setBackground(Ui.round(this, 0xCC263238, 14));
+            pkWinnerHeadlineTv.setText("🏆 WINNER: " + pkHostAName + " (" + pkScoreA + " vs " + pkScoreB + ")!");
+        } else if (pkScoreB > pkScoreA) {
+            pkRightResultStamp.setText("👑 VICTORY");
+            pkRightResultStamp.setBackground(Ui.round(this, 0xEEFFB300, 14));
+            pkLeftResultStamp.setText("😢 DEFEAT");
+            pkLeftResultStamp.setBackground(Ui.round(this, 0xCC263238, 14));
+            pkWinnerHeadlineTv.setText("🏆 WINNER: " + pkHostBName + " (" + pkScoreB + " vs " + pkScoreA + ")!");
+        } else {
+            pkLeftResultStamp.setText("🤝 TIE");
+            pkRightResultStamp.setText("🤝 TIE");
+            pkLeftResultStamp.setBackground(Ui.round(this, 0xCC1877F2, 14));
+            pkRightResultStamp.setBackground(Ui.round(this, 0xCC1877F2, 14));
+            pkWinnerHeadlineTv.setText("🤝 DRAW MATCH (" + pkScoreA + " - " + pkScoreB + ")!");
+        }
+
+        spawnFloatingEmoji("🏆");
+        spawnFloatingEmoji("👑");
+        spawnFloatingEmoji("🎉");
+    }
+
+    private void startPkRematchNow() {
+        if (pkBattleId.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        Map<String, Object> reset = new HashMap<>();
+        reset.put("status", "active");
+        reset.put("scoreA", 0);
+        reset.put("scoreB", 0);
+        reset.put("startedAtMs", now);
+        reset.put("endsAtMs", now + pkDurationSec * 1000L);
+        Fb.db().collection("chats").document("pkbattle_" + pkBattleId).set(reset, SetOptions.merge());
+        postSystemChat("🔄 PK REMATCH STARTED!");
+    }
+
+    private void endActivePkBattle() {
+        if (!pkBattleId.isEmpty()) {
+            Fb.db().collection("chats").document("pkbattle_" + pkBattleId)
+                    .set(Fb.map("status", "ended"), SetOptions.merge());
+        }
+        if (isHost && liveId != null) {
+            Map<String, Object> lu = new HashMap<>();
+            lu.put("pkActive", false);
+            lu.put("pkBattleId", "");
+            Fb.db().collection("lives").document(liveId).update(lu);
+        }
+        teardownPkStageUi();
+    }
+
+    private void teardownPkStageUi() {
+        pkBattleActive = false;
+        pkVictoryPhase = false;
+        pkRole = "";
+        pkBattleId = "";
+        stopLocalPkGuestStreaming();
+        cleanupPkListeners();
+        applyPkLayoutGeometry(false);
+    }
+
+    private void activateLocalPkGuestStreaming() {
+        if (!isMePkGuest || isFinishing()) return;
+        pkRightFallbackBox.setVisibility(View.GONE);
+        pkRightRemoteImg.setVisibility(View.GONE);
+        pkRightGuestTexture.setVisibility(View.VISIBLE);
+        if (pkGuestEngine == null) {
+            pkGuestEngine = new LiveStreamEngine(this, new LiveStreamEngine.Listener() {
+                @Override
+                public void onEncodedVideoFrame(String base64Webp, int width, int height) {
+                    pushPkGuestMediaPacket(base64Webp, null);
+                }
+                @Override
+                public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
+                    pushPkGuestMediaPacket(null, base64Ulaw);
+                }
+                @Override
+                public void onLocalVoiceLevel(int voiceLevel) { }
+                @Override
+                public void onDecodedRemoteVideo(Bitmap bitmap, boolean isCoHost) { }
+                @Override
+                public void onCameraError(String message) { }
+            });
+            pkGuestEngine.setStreamQuality(LiveStreamEngine.QUALITY_BALANCED);
+        }
+        pkGuestEngine.attachCameraPreview(pkRightGuestTexture, true);
+        pkGuestEngine.startBroadcasting(true);
+    }
+
+    private void pushPkGuestMediaPacket(@Nullable String vB64, @Nullable String aB64) {
+        if (!isMePkGuest || !pkBattleActive || pkBattleId.isEmpty() || isEnded) return;
+        long now = System.currentTimeMillis();
+        if (vB64 != null && now - lastPkMediaPushMs < 420L) return;
+        if (vB64 != null) lastPkMediaPushMs = now;
+        long seq = ++pkSeqOut;
+        Map<String, Object> pkt = new HashMap<>();
+        if (vB64 != null) {
+            pkt.put("v", vB64);
+            pkt.put("vs", seq);
+        }
+        if (aB64 != null) {
+            pkt.put("a", aB64);
+            pkt.put("as", seq);
+        }
+        Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b").set(pkt, SetOptions.merge());
+    }
+
+    private void stopLocalPkGuestStreaming() {
+        isMePkGuest = false;
+        if (pkGuestEngine != null) {
+            pkGuestEngine.releaseAll();
+            pkGuestEngine = null;
+        }
+        if (pkRightGuestTexture != null) pkRightGuestTexture.setVisibility(View.GONE);
+    }
+
+    private void cleanupPkListeners() {
+        subscribedPkBattleId = "";
+        if (pkBattleReg != null) { pkBattleReg.remove(); pkBattleReg = null; }
+        if (pkMediaAReg != null) { pkMediaAReg.remove(); pkMediaAReg = null; }
+        if (pkMediaBReg != null) { pkMediaBReg.remove(); pkMediaBReg = null; }
+    }
+
     // ==================== ENDING BROADCAST & POST-LIVE ANALYTICS SUMMARY ====================
 
     private void confirmExitOrEnd() {
@@ -2364,16 +3405,21 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void endHostBroadcastAndShowSummary() {
         if (isEnded) return;
         isEnded = true;
+        if (pkBattleActive) {
+            endActivePkBattle();
+        }
         engine.stopBroadcasting();
         engine.stopSpeakerPlayback();
 
-        long durSec = liveStartMs > 0 ? Math.max(1L, (System.currentTimeMillis() - liveStartMs) / 1000L) : 0L;
+        final long durSec = liveStartMs > 0 ? Math.max(1L, (System.currentTimeMillis() - liveStartMs) / 1000L) : 0L;
         if (liveId != null) {
             Map<String, Object> endMap = new HashMap<>();
             endMap.put("status", "ended");
             endMap.put("endedAt", FieldValue.serverTimestamp());
             endMap.put("durationSec", durSec);
             endMap.put("peakViewers", peakViewers);
+            endMap.put("pkActive", false);
+            endMap.put("pkBattleId", "");
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
             Fb.db().collection("lives").document(liveId).update(endMap);
@@ -2382,28 +3428,30 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
         }
 
-        String summary = String.format(Locale.US,
-                "⏱ Duration: %02d:%02d\n" +
-                "👁 Peak Concurrent Viewers: %d\n" +
-                "👥 Total Viewers Joined: %d\n" +
-                "❤️ Floating Reactions: %d\n" +
-                "💬 Live Chat Messages: %d\n" +
-                "❓ Q&A Questions: %d\n" +
-                "⭐ Community Stars Earned: %d",
-                durSec / 60, durSec % 60,
-                peakViewers, totalUniqueViewers, totalLikes,
-                totalComments, qaItems.size(), totalStarsReceived);
-
-        new AlertDialog.Builder(this)
-                .setCancelable(false)
-                .setTitle("🎬 Broadcast Summary")
-                .setMessage(summary)
-                .setPositiveButton("Share Recap to Feed", (d, w) -> {
+        liveHudOverlay.setVisibility(View.GONE);
+        View resultOverlay = LivePkAndGiftsUi.buildPostLiveSummaryOverlay(
+                this,
+                hostPhotoStr,
+                hostNameStr,
+                liveTitleStr,
+                durSec,
+                Math.max(1, totalUniqueViewers),
+                Math.max(1, peakViewers),
+                totalGiftsCount,
+                totalStarsReceived,
+                totalLikes,
+                totalComments,
+                pkWinsCount,
+                pkPlayedCount,
+                supporterStars,
+                supporterNames,
+                true,
+                () -> {
                     publishRecapPost(durSec);
                     finish();
-                })
-                .setNegativeButton("Done", (d, w) -> finish())
-                .show();
+                },
+                this::finish);
+        rootStage.addView(resultOverlay, new FrameLayout.LayoutParams(-1, -1));
     }
 
     private void publishRecapPost(long durSec) {
@@ -2426,17 +3474,39 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void showViewerBroadcastEndedDialog() {
         engine.stopSpeakerPlayback();
         stopLocalCoHostStreaming();
+        stopLocalPkGuestStreaming();
+        cleanupPkListeners();
         if (isFinishing()) return;
-        new AlertDialog.Builder(this)
-                .setCancelable(false)
-                .setTitle("🔴 Broadcast Ended")
-                .setMessage(hostNameStr + " has ended this live broadcast. Thanks for watching!")
-                .setPositiveButton("Back", (d, w) -> finish())
-                .show();
+        long durSec = liveStartMs > 0 ? Math.max(1L, (System.currentTimeMillis() - liveStartMs) / 1000L) : 0L;
+        liveHudOverlay.setVisibility(View.GONE);
+        View resultOverlay = LivePkAndGiftsUi.buildPostLiveSummaryOverlay(
+                this,
+                hostPhotoStr,
+                hostNameStr,
+                liveTitleStr,
+                durSec,
+                Math.max(1, totalUniqueViewers),
+                Math.max(1, peakViewers),
+                totalGiftsCount,
+                totalStarsReceived,
+                totalLikes,
+                totalComments,
+                pkWinsCount,
+                pkPlayedCount,
+                supporterStars,
+                supporterNames,
+                false,
+                null,
+                this::finish);
+        rootStage.addView(resultOverlay, new FrameLayout.LayoutParams(-1, -1));
     }
 
     @Override
     public void onBackPressed() {
+        if (isEnded) {
+            finish();
+            return;
+        }
         if (cleanViewMode) {
             toggleCleanViewMode(false);
             return;
@@ -2449,6 +3519,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         uiHandler.removeCallbacksAndMessages(null);
         if (liveDocReg != null) { liveDocReg.remove(); liveDocReg = null; }
         if (chatColReg != null) { chatColReg.remove(); chatColReg = null; }
+        cleanupPkListeners();
         if (rtdbStreamRef != null && rtdbStreamListener != null) {
             try { rtdbStreamRef.removeEventListener(rtdbStreamListener); } catch (Throwable ignored) { }
         }
@@ -2457,6 +3528,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             Map<String, Object> endMap = new HashMap<>();
             endMap.put("status", "ended");
             endMap.put("endedAt", FieldValue.serverTimestamp());
+            endMap.put("pkActive", false);
+            endMap.put("pkBattleId", "");
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
             Fb.db().collection("lives").document(liveId).update(endMap);
@@ -2473,6 +3546,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
 
         stopLocalCoHostStreaming();
+        stopLocalPkGuestStreaming();
         if (engine != null) engine.releaseAll();
         super.onDestroy();
     }

@@ -6,7 +6,11 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
@@ -57,6 +61,11 @@ public class LiveStreamEngine {
     public static final int QUALITY_BALANCED   = 1; // 264x468 @ Q52 (~400ms)
     public static final int QUALITY_HD         = 2; // 336x596 @ Q60 (~330ms)
 
+    public static final int BEAUTY_OFF       = 0;
+    public static final int BEAUTY_SOFT_GLOW = 1;
+    public static final int BEAUTY_PORCELAIN = 2;
+    public static final int BEAUTY_ROSY      = 3;
+
     public static final int AUDIO_SAMPLE_RATE = 8000;
     private static final int AUDIO_CHUNK_SAMPLES = 4800; // 600ms @ 8kHz (~4.8 KB u-law)
 
@@ -100,7 +109,10 @@ public class LiveStreamEngine {
     private boolean mirrorFront = true;
     private boolean torchOn = false;
     private boolean beautyBoost = false;
+    private int beautyLevel = BEAUTY_OFF;
     private boolean cameraPaused = false;
+    private volatile boolean primaryHostAudioMuted = false;
+    private volatile boolean coHostAudioMuted = false;
     private boolean hasFlashUnit = false;
     private Range<Integer> aeRange;
 
@@ -234,9 +246,49 @@ public class LiveStreamEngine {
     }
 
     public boolean toggleBeautyBoost() {
-        beautyBoost = !beautyBoost;
+        int next = (beautyLevel + 1) % 4;
+        setBeautyLevel(next);
+        return beautyLevel > 0;
+    }
+
+    public void setBeautyLevel(int level) {
+        this.beautyLevel = Math.max(BEAUTY_OFF, Math.min(BEAUTY_ROSY, level));
+        this.beautyBoost = (this.beautyLevel > 0);
         applyCaptureParams();
-        return beautyBoost;
+    }
+
+    public int getBeautyLevel() {
+        return beautyLevel;
+    }
+
+    public String getBeautyLabel() {
+        switch (beautyLevel) {
+            case BEAUTY_SOFT_GLOW: return "✨ Soft Glow";
+            case BEAUTY_PORCELAIN: return "🌸 Smooth Skin";
+            case BEAUTY_ROSY:      return "💖 Rosy Beauty";
+            default:               return "Off";
+        }
+    }
+
+    public void setPrimaryHostAudioMuted(boolean muted) {
+        this.primaryHostAudioMuted = muted;
+    }
+
+    public boolean isPrimaryHostAudioMuted() {
+        return primaryHostAudioMuted;
+    }
+
+    public void setCoHostAudioMuted(boolean muted) {
+        this.coHostAudioMuted = muted;
+    }
+
+    public boolean isCoHostAudioMuted() {
+        return coHostAudioMuted;
+    }
+
+    public void resetCoHostSequences() {
+        lastDecodedCoHostSeq = -1;
+        lastPlayedCoHostAudioSeq = -1;
     }
 
     public void setCameraPaused(boolean paused) {
@@ -538,6 +590,7 @@ public class LiveStreamEngine {
 
         encodingFrame.set(true);
         final boolean flipUnmirror = lensFront && !mirrorFront;
+        final int activeBeauty = beautyLevel;
         videoEncodeExec.execute(() -> {
             Bitmap toCompress = raw;
             try {
@@ -548,6 +601,13 @@ public class LiveStreamEngine {
                     if (flipped != raw) {
                         raw.recycle();
                         toCompress = flipped;
+                    }
+                }
+                if (activeBeauty > 0) {
+                    Bitmap beautified = applyBeautyGrade(toCompress, activeBeauty);
+                    if (beautified != toCompress) {
+                        toCompress.recycle();
+                        toCompress = beautified;
                     }
                 }
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(12288);
@@ -567,6 +627,64 @@ public class LiveStreamEngine {
                 encodingFrame.set(false);
             }
         });
+    }
+
+    /** Fast hardware-friendly skin smoothing + luminous warm/rosy TikTok beauty filter. */
+    private static Bitmap applyBeautyGrade(@NonNull Bitmap src, int level) {
+        try {
+            int w = src.getWidth();
+            int h = src.getHeight();
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(out);
+
+            // Subtle bilinear skin-softening pass for Porcelain / Rosy levels
+            Bitmap base = src;
+            Bitmap small = null;
+            if (level >= BEAUTY_PORCELAIN && w > 64 && h > 64) {
+                small = Bitmap.createScaledBitmap(src, Math.max(48, (int) (w * 0.72f)),
+                        Math.max(48, (int) (h * 0.72f)), true);
+            }
+
+            ColorMatrix cm = new ColorMatrix();
+            if (level == BEAUTY_SOFT_GLOW) {
+                cm.set(new float[]{
+                        1.06f, 0f,    0f,    0f, 10f,
+                        0f,    1.05f, 0f,    0f, 8f,
+                        0f,    0f,    1.03f, 0f, 6f,
+                        0f,    0f,    0f,    1f, 0f
+                });
+            } else if (level == BEAUTY_PORCELAIN) {
+                cm.set(new float[]{
+                        1.08f, 0.02f, 0f,    0f, 14f,
+                        0f,    1.07f, 0.02f, 0f, 12f,
+                        0f,    0.01f, 1.08f, 0f, 14f,
+                        0f,    0f,    0f,    1f, 0f
+                });
+            } else {
+                // BEAUTY_ROSY
+                cm.set(new float[]{
+                        1.11f, 0.02f, 0f,    0f, 15f,
+                        0f,    1.05f, 0f,    0f, 9f,
+                        0.02f, 0f,    1.06f, 0f, 11f,
+                        0f,    0f,    0f,    1f, 0f
+                });
+            }
+
+            Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
+            p.setColorFilter(new ColorMatrixColorFilter(cm));
+            canvas.drawBitmap(base, 0f, 0f, p);
+
+            if (small != null) {
+                Paint blend = new Paint(Paint.FILTER_BITMAP_FLAG);
+                blend.setAlpha(level == BEAUTY_PORCELAIN ? 88 : 72);
+                blend.setColorFilter(new ColorMatrixColorFilter(cm));
+                canvas.drawBitmap(small, null, new Rect(0, 0, w, h), blend);
+                small.recycle();
+            }
+            return out;
+        } catch (Throwable t) {
+            return src;
+        }
     }
 
     /** Decodes a remote WebP/JPEG Base64 video frame off the UI thread and posts Bitmap to UI. */
@@ -781,6 +899,8 @@ public class LiveStreamEngine {
 
     public void enqueueRemoteAudio(@Nullable String base64Ulaw, long seq, boolean isCoHost) {
         if (base64Ulaw == null || base64Ulaw.isEmpty() || speakerMuted) return;
+        if (!isCoHost && primaryHostAudioMuted) return;
+        if (isCoHost && coHostAudioMuted) return;
         if (isCoHost) {
             if (seq > 0 && seq <= lastPlayedCoHostAudioSeq) return;
             lastPlayedCoHostAudioSeq = seq;
