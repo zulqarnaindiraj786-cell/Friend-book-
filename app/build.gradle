@@ -1,4 +1,5 @@
 plugins {
+    id 'org.jetbrains.kotlin.android'
     id 'com.android.application'
     id 'com.google.gms.google-services'
 }
@@ -12,8 +13,8 @@ android {
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 51
-        versionName '2.8.19'
+        versionCode 52
+        versionName '2.8.20'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -49,6 +50,8 @@ android {
 
     testOptions { unitTests.includeAndroidResources = true }
     buildFeatures { buildConfig true }
+
+    kotlinOptions { jvmTarget = "17" }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

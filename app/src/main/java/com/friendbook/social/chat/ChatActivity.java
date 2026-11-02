@@ -568,7 +568,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         }
                     }
                     soundGate.end(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
-                    if (incomingSound) com.friendbook.social.core.SoundEffects.incoming(this);
+                    if (incomingSound) com.friendbook.social.core.SoundManager.playNewMessage(this);
                     adapter.setData(list);
                     if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
                         initialScrollDone = true;
@@ -745,7 +745,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         })
@@ -840,7 +840,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit()
                 .addOnSuccessListener(x -> {
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
@@ -917,7 +917,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         }).addOnFailureListener(e ->

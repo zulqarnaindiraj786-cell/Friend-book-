@@ -246,7 +246,7 @@ public class CommentsEngine {
         dotUpdates.put("commentsMap." + newId, commentMap);
         dotUpdates.put("comments", FieldValue.increment(1));
 
-        com.friendbook.social.core.SoundEffects.action(com.friendbook.social.App.instance, "comment", me);
+        com.friendbook.social.core.SoundManager.action(com.friendbook.social.App.instance, "comment", me);
         parentRef.update(dotUpdates)
                 .addOnSuccessListener(v -> {
                     if (cb != null) cb.onComplete(true, null);
@@ -284,7 +284,7 @@ public class CommentsEngine {
         dot.put("commentsMap." + c.id + ".reactions." + userId, rxVal);
         dot.put("commentsMap." + c.id + ".likedBy", likedByVal);
         dot.put("commentsMap." + c.id + ".likes", c.likes);
-        if (nextType != null) com.friendbook.social.core.SoundEffects.action(com.friendbook.social.App.instance, "reaction", userId);
+        if (nextType != null) com.friendbook.social.core.SoundManager.action(com.friendbook.social.App.instance, "reaction", userId);
         Fb.db().collection(collection).document(docId).update(dot);
 
         Map<String, Object> up = new HashMap<>();

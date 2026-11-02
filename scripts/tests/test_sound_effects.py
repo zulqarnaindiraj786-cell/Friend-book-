@@ -5,8 +5,8 @@ ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class SoundEffectsTest(unittest.TestCase):
     def test_assets_are_small_non_silent_pcm(self):
-        for name in ['reaction','comment','message_sent','message_received','gift','lion_roar','airplane']:
-            with wave.open(str(ROOT/f'app/src/main/res/raw/sfx_{name}.wav')) as w:
+        for name in ['like_pop','comment_pop','message_pop','sfx_message_sent','sfx_gift','sfx_lion_roar','sfx_airplane']:
+            with wave.open(str(ROOT/f'app/src/main/res/raw/{name}.wav')) as w:
                 self.assertEqual(w.getnchannels(),1); self.assertEqual(w.getsampwidth(),2)
                 self.assertEqual(w.getframerate(),22050)
                 frames=w.readframes(w.getnframes()); self.assertLess(len(frames),1_000_000)
@@ -15,15 +15,24 @@ class SoundEffectsTest(unittest.TestCase):
                 self.assertLess(max(abs(x) for x in samples),30000)
     def test_immediate_hooks_cover_posts_reels_comments_and_all_send_types(self):
         for file in ['post/Reactions.java','reels/ReelsFragment.java','post/CommentsEngine.java']:
-            self.assertIn('SoundEffects.action', (JAVA/file).read_text(),file)
+            self.assertIn('SoundManager.action', (JAVA/file).read_text(),file)
         chat=(JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('SoundEffects.action(this, "sent", me)'),3)
-        self.assertIn('SoundEffects.incoming(this)',chat)
+        self.assertEqual(chat.count('SoundManager.action(this, "sent", me)'),3)
+        self.assertIn('SoundManager.playNewMessage(this)',chat)
         self.assertIn('MetadataChanges.INCLUDE',chat)
         self.assertIn('snap.getMetadata().hasPendingWrites()',chat)
+    def test_replaceable_resources_and_kotlin_facade(self):
+        source=(JAVA/'core/SoundEffects.java').read_text()
+        for name in ['like_pop','comment_pop','message_pop']:
+            self.assertIn('R.raw.'+name,source)
+        facade=(JAVA/'core/SoundManager.kt').read_text()
+        for method in ['playLike','playComment','playMessageSent','playNewMessage']:
+            self.assertIn('@JvmStatic fun '+method,facade)
+        self.assertNotIn('SoundPool.Builder',facade) # no second audio pool / duplicate playback
+
     def test_interactions_have_fast_attack_and_short_duration(self):
-        for name in ['reaction','comment','message_sent','message_received']:
-            with wave.open(str(ROOT/f'app/src/main/res/raw/sfx_{name}.wav')) as w:
+        for name in ['like_pop','comment_pop','sfx_message_sent','message_pop']:
+            with wave.open(str(ROOT/f'app/src/main/res/raw/{name}.wav')) as w:
                 self.assertLessEqual(w.getnframes()/w.getframerate(),.25)
                 data=struct.unpack('<'+'h'*w.getnframes(),w.readframes(w.getnframes()))
                 self.assertGreater(max(abs(x) for x in data[:int(.005*w.getframerate())]),10000)
@@ -31,7 +40,7 @@ class SoundEffectsTest(unittest.TestCase):
         self.assertIn('.85f',manager)
         chat=(JAVA/'chat/ChatActivity.java').read_text()
         self.assertNotIn('SoundEffects.success',chat)
-        self.assertEqual(chat.count('SoundEffects.action(this, "sent", me);\n        batch.commit()'),3)
+        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);\n        batch.commit()'),3)
 
     def test_silence_background_and_cooldown_guards_are_present(self):
         manager=(JAVA/'core/SoundEffects.java').read_text()

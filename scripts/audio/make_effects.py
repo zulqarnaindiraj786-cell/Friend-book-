@@ -19,16 +19,16 @@ def pluck(t, duration, frequency):
     attack=min(1.0,t/.002)
     tail=min(1.0,(duration-t)/.008)
     return attack*tail*math.exp(-t*34)*(math.sin(2*math.pi*frequency*t)+.16*math.sin(4*math.pi*frequency*t))
-def pop(t, frequency, decay):
+def pop(t, frequency, decay, duration=.105):
     attack=min(1.0,t/.0015)
-    tail=min(1.0,max(0,(.105-t)/.008))
+    tail=min(1.0,max(0,(duration-t)/.008))
     # Falling resonant bubble, not an upward electronic whistle.
     phase=2*math.pi*(frequency*t+170*.012*(1-math.exp(-t/.012)))
     return attack*tail*math.exp(-t*decay)*(math.sin(phase)+.12*math.sin(2*phase))
-save('sfx_reaction',.105,lambda t:pop(t,650,42),.88)
-save('sfx_comment',.13,lambda t:pluck(t,.13,830)+.22*pluck(t,.13,1245),.88)
+save('like_pop',.2,lambda t:pop(t,650,42,.2),.88)
+save('comment_pop',.2,lambda t:pop(t,440,30,.2),.88)
 save('sfx_message_sent',.115,lambda t:pop(t,940,32),.88)
-save('sfx_message_received',.245,lambda t:pluck(t,.12,880)+.85*pluck(t-.105,.14,1174.66),.88)
+save('message_pop',.245,lambda t:pluck(t,.12,880)+.85*pluck(t-.105,.14,1174.66),.88)
 save('sfx_gift',.43,lambda t:ping(t,.43,700,1420)+.25*ping(t,.43,1050,2100))
 # Two textured, chesty synthetic growl/roar pulses: low formants + irregular harmonic excitation.
 low=0.0

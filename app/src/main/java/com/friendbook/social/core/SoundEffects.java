@@ -55,10 +55,10 @@ public final class SoundEffects {
                 if (pool!=sp || status!=0) return;
                 loaded.add(id); Runnable action=pending.remove(id); if (action!=null) action.run();
             });
-            samples.put(REACTION,current.load(app,R.raw.sfx_reaction,1));
-            samples.put(COMMENT,current.load(app,R.raw.sfx_comment,1));
+            samples.put(REACTION,current.load(app,R.raw.like_pop,1));
+            samples.put(COMMENT,current.load(app,R.raw.comment_pop,1));
             samples.put(SENT,current.load(app,R.raw.sfx_message_sent,1));
-            samples.put(RECEIVED,current.load(app,R.raw.sfx_message_received,1));
+            samples.put(RECEIVED,current.load(app,R.raw.message_pop,1));
             // Load tiny interaction sounds before the longer live effects.
             samples.put("lion",current.load(app,R.raw.sfx_lion_roar,1));
             samples.put("airplane",current.load(app,R.raw.sfx_airplane,1));
