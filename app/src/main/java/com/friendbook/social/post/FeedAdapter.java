@@ -719,9 +719,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setMinHeight(0);
             clp.setMargins(0, 0, 0, 0);
             Ui.pad(vh.content, 12, 2, 12, 8);
-            vh.content.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
             vh.content.setText(hasText ? styleHashtags(c, p.content) : "");
         }
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(vh.content);
         vh.content.setLayoutParams(clp);
 
         // ---------- poll (unchanged logic, simple gray rows) ----------

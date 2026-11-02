@@ -1001,6 +1001,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         boolean hasBio = user.bio != null && !user.bio.isEmpty();
         bioT.setText(hasBio ? user.bio : "");
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(bioT);
         bioT.setVisibility(hasBio ? View.VISIBLE : View.GONE);
 
         Ui.avatarLarge(this, avatar, user.photoUrl);

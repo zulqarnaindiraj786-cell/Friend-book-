@@ -28,18 +28,35 @@ public final class PushDeliveryWorker extends Worker {
         if (android.os.Build.VERSION.SDK_INT >= 31)
             builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST);
         OneTimeWorkRequest work = builder.build();
-        WorkManager.getInstance(App.instance).enqueueUniqueWork("fcm_" + key,
+        PushTrace.stage("queue_requested", "work=" + work.getId() + " " + PushTrace.request(body));
+        Operation operation = WorkManager.getInstance(App.instance).enqueueUniqueWork("fcm_" + key,
                 replaceRegistration && "register".equals(action) ? ExistingWorkPolicy.REPLACE : ExistingWorkPolicy.KEEP, work);
+        operation.getResult().addListener(() -> {
+            try {
+                operation.getResult().get();
+                PushTrace.stage("queue_operation_ok", "work=" + work.getId()); // KEEP may retain an older active request.
+            } catch (Exception e) { PushTrace.failure("queue_failed", e); }
+        }, androidx.core.content.ContextCompat.getMainExecutor(App.instance));
     }
     @NonNull @Override public Result doWork() {
         String uid = getInputData().getString("uid");
-        if (uid == null || !uid.equals(Fb.uid())) return Result.success();
+        if (uid == null || !uid.equals(Fb.uid())) {
+            PushTrace.stage("worker_skipped", "reason=account_changed work=" + getId());
+            return Result.success();
+        }
         boolean registration = false;
         try {
             JSONObject body = new JSONObject(getInputData().getString("body"));
+            PushTrace.stage("worker_start", "work=" + getId() + " attempt=" + getRunAttemptCount()
+                    + " actor=" + PushTrace.id(uid) + " " + PushTrace.request(body));
             boolean register = "register".equals(body.optString("action"));
             registration = register;
-            if (register) body.put("token", Tasks.await(FirebaseMessaging.getInstance().getToken(), 20, TimeUnit.SECONDS));
+            if (register) {
+                String token = Tasks.await(FirebaseMessaging.getInstance().getToken(), 20, TimeUnit.SECONDS);
+                body.put("token", token);
+                PushTrace.stage("fcm_token_ready", "present=" + (token != null && !token.isEmpty())
+                        + " actor=" + PushTrace.id(uid));
+            }
             String bearer = PushGateway.idToken();
             if (!uid.equals(Fb.uid())) return Result.success();
             PushGateway.Response response = PushGateway.call(body, bearer);
@@ -48,7 +65,12 @@ public final class PushDeliveryWorker extends Worker {
                 if (!uid.equals(Fb.uid())) return Result.success();
                 response = PushGateway.call(body, freshBearer);
             }
-            String outcome = "HTTP " + response.status + " " + response.data.toString();
+            String outcome = "HTTP " + response.status + " action=" + PushTrace.label(body.optString("action"))
+                    + " error=" + PushTrace.label(response.data.optString("error"))
+                    + " registered=" + response.data.optBoolean("registered")
+                    + " accepted=" + response.data.optInt("accepted") + " duplicate=" + response.data.optInt("duplicate")
+                    + " invalid=" + response.data.optInt("invalid") + " failed=" + response.data.optInt("failed");
+            PushTrace.stage("gateway_result", "work=" + getId() + " " + outcome);
             getApplicationContext().getSharedPreferences("push_diagnostics", 0).edit()
                     .putString(register ? "registration" : "last_send", outcome)
                     .putLong("updated_at", System.currentTimeMillis()).apply();

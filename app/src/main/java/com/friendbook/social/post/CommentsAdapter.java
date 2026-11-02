@@ -325,6 +325,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         boolean hasText = c.content != null && !c.content.isEmpty();
         h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
         h.text.setText(hasText ? c.content : "");
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
 
         boolean hasMedia = c.imageUrl != null && !c.imageUrl.isEmpty();
         h.media.setVisibility(hasMedia ? View.VISIBLE : View.GONE);

@@ -44,18 +44,22 @@ public final class PushManager {
     }
     public static synchronized void show(Context c, Map<String, String> d) {
         String uid = Fb.uid();
-        if (uid == null || !uid.equals(d.get("toUserId"))) return;
+        if (uid == null || !uid.equals(d.get("toUserId"))) {
+            PushTrace.stage("display_skipped", "reason=wrong_account actor=" + PushTrace.id(uid)); return;
+        }
         String type = d.get("type");
         if (type == null) return;
-        if ((type.contains("like") || type.equals("reaction")) && !Prefs.notifLikes(c)) return;
-        if ((type.contains("comment") || type.equals("reply")) && !Prefs.notifComments(c)) return;
-        if (type.startsWith("friend_") && !Prefs.notifRequests(c)) return;
-        if (type.equals("message") && !Prefs.notifMessages(c)) return;
+        if ((type.contains("like") || type.equals("reaction")) && !Prefs.notifLikes(c)) { PushTrace.stage("display_skipped", "reason=likes_disabled"); return; }
+        if ((type.contains("comment") || type.equals("reply")) && !Prefs.notifComments(c)) { PushTrace.stage("display_skipped", "reason=comments_disabled"); return; }
+        if (type.startsWith("friend_") && !Prefs.notifRequests(c)) { PushTrace.stage("display_skipped", "reason=friend_notifications_disabled"); return; }
+        if (type.equals("message") && !Prefs.notifMessages(c)) { PushTrace.stage("display_skipped", "reason=messages_disabled"); return; }
         String id = d.get("eventId");
         if (id == null || id.isEmpty()) return;
         android.content.SharedPreferences seen = c.getSharedPreferences("push_seen", 0);
-        if (seen.contains(id)) return;
-        if (!NotificationManagerCompat.from(c).areNotificationsEnabled()) return;
+        if (seen.contains(id)) { PushTrace.stage("display_skipped", "reason=duplicate event=" + PushTrace.id(id)); return; }
+        if (!NotificationManagerCompat.from(c).areNotificationsEnabled()) {
+            PushTrace.stage("display_skipped", "reason=os_notifications_disabled"); return;
+        }
         channel(c);
         Intent i = new Intent(c, PushOpenActivity.class);
         for (Map.Entry<String, String> e : d.entrySet()) i.putExtra(e.getKey(), e.getValue());
@@ -72,6 +76,7 @@ public final class PushManager {
         if (Prefs.notifVibrate(c)) b.setVibrate(new long[]{0, 200, 100, 200});
         try {
             NotificationManagerCompat.from(c).notify(id, 0, b.build());
+            PushTrace.stage("display_submitted", "event=" + PushTrace.id(id)); // Not proof the user saw it.
             if (seen.getAll().size() > 300) seen.edit().clear().apply();
             seen.edit().putBoolean(id, true).apply();
         } catch (SecurityException e) { android.util.Log.w("FriendBookPush", "Notification permission denied", e); }

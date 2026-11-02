@@ -246,10 +246,19 @@ public class Reactions {
             final Map<String, Object> data = myData;
             reactRef.set(data).addOnSuccessListener(v -> {
                 reconcileFromCollection(c, post.id, post.likes);
-                if (me.equals(Fb.uid()) && delta > 0 && post.authorId != null && !me.equals(post.authorId)) {
+                com.friendbook.social.push.PushTrace.stage("reaction_write_ok",
+                        "post=" + com.friendbook.social.push.PushTrace.id(post.id)
+                        + " actor=" + com.friendbook.social.push.PushTrace.id(me)
+                        + " receiver=" + com.friendbook.social.push.PushTrace.id(post.authorId)
+                        + " self=" + me.equals(post.authorId) + " delta=" + delta);
+                if (me.equals(Fb.uid()) && delta > 0 && post.authorId != null && !post.authorId.isEmpty() && !me.equals(post.authorId)) {
                     Notify.send(post.authorId, "like", Fb.myName() + " liked your post", post.id);
+                } else {
+                    com.friendbook.social.push.PushTrace.stage("reaction_push_skipped",
+                            "reason=" + (!me.equals(Fb.uid()) ? "account_changed" : delta <= 0 ? "not_new_reaction"
+                                    : post.authorId == null || post.authorId.isEmpty() ? "missing_owner" : "self_like"));
                 }
-            });
+            }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("reaction_write_failed", e));
 
             Map<String, Object> dot = new HashMap<>();
             dot.put("reactionsMap." + me, data);

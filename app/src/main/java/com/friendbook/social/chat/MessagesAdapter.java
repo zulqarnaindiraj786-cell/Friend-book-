@@ -6,7 +6,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
-import android.text.util.Linkify;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -187,7 +186,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         TextView text = Ui.tv(c, "", 15.5f, 0);
         text.setMaxWidth(maxBubbleW);
         text.setLineSpacing(Ui.dp(c, 1.5f), 1.0f);
-        Linkify.addLinks(text, Linkify.WEB_URLS);
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(text);
 
         ImageView img = new ImageView(c);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -224,10 +223,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
         bubble.addView(senderHeader);
         bubble.addView(quote, qlp);
+        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
         bubble.addView(text);
         bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 206), ViewGroup.LayoutParams.WRAP_CONTENT));
         bubble.addView(callRow);
-        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
 
         TextView react = Ui.tvBold(c, "", 11.5f, 0);
         Ui.pad(react, 6, 2, 6, 2);
@@ -301,6 +300,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setTextColor(Ui.sub(c));
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
             h.text.setText(m.text == null ? "" : m.text);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
             h.itemView.setOnClickListener(null);
             h.itemView.setOnLongClickListener(null);
             return;
@@ -430,6 +430,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         // 6. Content payload: Deleted / Sticker / Call Card / Voice Note / Photo+Text
         boolean isCall = "call".equals(m.type);
         boolean isVoice = "voice".equals(m.type) && m.voiceUrl != null && !m.voiceUrl.isEmpty();
+        boolean hasVideo = m.videoUrl != null && !m.videoUrl.isEmpty();
         boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
 
         if (m.isDeleted) {
@@ -518,21 +519,31 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setVisibility(View.VISIBLE);
             h.text.setTextSize(15.5f);
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-            if (hasImage) {
+            if (hasImage || hasVideo) {
                 h.img.setVisibility(View.VISIBLE);
-                Ui.img(c, h.img, m.imageUrl);
+                if (hasVideo) {
+                    h.img.setImageResource(android.R.drawable.ic_media_play);
+                    h.img.setBackgroundColor(0xFF202124);
+                    h.img.setContentDescription("Play official broadcast video");
+                } else {
+                    h.img.setBackgroundColor(Color.TRANSPARENT);
+                    h.img.setContentDescription("Message photo");
+                    Ui.img(c, h.img, m.imageUrl);
+                }
                 h.img.setOnClickListener(v -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
-                    i.putExtra("type", "image");
-                    i.putExtra("url", m.imageUrl);
+                    i.putExtra("type", hasVideo ? "video" : "image");
+                    i.putExtra("url", hasVideo ? m.videoUrl : m.imageUrl);
+                    i.putExtra("caption", m.text);
                     c.startActivity(i);
                 });
             } else {
                 h.img.setVisibility(View.GONE);
             }
             h.text.setText(m.text == null ? "" : m.text);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
             h.text.setTextColor(h.mine ? mineTxt : incomingTxt);
-            if (hasImage && (m.text == null || m.text.isEmpty())) {
+            if ((hasImage || hasVideo) && (m.text == null || m.text.isEmpty())) {
                 h.text.setVisibility(View.GONE);
             }
         }

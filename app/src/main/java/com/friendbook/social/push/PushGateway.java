@@ -20,12 +20,15 @@ public final class PushGateway {
     public static Response call(JSONObject body, String bearer) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(BuildConfig.SUPABASE_URL + "/functions/v1/send-fcm-notification").openConnection();
         try {
+            PushTrace.stage("http_start", "host=" + new URL(BuildConfig.SUPABASE_URL).getHost()
+                    + " path=send-fcm-notification " + PushTrace.request(body));
             c.setRequestMethod("POST"); c.setDoOutput(true); c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(10000); c.setReadTimeout(25000);
             c.setRequestProperty("Authorization", "Bearer " + bearer);
             c.setRequestProperty("Content-Type", "application/json");
             try (java.io.OutputStream out = c.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
             int status = c.getResponseCode();
+            PushTrace.stage("http_response", "status=" + status + " " + PushTrace.request(body));
             java.io.InputStream stream = status < 400 ? c.getInputStream() : c.getErrorStream();
             String text = "";
             if (stream != null) try (java.io.InputStream in = stream; java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {

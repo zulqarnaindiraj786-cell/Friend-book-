@@ -16,6 +16,7 @@ public final class FCMTokenManager {
         com.google.firebase.messaging.FirebaseMessaging.getInstance().setAutoInitEnabled(true);
         Fb.auth().addAuthStateListener(a -> {
             String uid = a.getUid();
+            PushTrace.stage("auth_state", "signed_in=" + (uid != null) + " actor=" + PushTrace.id(uid));
             if (activeUid != null && !activeUid.equals(uid)) {
                 androidx.work.WorkManager.getInstance(app).cancelAllWorkByTag("fcm_user_" + activeUid);
             }
@@ -38,6 +39,8 @@ public final class FCMTokenManager {
         if (uid == null) return;
         try {
             JSONObject request = new JSONObject().put("action", "register").put("device_id", deviceId(c));
+            PushTrace.stage("registration_enqueue", "actor=" + PushTrace.id(uid)
+                    + " device=" + PushTrace.id(deviceId(c)));
             PushDeliveryWorker.enqueue(request);
             // A long outage or OS scheduling delay must not require the user to register manually.
             androidx.work.PeriodicWorkRequest maintenance = new androidx.work.PeriodicWorkRequest.Builder(

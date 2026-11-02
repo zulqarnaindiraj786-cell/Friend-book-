@@ -84,6 +84,7 @@ public class StoryViewerActivity extends Activity {
         root.addView(video, new FrameLayout.LayoutParams(-1, -1));
 
         textCanvas = new TextView(this);
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(textCanvas);
         textCanvas.setGravity(Gravity.CENTER);
         textCanvas.setTextColor(Color.WHITE);
         textCanvas.setTextSize(26);

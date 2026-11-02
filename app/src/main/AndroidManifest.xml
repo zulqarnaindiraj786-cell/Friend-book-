@@ -141,6 +141,7 @@
         <activity android:name="com.friendbook.social.groups.GroupsActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.groups.GroupDetailActivity" android:screenOrientation="portrait" />
 
+        <activity android:name="com.friendbook.social.admin.OfficialBroadcastActivity" android:exported="false" />
         <activity android:name="com.friendbook.social.admin.AdminPanelActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.admin.ModeratorDeskActivity" android:screenOrientation="portrait" />
         <activity android:name="com.friendbook.social.admin.AdminContentActivity" android:screenOrientation="portrait" />

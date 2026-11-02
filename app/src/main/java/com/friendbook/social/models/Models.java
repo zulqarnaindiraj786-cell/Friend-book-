@@ -546,7 +546,7 @@ public class Models {
     }
 
     public static class Message {
-        public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, type, voiceUrl;
+        public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, videoUrl, type, voiceUrl;
         public String replyToText, replyToSender;
         public String callType, callStatus;
         public int callDurationSec;
@@ -567,6 +567,7 @@ public class Models {
             m0.receiverId = Format.str(m, "receiverId");
             m0.text = Format.str(m, "text");
             m0.imageUrl = Format.str(m, "imageUrl");
+            m0.videoUrl = Format.str(m, "videoUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");

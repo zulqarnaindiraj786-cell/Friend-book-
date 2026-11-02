@@ -145,6 +145,17 @@ service cloud.firestore {
       }
     }
 
+    // Official broadcast specs/progress: only full admins, never moderators/ordinary users.
+    match /officialBroadcasts/{bid} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && request.resource.data.adminId == request.auth.uid
+        && request.resource.data.text is string && request.resource.data.text.size() <= 20000
+        && request.resource.data.mediaType in ['', 'image', 'video'];
+      allow update: if isAdmin() && resource.data.adminId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'processed']);
+      allow delete: if isAdmin();
+    }
+
     // ---- notifications (admin broadcast writes many user docs) ----
     match /notifications/{nid} {
       allow read: if signedIn();

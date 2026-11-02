@@ -26,6 +26,8 @@ public final class FCMPush {
     }
     static void invoke(String target, String title, String message, JSONObject data) {
         try {
+            PushTrace.stage("send_enqueue", "actor=" + PushTrace.id(Fb.uid()) + " receiver="
+                    + PushTrace.id(target) + " event=" + PushTrace.id(data.optString("notificationId", data.optString("messageId"))));
             PushDeliveryWorker.enqueue(new JSONObject().put("action", "send")
                     .put("target_user_id", target).put("receiverId", target)
                     .put("title", title).put("body", message).put("data", data));

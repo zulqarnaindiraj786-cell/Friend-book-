@@ -1385,6 +1385,7 @@ public class ReelsFragment extends Fragment {
 
                 boolean hasCap = reel.caption != null && !reel.caption.trim().isEmpty();
                 captionT.setText(hasCap ? reel.caption : "");
+                com.friendbook.social.core.LinkUtils.makeLinksClickable(captionT);
                 captionT.setVisibility(hasCap ? View.VISIBLE : View.GONE);
 
                 audioT.setText("♫ Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));

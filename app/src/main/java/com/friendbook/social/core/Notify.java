@@ -35,8 +35,15 @@ public class Notify {
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
         String me = Fb.uid();
-        if (me == null || toUid == null || toUid.isEmpty()) return;
-        if (toUid.equals(me) && !"security".equals(type)) return;
+        if (me == null || toUid == null || toUid.isEmpty()) {
+            com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=missing_actor_or_receiver"); return;
+        }
+        if (toUid.equals(me) && !"security".equals(type)) {
+            com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=self_notification"); return;
+        }
+        com.friendbook.social.push.PushTrace.stage("notification_write_start", "type="
+                + com.friendbook.social.push.PushTrace.label(type) + " actor="
+                + com.friendbook.social.push.PushTrace.id(me) + " receiver=" + com.friendbook.social.push.PushTrace.id(toUid));
         boolean asTeam = "team".equals(type) || "announcement".equals(type)
                 || "tick".equals(type) || "ban".equals(type);
         Map<String, Object> n = new HashMap<>();
@@ -51,8 +58,10 @@ public class Notify {
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+            com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
+                    + com.friendbook.social.push.PushTrace.id(ref.getId()));
             if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
-        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Notification write failed; no push sent"));
+        }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
     }
 
     /**
