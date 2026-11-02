@@ -99,17 +99,22 @@ public final class Mentions {
             int start=((Number)a).intValue(),end=((Number)b).intValue(); String uid=(String)u;
             if(!MentionPolicy.valid(text,start,end,(String)label,uid)) continue;
             text.setSpan(new ClickableSpan() {
-                public void onClick(View view) { Intent i=new Intent(view.getContext(),ProfileActivity.class); i.putExtra("uid",uid); view.getContext().startActivity(i); }
+                public void onClick(View view) { if(uid.startsWith("bulk:")) { Ui.toast(view.getContext(),"Some "+(uid.endsWith("followers")?"followers":"friends")+" might receive notifications"); return; } Intent i=new Intent(view.getContext(),ProfileActivity.class); i.putExtra("uid",uid); view.getContext().startActivity(i); }
                 public void updateDrawState(TextPaint paint) { paint.setColor(BLUE); paint.setUnderlineText(false); paint.setTypeface(Typeface.DEFAULT_BOLD); }
             },start,end,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         return text;
     }
+    public static boolean hasBulk(List<Map<String,Object>> mentions) {
+        if(mentions==null) return false;
+        for(Map<String,Object> m:mentions) if("bulk:followers".equals(m.get("uid")) || "bulk:highlight".equals(m.get("uid"))) return true;
+        return false;
+    }
     public static void attach(EditText input) { attach(input, () -> null); }
     public static void attach(EditText input, java.util.function.Supplier<String> creator) {
         Handler handler=new Handler(Looper.getMainLooper());
         ListPopupWindow popup=new ListPopupWindow(input.getContext()); popup.setAnchorView(input); popup.setModal(false);
-        popup.setWidth(Ui.dp(input.getContext(),280)); popup.setHeight(Ui.dp(input.getContext(),200));
+        popup.setWidth(input.getResources().getDisplayMetrics().widthPixels-Ui.dp(input.getContext(),24)); popup.setHeight(Ui.dp(input.getContext(),340));
         input.addTextChangedListener(new TextWatcher() {
             int generation=0;
             Runnable pending;
@@ -137,25 +142,45 @@ public final class Mentions {
                             if(++done[0]<terms.size()) return;
                             List<DocumentSnapshot> users=new ArrayList<>(found.values()); List<String> names=new ArrayList<>();
                             for(DocumentSnapshot d:users) names.add(d.getString("displayName")==null?"User":d.getString("displayName"));
-                            if(names.isEmpty()) return;
-                            popup.setAdapter(new ArrayAdapter<String>(input.getContext(),android.R.layout.simple_list_item_1,names) {
+                            List<String> bulk=new ArrayList<>();
+                            for(String tag:Arrays.asList("followers","highlight")) if(tag.startsWith(query.toLowerCase(Locale.ROOT))) bulk.add(tag);
+                            List<String> rows=new ArrayList<>(); for(String tag:bulk) rows.add("@"+tag); rows.addAll(names);
+                            if(rows.isEmpty()) return;
+                            popup.setAdapter(new ArrayAdapter<String>(input.getContext(),android.R.layout.simple_list_item_1,rows) {
                                 @Override public View getView(int position,View recycled,android.view.ViewGroup parent) {
-                                    LinearLayout row=Ui.row(input.getContext()); Ui.pad(row,8,6,8,6);
+                                    LinearLayout row=Ui.row(input.getContext()); Ui.pad(row,12,10,12,10);
+                                    row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                                    boolean isBulk=position<bulk.size(); int userIndex=position-bulk.size();
                                     ImageView avatar=new ImageView(input.getContext());
-                                    row.addView(avatar,new LinearLayout.LayoutParams(Ui.dp(input.getContext(),32),Ui.dp(input.getContext(),32)));
-                                    Ui.avatar(input.getContext(),avatar,users.get(position).getString("photoUrl"));
-                                    boolean owner=users.get(position).getId().equals(creator.get());
-                                    TextView label=Ui.tvBold(input.getContext(),"  "+names.get(position)+(owner?"  ◆ Creator":""),14,owner?BLUE:Ui.txt(input.getContext()));
-                                    row.addView(label); return row;
+                                    row.addView(avatar,new LinearLayout.LayoutParams(Ui.dp(input.getContext(),44),Ui.dp(input.getContext(),44)));
+                                    if(isBulk) avatar.setImageResource(android.R.drawable.ic_menu_myplaces);
+                                    else Ui.avatar(input.getContext(),avatar,users.get(userIndex).getString("photoUrl"));
+                                    LinearLayout details=Ui.col(input.getContext()); Ui.pad(details,12,0,0,0);
+                                    boolean owner=!isBulk && users.get(userIndex).getId().equals(creator.get());
+                                    String title=isBulk?"@"+bulk.get(position):names.get(userIndex)+(owner?"  ◆ Creator":"");
+                                    TextView label=Ui.tvBold(input.getContext(),title,16,owner?BLUE:Ui.txt(input.getContext()));
+                                    LinearLayout titleRow=Ui.row(input.getContext()); titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                                    titleRow.addView(label);
+                                    if(!isBulk && Boolean.TRUE.equals(users.get(userIndex).get("isVerified"))) {
+                                        ImageView tick=new ImageView(input.getContext()); tick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
+                                        LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(Ui.dp(input.getContext(),15),Ui.dp(input.getContext(),15)); size.leftMargin=Ui.dp(input.getContext(),4); titleRow.addView(tick,size);
+                                    }
+                                    details.addView(titleRow);
+                                    String subtitle=isBulk?"Some "+(bulk.get(position).equals("followers")?"followers":"friends")+" might receive notifications":"Profile";
+                                    details.addView(Ui.tv(input.getContext(),subtitle,12,Ui.sub(input.getContext())));
+                                    row.addView(details); return row;
                                 }
                             });
                             popup.setOnItemClickListener((parent,view,position,id) -> {
                                 if(request!=generation) return;
-                                String label="@"+names.get(position); Editable value=input.getText();
+                                boolean isBulk=position<bulk.size(); int userIndex=position-bulk.size();
+                                String label=isBulk?"@"+bulk.get(position):"@"+names.get(userIndex); Editable value=input.getText();
+                                String selectedUid=isBulk?"bulk:"+bulk.get(position):users.get(userIndex).getId();
                                 SpannableString selected=new SpannableString(label);
-                                selected.setSpan(new Identity(users.get(position).getId(),label),0,label.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                                selected.setSpan(new Identity(selectedUid,label),0,label.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                                 value.replace(at,caret,selected); value.insert(at+label.length()," ");
                                 input.setSelection(at+label.length()+1); popup.dismiss();
+                                if(isBulk) Ui.toast(input.getContext(),"Public posts only · up to 20 eligible people per 24 hours · @followers requires the post owner");
                             });
                             popup.show(); input.requestFocus();
                         });

@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "esbuild functions/send-fcm-notification/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/gateway.mjs && node --test tests/*.test.mjs"
+    "test": "esbuild functions/send-fcm-notification/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/gateway.mjs && esbuild functions/bulk-mentions/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/bulk.mjs && node --test tests/*.test.mjs"
   },
   "devDependencies": { "esbuild": "0.25.12", "jose": "5.9.6" }
 }

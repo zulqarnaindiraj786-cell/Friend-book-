@@ -930,6 +930,7 @@ public class CreatePostActivity extends Activity {
         }
 
         docRef.set(m).addOnSuccessListener(v -> {
+            if(com.friendbook.social.core.Mentions.hasBulk(submittingMentions)) com.friendbook.social.push.FCMPush.bulkMention(docRef.getId(), "");
             if ((groupId == null || groupId.isEmpty()) && (pageId == null || pageId.isEmpty())
                     && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());

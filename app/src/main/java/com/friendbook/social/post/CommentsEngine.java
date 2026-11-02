@@ -261,6 +261,7 @@ public class CommentsEngine {
 
         parentRef.update(dotUpdates)
                 .addOnSuccessListener(v -> {
+                    if (me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
                     if (cb != null) cb.onComplete(true, null);
                 })
                 .addOnFailureListener(err -> {
@@ -272,7 +273,8 @@ public class CommentsEngine {
                     nested.put("comments", FieldValue.increment(1));
                     parentRef.set(nested, SetOptions.merge())
                             .addOnSuccessListener(v2 -> {
-                                if (cb != null) cb.onComplete(true, null);
+                                if (me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
+                    if (cb != null) cb.onComplete(true, null);
                             })
                             .addOnFailureListener(e2 -> { if (cb != null) cb.onComplete(false, e2.getMessage()); });
                 });

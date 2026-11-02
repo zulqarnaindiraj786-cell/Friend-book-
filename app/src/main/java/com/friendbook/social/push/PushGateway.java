@@ -18,12 +18,13 @@ public final class PushGateway {
         public boolean retryable() { return status == 409 || status == 429 || status >= 500; }
     }
     public static Response call(JSONObject body, String bearer) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(BuildConfig.SUPABASE_URL + "/functions/v1/send-fcm-notification").openConnection();
+        String endpoint = "bulk_mention".equals(body.optString("action")) ? "/functions/v1/bulk-mentions" : "/functions/v1/send-fcm-notification";
+        HttpURLConnection c = (HttpURLConnection) new URL(BuildConfig.SUPABASE_URL + endpoint).openConnection();
         try {
             PushTrace.stage("http_start", "host=" + new URL(BuildConfig.SUPABASE_URL).getHost()
-                    + " path=send-fcm-notification " + PushTrace.request(body));
+                    + " path=" + endpoint + " " + PushTrace.request(body));
             c.setRequestMethod("POST"); c.setDoOutput(true); c.setInstanceFollowRedirects(false);
-            c.setConnectTimeout(10000); c.setReadTimeout(25000);
+            c.setConnectTimeout(10000); c.setReadTimeout(endpoint.endsWith("bulk-mentions") ? 60000 : 25000);
             c.setRequestProperty("Authorization", "Bearer " + bearer);
             c.setRequestProperty("Content-Type", "application/json");
             try (java.io.OutputStream out = c.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }

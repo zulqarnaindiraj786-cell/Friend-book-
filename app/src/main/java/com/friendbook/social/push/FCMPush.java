@@ -18,6 +18,11 @@ public final class FCMPush {
         // Title/body are previews only: the gateway verifies and derives the final payload from Firestore.
         invoke(target.toString(), title, text, data);
     }
+    public static void bulkMention(String postId,String commentId) {
+        try { PushDeliveryWorker.enqueue(new JSONObject().put("action","bulk_mention")
+                .put("post_id",postId).put("comment_id",commentId==null?"":commentId)); }
+        catch(Exception ignored) { }
+    }
     public static void friendPost(String postId) {
         PushFanoutWorker.enqueue("friend_post", postId, "");
     }
