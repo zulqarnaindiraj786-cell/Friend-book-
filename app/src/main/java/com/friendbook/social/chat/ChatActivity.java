@@ -525,17 +525,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
         messageSnapshots.clear();
+        final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(200)
-                .addSnapshotListener((snap, err) -> {
+                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null) return;
                     LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
                     int prevCount = adapter.getItemCount();
                     int lastVis = lm != null ? lm.findLastVisibleItemPosition() : prevCount - 1;
                     boolean nearBottom = !initialScrollDone || forceScrollBottom || (prevCount - lastVis <= 4);
 
+                    boolean soundEligible = soundGate.begin(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    boolean incomingSound = false;
                     List<Models.Message> list = new ArrayList<>();
                     Set<String> hidden = hiddenMsgs();
                     List<DocumentSnapshot> toMark = new ArrayList<>();
@@ -553,14 +556,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     for (DocumentSnapshot d : snap) {
                         Models.Message m = messageSnapshots.get(d.getId());
                         if (m == null) { m = Models.Message.fromDoc(d); messageSnapshots.put(d.getId(), m); }
+                        boolean freshSound = soundGate.observe(m.id, m.createdAt, Presence.now(), soundEligible);
                         if (hidden.contains(m.id)) continue;
                         list.add(m);
+                        if (freshSound && me != null && !me.equals(m.senderId) && !m.isDeleted
+                                && !"system".equals(m.type) && !"call".equals(m.type)) incomingSound = true;
                         if (changedIds.contains(m.id) && me != null && me.equals(m.receiverId) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
                             boolean needsSeen = !m.isSeen && Prefs.readReceipts(this);
                             boolean needsDeliv = !m.isDelivered;
                             if (needsSeen || needsDeliv) toMark.add(d);
                         }
                     }
+                    soundGate.end(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    if (incomingSound) com.friendbook.social.core.SoundEffects.incoming(this);
                     adapter.setData(list);
                     if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
                         initialScrollDone = true;
@@ -585,6 +593,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private boolean typingOn = false;
+
+    @Override protected void onResume() {
+        super.onResume(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+    }
+    @Override protected void onPause() {
+        com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
+    }
 
     @Override
     protected void onStop() {
@@ -730,7 +745,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnSuccessListener(x -> com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId()))
+        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        batch.commit().addOnSuccessListener(x -> {
+            com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
+            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        })
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
 
@@ -822,8 +841,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
         batch.commit()
-                .addOnSuccessListener(x -> { com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId()); })
+                .addOnSuccessListener(x -> {
+                    com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
+                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                })
                 .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 
@@ -896,7 +919,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnSuccessListener(x -> com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId())).addOnFailureListener(e ->
+        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        batch.commit().addOnSuccessListener(x -> {
+            com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
+            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        }).addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));
     }
 

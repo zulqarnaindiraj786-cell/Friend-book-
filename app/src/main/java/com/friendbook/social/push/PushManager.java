@@ -49,6 +49,10 @@ public final class PushManager {
         }
         String type = d.get("type");
         if (type == null) return;
+        // The live chat snapshot provides the in-conversation ding; avoid a second notification-channel sound.
+        if ("message".equals(type) && com.friendbook.social.core.SoundEffects.isVisibleChat(d.get("chatId"))) {
+            PushTrace.stage("display_skipped", "reason=chat_already_visible"); return;
+        }
         if ((type.contains("like") || type.equals("reaction")) && !Prefs.notifLikes(c)) { PushTrace.stage("display_skipped", "reason=likes_disabled"); return; }
         if ((type.contains("comment") || type.equals("reply")) && !Prefs.notifComments(c)) { PushTrace.stage("display_skipped", "reason=comments_disabled"); return; }
         if (type.startsWith("friend_") && !Prefs.notifRequests(c)) { PushTrace.stage("display_skipped", "reason=friend_notifications_disabled"); return; }

@@ -1546,9 +1546,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         chatColReg = Fb.db().collection("lives").document(liveId).collection("chat")
                 .orderBy("createdAtMs", Query.Direction.ASCENDING)
                 .limitToLast(100)
-                .addSnapshotListener((snap, err) -> {
+                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (isFinishing() || snap == null) return;
-                    onChatSnapshot(snap.getDocuments());
+                    onChatSnapshot(snap.getDocuments(), snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
                 });
     }
 
@@ -1726,7 +1726,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private final Set<String> processedPacketIds = new HashSet<>();
 
-    private void onChatSnapshot(List<DocumentSnapshot> docs) {
+    private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(com.friendbook.social.core.Presence.now());
+    private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
+        boolean soundEligible = giftSoundGate.begin(fromCache);
         List<ChatItem> visibleMessages = new ArrayList<>();
         for (DocumentSnapshot d : docs) {
             Map<String, Object> m = d.getData();
@@ -1743,6 +1745,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
             // Immediately hide permanently blocked users from Live Chat!
             if (!uid.isEmpty() && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(uid)) {
+                if ("gift".equals(type)) giftSoundGate.observe(id, Format.longOf(m, "createdAtMs"),
+                        com.friendbook.social.core.Presence.now(), soundEligible);
                 continue;
             }
 
@@ -1770,6 +1774,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 int stars = Format.intOf(m, "stars");
                 String gEmoji = Format.strOr(m, "giftEmoji", "🎁");
                 String gName = Format.strOr(m, "giftName", "Gift");
+                long giftTime = Format.ts(m.get("createdAt"));
+                if (giftTime <= 0) giftTime = Format.longOf(m, "createdAtMs");
+                boolean freshGiftSound = giftSoundGate.observe(id, giftTime, com.friendbook.social.core.Presence.now(), soundEligible);
+                if (freshGiftSound && stars > 0) com.friendbook.social.core.SoundEffects.gift(this,
+                        Format.str(m, "giftId"), gEmoji, gName);
                 if (isNewPacket && stars > 0) {
                     totalGiftsCount++;
                     int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;
@@ -1849,6 +1858,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (!visibleMessages.isEmpty()) {
             chatRv.scrollToPosition(visibleMessages.size() - 1);
         }
+        giftSoundGate.end(fromCache);
     }
 
     // ==================== CO-HOST ("JOIN LIVE" SPLIT SCREEN VIDEO + VOICE) ====================
@@ -2375,11 +2385,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     chatGift.put("name", Fb.myName());
                     chatGift.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
                     chatGift.put("stars", coins);
+                    chatGift.put("giftId", gift.id);
                     chatGift.put("giftEmoji", gift.emoji);
                     chatGift.put("giftName", gift.name);
                     chatGift.put("text", "sent " + gift.emoji + " " + gift.name + " (⭐ " + coins + ")"
                             + (pkBattleActive ? " to " + recipientName : "") + "!");
                     chatGift.put("createdAtMs", System.currentTimeMillis());
+                    chatGift.put("createdAt", FieldValue.serverTimestamp());
                     if (liveId != null) {
                         Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
                     }

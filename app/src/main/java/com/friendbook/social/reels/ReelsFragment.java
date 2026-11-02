@@ -1812,7 +1812,9 @@ public class ReelsFragment extends Fragment {
 
                 final String pushAuthor = reel.authorId;
                 final String pushReelId = reel.id;
+                final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
                 Runnable notifyReaction = () -> {
+                    if (nextType != null) com.friendbook.social.core.SoundEffects.success(ctx, "reaction", soundStarted, me);
                     if (me.equals(Fb.uid()) && nextType != null && prev == null && !me.equals(pushAuthor)) {
                         Notify.send(pushAuthor, "reel_like", Fb.myName() + " liked your reel", pushReelId);
                     }

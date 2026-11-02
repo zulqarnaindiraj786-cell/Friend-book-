@@ -224,6 +224,7 @@ public class CommentsEngine {
             if (cb != null) cb.onComplete(false, "Not signed in");
             return null;
         }
+        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
         final String newId = Fb.db().collection("comments").document().getId();
         final long now = System.currentTimeMillis();
 
@@ -248,6 +249,7 @@ public class CommentsEngine {
 
         parentRef.update(dotUpdates)
                 .addOnSuccessListener(v -> {
+                    com.friendbook.social.core.SoundEffects.success(com.friendbook.social.App.instance, "comment", soundStarted, me);
                     if (cb != null) cb.onComplete(true, null);
                 })
                 .addOnFailureListener(err -> {
@@ -258,7 +260,10 @@ public class CommentsEngine {
                     nested.put("commentsMap", inner);
                     nested.put("comments", FieldValue.increment(1));
                     parentRef.set(nested, SetOptions.merge())
-                            .addOnSuccessListener(v2 -> { if (cb != null) cb.onComplete(true, null); })
+                            .addOnSuccessListener(v2 -> {
+                                com.friendbook.social.core.SoundEffects.success(com.friendbook.social.App.instance, "comment", soundStarted, me);
+                                if (cb != null) cb.onComplete(true, null);
+                            })
                             .addOnFailureListener(e2 -> { if (cb != null) cb.onComplete(false, e2.getMessage()); });
                 });
 
@@ -281,7 +286,10 @@ public class CommentsEngine {
         dot.put("commentsMap." + c.id + ".reactions." + userId, rxVal);
         dot.put("commentsMap." + c.id + ".likedBy", likedByVal);
         dot.put("commentsMap." + c.id + ".likes", c.likes);
-        Fb.db().collection(collection).document(docId).update(dot);
+        long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        Fb.db().collection(collection).document(docId).update(dot).addOnSuccessListener(v -> {
+            if (nextType != null) com.friendbook.social.core.SoundEffects.success(com.friendbook.social.App.instance, "reaction", soundStarted, userId);
+        });
 
         Map<String, Object> up = new HashMap<>();
         Map<String, Object> rxSub = new HashMap<>();
