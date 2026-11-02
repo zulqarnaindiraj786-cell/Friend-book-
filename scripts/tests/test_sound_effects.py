@@ -13,17 +13,29 @@ class SoundEffectsTest(unittest.TestCase):
                 samples=struct.unpack('<'+'h'*(len(frames)//2),frames)
                 self.assertGreater(max(abs(x) for x in samples),1000)
                 self.assertLess(max(abs(x) for x in samples),30000)
-    def test_success_hooks_cover_posts_reels_comments_and_all_send_types(self):
+    def test_immediate_hooks_cover_posts_reels_comments_and_all_send_types(self):
         for file in ['post/Reactions.java','reels/ReelsFragment.java','post/CommentsEngine.java']:
-            self.assertIn('SoundEffects.success', (JAVA/file).read_text(),file)
+            self.assertIn('SoundEffects.action', (JAVA/file).read_text(),file)
         chat=(JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('SoundEffects.success(this, "sent", soundStarted, me)'),3)
+        self.assertEqual(chat.count('SoundEffects.action(this, "sent", me)'),3)
         self.assertIn('SoundEffects.incoming(this)',chat)
         self.assertIn('MetadataChanges.INCLUDE',chat)
         self.assertIn('snap.getMetadata().hasPendingWrites()',chat)
+    def test_interactions_have_fast_attack_and_short_duration(self):
+        for name in ['reaction','comment','message_sent','message_received']:
+            with wave.open(str(ROOT/f'app/src/main/res/raw/sfx_{name}.wav')) as w:
+                self.assertLessEqual(w.getnframes()/w.getframerate(),.25)
+                data=struct.unpack('<'+'h'*w.getnframes(),w.readframes(w.getnframes()))
+                self.assertGreater(max(abs(x) for x in data[:int(.005*w.getframerate())]),10000)
+        manager=(JAVA/'core/SoundEffects.java').read_text()
+        self.assertIn('.85f',manager)
+        chat=(JAVA/'chat/ChatActivity.java').read_text()
+        self.assertNotIn('SoundEffects.success',chat)
+        self.assertEqual(chat.count('SoundEffects.action(this, "sent", me);\n        batch.commit()'),3)
+
     def test_silence_background_and_cooldown_guards_are_present(self):
         manager=(JAVA/'core/SoundEffects.java').read_text()
-        for token in ['Prefs.quiet','Prefs.inAppSounds','App.isForeground','RINGER_MODE_NORMAL','INTERRUPTION_FILTER_ALL','ticket()-started>10_000L','ticket()-requested>500L','Objects.equals(actor,Fb.uid())']:
+        for token in ['Prefs.quiet','Prefs.inAppSounds','App.isForeground','RINGER_MODE_NORMAL','INTERRUPTION_FILTER_ALL','ticket()-requested>120L','Objects.equals(actor,Fb.uid())']:
             self.assertIn(token,manager)
         self.assertNotIn('requestAudioFocus',manager)
         self.assertIn('SoundEffects.stopAll()', (JAVA/'App.java').read_text())

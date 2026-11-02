@@ -13,10 +13,22 @@ def save(name, duration, fn, peak=.72):
 def chirp(t,f0,f1,d): return math.sin(2*math.pi*(f0*t+(f1-f0)*t*t/(2*d)))
 def ping(t,d,f0,f1):
     return math.sin(math.pi*min(1,t/d))**2*math.exp(-t*8)*(chirp(t,f0,f1,d)+.18*chirp(t,2*f0,2*f1,d))
-save('sfx_reaction',.16,lambda t:ping(t,.16,680,1220))
-save('sfx_comment',.24,lambda t:ping(t,.24,480,760)+(.30*ping(t-.07,.17,920,710) if t>.07 else 0))
-save('sfx_message_sent',.23,lambda t:ping(t,.23,420,1240))
-save('sfx_message_received',.32,lambda t:ping(t,.32,1040,680)+(.30*ping(t-.11,.21,1260,960) if t>.11 else 0))
+# Fast attack (2 ms), short rounded UI pops: no slow chirp/swell or silent lead-in.
+def pluck(t, duration, frequency):
+    if t < 0 or t >= duration: return 0.0
+    attack=min(1.0,t/.002)
+    tail=min(1.0,(duration-t)/.008)
+    return attack*tail*math.exp(-t*34)*(math.sin(2*math.pi*frequency*t)+.16*math.sin(4*math.pi*frequency*t))
+def pop(t, frequency, decay):
+    attack=min(1.0,t/.0015)
+    tail=min(1.0,max(0,(.105-t)/.008))
+    # Falling resonant bubble, not an upward electronic whistle.
+    phase=2*math.pi*(frequency*t+170*.012*(1-math.exp(-t/.012)))
+    return attack*tail*math.exp(-t*decay)*(math.sin(phase)+.12*math.sin(2*phase))
+save('sfx_reaction',.105,lambda t:pop(t,650,42),.88)
+save('sfx_comment',.13,lambda t:pluck(t,.13,830)+.22*pluck(t,.13,1245),.88)
+save('sfx_message_sent',.115,lambda t:pop(t,940,32),.88)
+save('sfx_message_received',.245,lambda t:pluck(t,.12,880)+.85*pluck(t-.105,.14,1174.66),.88)
 save('sfx_gift',.43,lambda t:ping(t,.43,700,1420)+.25*ping(t,.43,1050,2100))
 # Two textured, chesty synthetic growl/roar pulses: low formants + irregular harmonic excitation.
 low=0.0

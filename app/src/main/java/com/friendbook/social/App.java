@@ -60,6 +60,7 @@ public class App extends Application implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
         com.friendbook.social.push.PushManager.init(this);

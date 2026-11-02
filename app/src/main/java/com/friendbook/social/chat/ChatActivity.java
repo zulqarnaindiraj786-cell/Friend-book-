@@ -745,9 +745,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         })
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
@@ -841,10 +840,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
         batch.commit()
                 .addOnSuccessListener(x -> {
-                    com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                 })
                 .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
@@ -919,9 +917,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        final long soundStarted = com.friendbook.social.core.SoundEffects.ticket();
+        com.friendbook.social.core.SoundEffects.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.core.SoundEffects.success(this, "sent", soundStarted, me);
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         }).addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));

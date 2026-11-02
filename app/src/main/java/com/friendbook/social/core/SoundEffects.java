@@ -25,6 +25,9 @@ public final class SoundEffects {
     private static int giftStream;
     private static volatile String visibleChat;
     private SoundEffects() {}
+    private static void onMain(Runnable work) {
+        if (Looper.myLooper()==Looper.getMainLooper()) work.run(); else MAIN.post(work);
+    }
     public static long ticket() { return SystemClock.elapsedRealtime(); }
     public static void visibleChat(String id) { visibleChat=id; }
     public static void clearVisibleChat(String id) { if (Objects.equals(id,visibleChat)) visibleChat=null; }
@@ -41,7 +44,7 @@ public final class SoundEffects {
     }
     public static void warmUp(Context context) {
         Context app=context.getApplicationContext();
-        MAIN.post(() -> {
+        onMain(() -> {
             if (pool!=null) return;
             try {
             SoundPool current=new SoundPool.Builder().setMaxStreams(3)
@@ -56,6 +59,7 @@ public final class SoundEffects {
             samples.put(COMMENT,current.load(app,R.raw.sfx_comment,1));
             samples.put(SENT,current.load(app,R.raw.sfx_message_sent,1));
             samples.put(RECEIVED,current.load(app,R.raw.sfx_message_received,1));
+            // Load tiny interaction sounds before the longer live effects.
             samples.put("lion",current.load(app,R.raw.sfx_lion_roar,1));
             samples.put("airplane",current.load(app,R.raw.sfx_airplane,1));
             samples.put("gift",current.load(app,R.raw.sfx_gift,1));
@@ -65,8 +69,9 @@ public final class SoundEffects {
             }
         });
     }
-    public static void success(Context c,String effect,long started,String actor) {
-        if (actor==null || !actor.equals(Fb.uid()) || ticket()-started>10_000L) return;
+    /** Immediate local action feedback, not a server-delivery acknowledgement. */
+    public static void action(Context c,String effect,String actor) {
+        if (actor==null || !actor.equals(Fb.uid())) return;
         play(c,effect,false);
     }
     public static void incoming(Context c) { if (c!=null && Prefs.notifMessages(c)) play(c,RECEIVED,false); }
@@ -78,17 +83,17 @@ public final class SoundEffects {
         Context app=c.getApplicationContext(); long requested=ticket(); String actor=Fb.uid();
         if (!allowed(app)) return;
         warmUp(app);
-        MAIN.post(() -> {
+        onMain(() -> {
             if (!allowed(app) || pool==null) return;
             Integer sample=samples.get(effect); if (sample==null) return;
             Runnable action=() -> {
-                if (pool==null || !Objects.equals(actor,Fb.uid()) || !allowed(app) || ticket()-requested>500L) return;
+                if (pool==null || !Objects.equals(actor,Fb.uid()) || !allowed(app) || ticket()-requested>120L) return;
                 String lane=gift ? "gift" : effect;
                 long previous=lastPlayed.getOrDefault(lane,0L);
                 if (previous>0 && ticket()-previous<(gift ? 1400L : 160L)) return;
                 lastPlayed.put(lane,ticket());
                 if (gift && giftStream!=0) pool.stop(giftStream);
-                float volume=gift ? .42f : .32f;
+                float volume=gift ? .42f : .85f;
                 int stream=pool.play(sample,volume,volume,gift?2:1,0,1f);
                 if (gift) giftStream=stream;
                 streams.add(stream); if(streams.size()>32) streams.remove(0);
