@@ -1743,7 +1743,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendUsers.add(u);
             UsersAdapter.Row r = new UsersAdapter.Row();
             r.user = u;
-            r.subtitle = u.isOnline ? "🟢 Active now" : "Friend";
+            r.subtitle = "Friend"; // Live profile/chat status comes from Presence.watch, never this cached user card.
             rows.add(r);
         }
         friendsAdapter.setData(rows);

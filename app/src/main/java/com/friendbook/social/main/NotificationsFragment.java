@@ -116,15 +116,27 @@ public class NotificationsFragment extends Fragment {
     }
 
     private void markAllReadReal() {
-        markAllReadOptimisticNow();
-        MainActivity.clearNotificationsBadgeNow();
+        // Only the explicit "Mark all read" button invokes this operation.
+        String me = Fb.uid();
+        if (me == null) return;
+        Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .limit(450).get().addOnSuccessListener(snap -> {
+                    if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
+                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+                    for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
+                    batch.commit().addOnSuccessListener(v -> {
+                        if (!me.equals(Fb.uid())) return;
+                        markAllReadOptimisticNow();
+                        MainActivity.clearNotificationsBadgeNow();
+                        if (snap.size() == 450) markAllReadReal();
+                    });
+                });
     }
 
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
         if (!hidden) {
-            markAllReadOptimisticNow();
             MainActivity.clearNotificationsBadgeNow();
         }
     }
@@ -133,7 +145,6 @@ public class NotificationsFragment extends Fragment {
     public void onStart() {
         super.onStart();
         if (!isHidden()) {
-            markAllReadOptimisticNow();
             MainActivity.clearNotificationsBadgeNow();
         }
         String me = Fb.uid();

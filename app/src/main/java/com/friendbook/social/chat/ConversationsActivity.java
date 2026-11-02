@@ -56,6 +56,30 @@ public class ConversationsActivity extends Activity {
     private boolean showArchived = false;
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
+    private boolean watchingPresence;
+    private final Map<String, Presence.Handle> activePresence = new HashMap<>();
+    private final Map<String, Boolean> onlineUsers = new HashMap<>();
+    private final Map<String, Long> lastSeenUsers = new HashMap<>();
+    private final Set<ConvAdapter.VH> boundHolders = new HashSet<>();
+
+    private void ensurePresence(String uid) {
+        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid()) || activePresence.containsKey(uid)) return;
+        Presence.Handle handle = Presence.watch(uid, (online, lastSeen) -> {
+            if (!watchingPresence) return;
+            onlineUsers.put(uid, online); lastSeenUsers.put(uid, lastSeen);
+            renderActiveNow();
+            for (ConvAdapter.VH holder : boundHolders) if (uid.equals(holder.boundUid)) renderRowPresence(holder, online, lastSeen);
+        });
+        activePresence.put(uid, handle);
+    }
+    private void renderRowPresence(ConvAdapter.VH h, boolean online, long seen) {
+        h.dot.setVisibility(online ? View.VISIBLE : View.GONE);
+        h.lastActive.setText(com.friendbook.social.core.TimeAgoUtil.formatShortLastSeen(seen, Presence.now()));
+        h.lastActive.setContentDescription(Presence.formatActiveStatus(false, seen));
+        h.lastActive.setVisibility(!online && seen > 0 ? View.VISIBLE : View.GONE);
+        h.time.setVisibility(!online && seen > 0 ? View.GONE : View.VISIBLE);
+    }
+
     private final List<Room> allRooms = new ArrayList<>();
     private final List<Room> rooms = new ArrayList<>();
 
@@ -205,6 +229,8 @@ public class ConversationsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
+        watchingPresence = true;
+        adapter.notifyDataSetChanged();
         // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
         // Live snapshot listener on users so Active Now strip updates green online dots in real time!
@@ -212,10 +238,12 @@ public class ConversationsActivity extends Activity {
             if (isFinishing() || usnap == null) return;
             for (DocumentSnapshot ud : usnap) {
                 Models.User u = Models.User.fromDoc(ud);
-                if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
+                if (u.uid == null || u.uid.equals(me)) continue;
+                if (u.deactivated) { userCache.remove(u.uid); onlineUsers.remove(u.uid); continue; }
                 if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
                 com.friendbook.social.core.FastCache.putUser(u);
                 userCache.put(u.uid, u);
+                ensurePresence(u.uid);
             }
             renderActiveNow();
             applyFilter();
@@ -245,6 +273,7 @@ public class ConversationsActivity extends Activity {
                                     if (us != null) {
                                         com.friendbook.social.core.FastCache.putUser(us);
                                         userCache.put(r.other, us);
+                                        ensurePresence(r.other);
                                         renderActiveNow();
                                         applyFilter();
                                     }
@@ -264,12 +293,14 @@ public class ConversationsActivity extends Activity {
         activeRow.removeAllViews();
         String me = Fb.uid();
         List<Models.User> stripUsers = new ArrayList<>(userCache.values());
-        stripUsers.sort((a, b2) -> Boolean.compare(b2 != null && b2.isOnline, a != null && a.isOnline));
+        stripUsers.sort((a, b2) -> String.valueOf(a.uid).compareTo(String.valueOf(b2.uid)));
         int count = 0;
         for (Models.User u : stripUsers) {
-            if (u == null || u.uid == null || u.uid.equals(me)) continue;
+            if (u == null || u.uid == null || u.uid.equals(me) || u.deactivated) continue;
+            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
+            boolean online = Boolean.TRUE.equals(onlineUsers.get(u.uid));
+            if (!online) continue; // Active Now contains only fresh, live presence; never cached isOnline flags.
             if (count >= 18) break;
-            boolean online = u.isOnline && u.showActiveStatus;
             LinearLayout b = Ui.col(this);
             b.setGravity(Gravity.CENTER);
             FrameLayout aw = new FrameLayout(this);
@@ -337,6 +368,12 @@ public class ConversationsActivity extends Activity {
         super.onStop();
         if (reg != null) reg.remove();
         if (usersReg != null) usersReg.remove();
+        watchingPresence = false;
+        for (Presence.Handle handle : activePresence.values()) handle.close();
+        activePresence.clear(); onlineUsers.clear(); lastSeenUsers.clear();
+        for (ConvAdapter.VH h : boundHolders) { h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE); }
+        boundHolders.clear();
+        renderActiveNow();
     }
 
     private void roomMenu(Room r) {
@@ -403,15 +440,9 @@ public class ConversationsActivity extends Activity {
             row.setBackgroundColor(Ui.card(ConversationsActivity.this));
             Ui.pad(row, 12, 10, 12, 10);
 
-            FrameLayout avWrap = new FrameLayout(ConversationsActivity.this);
-            ImageView av = new ImageView(ConversationsActivity.this);
-            int s = Ui.dp(ConversationsActivity.this, 54);
-            avWrap.addView(av, new FrameLayout.LayoutParams(s, s));
-            View dot = Ui.onlineDot(ConversationsActivity.this);
-            int ds = Ui.dp(ConversationsActivity.this, 13);
-            FrameLayout.LayoutParams dp = new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END);
-            avWrap.addView(dot, dp);
-            dot.setVisibility(View.GONE);
+            FrameLayout avWrap = (FrameLayout) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_presence_avatar, row, false);
+            ImageView av = avWrap.findViewById(com.friendbook.social.R.id.presence_avatar);
+            View dot = avWrap.findViewById(com.friendbook.social.R.id.presence_green_dot);
             row.addView(avWrap);
 
             LinearLayout mid = Ui.col(ConversationsActivity.this);
@@ -437,17 +468,21 @@ public class ConversationsActivity extends Activity {
             TextView time = Ui.tv(ConversationsActivity.this, "", 11, Ui.sub(ConversationsActivity.this));
             TextView badge = Ui.badge(ConversationsActivity.this);
             TextView pin = Ui.tv(ConversationsActivity.this, "", 12, Ui.sub(ConversationsActivity.this));
+            TextView lastActive = (TextView) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_last_active, right, false);
+            lastActive.setTextColor(Ui.sub(ConversationsActivity.this));
             right.addView(time);
+            right.addView(lastActive);
             right.addView(badge);
             right.addView(pin);
             row.addView(right);
-            return new VH(row, av, dot, name, tick, last, time, badge, pin);
+            return new VH(row, av, dot, name, tick, last, time, badge, pin, lastActive);
         }
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
-            if (h.presence != null) { h.presence.close(); h.presence = null; }
+            boundHolders.add(h); h.boundUid = null;
+            h.lastActive.setVisibility(View.GONE); h.time.setVisibility(View.VISIBLE);
             h.dot.setVisibility(View.GONE);
             h.av.setPadding(0, 0, 0, 0);
             h.av.setBackground(null);
@@ -489,8 +524,9 @@ public class ConversationsActivity extends Activity {
                 h.name.setText(resolvedName);
                 Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
                 Ui.avatar(ConversationsActivity.this, h.av, resolvedPhoto);
-                h.presence = Presence.watch(r.other, (online, lastSeen) ->
-                        h.dot.setVisibility(online && r.unread == 0 ? View.VISIBLE : View.GONE));
+                h.boundUid = r.other;
+                ensurePresence(r.other);
+                renderRowPresence(h, Boolean.TRUE.equals(onlineUsers.get(r.other)), lastSeenUsers.getOrDefault(r.other, 0L));
             }
 
             boolean unread = r.unread > 0;
@@ -523,17 +559,18 @@ public class ConversationsActivity extends Activity {
         @Override
         public void onViewRecycled(@NonNull VH h) {
             super.onViewRecycled(h);
-            if (h.presence != null) { h.presence.close(); h.presence = null; }
+            boundHolders.remove(h); h.boundUid = null;
+            h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE);
         }
 
         class VH extends RecyclerView.ViewHolder {
             ImageView av, tick;
             View dot;
-            TextView name, last, time, badge, pin;
-            Presence.Handle presence;
-            VH(View v, ImageView a, View d, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p) {
+            TextView name, last, time, badge, pin, lastActive;
+            String boundUid;
+            VH(View v, ImageView a, View d, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p, TextView active) {
                 super(v);
-                av = a; dot = d; name = n; tick = tk; last = l; time = t; badge = b; pin = p;
+                av = a; dot = d; name = n; tick = tk; last = l; time = t; badge = b; pin = p; lastActive = active;
             }
         }
     }

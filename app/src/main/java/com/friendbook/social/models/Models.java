@@ -97,10 +97,11 @@ public class Models {
             long lsTs = Format.ts(m == null ? null : m.get("lastSeen"));
             long lsMs = (m != null && m.get("lastSeenMs") instanceof Number)
                     ? ((Number) m.get("lastSeenMs")).longValue() : 0L;
-            u.lastSeen = u.showActiveStatus ? Math.max(lsTs, lsMs) : 0L;
-            boolean rawOnline = Format.boolOf(m, "isOnline");
-            u.isOnline = u.showActiveStatus && rawOnline && u.lastSeen > 0L
-                    && (System.currentTimeMillis() - u.lastSeen) <= com.friendbook.social.core.Presence.ONLINE_TTL_MS;
+            u.lastSeen = u.showActiveStatus ? (lsTs > 0 ? lsTs : lsMs) : 0L;
+            boolean rawOnline = m != null && m.containsKey("isActive") ? Format.boolOf(m, "isActive") : Format.boolOf(m, "isOnline");
+            if (m != null && m.containsKey("isOnline") && !Format.boolOf(m, "isOnline")) rawOnline = false;
+            u.isOnline = u.showActiveStatus && com.friendbook.social.core.PresencePolicy.isFreshOnline(
+                    rawOnline, u.lastSeen, com.friendbook.social.core.Presence.now());
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");

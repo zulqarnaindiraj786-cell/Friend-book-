@@ -140,9 +140,6 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                             }
                         }
                     }
-                    if (!isHidden() && getActivity() != null && !allIds.isEmpty()) {
-                        com.friendbook.social.core.Prefs.markFriendRequestsSeen(getActivity(), me, allIds);
-                    }
                     incoming.sort((a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     tabs[SEC_REQUESTS].setText(incoming.isEmpty() ? "Requests"
                             : "Requests (" + incoming.size() + ")");

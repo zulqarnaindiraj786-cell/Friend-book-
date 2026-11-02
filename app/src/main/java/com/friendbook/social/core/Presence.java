@@ -20,142 +20,115 @@ import com.google.firebase.firestore.SetOptions;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Real-time Online / Active Status + typing indicators backed by BOTH Cloud Firestore
- * (25s foreground heartbeat + 95s staleness TTL) and Firebase Realtime Database (onDisconnect).
- */
+/** RTDB onDisconnect presence, per-install connections, bounded freshness and privacy-aware readers. */
 public class Presence {
-
     public interface Callback { void onPresence(boolean online, long lastSeen); }
-
     public static final long HEARTBEAT_INTERVAL_MS = 25_000L;
-    public static final long ONLINE_TTL_MS = 95_000L;
-
+    public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS;
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static DatabaseReference statusRef;
     private static ValueEventListener connListener;
     private static String boundUid;
-    private static volatile boolean foregroundActive = false;
-
+    private static boolean foregroundActive, disconnectArmed;
+    private static String installId;
+    private static long generation, serverOffset;
+    private static ValueEventListener offsetListener;
+    public static long now() { return System.currentTimeMillis() + serverOffset; }
+    private static String installId() {
+        if (installId == null) {
+            Context c = com.friendbook.social.App.instance;
+            if (c == null) return "session_" + java.util.UUID.randomUUID();
+            android.content.SharedPreferences p = c.getSharedPreferences("presence_install", 0);
+            installId = p.getString("id", "");
+            if (installId.isEmpty()) { installId = java.util.UUID.randomUUID().toString(); p.edit().putString("id", installId).apply(); }
+        }
+        return installId;
+    }
+    private static Map<String, Object> status(boolean online) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("state", online ? "online" : "offline"); m.put("isActive", online);
+        m.put("lastSeen", ServerValue.TIMESTAMP); m.put("lastChanged", ServerValue.TIMESTAMP);
+        String key = "connections/" + installId() + "/";
+        m.put(key + "state", online ? "online" : "offline"); m.put(key + "isActive", online);
+        m.put(key + "lastSeen", ServerValue.TIMESTAMP); m.put(key + "lastChanged", ServerValue.TIMESTAMP);
+        return m;
+    }
     private static final Runnable HEARTBEAT = new Runnable() {
-        @Override
-        public void run() {
-            if (!foregroundActive) return;
-            String uid = Fb.uid();
-            if (uid == null) return;
-            Context ctx = com.friendbook.social.App.instance;
-            if (ctx != null && !Prefs.activeStatus(ctx)) return;
-            writeFirestore(uid, true);
-            writeRtdbOnline(uid);
+        @Override public void run() {
+            if (!foregroundActive || boundUid == null || !boundUid.equals(Fb.uid())) return;
+            Context c = com.friendbook.social.App.instance;
+            if (c != null && !Prefs.activeStatus(c)) { goOffline(); return; }
+            writeFirestore(boundUid, true);
+            // Never queue an online write before the server acknowledges onDisconnect registration.
+            if (disconnectArmed && statusRef != null) statusRef.updateChildren(status(true));
             H.postDelayed(this, HEARTBEAT_INTERVAL_MS);
         }
     };
-
-    /** Called on app launch, foreground resume, login, or toggling Active Status ON. */
     public static void init() {
-        foregroundActive = true;
         String uid = Fb.uid();
-        if (uid == null) return;
-
-        Context ctx = com.friendbook.social.App.instance;
-        boolean allowActive = (ctx == null) || Prefs.activeStatus(ctx);
-        if (!allowActive) {
-            writeOfflineInternal(uid);
-            return;
+        if (uid == null) { goOffline(); return; }
+        Context c = com.friendbook.social.App.instance;
+        if (c != null && !Prefs.activeStatus(c)) {
+            goOffline(); writeOfflineInternal(uid); return;
         }
-
-        // 1. Immediately publish online + fresh heartbeat timestamp to Firestore (never wait on RTDB!)
+        if (boundUid != null && !uid.equals(boundUid)) goOffline();
+        foregroundActive = true;
         writeFirestore(uid, true);
-
-        // 2. Start 25s foreground heartbeat so peers know our session is genuinely alive
-        H.removeCallbacks(HEARTBEAT);
-        H.postDelayed(HEARTBEAT, HEARTBEAT_INTERVAL_MS);
-
-        // 3. Also attach RTDB socket-level presence + onDisconnect where available
+        H.removeCallbacks(HEARTBEAT); H.postDelayed(HEARTBEAT, HEARTBEAT_INTERVAL_MS);
+        if (uid.equals(boundUid) && connListener != null) return;
+        boundUid = uid;
         if (Fb.rtdb() == null) return;
-        try {
-            statusRef = Fb.rtdb().getReference("status").child(uid);
-            writeRtdbOnline(uid);
-            if (uid.equals(boundUid) && connListener != null) return;
-            DatabaseReference connected = Fb.rtdb().getReference(".info/connected");
-            if (connListener != null) {
-                try { connected.removeEventListener(connListener); } catch (Throwable ignored) { }
-            }
-            boundUid = uid;
-            connListener = new ValueEventListener() {
-                @Override public void onDataChange(@NonNull DataSnapshot snap) {
-                    Boolean ok = snap.getValue(Boolean.class);
-                    if (ok == null || !ok || Fb.uid() == null || !foregroundActive) return;
-                    Context c = com.friendbook.social.App.instance;
-                    if (c != null && !Prefs.activeStatus(c)) return;
-                    Map<String, Object> online = new HashMap<>();
-                    online.put("state", "online");
-                    online.put("lastChanged", ServerValue.TIMESTAMP);
-                    Map<String, Object> offline = new HashMap<>();
-                    offline.put("state", "offline");
-                    offline.put("lastChanged", ServerValue.TIMESTAMP);
-                    if (statusRef != null) {
-                        statusRef.onDisconnect().setValue(offline);
-                        statusRef.setValue(online);
-                    }
+        if (offsetListener == null) {
+            offsetListener = new ValueEventListener() {
+                public void onDataChange(@NonNull DataSnapshot data) {
+                    Long offset = data.getValue(Long.class); if (offset != null) serverOffset = offset;
                 }
-                @Override public void onCancelled(@NonNull DatabaseError error) { }
+                public void onCancelled(@NonNull DatabaseError e) {}
             };
-            connected.addValueEventListener(connListener);
-        } catch (Throwable ignored) { }
+            Fb.rtdb().getReference(".info/serverTimeOffset").addValueEventListener(offsetListener);
+        }
+        final DatabaseReference target = Fb.rtdb().getReference("status").child(uid);
+        statusRef = target;
+        final long session = ++generation;
+        connListener = new ValueEventListener() {
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                if (session != generation) return;
+                disconnectArmed = false;
+                if (!Boolean.TRUE.equals(snapshot.getValue(Boolean.class)) || !foregroundActive || !uid.equals(Fb.uid())) return;
+                target.onDisconnect().updateChildren(status(false), (error, ref) -> {
+                    if (error != null || session != generation || !foregroundActive || !uid.equals(Fb.uid())) return;
+                    disconnectArmed = true;
+                    target.updateChildren(status(true));
+                });
+            }
+            public void onCancelled(@NonNull DatabaseError error) { disconnectArmed = false; }
+        };
+        Fb.rtdb().getReference(".info/connected").addValueEventListener(connListener);
     }
-
-    private static void writeRtdbOnline(@NonNull String uid) {
-        if (Fb.rtdb() == null) return;
-        try {
-            Map<String, Object> online = new HashMap<>();
-            online.put("state", "online");
-            online.put("lastChanged", ServerValue.TIMESTAMP);
-            Fb.rtdb().getReference("status").child(uid).setValue(online);
-        } catch (Throwable ignored) { }
-    }
-
     private static void writeFirestore(@NonNull String uid, boolean online) {
         try {
             Context ctx = com.friendbook.social.App.instance;
-            boolean allowed = (ctx == null) || Prefs.activeStatus(ctx);
-            long now = System.currentTimeMillis();
+            boolean allowed = ctx == null || Prefs.activeStatus(ctx);
             Map<String, Object> m = new HashMap<>();
-            m.put("isOnline", online && allowed);
+            m.put("isOnline", online && allowed); m.put("isActive", online && allowed);
             m.put("showActiveStatus", allowed);
-            m.put("lastSeenMs", now);
-            m.put("lastSeen", FieldValue.serverTimestamp());
+            m.put("lastSeenMs", now()); m.put("lastSeen", FieldValue.serverTimestamp());
             Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
-        } catch (Throwable ignored) { }
+        } catch (Exception e) { android.util.Log.w("FriendBookPresence", "Presence write could not be queued"); }
     }
-
-    /** Called when app moves to background, user logs out, switches accounts, or turns off Active Status. */
     public static void goOffline() {
-        foregroundActive = false;
+        foregroundActive = false; disconnectArmed = false; generation++;
         H.removeCallbacks(HEARTBEAT);
-        String uid = Fb.uid();
-        if (uid == null) uid = boundUid;
-        if (Fb.rtdb() != null && connListener != null) {
-            try { Fb.rtdb().getReference(".info/connected").removeEventListener(connListener); }
-            catch (Throwable ignored) { }
-        }
-        connListener = null;
-        boundUid = null;
-        if (uid != null) {
-            writeOfflineInternal(uid);
-        }
+        String uid = boundUid != null ? boundUid : Fb.uid();
+        if (Fb.rtdb() != null && connListener != null)
+            Fb.rtdb().getReference(".info/connected").removeEventListener(connListener);
+        connListener = null; statusRef = null; boundUid = null;
+        if (uid != null) writeOfflineInternal(uid);
+        // Keep the armed onDisconnect operation: it is a safety net if this offline write cannot reach the server.
     }
-
-    private static void writeOfflineInternal(@NonNull String uid) {
+    private static void writeOfflineInternal(String uid) {
         writeFirestore(uid, false);
-        if (Fb.rtdb() != null) {
-            try {
-                Map<String, Object> offline = new HashMap<>();
-                offline.put("state", "offline");
-                offline.put("lastChanged", ServerValue.TIMESTAMP);
-                Fb.rtdb().getReference("status").child(uid).setValue(offline);
-            } catch (Throwable ignored) { }
-        }
+        if (Fb.rtdb() != null) Fb.rtdb().getReference("status").child(uid).updateChildren(status(false));
     }
 
     /** Extracts freshest epoch-ms timestamp from user doc (`lastSeenMs` or `lastSeen`). */
@@ -165,34 +138,20 @@ public class Presence {
         Object rawMs = d.get("lastSeenMs");
         if (rawMs instanceof Number) ms = ((Number) rawMs).longValue();
         long ts = Format.ts(d.get("lastSeen"));
-        return Math.max(ms, ts);
+        return ts > 0 ? ts : ms;
     }
 
-    /** Evaluates whether a Firestore user doc is genuinely online right now (respects privacy + 95s TTL). */
+    /** Evaluates whether a Firestore user doc is genuinely online right now (respects privacy + five-minute freshness). */
     public static boolean isUserOnlineDoc(@Nullable DocumentSnapshot d) {
         if (d == null || !d.exists()) return false;
         Boolean show = d.getBoolean("showActiveStatus");
         if (show != null && !show) return false;
-        if (!Boolean.TRUE.equals(d.getBoolean("isOnline"))) return false;
-        long ls = extractLastSeenMs(d);
-        if (ls <= 0L) return false;
-        return (System.currentTimeMillis() - ls) <= ONLINE_TTL_MS;
+        boolean active = firestoreActive(d);
+        return PresencePolicy.isFreshOnline(active, extractLastSeenMs(d), now());
     }
 
-    /** Formats clean Messenger-style status ("Active now", "Active 5m ago", "Active 1h ago"). */
-    @NonNull
-    public static String formatActiveStatus(boolean online, long lastSeenMs) {
-        if (online) return "Active now";
-        if (lastSeenMs <= 0L) return "";
-        long diff = Math.max(0L, System.currentTimeMillis() - lastSeenMs);
-        if (diff < 60_000L) return "Active just now";
-        long mins = diff / 60_000L;
-        if (mins < 60L) return "Active " + mins + "m ago";
-        long hrs = mins / 60L;
-        if (hrs < 24L) return "Active " + hrs + "h ago";
-        long days = hrs / 24L;
-        if (days < 7L) return "Active " + days + "d ago";
-        return "Active " + (days / 7L) + "w ago";
+    @NonNull public static String formatActiveStatus(boolean online, long lastSeenMs) {
+        return online ? "Active now" : TimeAgoUtil.formatLastSeen(lastSeenMs, now());
     }
 
     /** Handle to a live presence or typing watcher; close() to detach. */
@@ -215,12 +174,12 @@ public class Presence {
         }
     }
 
-    /** Watch a user's presence by merging Firestore + RTDB with live 30s staleness re-evaluation. */
+    /** Watch RTDB-authoritative presence, Firestore privacy, and deadline-based freshness expiry. */
     public static Handle watch(String uid, Callback cb) {
         Handle h = new Handle();
         if (uid == null || uid.isEmpty() || cb == null) return h;
 
-        final boolean[] showActive = {true};
+        final boolean[] showActive = {false};
         final boolean[] fsSeen = {false};
         final boolean[] fsOnline = {false};
         final long[] fsLastSeen = {0L};
@@ -228,32 +187,21 @@ public class Presence {
         final boolean[] rtdbSeen = {false};
         final boolean[] rtdbOnline = {false};
         final long[] rtdbLastChanged = {0L};
+        final long[] rtdbBestSeen = {0L};
 
         final Runnable emit = () -> {
             if (h.closed) return;
-            if (!showActive[0]) {
-                cb.onPresence(false, 0L);
-                return;
+            long clock = now();
+            boolean online = PresencePolicy.resolve(showActive[0], rtdbSeen[0], rtdbOnline[0], rtdbLastChanged[0],
+                    fsSeen[0], fsOnline[0], fsLastSeen[0], clock);
+            long bestLastSeen = rtdbSeen[0] && rtdbBestSeen[0] > 0 ? rtdbBestSeen[0] : fsLastSeen[0];
+            cb.onPresence(online, showActive[0] ? bestLastSeen : 0L);
+            if (h.ticker != null) {
+                H.removeCallbacks(h.ticker);
+                long activeTimestamp = rtdbSeen[0] ? rtdbLastChanged[0] : fsLastSeen[0];
+                long remaining = ONLINE_TTL_MS - (clock - activeTimestamp);
+                H.postDelayed(h.ticker, online ? Math.max(1L, Math.min(30_000L, remaining)) : 30_000L);
             }
-            long now = System.currentTimeMillis();
-            long bestLastSeen = Math.max(fsLastSeen[0], rtdbLastChanged[0]);
-
-            boolean fsFreshOnline = fsOnline[0]
-                    && (fsLastSeen[0] > 0L ? (now - fsLastSeen[0]) <= ONLINE_TTL_MS : !rtdbSeen[0]);
-            boolean rtdbFreshOnline = rtdbSeen[0] && rtdbOnline[0]
-                    && !(fsSeen[0] && !fsOnline[0] && fsLastSeen[0] > rtdbLastChanged[0] + 2_000L);
-
-            boolean mergedOnline;
-            if (fsFreshOnline) {
-                if (rtdbSeen[0] && !rtdbOnline[0] && rtdbLastChanged[0] > fsLastSeen[0] + 2_000L) {
-                    mergedOnline = false;
-                } else {
-                    mergedOnline = true;
-                }
-            } else {
-                mergedOnline = rtdbFreshOnline;
-            }
-            cb.onPresence(mergedOnline, bestLastSeen);
         };
 
         if (Fb.rtdb() != null) {
@@ -261,39 +209,63 @@ public class Presence {
                 h.ref = Fb.rtdb().getReference("status").child(uid);
                 h.rtdbL = new ValueEventListener() {
                     @Override public void onDataChange(@NonNull DataSnapshot s) {
-                        if (h.closed || !s.exists()) return;
+                        if (h.closed) return;
                         rtdbSeen[0] = true;
-                        rtdbOnline[0] = "online".equals(s.child("state").getValue(String.class));
-                        Long lc = s.child("lastChanged").getValue(Long.class);
-                        if (lc != null) rtdbLastChanged[0] = lc;
+                        long rootTime = timestamp(s);
+                        long bestTime = rootTime, activeTime = 0, connectionTime = 0;
+                        boolean hasConnections = s.child("connections").exists();
+                        for (DataSnapshot connection : s.child("connections").getChildren()) {
+                            long time = timestamp(connection);
+                            bestTime = Math.max(bestTime, time); connectionTime = Math.max(connectionTime, time);
+                            if (PresencePolicy.isFreshOnline(active(connection), time, now())) activeTime = Math.max(activeTime, time);
+                        }
+                        // Each installation disconnects only itself; another fresh foreground installation stays online.
+                        boolean legacyRoot = !hasConnections || rootTime > connectionTime + 2_000L;
+                        rtdbOnline[0] = activeTime > 0 || (legacyRoot && PresencePolicy.isFreshOnline(active(s), rootTime, now()));
+                        rtdbBestSeen[0] = bestTime;
+                        rtdbLastChanged[0] = rtdbOnline[0] ? Math.max(activeTime, legacyRoot ? rootTime : 0) : bestTime;
                         emit.run();
                     }
-                    @Override public void onCancelled(@NonNull DatabaseError e) { }
+                    @Override public void onCancelled(@NonNull DatabaseError e) {
+                        rtdbSeen[0] = true; rtdbOnline[0] = false; emit.run();
+                    }
                 };
                 h.ref.addValueEventListener(h.rtdbL);
             } catch (Throwable ignored) { }
         }
 
         h.fsL = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
-                    if (h.closed || d == null || !d.exists()) return;
-                    fsSeen[0] = true;
+                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (d, err) -> {
+                    if (h.closed) return;
+                    if (d == null || !d.exists()) { showActive[0] = false; fsSeen[0] = false; fsOnline[0] = false; emit.run(); return; }
+                    fsSeen[0] = !d.getMetadata().isFromCache();
                     Boolean show = d.getBoolean("showActiveStatus");
-                    showActive[0] = (show == null || show);
-                    fsOnline[0] = Boolean.TRUE.equals(d.getBoolean("isOnline"));
+                    showActive[0] = (show == null || show) && !Boolean.TRUE.equals(d.getBoolean("deactivated"))
+                            && !Boolean.TRUE.equals(d.getBoolean("banned"));
+                    fsOnline[0] = firestoreActive(d);
                     fsLastSeen[0] = extractLastSeenMs(d);
                     emit.run();
                 });
 
-        h.ticker = new Runnable() {
-            @Override public void run() {
-                if (h.closed) return;
-                emit.run();
-                H.postDelayed(this, 30_000L);
-            }
-        };
-        H.postDelayed(h.ticker, 30_000L);
+        h.ticker = emit;
+        emit.run();
         return h;
+    }
+
+    private static boolean firestoreActive(DocumentSnapshot data) {
+        Boolean active = data.getBoolean("isActive"), legacy = data.getBoolean("isOnline");
+        if (Boolean.FALSE.equals(active) || Boolean.FALSE.equals(legacy)) return false;
+        return Boolean.TRUE.equals(active) || Boolean.TRUE.equals(legacy);
+    }
+    private static long timestamp(DataSnapshot data) {
+        Object seen = data.child("lastSeen").getValue(), changed = data.child("lastChanged").getValue();
+        return Math.max(seen instanceof Number ? ((Number) seen).longValue() : 0,
+                changed instanceof Number ? ((Number) changed).longValue() : 0);
+    }
+    private static boolean active(DataSnapshot data) {
+        // isActive is authoritative if present; state supports installed legacy clients.
+        Object flag = data.child("isActive").getValue();
+        return flag instanceof Boolean ? Boolean.TRUE.equals(flag) : "online".equals(data.child("state").getValue(String.class));
     }
 
     // ---- typing ----

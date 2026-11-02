@@ -114,7 +114,7 @@ public class App extends Application implements SensorEventListener {
                 startedCount = Math.max(0, startedCount - 1);
                 if (startedCount == 0) {
                     timeHandler.removeCallbacks(deferredOffline);
-                    timeHandler.postDelayed(deferredOffline, 1500L);
+                    timeHandler.postDelayed(deferredOffline, 500L);
                 }
             }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }
