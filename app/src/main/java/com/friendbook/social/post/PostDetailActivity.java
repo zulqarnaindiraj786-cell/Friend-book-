@@ -198,6 +198,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         cancelReply.setVisibility(View.GONE);
         cancelReply.setPadding(Ui.dp(this, 8), 0, 0, 0);
         cancelReply.setOnClickListener(v -> {
+            com.friendbook.social.core.Mentions.clearReplyTarget(input);
             replyingTo = null;
             replyChip.setVisibility(View.GONE);
             cancelReply.setVisibility(View.GONE);
@@ -395,6 +396,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     // ---------- hosts ----------
     @Override public void onReply(Models.Comment parent) {
         replyingTo = parent;
+        com.friendbook.social.core.Mentions.setReplyTarget(input, parent.authorId, parent.authorName);
         replyChip.setText("Replying to " + parent.authorName);
         replyChip.setVisibility(View.VISIBLE);
         ((LinearLayout) replyChip.getParent()).getChildAt(1).setVisibility(View.VISIBLE);

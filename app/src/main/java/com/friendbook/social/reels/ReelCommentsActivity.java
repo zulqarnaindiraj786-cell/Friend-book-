@@ -160,6 +160,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     }
 
     private void cancelReply() {
+        com.friendbook.social.core.Mentions.clearReplyTarget(input);
         replyingTo = null;
         replyChip.setVisibility(View.GONE);
         if (replyChip.getParent() instanceof LinearLayout) {
@@ -189,6 +190,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     public void onReply(Models.Comment c) {
         replyingTo = c;
+        com.friendbook.social.core.Mentions.setReplyTarget(input, c.authorId, c.authorName);
         replyChip.setVisibility(View.VISIBLE);
         if (replyChip.getParent() instanceof LinearLayout) {
             ((LinearLayout) replyChip.getParent()).getChildAt(1).setVisibility(View.VISIBLE);

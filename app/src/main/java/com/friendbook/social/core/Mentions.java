@@ -17,9 +17,43 @@ import java.util.*;
 public final class Mentions {
     private static final int BLUE=0xFF1A73E8;
     private Mentions() {}
-    private static final class Identity extends ForegroundColorSpan {
+    private static class Identity extends ForegroundColorSpan {
         final String uid,label;
         Identity(String uid,String label) { super(BLUE); this.uid=uid; this.label=label; }
+    }
+    private static final class ReplyIdentity extends Identity {
+        ReplyIdentity(String uid,String label) { super(uid,label); }
+    }
+    /** Insert the actual reply author's identity, never the post owner or a name lookup. */
+    public static void setReplyTarget(EditText input,String uid,String name) {
+        String display=name==null || name.trim().isEmpty()?"User":name.trim();
+        String label="@"+display;
+        if(!MentionPolicy.valid(label,0,label.length(),label,uid)) return;
+        clearReplyTarget(input);
+        Editable text=input.getText();
+        for(Identity span:text.getSpans(0,text.length(),Identity.class)) {
+            int start=text.getSpanStart(span),end=text.getSpanEnd(span);
+            if(uid.equals(span.uid) && MentionPolicy.valid(text,start,end,span.label,span.uid)) {
+                input.setSelection(text.length()); return;
+            }
+        }
+        SpannableString prefix=new SpannableString(label+" ");
+        prefix.setSpan(new ReplyIdentity(uid,label),0,label.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.insert(0,prefix);
+        input.setSelection(text.length());
+    }
+    /** Cancel/switch only removes an untouched auto-prefix; never erase a user's edited draft. */
+    public static void clearReplyTarget(EditText input) {
+        Editable text=input.getText();
+        for(ReplyIdentity span:text.getSpans(0,text.length(),ReplyIdentity.class)) {
+            int start=text.getSpanStart(span),end=text.getSpanEnd(span);
+            boolean intact=MentionPolicy.valid(text,start,end,span.label,span.uid);
+            text.removeSpan(span);
+            if(intact) {
+                if(end<text.length() && text.charAt(end)==' ') end++;
+                text.delete(start,end);
+            }
+        }
     }
     public static List<Map<String,Object>> read(Object value) {
         List<Map<String,Object>> result=new ArrayList<>();

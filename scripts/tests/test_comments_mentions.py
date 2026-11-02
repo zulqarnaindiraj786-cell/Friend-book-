@@ -12,6 +12,18 @@ class CommentMentionGuards(unittest.TestCase):
             self.assertIn('busy = false;',send[send.index('});'):send.index('if (local != null)')])
             self.assertNotIn('Ui.hideKeyboard(this)',source)
             self.assertIn('Mentions.capture(input)',source)
+    def test_reply_inserts_comment_author_identity_in_body(self):
+        for file in ['post/PostDetailActivity.java','reels/ReelCommentsActivity.java']:
+            source=(JAVA/file).read_text()
+            reply=source[source.index('void onReply('):]
+            self.assertIn('Mentions.setReplyTarget(input,',reply)
+            self.assertIn('.authorId,',reply)
+            self.assertIn('Mentions.clearReplyTarget(input)',source)
+        source=(JAVA/'core/Mentions.java').read_text()
+        self.assertIn('new ReplyIdentity(uid,label)',source)
+        self.assertIn('text.insert(0,prefix)',source)
+        self.assertIn('text.removeSpan(span)',source)
+
     def test_persistence_and_rendering_including_edits(self):
         engine=(JAVA/'post/CommentsEngine.java').read_text()
         self.assertIn('m.put("mentions", c.mentions)',engine)
