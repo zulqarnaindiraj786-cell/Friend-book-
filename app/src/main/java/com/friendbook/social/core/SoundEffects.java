@@ -12,9 +12,9 @@ import com.friendbook.social.App;
 import com.friendbook.social.R;
 import java.util.*;
 
-/** Small original foreground effects; no audio-focus request, player interruption or background roar. */
+/** Chat-only foreground tones; no audio-focus request or media interruption. */
 public final class SoundEffects {
-    public static final String REACTION="reaction", COMMENT="comment", SENT="sent", RECEIVED="received";
+    public static final String SENT="sent", RECEIVED="received";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static SoundPool pool;
     private static final Map<String,Integer> samples = new HashMap<>();
@@ -22,7 +22,6 @@ public final class SoundEffects {
     private static final Map<String,Long> lastPlayed = new HashMap<>();
     private static final Map<Integer,Runnable> pending = new HashMap<>();
     private static final List<Integer> streams = new ArrayList<>();
-    private static int giftStream;
     private static volatile String visibleChat;
     private SoundEffects() {}
     private static void onMain(Runnable work) {
@@ -55,14 +54,8 @@ public final class SoundEffects {
                 if (pool!=sp || status!=0) return;
                 loaded.add(id); Runnable action=pending.remove(id); if (action!=null) action.run();
             });
-            samples.put(REACTION,current.load(app,R.raw.like_pop,1));
-            samples.put(COMMENT,current.load(app,R.raw.comment_pop,1));
             samples.put(SENT,current.load(app,R.raw.sfx_message_sent,1));
             samples.put(RECEIVED,current.load(app,R.raw.message_pop,1));
-            // Load tiny interaction sounds before the longer live effects.
-            samples.put("lion",current.load(app,R.raw.sfx_lion_roar,1));
-            samples.put("airplane",current.load(app,R.raw.sfx_airplane,1));
-            samples.put("gift",current.load(app,R.raw.sfx_gift,1));
             } catch (RuntimeException error) {
                 if(pool!=null) pool.release(); pool=null; samples.clear(); loaded.clear(); pending.clear();
                 android.util.Log.w("FriendBookSound", "Sound output unavailable; continuing silently");
@@ -71,14 +64,11 @@ public final class SoundEffects {
     }
     /** Immediate local action feedback, not a server-delivery acknowledgement. */
     public static void action(Context c,String effect,String actor) {
-        if (actor==null || !actor.equals(Fb.uid())) return;
-        play(c,effect,false);
+        if (!SENT.equals(effect) || actor==null || !actor.equals(Fb.uid())) return;
+        play(c,effect);
     }
-    public static void incoming(Context c) { if (c!=null && Prefs.notifMessages(c)) play(c,RECEIVED,false); }
-    public static void gift(Context c,String id,String emoji,String name) {
-        play(c,GiftSoundPolicy.effect(id,emoji,name),true);
-    }
-    private static void play(Context c,String effect,boolean gift) {
+    public static void incoming(Context c) { if (c!=null && Prefs.notifMessages(c)) play(c,RECEIVED); }
+    private static void play(Context c,String effect) {
         if(c==null) return;
         Context app=c.getApplicationContext(); long requested=ticket(); String actor=Fb.uid();
         if (!allowed(app)) return;
@@ -88,14 +78,12 @@ public final class SoundEffects {
             Integer sample=samples.get(effect); if (sample==null) return;
             Runnable action=() -> {
                 if (pool==null || !Objects.equals(actor,Fb.uid()) || !allowed(app) || ticket()-requested>120L) return;
-                String lane=gift ? "gift" : effect;
+                String lane=effect;
                 long previous=lastPlayed.getOrDefault(lane,0L);
-                if (previous>0 && ticket()-previous<(gift ? 1400L : 160L)) return;
+                if (previous>0 && ticket()-previous<100L) return;
                 lastPlayed.put(lane,ticket());
-                if (gift && giftStream!=0) pool.stop(giftStream);
-                float volume=gift ? .42f : .85f;
-                int stream=pool.play(sample,volume,volume,gift?2:1,0,1f);
-                if (gift) giftStream=stream;
+                float volume=.7f;
+                int stream=pool.play(sample,volume,volume,1,0,1f);
                 streams.add(stream); if(streams.size()>32) streams.remove(0);
             };
             if(loaded.contains(sample)) action.run(); else pending.put(sample,action);
@@ -103,10 +91,9 @@ public final class SoundEffects {
     }
     public static void stopAll() { MAIN.post(() -> {
         pending.clear(); if(pool!=null) for(int stream:streams) pool.stop(stream);
-        if(pool!=null && giftStream!=0) pool.stop(giftStream);
-        streams.clear(); giftStream=0;
+        streams.clear();
     }); }
     public static void release() { MAIN.post(() -> {
-        if(pool!=null) pool.release(); pool=null; samples.clear();loaded.clear();pending.clear();streams.clear();giftStream=0;
+        if(pool!=null) pool.release(); pool=null; samples.clear();loaded.clear();pending.clear();streams.clear();
     }); }
 }

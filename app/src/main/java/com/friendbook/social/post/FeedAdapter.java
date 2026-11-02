@@ -721,6 +721,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Ui.pad(vh.content, 12, 2, 12, 8);
             vh.content.setText(hasText ? styleHashtags(c, p.content) : "");
         }
+        vh.content.setText(com.friendbook.social.core.Mentions.styled(vh.content.getText(), p.mentions));
         com.friendbook.social.core.LinkUtils.makeLinksClickable(vh.content);
         vh.content.setLayoutParams(clp);
 
@@ -973,10 +974,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             bp.leftMargin = Ui.dp(c, 8);
 
             TextView authorT = Ui.tvBold(c, (cm.pinned ? "📌 " : "") + uName, 12.5f, Ui.txt(c));
+            if(cm.authorId!=null && cm.authorId.equals(p.authorId)) {
+                authorT.append("  ◆ Creator"); authorT.setTextColor(0xFF1A73E8);
+            }
+            authorT.setOnClickListener(v -> { if(host!=null) host.openProfile(cm.authorId); });
             bubble.addView(authorT);
             String bodyTxt = cm.content != null && !cm.content.isEmpty()
                     ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
             TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
+            bodyT.setText(com.friendbook.social.core.Mentions.styled(bodyTxt,cm.mentions));
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(bodyT);
             bodyT.setMaxLines(3);
             bubble.addView(bodyT);
             bubble.setOnClickListener(v -> { if (host != null) host.openComments(p); });

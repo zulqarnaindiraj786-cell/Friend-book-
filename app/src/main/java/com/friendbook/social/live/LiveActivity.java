@@ -1777,8 +1777,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 long giftTime = Format.ts(m.get("createdAt"));
                 if (giftTime <= 0) giftTime = Format.longOf(m, "createdAtMs");
                 boolean freshGiftSound = giftSoundGate.observe(id, giftTime, com.friendbook.social.core.Presence.now(), soundEligible);
-                if (freshGiftSound && stars > 0) com.friendbook.social.core.SoundEffects.gift(this,
-                        Format.str(m, "giftId"), gEmoji, gName);
                 if (isNewPacket && stars > 0) {
                     totalGiftsCount++;
                     int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;

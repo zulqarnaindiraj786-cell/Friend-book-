@@ -319,12 +319,17 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
 
         Ui.avatar(activity, h.av, dispPhoto);
-        h.author.setText((c.pinned ? "📌 " : "") + dispName);
+        android.text.SpannableString authorLabel = new android.text.SpannableString((c.pinned ? "📌 " : "") + dispName
+                + (c.authorId != null && c.authorId.equals(postAuthorId) ? "  ◆ Creator" : ""));
+        if (c.authorId != null && c.authorId.equals(postAuthorId)) {
+            authorLabel.setSpan(new android.text.style.ForegroundColorSpan(0xFF1A73E8),0,authorLabel.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        h.author.setText(authorLabel);
         TickCache.attach(h.tick, c.authorId);
 
         boolean hasText = c.content != null && !c.content.isEmpty();
         h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
-        h.text.setText(hasText ? c.content : "");
+        h.text.setText(com.friendbook.social.core.Mentions.styled(hasText ? c.content : "", c.mentions));
         com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
 
         boolean hasMedia = c.imageUrl != null && !c.imageUrl.isEmpty();
@@ -488,7 +493,8 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     private void editDialog(Models.Comment c) {
         EditText e = Ui.multi(activity, "Comment", 3);
-        e.setText(c.content);
+        com.friendbook.social.core.Mentions.attach(e);
+        com.friendbook.social.core.Mentions.restore(e,c.content,c.mentions);
         LinearLayout box = Ui.col(activity);
         Ui.pad(box, 18, 12, 18, 4);
         box.addView(e, new LinearLayout.LayoutParams(-1, -2));
@@ -498,6 +504,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 .setPositiveButton("Save", (d, w) -> {
                     String nv = e.getText().toString().trim();
                     if (nv.isEmpty()) return;
+                    c.mentions = com.friendbook.social.core.Mentions.capture(e);
                     c.content = nv;
                     c.edited = true;
                     notifyDataSetChanged();

@@ -240,6 +240,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         composer.addView(camBtn);
 
         input = Ui.input(this, "Write a comment…");
+        com.friendbook.social.core.Mentions.attach(input, () -> post == null ? null : post.authorId);
         input.setBackground(Ui.round(this, Ui.inputBg(this), 20));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         ip.leftMargin = Ui.dp(this, 6);
@@ -329,7 +330,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         String me = Fb.uid();
         if (me == null) return;
         busy = true;
-        Ui.hideKeyboard(this);
+        final List<Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
 
         if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
@@ -339,18 +340,18 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     .addOnSuccessListener(url -> {
                         pendingPhotoUri = null;
                         mediaPreviewRow.setVisibility(View.GONE);
-                        writeCommentDoc(me, text, url);
+                        writeCommentDoc(me, text, url, mentions);
                     })
                     .addOnFailureListener(err -> {
                         busy = false;
                         Ui.toast(PostDetailActivity.this, "Photo upload failed: " + err.getMessage());
                     });
         } else {
-            writeCommentDoc(me, text, "");
+            writeCommentDoc(me, text, "", mentions);
         }
     }
 
-    private void writeCommentDoc(String me, String text, String mediaUrl) {
+    private void writeCommentDoc(String me, String text, String mediaUrl, List<Map<String,Object>> mentions) {
         final Models.Comment replyTarget = replyingTo;
         String parentId = replyTarget != null ? replyTarget.id : "";
 
@@ -363,9 +364,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         refreshSendState();
 
         // Writes atomically to posts/{postId}.commentsMap.<newId> (100% visible to ALL users!) + mirrors!
-        Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId,
+        Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId, mentions,
                 (ok, errMsg) -> {
-                    busy = false;
                     if (ok) {
                         if (post != null && !me.equals(post.authorId)) {
                             Notify.send(post.authorId, "comment",
@@ -380,6 +380,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     }
                 });
 
+        busy = false; // Queueing is complete; never wait for a remote ACK to accept the next comment.
+        input.requestFocus();
         if (local != null) {
             rawComments.add(local);
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));

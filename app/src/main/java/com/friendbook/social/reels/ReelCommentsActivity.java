@@ -131,6 +131,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         row.addView(av, new LinearLayout.LayoutParams(s, s));
         Ui.avatar(this, av, Fb.myPhoto());
         input = Ui.input(this, "Add a public comment…");
+        com.friendbook.social.core.Mentions.attach(input, () -> author);
         input.setBackground(Ui.round(this, Ui.inputBg(this), 20));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         ip.leftMargin = Ui.dp(this, 8);
@@ -215,13 +216,12 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         final Models.Comment replyTarget = replyingTo;
         String parentId = replyTarget == null ? "" : replyTarget.id;
 
+        java.util.List<java.util.Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
         cancelReply();
         input.setText("");
-        Ui.hideKeyboard(this);
 
-        Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId,
+        Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId, mentions,
                 (ok, errMsg) -> {
-                    busy = false;
                     if (ok) {
                         if (author != null && !me.equals(author)) {
                             Notify.send(author, "reel_comment", Fb.myName() + " commented on your reel", reelId);
@@ -234,6 +234,8 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
                     }
                 });
 
+        busy = false; // Local queue accepted; allow another comment before network acknowledgement.
+        input.requestFocus();
         if (local != null) {
             rawComments.add(local);
             updateHeaderText();

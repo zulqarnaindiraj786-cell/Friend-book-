@@ -244,7 +244,6 @@ public class Reactions {
             });
         } else {
             final Map<String, Object> data = myData;
-            com.friendbook.social.core.SoundManager.action(c, "reaction", me);
             reactRef.set(data).addOnSuccessListener(v -> {
                 reconcileFromCollection(c, post.id, post.likes);
                 com.friendbook.social.push.PushTrace.stage("reaction_write_ok",

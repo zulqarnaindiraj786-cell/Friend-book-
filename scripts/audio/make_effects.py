@@ -1,58 +1,19 @@
-"""Original deterministic synthesized effects; no third-party or platform sound samples."""
-import math, random, struct, wave
+"""Generate original short chat-only send/receive tones, not WhatsApp recordings."""
+import math, struct, wave
 from pathlib import Path
 OUT=Path(__file__).resolve().parents[2]/'app/src/main/res/raw'
 SR=22050
-rng=random.Random(5818)
-def save(name, duration, fn, peak=.72):
+def save(name,duration,fn):
     values=[fn(i/SR) for i in range(int(duration*SR))]
-    maximum=max(abs(v) for v in values) or 1
+    peak=max(abs(v) for v in values) or 1
     with wave.open(str(OUT/(name+'.wav')),'wb') as w:
         w.setparams((1,2,SR,0,'NONE','not compressed'))
-        w.writeframes(b''.join(struct.pack('<h',int(max(-1,min(1,v/maximum*peak))*32767)) for v in values))
-def chirp(t,f0,f1,d): return math.sin(2*math.pi*(f0*t+(f1-f0)*t*t/(2*d)))
-def ping(t,d,f0,f1):
-    return math.sin(math.pi*min(1,t/d))**2*math.exp(-t*8)*(chirp(t,f0,f1,d)+.18*chirp(t,2*f0,2*f1,d))
-# Fast attack (2 ms), short rounded UI pops: no slow chirp/swell or silent lead-in.
-def pluck(t, duration, frequency):
-    if t < 0 or t >= duration: return 0.0
-    attack=min(1.0,t/.002)
-    tail=min(1.0,(duration-t)/.008)
-    return attack*tail*math.exp(-t*34)*(math.sin(2*math.pi*frequency*t)+.16*math.sin(4*math.pi*frequency*t))
-def pop(t, frequency, decay, duration=.105):
-    attack=min(1.0,t/.0015)
-    tail=min(1.0,max(0,(duration-t)/.008))
-    # Falling resonant bubble, not an upward electronic whistle.
-    phase=2*math.pi*(frequency*t+170*.012*(1-math.exp(-t/.012)))
-    return attack*tail*math.exp(-t*decay)*(math.sin(phase)+.12*math.sin(2*phase))
-save('like_pop',.2,lambda t:pop(t,650,42,.2),.88)
-save('comment_pop',.2,lambda t:pop(t,440,30,.2),.88)
-save('sfx_message_sent',.115,lambda t:pop(t,940,32),.88)
-save('message_pop',.245,lambda t:pluck(t,.12,880)+.85*pluck(t-.105,.14,1174.66),.88)
-save('sfx_gift',.43,lambda t:ping(t,.43,700,1420)+.25*ping(t,.43,1050,2100))
-# Two textured, chesty synthetic growl/roar pulses: low formants + irregular harmonic excitation.
-low=0.0
-phase=0.0
-def roar(t):
-    global low,phase
-    noise=rng.uniform(-1,1); low=.86*low+.14*noise
-    env=0
-    for start,length in [(0.08,1.25),(1.52,1.0)]:
-        u=(t-start)/length
-        if 0<u<1: env+=math.sin(math.pi*u)**.75*(.72+.28*math.sin(2*math.pi*8*t)**2)
-    freq=72+24*math.sin(math.pi*t/2.8)+8*low
-    phase+=2*math.pi*freq/SR
-    source=sum(math.sin(phase*k)/(k**.8) for k in range(1,9))
-    return env*(.55*math.tanh(source*1.5)+1.9*low+.16*noise)
-save('sfx_lion_roar',2.8,roar,.78)
-low=0.0
-phase=0.0
-def flyby(t):
-    global low,phase
-    noise=rng.uniform(-1,1); low=.94*low+.06*noise
-    env=math.sin(math.pi*t/3.0)**2
-    pitch=260-130*(t/3.0)+48*math.exp(-((t-1.25)/.5)**2)
-    phase+=2*math.pi*pitch/SR
-    return env*(.5*noise+1.7*low+.13*math.sin(phase)+.07*math.sin(2.07*phase))
-save('sfx_airplane',3.0,flyby,.72)
-print('Generated 7 original mono PCM effects at',SR,'Hz')
+        w.writeframes(b''.join(struct.pack('<h',int(v/peak*.8*32767)) for v in values))
+def tap(t,freq,duration):
+    if t<0 or t>=duration: return 0
+    envelope=min(1,t/.002)*min(1,(duration-t)/.006)*math.exp(-t*38)
+    return envelope*(math.sin(2*math.pi*freq*t)+.12*math.sin(4*math.pi*freq*t))
+# Subtle percussive two-tone taps; no long ringtone or slow attack.
+save('sfx_message_sent',.095,lambda t:tap(t,840,.095)+.4*tap(t-.022,1120,.073))
+save('message_pop',.14,lambda t:tap(t,1120,.07)+.65*tap(t-.06,840,.08))
+print('Generated two original chat-only PCM tones')

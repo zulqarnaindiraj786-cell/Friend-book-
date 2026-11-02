@@ -192,6 +192,7 @@ public class CommentsEngine {
         m.put("authorName", c.authorName == null ? "friendbook User" : c.authorName);
         m.put("authorPhotoUrl", c.authorPhoto == null ? "" : c.authorPhoto);
         m.put("authorPhoto", c.authorPhoto == null ? "" : c.authorPhoto);
+        m.put("mentions", c.mentions);
         m.put("content", c.content == null ? "" : c.content);
         m.put("text", c.content == null ? "" : c.content);
         m.put("imageUrl", c.imageUrl == null ? "" : c.imageUrl);
@@ -219,6 +220,17 @@ public class CommentsEngine {
                                              final String mediaUrl,
                                              final String parentId,
                                              final PostCallback cb) {
+        return sendComment(collection, docId, queryKey, text, mediaUrl, parentId, new ArrayList<>(), cb);
+    }
+
+    public static Models.Comment sendComment(final String collection,
+                                             final String docId,
+                                             final String queryKey,
+                                             final String text,
+                                             final String mediaUrl,
+                                             final String parentId,
+                                             final List<Map<String,Object>> mentions,
+                                             final PostCallback cb) {
         String me = Fb.uid();
         if (me == null || docId == null || docId.isEmpty()) {
             if (cb != null) cb.onComplete(false, "Not signed in");
@@ -234,6 +246,7 @@ public class CommentsEngine {
         local.authorName = Fb.myName();
         local.authorPhoto = Fb.myPhoto();
         local.content = text == null ? "" : text;
+        local.mentions = mentions == null ? new ArrayList<>() : new ArrayList<>(mentions);
         local.imageUrl = mediaUrl == null ? "" : mediaUrl;
         local.parentId = parentId == null ? "" : parentId;
         local.createdAt = now;
@@ -246,7 +259,6 @@ public class CommentsEngine {
         dotUpdates.put("commentsMap." + newId, commentMap);
         dotUpdates.put("comments", FieldValue.increment(1));
 
-        com.friendbook.social.core.SoundManager.action(com.friendbook.social.App.instance, "comment", me);
         parentRef.update(dotUpdates)
                 .addOnSuccessListener(v -> {
                     if (cb != null) cb.onComplete(true, null);
@@ -284,7 +296,6 @@ public class CommentsEngine {
         dot.put("commentsMap." + c.id + ".reactions." + userId, rxVal);
         dot.put("commentsMap." + c.id + ".likedBy", likedByVal);
         dot.put("commentsMap." + c.id + ".likes", c.likes);
-        if (nextType != null) com.friendbook.social.core.SoundManager.action(com.friendbook.social.App.instance, "reaction", userId);
         Fb.db().collection(collection).document(docId).update(dot);
 
         Map<String, Object> up = new HashMap<>();
@@ -301,12 +312,14 @@ public class CommentsEngine {
     public static void editComment(String collection, String docId, Models.Comment c, String newText) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()) return;
         Map<String, Object> dot = new HashMap<>();
+        dot.put("commentsMap." + c.id + ".mentions", c.mentions);
         dot.put("commentsMap." + c.id + ".content", newText);
         dot.put("commentsMap." + c.id + ".text", newText);
         dot.put("commentsMap." + c.id + ".edited", true);
         Fb.db().collection(collection).document(docId).update(dot);
 
         Map<String, Object> up = new HashMap<>();
+        up.put("mentions", c.mentions);
         up.put("content", newText);
         up.put("text", newText);
         up.put("edited", true);

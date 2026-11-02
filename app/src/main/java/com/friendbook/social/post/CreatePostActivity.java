@@ -53,6 +53,7 @@ public class CreatePostActivity extends Activity {
     };
 
     private EditText text;
+    private java.util.List<java.util.Map<String,Object>> submittingMentions = new java.util.ArrayList<>();
     private TextView privacyBtn, feelingBtn, postBtn, mediaLabel;
     private ImageView preview;
     private VideoView videoPreview;
@@ -162,6 +163,7 @@ public class CreatePostActivity extends Activity {
         body.addView(specialBadge, sbp);
 
         text = Ui.multi(this, "What's on your mind?", 5);
+        com.friendbook.social.core.Mentions.attach(text);
         text.setBackgroundColor(Color.TRANSPARENT);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2);
         tp.topMargin = Ui.dp(this, 10);
@@ -735,7 +737,7 @@ public class CreatePostActivity extends Activity {
     private void loadForEdit() {
         Fb.db().collection("posts").document(editId).get().addOnSuccessListener(d -> {
             if (!d.exists()) { Ui.toast(this, "Post not found"); finish(); return; }
-            text.setText(d.getString("content"));
+            com.friendbook.social.core.Mentions.restore(text, d.getString("content"), com.friendbook.social.core.Mentions.read(d.get("mentions")));
             String f = d.getString("feeling");
             if (f != null && !f.isEmpty()) { feeling = f; feelingBtn.setText(f); }
             String p = d.getString("privacy");
@@ -766,6 +768,7 @@ public class CreatePostActivity extends Activity {
     private void submit() {
         if (busy) return;
         String content = text.getText().toString().trim();
+        submittingMentions = com.friendbook.social.core.Mentions.capture(text);
         boolean hasPoll = !pollOptions.isEmpty();
         boolean hasSpecial = !"regular".equals(postType);
         if (content.isEmpty() && mediaUris.isEmpty() && !hasPoll && !hasSpecial && bgColor == 0 && editId == null) {
@@ -822,6 +825,7 @@ public class CreatePostActivity extends Activity {
     private void save(String content, String uploadedUrl, List<String> allUrls) {
         Map<String, Object> m = new HashMap<>();
         m.put("content", content);
+        m.put("mentions", submittingMentions);
         m.put("feeling", feeling);
         m.put("privacy", privacy);
         m.put("location", location == null ? "" : location);
@@ -899,6 +903,7 @@ public class CreatePostActivity extends Activity {
         optimistic.authorVerified = myVer;
         optimistic.authorTickLevel = myTick;
         optimistic.content = content;
+        optimistic.mentions = new java.util.ArrayList<>(submittingMentions);
         optimistic.feeling = feeling;
         optimistic.privacy = privacy;
         optimistic.location = location == null ? "" : location;

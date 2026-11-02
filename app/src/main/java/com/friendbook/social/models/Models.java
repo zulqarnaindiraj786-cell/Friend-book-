@@ -141,6 +141,7 @@ public class Models {
     }
 
     public static class Post {
+        public List<Map<String,Object>> mentions = new ArrayList<>();
         public String id, authorId, authorName, authorPhoto, content, mediaUrl, mediaType,
                 feeling, privacy, sharedFromId, sharedFromAuthor, sharedFromContent,
                 sharedFromMediaUrl, sharedFromMediaType, location, groupId;
@@ -196,6 +197,7 @@ public class Models {
             p.authorName = Format.strOr(m, "authorName", "User");
             p.authorPhoto = Format.str(m, "authorPhotoUrl");
             p.content = Format.str(m, "content");
+            p.mentions = com.friendbook.social.core.Mentions.read(m.get("mentions"));
             p.mediaUrl = Format.str(m, "mediaUrl");
             p.mediaType = Format.strOr(m, "mediaType", "none");
             p.feeling = Format.str(m, "feeling");
@@ -324,6 +326,7 @@ public class Models {
     }
 
     public static class Comment {
+        public List<Map<String,Object>> mentions = new ArrayList<>();
         public String id, postId, authorId, authorName, authorPhoto, content, imageUrl, parentId;
         public boolean edited;
         public boolean pinned;
@@ -348,6 +351,7 @@ public class Models {
                     Format.strOr(m, "authorPhoto", Format.str(m, "userPhoto")));
             c.content = Format.strOr(m, "content",
                     Format.strOr(m, "text", Format.str(m, "message")));
+            c.mentions = com.friendbook.social.core.Mentions.read(m == null ? null : m.get("mentions"));
             c.imageUrl = Format.strOr(m, "imageUrl", Format.str(m, "mediaUrl"));
             c.parentId = Format.str(m, "parentId");
             c.edited = m != null && Boolean.TRUE.equals(m.get("edited"));
