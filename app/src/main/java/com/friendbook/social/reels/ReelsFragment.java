@@ -1518,6 +1518,7 @@ public class ReelsFragment extends Fragment {
                     });
 
                     mp.setOnErrorListener((player, what, extra) -> {
+                        if(player!=activeMp || !java.util.Objects.equals(targetUrl,reel==null?null:reel.videoUrl)) return true;
                         bufferingSpinner.setVisibility(View.GONE);
                         // Automatic fallback to raw untransformed URL if CDN transform failed
                         if (!triedRawFallback && reel != null && reel.videoUrl != null) {
@@ -1553,6 +1554,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void prepareWithRawUrlFallback(Context ctx, String rawUrl) {
+                if(!userRequestedVideo || !wantPlay || getBindingAdapterPosition()!=playingPos || reel==null || !java.util.Objects.equals(rawUrl,reel.videoUrl)) return;
                 releasePlayerOnly();
                 try {
                     MediaPlayer mp = new MediaPlayer();
@@ -1611,7 +1613,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void startPreparedPlayer() {
-                if (!wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
+                if (!userRequestedVideo || !wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
                 try {
                     float vol = muted ? 0f : 1f;
                     activeMp.setVolume(vol, vol);

@@ -204,7 +204,9 @@ public class ConversationsActivity extends Activity {
         // ⚡ 0.0ms Instant Frame #1 Hydration from FastCache!
         String me0 = Fb.uid();
         if (me0 != null) {
+            int cachedRooms=0;
             for (Models.ChatRoom cr : com.friendbook.social.core.FastCache.getChats()) {
+                if(cachedRooms++>=15) break;
                 Room r = new Room();
                 r.room = cr;
                 r.other = cr.otherUid(me0);

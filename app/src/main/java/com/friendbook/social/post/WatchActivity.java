@@ -71,8 +71,14 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         rv.setItemViewCacheSize(16);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
-        adapter.showFooter = false;
+        adapter.showFooter = true;
         rv.setAdapter(adapter);
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                LinearLayoutManager manager=(LinearLayoutManager)list.getLayoutManager();
+                if(dy>0 && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-3) loadMore();
+            }
+        });
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
             forceReRank = true;
