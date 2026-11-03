@@ -46,6 +46,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final List<Models.FriendRequest> incoming = new ArrayList<>();
     private final Set<String> dismissedReqIds = new HashSet<>();
     private final Set<String> outgoing = new HashSet<>();
+    private LinearLayout pageControls;
     private final List<String> friendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
     private final List<Models.User> suggestions = new ArrayList<>();
@@ -98,6 +99,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         adapter = new UsersAdapter(a, this);
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(a);root.addView(pageControls);
         refreshTabs();
         return root;
     }
@@ -127,8 +129,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         String me = Fb.uid();
         if (me == null) return;
 
-        inReg = Fb.db().collection("friend_requests").whereEqualTo("toUid", me)
-                .addSnapshotListener((snap, err) -> {
+        inReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friend_requests").whereEqualTo("toUid", me),20,"Incoming requests",(snap,err)-> {
                     incoming.clear();
                     List<String> allIds = new ArrayList<>();
                     if (snap != null) {
@@ -148,8 +149,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     render();
                 });
 
-        outReg = Fb.db().collection("friend_requests").whereEqualTo("fromUid", me)
-                .addSnapshotListener((snap, err) -> {
+        outReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friend_requests").whereEqualTo("fromUid", me),20,"Sent requests",(snap,err)-> {
                     outgoing.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -160,8 +160,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     render();
                 });
 
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
+        friendsReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friends").whereArrayContains("participants", me),20,"Friends",(snap,err)-> {
                     friendIds.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -173,10 +172,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     render();
                 });
 
-        usersReg = Fb.db().collection("users")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(60)
-                .addSnapshotListener((snap, err) -> {
+        usersReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,
+                Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),20,"People",(snap,err)-> {
                     suggestions.clear();
                     String me2 = Fb.uid();
                     if (snap != null) {
@@ -325,7 +322,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         // guard duplicates
         Fb.db().collection("friend_requests")
                 .whereEqualTo("fromUid", me).whereEqualTo("toUid", target.uid)
-                .get().addOnSuccessListener(snap -> {
+                .limit(1).get().addOnSuccessListener(snap -> {
                     if (snap != null && !snap.isEmpty()) {
                         Ui.toast(getActivity(), "Request already sent");
                         return;
@@ -348,13 +345,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void cancelRequest(Models.User target) {
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("friend_requests")
-                .whereEqualTo("fromUid", me).whereEqualTo("toUid", target.uid)
-                .get().addOnSuccessListener(snap -> {
-                    if (snap == null) return;
-                    for (DocumentSnapshot d : snap) d.getReference().delete();
-                    Ui.toast(getActivity(), "Request cancelled");
-                });
+        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
+                .whereEqualTo("fromUid",me).whereEqualTo("toUid",target.uid))
+                .addOnSuccessListener(v->Ui.toast(getActivity(),"Request cancelled"))
+                .addOnFailureListener(e->Ui.toast(getActivity(),"Couldn't cancel. Please retry."));
     }
 
     private void acceptRequest(UsersAdapter.Row r) {
@@ -385,8 +379,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 "Unfriend", () -> {
                     String me = Fb.uid();
                     if (me == null) return;
-                    Fb.db().collection("friends").whereArrayContains("participants", me)
-                            .get().addOnSuccessListener(snap -> {
+                    Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,u.uid),java.util.Arrays.asList(u.uid,me)))
+                            .limit(1).get().addOnSuccessListener(snap -> {
                                 if (snap == null) return;
                                 for (DocumentSnapshot d : snap) {
                                     List<String> parts = Models.ChatRoom.fromDoc(d).participants;

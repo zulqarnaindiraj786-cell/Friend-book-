@@ -144,11 +144,9 @@ public class MonetizationActivity extends Activity {
         Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
                 .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
         if (subsCountReg != null) subsCountReg.remove();
-        subsCountReg = Fb.db().collection("subscriptions")
-                .whereEqualTo("creatorId", me)
-                .whereEqualTo("status", "active")
-                .addSnapshotListener((snap, err) ->
-                        subsCountT.setText("Active VIP Fan Club members: " + (snap == null ? 0 : snap.size())));
+        subsCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("subscriptions")
+                .whereEqualTo("creatorId",me).whereEqualTo("status","active"),total->
+                    subsCountT.setText("Active VIP Fan Club members: "+total));
     }
 
     private void checkEligibility(int followers, int reels) {

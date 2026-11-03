@@ -30,6 +30,7 @@ import java.util.Locale;
 
 /** Birthdays tab: friends whose birthday is today or coming up. */
 public class BirthdaysActivity extends Activity {
+    private LinearLayout pageControls;
 
     private final List<RowItem> rows = new ArrayList<>();
     private Adapter adapter;
@@ -71,6 +72,7 @@ public class BirthdaysActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -79,8 +81,8 @@ public class BirthdaysActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
+        friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
                     friendIds.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap)

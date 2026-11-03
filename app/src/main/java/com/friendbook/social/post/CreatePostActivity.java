@@ -381,33 +381,12 @@ public class CreatePostActivity extends Activity {
 
     /** 👥 Tag people — multi-pick from your friends; shows "— with X" on the post. */
     private void tagFriendsDialog() {
-        String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("friends").whereArrayContains("participants", me).get()
-                .addOnSuccessListener(snap -> {
-                    java.util.List<String> ids = new ArrayList<>();
-                    for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                        List<String> parts = com.friendbook.social.models.Models.ChatRoom.fromDoc(d).participants;
-                        for (String p : parts) if (!p.equals(me)) ids.add(p);
-                    }
-                    if (ids.isEmpty()) { Ui.toast(this, "No friends to tag yet"); return; }
-                    // resolve names in chunks of 10
-                    java.util.List<String> names = new ArrayList<>();
-                    java.util.List<String> uids = new ArrayList<>();
-                    java.util.List<java.util.List<String>> chunks = Ui.chunks(ids, 10);
-                    final int[] left = {chunks.size()};
-                    for (java.util.List<String> chunk : chunks) {
-                        Fb.db().collection("users").whereIn(
-                                com.google.firebase.firestore.FieldPath.documentId(), chunk).get()
-                                .addOnSuccessListener(s -> {
-                                    for (com.google.firebase.firestore.DocumentSnapshot d2 : s) {
-                                        uids.add(d2.getId());
-                                        names.add(Format.strOr(d2.getData(), "displayName", "User"));
-                                    }
-                                    if (--left[0] == 0) showTagPicker(uids, names);
-                                });
-                    }
-                });
+        java.util.Map<String,String> initial=new java.util.LinkedHashMap<>();
+        for(int i=0;i<taggedUids.size();i++)initial.put(taggedUids.get(i),i<taggedNames.size()?taggedNames.get(i):"User");
+        com.friendbook.social.core.FriendPicker.multi(this,"Tag friends",initial,selected->{
+            taggedUids.clear();taggedNames.clear();taggedUids.addAll(selected.keySet());taggedNames.addAll(selected.values());
+            Ui.toast(this,taggedNames.isEmpty()?"Tags cleared":"Tagged: "+android.text.TextUtils.join(", ",taggedNames));
+        });
     }
 
     private void showTagPicker(java.util.List<String> uids, java.util.List<String> names) {

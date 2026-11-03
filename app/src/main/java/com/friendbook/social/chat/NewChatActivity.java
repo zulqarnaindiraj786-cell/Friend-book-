@@ -34,6 +34,7 @@ import java.util.Set;
  * Friends & Online users sort to the top automatically.
  */
 public class NewChatActivity extends Activity {
+    private LinearLayout pageControls;
 
     private TextView empty;
     private RecyclerView rv;
@@ -110,6 +111,7 @@ public class NewChatActivity extends Activity {
         };
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -119,8 +121,8 @@ public class NewChatActivity extends Activity {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
 
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
+        friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
                     friendIds.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -132,8 +134,8 @@ public class NewChatActivity extends Activity {
                     render();
                 });
 
-        usersReg = Fb.db().collection("users").limit(150)
-                .addSnapshotListener((snap, err) -> {
+        usersReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("users"),20,"new-chat-people",(snap,err)-> {
+                    allUsers.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
                             Models.User u = Models.User.fromDoc(d);

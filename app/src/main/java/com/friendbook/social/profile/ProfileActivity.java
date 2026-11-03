@@ -1298,11 +1298,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 break;
             case "outgoing":
                 Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () ->
-                        Fb.db().collection("friend_requests")
-                                .whereEqualTo("fromUid", Fb.uid()).whereEqualTo("toUid", uid)
-                                .get().addOnSuccessListener(snap -> {
-                                    for (DocumentSnapshot d : snap) d.getReference().delete();
-                                }));
+                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
+                                .whereEqualTo("fromUid",Fb.uid()).whereEqualTo("toUid",uid))
+                                .addOnFailureListener(e->Ui.toast(this,"Couldn't cancel. Please retry.")));
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1359,8 +1357,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void unfriend() {
         Ui.confirm(this, "Unfriend " + user.displayName + "?", "", "Unfriend", () -> {
             String me = Fb.uid();
-            Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .get().addOnSuccessListener(snap -> {
+            Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
+                    .limit(1).get().addOnSuccessListener(snap -> {
                         for (DocumentSnapshot d : snap) {
                             List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             if (parts.contains(uid)) {

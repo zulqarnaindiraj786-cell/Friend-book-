@@ -926,18 +926,11 @@ public class SettingsActivity extends Activity {
             } else {
                 Ui.confirm(this, "Limit past posts?",
                         "All past Public posts on your timeline will change to Friends-only.",
-                        "Limit Past Posts", () -> Fb.db().collection("posts")
-                                .whereEqualTo("authorId", Fb.uid()).get()
-                                .addOnSuccessListener(snap -> {
-                                    int changed = 0;
-                                    for (DocumentSnapshot d : snap) {
-                                        if ("Public".equalsIgnoreCase(d.getString("privacy"))) {
-                                            d.getReference().update("privacy", "Friends");
-                                            changed++;
-                                        }
-                                    }
-                                    Ui.toast(this, changed + " past post(s) limited to Friends 🔒");
-                                }));
+                        "Limit Past Posts", () -> com.friendbook.social.core.QueryActions.updateMatching(
+                                Fb.db().collection("posts").whereEqualTo("authorId",Fb.uid()).whereEqualTo("privacy","Public"),
+                                Fb.map("privacy","Friends"))
+                                .addOnSuccessListener(changed->Ui.toast(this,changed+" past post(s) limited to Friends"))
+                                .addOnFailureListener(e->Ui.toast(this,"Some posts could not be updated. Retry to continue.")));
             }
         });
     }
@@ -1006,52 +999,20 @@ public class SettingsActivity extends Activity {
     }
 
     private void restrictedListDialog() {
-        String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("friends").whereArrayContains("participants", me).get()
-                .addOnSuccessListener(snap -> {
-                    List<String> fids = new ArrayList<>();
-                    for (DocumentSnapshot d : snap) {
-                        for (String p : Models.ChatRoom.fromDoc(d).participants)
-                            if (!p.equals(me)) fids.add(p);
-                    }
-                    if (fids.isEmpty()) {
-                        Ui.toast(this, "Add friends first to manage your Restricted list");
-                        return;
-                    }
-                    Fb.db().collection("users").whereIn(
-                            com.google.firebase.firestore.FieldPath.documentId(),
-                            fids.subList(0, Math.min(10, fids.size()))).get()
-                            .addOnSuccessListener(usnap -> {
-                                List<Models.User> users = new ArrayList<>();
-                                List<String> cur = Fb.me != null ? Fb.me.restrictedUids : new ArrayList<>();
-                                for (DocumentSnapshot ud : usnap) users.add(Models.User.fromDoc(ud));
-                                String[] labels = new String[users.size()];
-                                for (int i = 0; i < users.size(); i++) {
-                                    Models.User u = users.get(i);
-                                    labels[i] = (cur.contains(u.uid) ? "🔒 Restricted: " : "👥 Friend: ") + u.displayName;
-                                }
-                                Ui.choose(this, "Tap a friend to toggle Restricted (Public-only)", labels, w -> {
-                                    Models.User target = users.get(w);
-                                    List<String> next = new ArrayList<>(cur);
-                                    boolean remove = next.contains(target.uid);
-                                    if (remove) next.remove(target.uid); else next.add(target.uid);
-                                    patchUser("restrictedUids", next);
-                                    if (Fb.me != null) Fb.me.restrictedUids = next;
-                                    Ui.toast(this, remove ? target.displayName + " removed from Restricted"
-                                            : target.displayName + " added to Restricted list");
-                                    recreate();
-                                });
-                            });
-                });
+        com.friendbook.social.core.FriendPicker.single(this,"Tap a friend to toggle Restricted (Public-only)",target->{
+            List<String> next=new ArrayList<>(Fb.me!=null?Fb.me.restrictedUids:new ArrayList<>());
+            boolean remove=next.contains(target.uid);if(remove)next.remove(target.uid);else next.add(target.uid);
+            patchUser("restrictedUids",next);if(Fb.me!=null)Fb.me.restrictedUids=next;
+            Ui.toast(this,remove?target.displayName+" removed from Restricted":target.displayName+" added to Restricted");recreate();
+        });
     }
 
     private void accessInfoDialog() {
         String me = Fb.uid();
         if (me == null) return;
         Ui.toast(this, "Loading your account summary…");
-        Fb.db().collection("posts").whereEqualTo("authorId", me).get()
-                .addOnSuccessListener(ps -> {
+        com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+                    if(isFinishing() || isDestroyed())return;
                     Models.User u = Fb.me;
                     Ui.info(this, "📋 Your friendbook information",
                             "• Name: " + (u != null ? u.displayName : "") + "\n"
@@ -1060,7 +1021,7 @@ public class SettingsActivity extends Activity {
                                     + "• Friends: " + (u != null ? u.friendsCount : 0) + "\n"
                                     + "• Followers / Following: " + (u != null ? u.followers.size() : 0)
                                     + " / " + (u != null ? u.following.size() : 0) + "\n"
-                                    + "• Total posts: " + ps.size() + "\n"
+                                    + "• Total posts: " + totalPosts + "\n"
                                     + "• Verification tick: " + (u != null ? Admin.tickLabel(u.tickLevel) : "none") + "\n"
                                     + "• Stars balance: " + (u != null ? u.stars : 0) + " ⭐\n"
                                     + "• Saved reels/highlights: " + (u != null ? u.highlightStoryIds.size() : 0));

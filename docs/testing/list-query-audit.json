@@ -3,78 +3,6 @@
   "all_app_bounded": false,
   "findings": [
     {
-      "file": "app/src/main/java/com/friendbook/social/admin/AdminContentActivity.java",
-      "line": 149,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"comments\").whereEqualTo(\"postId\", it.id).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/bluetick/BlueTickActivity.java",
-      "line": 187,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"referrals\")\n                .whereEqualTo(\"refBy\", uid)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/bluetick/MonetizationActivity.java",
-      "line": 147,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"subscriptions\")\n                .whereEqualTo(\"creatorId\", me)\n                .whereEqualTo(\"status\", \"active\")\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/chat/NewChatActivity.java",
-      "line": 122,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/BirthdaysActivity.java",
-      "line": 82,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 130,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\").whereEqualTo(\"toUid\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 151,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\").whereEqualTo(\"fromUid\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 163,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 326,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\")\n                .whereEqualTo(\"fromUid\", me).whereEqualTo(\"toUid\", target.uid)\n                .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 351,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\")\n                .whereEqualTo(\"fromUid\", me).whereEqualTo(\"toUid\", target.uid)\n                .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/friends/FriendsFragment.java",
-      "line": 388,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                            .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/groups/GroupsActivity.java",
-      "line": 144,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"groups\")\n                .addSnapshotListener("
-    },
-    {
       "file": "app/src/main/java/com/friendbook/social/main/HomeFragment.java",
       "line": 516,
       "kind": "collection query needs manual limit/cursor review",
@@ -82,141 +10,21 @@
     },
     {
       "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 460,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"referrals\")\n                .whereEqualTo(\"refBy\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 472,
+      "line": 469,
       "kind": "collection query needs manual limit/cursor review",
       "query": "Fb.db().collection(\"notifications\")\n                .whereEqualTo(\"toUserId\", me).whereEqualTo(\"isRead\", false)\n                .addSnapshotListener("
     },
     {
       "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 508,
+      "line": 505,
       "kind": "collection query needs manual limit/cursor review",
       "query": "Fb.db().collection(\"chats\")\n                .whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
     },
     {
       "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 546,
+      "line": 543,
       "kind": "collection query needs manual limit/cursor review",
       "query": "Fb.db().collection(\"friend_requests\")\n                .whereEqualTo(\"toUid\", me).whereEqualTo(\"status\", \"pending\")\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/post/CreatePostActivity.java",
-      "line": 386,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/post/CreatePostActivity.java",
-      "line": 400,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"users\").whereIn(\n                                com.google.firebase.firestore.FieldPath.documentId(), chunk).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/post/FeedAdapter.java",
-      "line": 1459,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"comments\").whereEqualTo(\"postId\", p.id).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/post/FeedAdapter.java",
-      "line": 1463,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\").document(p.id).collection(\"reactions\").get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/post/SavedPostsActivity.java",
-      "line": 104,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\").whereArrayContains(\"savedBy\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/profile/ProfileActivity.java",
-      "line": 1301,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\")\n                                .whereEqualTo(\"fromUid\", Fb.uid()).whereEqualTo(\"toUid\", uid)\n                                .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/profile/ProfileActivity.java",
-      "line": 1362,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                    .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/ArchiveTrashActivity.java",
-      "line": 123,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"stories\").whereEqualTo(\"authorId\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/ArchiveTrashActivity.java",
-      "line": 133,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\").whereEqualTo(\"authorId\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/FeedPreferencesActivity.java",
-      "line": 154,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/FeedPreferencesActivity.java",
-      "line": 175,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"users\").whereIn(\n                    com.google.firebase.firestore.FieldPath.documentId(), chunk)\n                    .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/SettingsActivity.java",
-      "line": 929,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\")\n                                .whereEqualTo(\"authorId\", Fb.uid()).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/SettingsActivity.java",
-      "line": 1011,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/SettingsActivity.java",
-      "line": 1022,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"users\").whereIn(\n                            com.google.firebase.firestore.FieldPath.documentId(),\n                            fids.subList(0, Math.min(10, fids.size()))).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/settings/SettingsActivity.java",
-      "line": 1053,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\").whereEqualTo(\"authorId\", me).get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/social/PageDetailActivity.java",
-      "line": 230,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"posts\").whereEqualTo(\"pageId\", pageId)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/social/PokesActivity.java",
-      "line": 33,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"pokes\")\n                .whereEqualTo(\"from\", me).whereEqualTo(\"to\", toUid)\n                .get()"
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/social/PokesActivity.java",
-      "line": 88,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"pokes\").whereEqualTo(\"to\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/story/StoryViewerActivity.java",
-      "line": 229,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"stories\").whereEqualTo(\"authorId\", authorId)\n                .addSnapshotListener("
     }
   ]
 }

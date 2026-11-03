@@ -22,6 +22,7 @@ import java.util.Map;
 
 /** 👋 Pokes — classic friendbook fun. See who poked you, poke back, clear. */
 public class PokesActivity extends Activity {
+    private LinearLayout pageControls;
 
     private LinearLayout list;
     private ListenerRegistration reg;
@@ -30,33 +31,24 @@ public class PokesActivity extends Activity {
     public static void sendPoke(final Activity a, final String toUid, final String toName) {
         final String me = Fb.uid();
         if (me == null || toUid == null || toUid.equals(me)) return;
-        Fb.db().collection("pokes")
-                .whereEqualTo("from", me).whereEqualTo("to", toUid)
-                .get().addOnSuccessListener(snap -> {
-                    long now = System.currentTimeMillis();
-                    for (DocumentSnapshot d : snap) {
-                        Object at = d.get("at");
-                        long t = at instanceof com.google.firebase.Timestamp
-                                ? ((com.google.firebase.Timestamp) at).toDate().getTime()
-                                : at instanceof Number ? ((Number) at).longValue() : 0;
-                        if (now - t < 24L * 3600_000L) {
-                            Ui.toast(a, "You already poked " + toName + " — wait a bit 😄");
-                            return;
-                        }
-                    }
-                    Map<String, Object> p = new HashMap<>();
-                    p.put("from", me);
-                    p.put("fromName", Fb.myName());
-                    p.put("fromPhotoUrl", Fb.myPhoto());
-                    p.put("to", toUid);
-                    p.put("at", FieldValue.serverTimestamp());
-                    Fb.db().collection("pokes").add(p)
-                            .addOnSuccessListener(x -> {
-                                Ui.toast(a, "👋 You poked " + toName + "!");
-                                Notify.send(toUid, "poke", "poked you 👋", null);
-                            })
-                            .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
-                });
+        com.friendbook.social.core.QueryActions.anyRecent(Fb.db().collection("pokes")
+                .whereEqualTo("from",me).whereEqualTo("to",toUid),System.currentTimeMillis()-24L*3600_000L)
+                .addOnSuccessListener(recent->{
+                    if(!me.equals(Fb.uid()))return;
+                    if(recent){Ui.toast(a,"You already poked "+toName+" — wait a bit");return;}
+                    // A deterministic per-pair document prevents concurrent taps bypassing the 24h gate.
+                    String pair=java.util.UUID.nameUUIDFromBytes((me+"|"+toUid).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+                    com.google.firebase.firestore.DocumentReference ref=Fb.db().collection("pokes").document("pair_"+pair);
+                    Fb.db().runTransaction(tx->{
+                        DocumentSnapshot current=tx.get(ref);
+                        if(current.exists() && System.currentTimeMillis()-Format.ts(current.get("at"))<24L*3600_000L)return false;
+                        tx.set(ref,Fb.map("from",me,"fromName",Fb.myName(),"fromPhotoUrl",Fb.myPhoto(),"to",toUid,"at",FieldValue.serverTimestamp()));return true;
+                    }).addOnSuccessListener(written->{
+                        if(!me.equals(Fb.uid()))return;
+                        if(written){Ui.toast(a,"You poked "+toName+"!");Notify.send(toUid,"poke","poked you",null);}
+                        else Ui.toast(a,"Already poked — wait a bit");
+                    }).addOnFailureListener(e->Ui.toast(a,"Couldn't send poke. Reconnect and retry."));
+                }).addOnFailureListener(e->Ui.toast(a,"Couldn't check the last poke. Please retry."));
     }
 
     @Override
@@ -77,6 +69,7 @@ public class PokesActivity extends Activity {
         android.widget.ScrollView sv = new android.widget.ScrollView(this);
         sv.addView(list);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -85,8 +78,8 @@ public class PokesActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) return;
-        reg = Fb.db().collection("pokes").whereEqualTo("to", me)
-                .addSnapshotListener((snap, err) -> {
+        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("pokes").whereEqualTo("to",me),20,"pokes",(snap,err)-> {
                     list.removeAllViews();
                     if (snap == null || snap.isEmpty()) {
                         TextView e = Ui.tv(this, "No pokes yet 😴\nVisit a friend's profile and poke them!", 14, Ui.sub(this));
@@ -135,7 +128,7 @@ public class PokesActivity extends Activity {
         TextView back = Ui.roundChip(this, "👋 Poke back", Ui.BLUE, 0xFFFFFFFF, 12);
         back.setOnClickListener(v -> {
             sendPoke(this, fromUid, name);
-            d.getReference().delete();
+            d.getReference().delete().addOnSuccessListener(v2->list.removeView(r));
         });
         r.addView(back);
 

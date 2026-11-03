@@ -457,12 +457,9 @@ public class MainActivity extends Activity {
     private void watchReferralsForFreeTick() {
         String me = Fb.uid();
         if (me == null) return;
-        referralReg = Fb.db().collection("referrals")
-                .whereEqualTo("refBy", me)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null) return;
-                    com.friendbook.social.core.Admin.autoGrantByReferrals(this, snap.size());
-                });
+        if(referralReg!=null)referralReg.remove();
+        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->
+                com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
     private void startBadgeListeners() {

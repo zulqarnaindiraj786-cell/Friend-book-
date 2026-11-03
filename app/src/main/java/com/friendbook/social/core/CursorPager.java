@@ -40,6 +40,7 @@ public final class CursorPager {
     }
     private boolean active(){return !closed && Objects.equals(actor,Fb.uid());}
     private void emit(String error){if(active())listener.changed(new ArrayList<>(records.values()),more,loading,error);}
+    public void forget(String id){records.remove(id);CACHE.remove(key);}
     public boolean hasMore(){return more;}
     public void close(){closed=true;}
 }

@@ -1456,14 +1456,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void deletePost(Models.Post p) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
             Fb.db().collection("posts").document(p.id).delete();
-            Fb.db().collection("comments").whereEqualTo("postId", p.id).get()
-                    .addOnSuccessListener((QuerySnapshot snap) -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
-                    });
-            Fb.db().collection("posts").document(p.id).collection("reactions").get()
-                    .addOnSuccessListener(snap -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
-                    });
+            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",p.id))
+                    .addOnFailureListener(e->Ui.toast(activity,"Post removed; some old comments could not be cleaned up."));
+            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("posts").document(p.id).collection("reactions"))
+                    .addOnFailureListener(e->Ui.toast(activity,"Some reactions could not be cleaned up."));
             Ui.toast(activity, "Post deleted");
         });
     }
