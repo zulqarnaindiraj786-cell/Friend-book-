@@ -14,6 +14,7 @@ function mock(options={}) {
  globalThis.fetch=async(url,init={})=>{
   url=String(url);const body=init.body?JSON.parse(init.body):null;calls.push({url,init,body});
   if(url.endsWith('/posts/post1'))return document(post);
+  if(url.endsWith('/posts/post1/comments/comment1'))return options.comment ? document(options.comment) : new Response('',{status:404});
   if(url.endsWith('/users/alice'))return document({displayName:'Alice',followers:options.followers||['bob'],...options.sender});
   if(url.includes('/users/'))return document({following:['alice'],...(options.recipient||{})});
   if(url.endsWith(':runQuery'))return Response.json([{document:{fields:{participants:encode(['alice','bob'])}}}]);
@@ -64,4 +65,16 @@ test('bounded audience never exceeds twenty even for a large follower list',asyn
  const calls=mock({followers:Array.from({length:100},(_,i)=>'user'+i)});const r=await handleRequest(request(),verify);assert.equal(r.status,200);
  assert.equal(calls.filter(c=>c.init.method==='PATCH').length,20);
  assert.equal(calls.find(c=>c.url.includes('/rpc/reserve_bulk_mention')).body.p_audience.length,20);
+});
+
+test('canonical-only comments preserve bulk authorization and legacy fallback',async()=>{
+ const source={authorId:'alice',content:'@followers',mentions:[{uid:'bulk:followers',label:'@followers',start:0,end:10}],createdAt:Date.now()};
+ for(const options of [{comment:source},{post:{commentsMap:{comment1:source}}}]) {
+  const calls=mock(options);const r=await handleRequest(request({action:'bulk_mention',post_id:'post1',comment_id:'comment1'}),verify);
+  assert.equal(r.status,200);assert.equal((await r.json()).inbox,1);
+  assert.ok(calls.some(c=>c.url.endsWith('/comments/comment1')));
+ }
+ const calls=mock({comment:{...source,authorId:'mallory'},post:{commentsMap:{comment1:source}}});
+ const rejected=await handleRequest(request({action:'bulk_mention',post_id:'post1',comment_id:'comment1'}),verify);
+ assert.equal(rejected.status,403);assert.equal(calls.filter(c=>c.init.method==='PATCH').length,0);
 });

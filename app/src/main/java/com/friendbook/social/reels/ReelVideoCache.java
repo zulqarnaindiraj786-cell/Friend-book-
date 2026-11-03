@@ -123,7 +123,16 @@ public final class ReelVideoCache {
      */
     public static String deriveThumbUrl(String rawVideoUrl, String explicitThumbUrl) {
         if (explicitThumbUrl != null && !explicitThumbUrl.trim().isEmpty()) {
-            return explicitThumbUrl.trim();
+            String image=explicitThumbUrl.trim();
+            int upload=image.indexOf("/image/upload/");
+            if(upload>=0 && image.contains("cloudinary.com")) {
+                String rest=image.substring(upload+14);
+                java.util.regex.Matcher version=java.util.regex.Pattern.compile("(?:^|/)(v[0-9]+/.*)").matcher(rest);
+                if(version.find()) rest=version.group(1);
+                else while(rest.contains("/") && rest.substring(0,rest.indexOf('/')).matches("(?:w_|h_|c_|q_|f_|g_|ar_|dpr_).*")) rest=rest.substring(rest.indexOf('/')+1);
+                return image.substring(0,upload+14)+"w_480,c_limit,f_webp,q_auto:eco/"+rest;
+            }
+            return image;
         }
         if (rawVideoUrl == null || rawVideoUrl.isEmpty()) return "";
         String u = rawVideoUrl.trim();

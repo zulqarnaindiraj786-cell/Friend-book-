@@ -25,6 +25,9 @@ jobs:
       - name: Guard message badge and read-state separation
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
+      - name: Exercise 5000 virtual pagination sessions (model only, no production traffic)
+        run: python3 scripts/loadtest/paging_model.py
+
       - name: Test direct FCM gateway with mocked providers
         run: npm ci --prefix supabase && npm test --prefix supabase
 

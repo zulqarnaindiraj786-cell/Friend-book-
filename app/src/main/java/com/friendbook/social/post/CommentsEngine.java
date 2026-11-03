@@ -9,7 +9,6 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -17,171 +16,94 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * 💬 Universal Multi-User Real-Time Comments Engine (friendbook Pro):
- * Guarantees 100% of ALL users' comments & replies sync across EVERY device by storing
- * comments atomically inside the parent document's `commentsMap.<commentId>` (posts/{id} or reels/{id})
- * IN ADDITION TO `posts/{id}/comments` and `comments` collections — eliminating any
- * collection-level security rule isolation or offline-only cache traps!
- */
+/** Paged canonical comment history; legacy parent maps are read-only compatibility data. */
 public class CommentsEngine {
 
     public interface Listener {
         void onComments(List<Models.Comment> allComments, String pinnedCommentId);
     }
 
+    /** One latest-15 listener; older pages are explicit one-shot cursor reads. */
     public static class Handle {
-        private final List<ListenerRegistration> regs = new ArrayList<>();
-        public void add(ListenerRegistration r) { if (r != null) regs.add(r); }
-        public void remove() {
-            for (ListenerRegistration r : regs) {
-                try { r.remove(); } catch (Throwable ignored) { }
+        private final List<ListenerRegistration> regs=new ArrayList<>();
+        private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
+        private final List<Models.Comment> legacy=new ArrayList<>();
+        private com.google.firebase.firestore.Query query;
+        private DocumentSnapshot cursor;
+        private Listener listener;
+        private String pinned="", actor=Fb.uid();
+        private final Set<String> deleted=new HashSet<>();
+        private boolean closed, loading, more=true, cursorReady;
+        private int legacyLoaded=15, visible=15;
+        public String error="";
+        public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
+        private boolean active() { return !closed && java.util.Objects.equals(actor,Fb.uid()); }
+        public boolean hasMore() { return more || legacyLoaded<legacy.size(); }
+        public boolean isLoading() { return loading; }
+        private void emit() {
+            if(!active()) return;
+            Map<String,Models.Comment> all=new LinkedHashMap<>();
+            for(int i=0;i<Math.min(legacyLoaded,legacy.size());i++) all.put(legacy.get(i).id,legacy.get(i));
+            all.putAll(older); all.putAll(latest);
+            List<Models.Comment> result=new ArrayList<>();
+            for(Models.Comment c:all.values()) if(!deleted.contains(c.id) && (Fb.me==null || Fb.me.blocked==null || !Fb.me.blocked.contains(c.authorId))) {
+                c.pinned=c.id.equals(pinned); result.add(c);
             }
-            regs.clear();
+            result=com.friendbook.social.core.PageWindow.latest(result,
+                    java.util.Comparator.comparingLong((Models.Comment c)->c.createdAt).thenComparing(c->c.id),visible);
+            if(listener!=null) listener.onComments(result,pinned);
         }
+        public void loadMore() {
+            if(!active() || loading) return;
+            if(!more) { legacyLoaded+=15; visible+=15; emit(); return; }
+            if(!cursorReady || cursor==null) return;
+            loading=true; error="";
+            query.startAfter(cursor).limit(15).get().addOnSuccessListener(page -> {
+                if(!active()) return; loading=false; visible+=15; legacyLoaded+=15;
+                more=page.size()==15;
+                if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
+                for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); older.put(c.id,c); }
+                emit();
+            }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
+        }
+        public void remove() { closed=true; for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
     }
 
-    /**
-     * Live-watches ALL comments from ALL users across:
-     * 1) {collection}/{docId}.commentsMap (100% multi-user readable/writable)
-     * 2) {collection}/{docId}/comments subcollection
-     * 3) root `comments` collection (where postId == queryKey)
-     * Automatically backfills any legacy/local-only comments into {collection}/{docId}.commentsMap!
-     */
-    public static Handle watch(final String collection,
-                               final String docId,
-                               final String queryKey,
-                               final Listener listener) {
-        final Handle handle = new Handle();
-        if (docId == null || docId.isEmpty()) return handle;
-
-        final Map<String, Models.Comment> fromParentDoc = new LinkedHashMap<>();
-        final Map<String, Models.Comment> fromSubCol = new LinkedHashMap<>();
-        final Map<String, Models.Comment> fromRootCol = new LinkedHashMap<>();
-        final Set<String> backfilledIds = new HashSet<>();
-        final String[] pinnedHolder = new String[]{""};
-        final int[] storedCounter = new int[]{-1};
-
-        final Runnable emitMerged = () -> {
-            Map<String, Models.Comment> merged = new LinkedHashMap<>();
-            // 1. Root & subcollection first, then parent doc map (or merge reactions/edits)
-            for (Models.Comment c : fromRootCol.values()) mergeInto(merged, c);
-            for (Models.Comment c : fromSubCol.values()) mergeInto(merged, c);
-            for (Models.Comment c : fromParentDoc.values()) mergeInto(merged, c);
-
-            String pinnedId = pinnedHolder[0];
-            List<Models.Comment> result = new ArrayList<>();
-            for (Models.Comment c : merged.values()) {
-                if (c == null) continue;
-                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(c.authorId)) {
-                    continue;
-                }
-                c.pinned = (pinnedId != null && !pinnedId.isEmpty() && pinnedId.equals(c.id)) || c.pinned;
-                result.add(c);
-            }
-            Collections.sort(result, (a, b) -> Long.compare(a.createdAt, b.createdAt));
-
-            // Auto-backfill any comment present in root/subcollection but missing from parentDoc.commentsMap!
-            Map<String, Object> backfillUpdates = new HashMap<>();
-            for (Models.Comment c : result) {
-                if (c.id != null && !c.id.isEmpty()
-                        && !fromParentDoc.containsKey(c.id)
-                        && backfilledIds.add(c.id)) {
-                    backfillUpdates.put("commentsMap." + c.id, toMap(c, queryKey));
+    public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
+        Handle handle=new Handle(); handle.listener=listener;
+        if(docId==null || docId.isEmpty()) return handle;
+        DocumentReference parent=Fb.db().collection(collection).document(docId);
+        handle.query=parent.collection("comments").orderBy("createdAt",com.google.firebase.firestore.Query.Direction.DESCENDING);
+        // Compatibility only: one parent read. Never rebuild or expand its old commentsMap.
+        parent.get().addOnSuccessListener(doc -> {
+            if(!handle.active() || !doc.exists()) return;
+            handle.pinned=com.friendbook.social.core.Format.str(doc.getData(),"pinnedCommentId");
+            handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
+            handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
+        });
+        handle.add(handle.query.limit(15).addSnapshotListener((page,error) -> {
+            if(!handle.active()) return;
+            if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
+            handle.older.putAll(handle.latest);
+            for(com.google.firebase.firestore.DocumentChange change:page.getDocumentChanges()) {
+                if(change.getType()==com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+                    final String id=change.getDocument().getId();
+                    change.getDocument().getReference().get().addOnSuccessListener(current -> {
+                        if(!handle.active()) return;
+                        if(!current.exists()) { handle.deleted.add(id); handle.older.remove(id); handle.latest.remove(id); }
+                        handle.emit();
+                    });
                 }
             }
-            if (!backfillUpdates.isEmpty()) {
-                backfillUpdates.put("comments", result.size());
-                Fb.db().collection(collection).document(docId).update(backfillUpdates)
-                        .addOnFailureListener(err -> {
-                            Map<String, Object> nested = new HashMap<>();
-                            Map<String, Object> cmap = new HashMap<>();
-                            for (Models.Comment c : result) {
-                                if (c.id != null && !c.id.isEmpty()) cmap.put(c.id, toMap(c, queryKey));
-                            }
-                            nested.put("commentsMap", cmap);
-                            nested.put("comments", result.size());
-                            Fb.db().collection(collection).document(docId).set(nested, SetOptions.merge());
-                        });
-            } else if (storedCounter[0] >= 0 && storedCounter[0] != result.size() && !fromParentDoc.isEmpty()) {
-                storedCounter[0] = result.size();
-                Map<String, Object> heal = new HashMap<>();
-                heal.put("comments", result.size());
-                Fb.db().collection(collection).document(docId).set(heal, SetOptions.merge());
+            handle.latest.clear();
+            for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); }
+            if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
+                handle.cursorReady=true; handle.more=page.size()==15;
+                if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
-
-            if (listener != null) listener.onComments(result, pinnedId);
-        };
-
-        // Source 1: Parent document (`posts/{docId}` or `reels/{docId}`) — guaranteed readable/writable by ALL users!
-        handle.add(Fb.db().collection(collection).document(docId)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap != null && snap.exists()) {
-                        fromParentDoc.clear();
-                        Map<String, Object> data = snap.getData();
-                        String pin = data != null && data.get("pinnedCommentId") instanceof String
-                                ? (String) data.get("pinnedCommentId") : "";
-                        pinnedHolder[0] = pin == null ? "" : pin;
-                        Long cnt = snap.getLong("comments");
-                        storedCounter[0] = cnt != null ? cnt.intValue() : 0;
-                        List<Models.Comment> embedded = Models.Comment.parseEmbeddedComments(queryKey, data, pinnedHolder[0]);
-                        for (Models.Comment c : embedded) {
-                            if (c.id != null && !c.id.isEmpty()) fromParentDoc.put(c.id, c);
-                        }
-                        emitMerged.run();
-                    }
-                }));
-
-        // Source 2: Subcollection `{collection}/{docId}/comments`
-        handle.add(Fb.db().collection(collection).document(docId).collection("comments")
-                .addSnapshotListener((snap, err) -> {
-                    if (snap != null) {
-                        fromSubCol.clear();
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            Models.Comment c = Models.Comment.fromDoc(d);
-                            if (c.id != null && !c.id.isEmpty()) fromSubCol.put(c.id, c);
-                        }
-                        emitMerged.run();
-                    }
-                }));
-
-        // Source 3: Global `comments` collection (`whereEqualTo("postId", queryKey)`)
-        String key = (queryKey != null && !queryKey.isEmpty()) ? queryKey : docId;
-        handle.add(Fb.db().collection("comments").whereEqualTo("postId", key)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap != null) {
-                        fromRootCol.clear();
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            Models.Comment c = Models.Comment.fromDoc(d);
-                            if (c.id != null && !c.id.isEmpty()) fromRootCol.put(c.id, c);
-                        }
-                        emitMerged.run();
-                    }
-                }));
-
+            handle.emit();
+        }));
         return handle;
-    }
-
-    private static void mergeInto(Map<String, Models.Comment> target, Models.Comment incoming) {
-        if (incoming == null || incoming.id == null || incoming.id.isEmpty()) return;
-        Models.Comment prev = target.get(incoming.id);
-        if (prev == null) {
-            target.put(incoming.id, incoming);
-            return;
-        }
-        // Merge reactions & keep latest edited content
-        if (incoming.edited && !prev.edited) prev.content = incoming.content;
-        prev.edited = prev.edited || incoming.edited;
-        prev.pinned = prev.pinned || incoming.pinned;
-        if (prev.content == null || prev.content.isEmpty()) prev.content = incoming.content;
-        if (prev.imageUrl == null || prev.imageUrl.isEmpty()) prev.imageUrl = incoming.imageUrl;
-        if (prev.authorName == null || prev.authorName.isEmpty() || "User".equals(prev.authorName)) {
-            prev.authorName = incoming.authorName;
-        }
-        if (prev.authorPhoto == null || prev.authorPhoto.isEmpty()) prev.authorPhoto = incoming.authorPhoto;
-        if (incoming.reactions != null) prev.reactions.putAll(incoming.reactions);
-        prev.likes = Math.max(Math.max(prev.likes, incoming.likes), prev.reactions.size());
-        if (prev.createdAt <= 0) prev.createdAt = incoming.createdAt;
     }
 
     public static Map<String, Object> toMap(Models.Comment c, String queryKey) {
@@ -210,8 +132,8 @@ public class CommentsEngine {
     }
 
     /**
-     * Writes a new comment to `collection/{docId}.commentsMap.<newId>` (primary multi-user sync!)
-     * AND mirrors to `{collection}/{docId}/comments/{newId}` + `comments/{newId}`.
+     * Writes a canonical comment + moderation mirror + one bounded parent preview atomically.
+     * Frozen legacy maps are never expanded.
      */
     public static Models.Comment sendComment(final String collection,
                                              final String docId,
@@ -254,39 +176,24 @@ public class CommentsEngine {
         final Map<String, Object> commentMap = toMap(local, local.postId);
         final DocumentReference parentRef = Fb.db().collection(collection).document(docId);
 
-        // 1. Primary write onto parent doc (`posts/{docId}` or `reels/{docId}`) — 100% shared across ALL users!
-        Map<String, Object> dotUpdates = new HashMap<>();
-        dotUpdates.put("commentsMap." + newId, commentMap);
-        dotUpdates.put("comments", FieldValue.increment(1));
-
-        parentRef.update(dotUpdates)
-                .addOnSuccessListener(v -> {
-                    if (me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-                    if (cb != null) cb.onComplete(true, null);
-                })
-                .addOnFailureListener(err -> {
-                    // Fallback if document needs nested map merge
-                    Map<String, Object> nested = new HashMap<>();
-                    Map<String, Object> inner = new HashMap<>();
-                    inner.put(newId, commentMap);
-                    nested.put("commentsMap", inner);
-                    nested.put("comments", FieldValue.increment(1));
-                    parentRef.set(nested, SetOptions.merge())
-                            .addOnSuccessListener(v2 -> {
-                                if (me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-                    if (cb != null) cb.onComplete(true, null);
-                            })
-                            .addOnFailureListener(e2 -> { if (cb != null) cb.onComplete(false, e2.getMessage()); });
-                });
-
-        // 2. Best-effort mirror to root `comments` and subcollection (for Admin tools & Activity Log)
-        Fb.db().collection("comments").document(newId).set(commentMap);
-        parentRef.collection("comments").document(newId).set(commentMap);
+        // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
+        // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
+        com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+        batch.set(parentRef.collection("comments").document(newId),commentMap);
+        batch.set(Fb.db().collection("comments").document(newId),commentMap);
+        Map<String,Object> patch=new HashMap<>();
+        patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));
+        patch.put("commentsStorageVersion",2);
+        batch.update(parentRef,patch);
+        batch.commit().addOnSuccessListener(v -> {
+            if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
+            if(cb!=null) cb.onComplete(true,null);
+        }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
 
         return local;
     }
 
-    /** Updates reactions on a comment per `userId` across parent doc `commentsMap`, subcollection, and `comments`. */
+    /** Updates only the acting user reaction in canonical + moderation records. */
     public static void updateCommentReaction(String collection, String docId, Models.Comment c,
                                              String userId, String nextType) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()
@@ -294,39 +201,40 @@ public class CommentsEngine {
         Object rxVal = nextType == null ? FieldValue.delete() : nextType;
         Object likedByVal = nextType == null ? FieldValue.arrayRemove(userId) : FieldValue.arrayUnion(userId);
 
-        Map<String, Object> dot = new HashMap<>();
-        dot.put("commentsMap." + c.id + ".reactions." + userId, rxVal);
-        dot.put("commentsMap." + c.id + ".likedBy", likedByVal);
-        dot.put("commentsMap." + c.id + ".likes", c.likes);
-        Fb.db().collection(collection).document(docId).update(dot);
-
         Map<String, Object> up = new HashMap<>();
         Map<String, Object> rxSub = new HashMap<>();
         rxSub.put(userId, rxVal);
         up.put("reactions", rxSub);
         up.put("likedBy", likedByVal);
         up.put("likes", c.likes);
-        Fb.db().collection("comments").document(c.id).set(up, SetOptions.merge());
-        Fb.db().collection(collection).document(docId).collection("comments").document(c.id).set(up, SetOptions.merge());
+        mutateComment(collection,docId,c,up);
     }
 
-    /** Edits comment text across BOTH parent doc `commentsMap` and `comments`. */
+    /** Edits canonical text/mentions and moderation mirror without growing parent maps. */
     public static void editComment(String collection, String docId, Models.Comment c, String newText) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()) return;
-        Map<String, Object> dot = new HashMap<>();
-        dot.put("commentsMap." + c.id + ".mentions", c.mentions);
-        dot.put("commentsMap." + c.id + ".content", newText);
-        dot.put("commentsMap." + c.id + ".text", newText);
-        dot.put("commentsMap." + c.id + ".edited", true);
-        Fb.db().collection(collection).document(docId).update(dot);
-
         Map<String, Object> up = new HashMap<>();
         up.put("mentions", c.mentions);
         up.put("content", newText);
         up.put("text", newText);
         up.put("edited", true);
-        Fb.db().collection("comments").document(c.id).set(up, SetOptions.merge());
-        Fb.db().collection(collection).document(docId).collection("comments").document(c.id).set(up, SetOptions.merge());
+        mutateComment(collection,docId,c,up);
+    }
+
+    /** Existing canonical records keep offline queued edits/reactions. Legacy promotion is transactional
+     * to avoid overwriting a newer canonical edit with a frozen legacy copy. */
+    private static void mutateComment(String collection,String docId,Models.Comment c,Map<String,Object> patch) {
+        DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
+        DocumentReference mirror=Fb.db().collection("comments").document(c.id);
+        if(c.canonicalStored) {
+            com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+            batch.set(canonical,patch,SetOptions.merge()); batch.set(mirror,patch,SetOptions.merge()); batch.commit();
+        } else {
+            Fb.db().runTransaction(tx -> {
+                if(!tx.get(canonical).exists()) tx.set(canonical,toMap(c,c.postId));
+                tx.set(canonical,patch,SetOptions.merge()); tx.set(mirror,patch,SetOptions.merge()); return null;
+            }).addOnSuccessListener(v -> c.canonicalStored=true);
+        }
     }
 
     /** Pins/unpins a comment on a post (Post Author feature!). */
@@ -334,9 +242,6 @@ public class CommentsEngine {
         if (docId == null || docId.isEmpty()) return;
         Map<String, Object> dot = new HashMap<>();
         dot.put("pinnedCommentId", pin ? commentId : "");
-        if (commentId != null && !commentId.isEmpty()) {
-            dot.put("commentsMap." + commentId + ".pinned", pin);
-        }
         Fb.db().collection(collection).document(docId).update(dot);
     }
 
@@ -347,6 +252,7 @@ public class CommentsEngine {
             Map<String, Object> dot = new HashMap<>();
             dot.put("commentsMap." + c.id, FieldValue.delete());
             dot.put("comments", FieldValue.increment(-1));
+            dot.put("lastComment", FieldValue.delete());
             Fb.db().collection(collection).document(docId).update(dot);
             Fb.db().collection(collection).document(docId).collection("comments").document(c.id).delete();
         }

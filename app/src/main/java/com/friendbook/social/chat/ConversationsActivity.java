@@ -80,6 +80,10 @@ public class ConversationsActivity extends Activity {
         h.time.setVisibility(!online && seen > 0 ? View.GONE : View.VISIBLE);
     }
 
+    private com.google.firebase.firestore.DocumentSnapshot inboxCursor;
+    private boolean inboxLoading, inboxMore=true;
+    private int inboxGeneration;
+    private TextView inboxMoreButton;
     private final List<Room> allRooms = new ArrayList<>();
     private final List<Room> rooms = new ArrayList<>();
 
@@ -187,6 +191,13 @@ public class ConversationsActivity extends Activity {
         rv.setItemViewCacheSize(20);
         adapter = new ConvAdapter();
         rv.setAdapter(adapter);
+        inboxMoreButton=Ui.tvBold(this,"Load more chats",13,Ui.BLUE);
+        inboxMoreButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
+        inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));
+        TextView refreshChats=Ui.tvBold(this,"Refresh chats",13,Ui.BLUE);
+        refreshChats.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
+        refreshChats.setOnClickListener(v -> loadInboxPage(true)); root.addView(refreshChats);
+        root.addView(inboxMoreButton);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
 
@@ -248,9 +259,20 @@ public class ConversationsActivity extends Activity {
             renderActiveNow();
             applyFilter();
         });
-        reg = Fb.db().collection("chats").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
-                    allRooms.clear();
+        inboxGeneration++; inboxLoading=false;
+        loadInboxPage(true);
+    }
+
+    private void loadInboxPage(boolean reset) {
+        if(inboxLoading || (!reset && !inboxMore)) return;
+        inboxLoading=true; final int generation=inboxGeneration; final String me=Fb.uid();
+        com.google.firebase.firestore.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
+        if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
+        query.limit(15).get().addOnSuccessListener(snap -> {
+            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
+            inboxLoading=false; inboxMore=snap.size()==15;
+            if(!snap.isEmpty()) inboxCursor=snap.getDocuments().get(snap.size()-1);
+                    if(reset) allRooms.clear();
                     if (snap != null) {
                         Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
                                 .getStringSet("hiddenChats", new HashSet<>());
@@ -267,6 +289,7 @@ public class ConversationsActivity extends Activity {
                                 Object n = ((Map<?, ?>) u).get(me);
                                 if (n instanceof Number) r.unread = ((Number) n).intValue();
                             }
+                            allRooms.removeIf(old -> old.room.id.equals(r.room.id));
                             allRooms.add(r);
                             if (!r.room.isGroup && !Ui.TEAM_USER_ID.equals(r.other) && !userCache.containsKey(r.other)) {
                                 Fb.getUser(r.other).addOnSuccessListener(us -> {
@@ -286,7 +309,11 @@ public class ConversationsActivity extends Activity {
                     com.friendbook.social.core.FastCache.saveChats(toCache);
                     renderActiveNow();
                     applyFilter();
-                });
+            inboxMoreButton.setText(inboxMore?"Load more chats":"All chats loaded");
+        }).addOnFailureListener(error -> {
+            if(generation!=inboxGeneration) return;
+            inboxLoading=false; inboxMoreButton.setText("Retry loading chats");
+        });
     }
 
     private void renderActiveNow() {
@@ -366,6 +393,7 @@ public class ConversationsActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        inboxGeneration++; inboxLoading=false;
         if (reg != null) reg.remove();
         if (usersReg != null) usersReg.remove();
         watchingPresence = false;

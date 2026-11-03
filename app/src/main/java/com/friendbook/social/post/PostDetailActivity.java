@@ -145,6 +145,14 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
         }));
         cHeader.addView(sortLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
+        older.setOnClickListener(v -> {
+            if(commentsHandle==null) return;
+            if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
+            if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+        });
+        cHeader.addView(older);
 
         TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
         seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
@@ -309,10 +317,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-            if (post != null && post.comments != rawComments.size()) {
-                post.comments = rawComments.size();
-                postAdapter.notifyItemChanged(0, "META_ONLY");
-            }
+
         });
     }
 

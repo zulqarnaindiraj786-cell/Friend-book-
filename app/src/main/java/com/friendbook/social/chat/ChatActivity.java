@@ -43,6 +43,11 @@ import java.util.Set;
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private static final int PICK_IMG = 51;
+    private DocumentSnapshot historyCursor;
+    private boolean historyLoading, historyMore=true;
+    private int historyGeneration;
+    private TextView historyButton;
+    private final Map<String,Models.Message> historyMessages=new HashMap<>();
 
     private String peerId, peerName = "", peerPhoto = "", chatId;
     private boolean isGroupChat = false;
@@ -250,6 +255,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 rv.post(() -> rv.scrollToPosition(adapter.getItemCount() - 1));
             }
         });
+        historyButton=Ui.tvBold(this,"View older messages",13,Ui.BLUE);
+        historyButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
+        historyButton.setOnClickListener(v -> loadOlderMessages());
+        root.addView(historyButton);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         readOnlyBanner = Ui.tvBold(this, "🛡 Official updates from friendbook Team", 13, Ui.sub(this));
@@ -524,14 +533,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
-        messageSnapshots.clear();
+        messageSnapshots.clear(); historyMessages.clear(); historyCursor=null; historyMore=true; historyLoading=false; historyGeneration++;
         final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(200)
+                .limitToLast(15)
                 .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null) return;
+                    if(historyCursor==null && !snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()) {
+                        historyCursor=snap.getDocuments().get(0); historyMore=snap.size()==15;
+                    }
                     LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
                     int prevCount = adapter.getItemCount();
                     int lastVis = lm != null ? lm.findLastVisibleItemPosition() : prevCount - 1;
@@ -547,7 +559,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
                         String id = change.getDocument().getId();
                         if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
-                            messageSnapshots.remove(id);
+                            Models.Message evicted=messageSnapshots.remove(id);
+                            if(evicted!=null) historyMessages.put(id,evicted);
                         } else {
                             changedIds.add(id);
                             messageSnapshots.put(id, Models.Message.fromDoc(change.getDocument()));
@@ -569,7 +582,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     }
                     soundGate.end(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
                     if (incomingSound) com.friendbook.social.core.SoundManager.playNewMessage(this);
+                    Map<String,Models.Message> combined=new HashMap<>(historyMessages);
+                    for(Models.Message message:list) combined.put(message.id,message);
+                    list=new ArrayList<>(combined.values()); list.removeIf(message -> hidden.contains(message.id));
+                    list.sort((x,y)->Long.compare(x.createdAt,y.createdAt));
                     adapter.setData(list);
+                    historyButton.setText(historyMore?"View older messages":"All messages loaded");
                     if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
                         initialScrollDone = true;
                         forceScrollBottom = false;
@@ -592,6 +610,33 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 });
     }
 
+    private void loadOlderMessages() {
+        if(historyLoading || !historyMore || historyCursor==null) return;
+        historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
+        historyButton.setText("Loading older messages…");
+        Fb.db().collection("chats").document(chatId).collection("messages")
+                .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor).limit(15).get()
+                .addOnSuccessListener(page -> {
+                    if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
+                    historyLoading=false; historyMore=page.size()==15;
+                    if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
+                    LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
+                    int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
+                    int top=anchor==null?0:anchor.getTop();
+                    int previous=adapter.getItemCount();
+                    for(DocumentSnapshot doc:page) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
+                    Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots);
+                    Set<String> hidden=hiddenMsgs(); List<Models.Message> rows=new ArrayList<>(combined.values());
+                    rows.removeIf(message -> hidden.contains(message.id)); rows.sort((x,y)->Long.compare(x.createdAt,y.createdAt));
+                    adapter.setData(rows); manager.scrollToPositionWithOffset(Math.max(0,first+rows.size()-previous),top);
+                    historyButton.setText(historyMore?"View older messages":"All messages loaded");
+                    // History does not trigger sounds or bulk seen/delivered writes.
+                }).addOnFailureListener(error -> {
+                    if(generation!=historyGeneration) return;
+                    historyLoading=false; historyButton.setText("Retry older messages");
+                });
+    }
+
     private boolean typingOn = false;
 
     @Override protected void onResume() {
@@ -604,6 +649,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStop() {
         super.onStop();
+        historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();

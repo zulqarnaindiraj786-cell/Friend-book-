@@ -27,7 +27,9 @@ class CommentMentionGuards(unittest.TestCase):
     def test_persistence_and_rendering_including_edits(self):
         engine=(JAVA/'post/CommentsEngine.java').read_text()
         self.assertIn('m.put("mentions", c.mentions)',engine)
-        self.assertIn('dot.put("commentsMap." + c.id + ".mentions", c.mentions)',engine)
+        self.assertIn('up.put("mentions", c.mentions)',engine)
+        self.assertIn("mutateComment(collection,docId,c,up)",engine)
+        self.assertNotIn('dot.put("commentsMap." + c.id + ".mentions"',engine)
         for file in ['post/FeedAdapter.java','post/CommentsAdapter.java']:
             self.assertIn('Mentions.styled',(JAVA/file).read_text())
             self.assertIn('◆ Creator',(JAVA/file).read_text())

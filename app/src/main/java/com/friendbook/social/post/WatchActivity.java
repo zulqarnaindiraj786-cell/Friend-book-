@@ -31,6 +31,9 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private ListenerRegistration reg;
+    private DocumentSnapshot cursor;
+    private boolean loading, more=true;
+    private int generation;
     private SwipeRefreshLayout swipe;
     private final List<Models.Post> rawVideos = new ArrayList<>();
     private final List<String> sessionOrderIds = new ArrayList<>();
@@ -87,7 +90,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         }
         if (!rawVideos.isEmpty()) applyFilter();
 
-        Fb.db().collection("posts").whereEqualTo("mediaType", "video").limit(80)
+        Fb.db().collection("posts").whereEqualTo("mediaType", "video").limit(10)
                 .get(Source.CACHE)
                 .addOnSuccessListener(snap -> {
                     if (snap != null && !snap.isEmpty() && rawVideos.isEmpty()) {
@@ -191,18 +194,13 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void listen() {
-        if (reg != null) reg.remove();
-        reg = Fb.db().collection("posts")
-                .whereEqualTo("mediaType", "video")
-                .limit(100)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap != null) consume(snap.getDocuments());
-                });
+        generation++; loading=false; cursor=null; more=true; loadMore();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        generation++; loading=false;
         FastCache.removeReactionObserver(reactionObserver);
         if (reg != null) reg.remove();
     }
@@ -230,6 +228,24 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
 
     @Override public void createStory() { }
     @Override public void openStoryGroup(com.friendbook.social.story.StoriesAdapter.Group g) { }
-    @Override public void loadMore() { }
-    @Override public boolean hasMore() { return false; }
+    @Override public void loadMore() {
+        if(loading || !more) return;
+        loading=true; final int request=generation; final String actor=Fb.uid();
+        com.google.firebase.firestore.Query query=Fb.db().collection("posts").whereEqualTo("mediaType","video");
+        boolean first=cursor==null; if(cursor!=null) query=query.startAfter(cursor);
+        query.limit(10).get().addOnSuccessListener(page -> {
+            if(request!=generation || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
+            loading=false; more=page.size()==10;
+            if(first) rawVideos.clear();
+            if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
+            java.util.Set<String> ids=new java.util.HashSet<>(); for(Models.Post item:rawVideos) ids.add(item.id);
+            for(DocumentSnapshot doc:page) {
+                Models.Post post=Models.Post.fromDoc(doc);
+                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged")) || (Fb.me!=null && Fb.me.blocked.contains(post.authorId)) || Prefs.isSnoozed(this,post.authorId)) continue;
+                if(ids.add(post.id)) rawVideos.add(post);
+            }
+            applyFilter();
+        }).addOnFailureListener(error -> { if(request==generation) { loading=false; Ui.toast(this,"Couldn't load videos. Tap Load more to retry"); } });
+    }
+    @Override public boolean hasMore() { return more; }
 }

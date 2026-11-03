@@ -78,6 +78,14 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             adapter.setAll(rawComments);
         }));
         bar.addView(countHeader, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
+        older.setOnClickListener(v -> {
+            if(commentsHandle==null) return;
+            if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
+            if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+        });
+        bar.addView(older);
         root.addView(bar);
         root.addView(Ui.divider(this));
 

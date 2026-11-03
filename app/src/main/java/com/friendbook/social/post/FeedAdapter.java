@@ -891,9 +891,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             } else {
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
-            if (!Prefs.dataSaver(c)) {
-                com.friendbook.social.reels.ReelVideoCache.prefetchSingle(c, p.mediaUrl);
-            }
+            // Poster only. Full media is requested by the user's tap, never by feed binding.
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);

@@ -335,8 +335,11 @@ public class Models {
         public List<String> likedBy = new ArrayList<>();
         public Map<String, String> reactions = new HashMap<>(); // uid -> like|love|haha|wow|sad|angry
 
+        public transient boolean canonicalStored;
         public static Comment fromDoc(DocumentSnapshot d) {
-            return fromMap(d.getId(), d.getData());
+            Comment c=fromMap(d.getId(), d.getData());
+            c.canonicalStored=d.getReference().getParent().getParent()!=null;
+            return c;
         }
 
         @SuppressWarnings("unchecked")
@@ -381,6 +384,13 @@ public class Models {
         public static List<Comment> parseEmbeddedComments(String parentDocId, Map<String, Object> docMap, String pinnedId) {
             List<Comment> out = new ArrayList<>();
             if (docMap == null) return out;
+            Object latest=docMap.get("lastComment");
+            if(latest instanceof Map) {
+                Map<String,Object> data=new HashMap<>();
+                for(Map.Entry<?,?> entry:((Map<?,?>)latest).entrySet()) data.put(String.valueOf(entry.getKey()),entry.getValue());
+                Comment comment=fromMap(Format.str(data,"id"),data);
+                if(comment.id!=null && !comment.id.isEmpty()) out.add(comment);
+            }
             Object cm = docMap.get("commentsMap");
             if (cm instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) cm).entrySet()) {
@@ -392,7 +402,7 @@ public class Models {
                         Comment c = fromMap(String.valueOf(e.getKey()), sub);
                         if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
                         if (pinnedId != null && !pinnedId.isEmpty() && pinnedId.equals(c.id)) c.pinned = true;
-                        out.add(c);
+                        if(out.stream().noneMatch(existing -> existing.id.equals(c.id))) out.add(c);
                     }
                 }
             }
@@ -406,7 +416,7 @@ public class Models {
                         }
                         Comment c = fromMap(Format.str(sub, "id"), sub);
                         if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
-                        out.add(c);
+                        if(out.stream().noneMatch(existing -> existing.id.equals(c.id))) out.add(c);
                     }
                 }
             }
