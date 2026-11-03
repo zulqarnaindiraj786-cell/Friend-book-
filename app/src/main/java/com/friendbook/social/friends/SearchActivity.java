@@ -91,7 +91,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         usersRv.setAdapter(usersAdapter);
         body.addView(usersRv, new LinearLayout.LayoutParams(-1, -2));
 
-        morePeople=Ui.tvBold(this,"More people",14,Ui.BLUE);body.addView(morePeople);
+        morePeople=Ui.tvBold(this,"More people",14,Ui.BLUE);morePeople.setVisibility(View.GONE);body.addView(morePeople);
         morePeople.setOnClickListener(v->{if(peopleA!=null)peopleA.next();if(peopleB!=null)peopleB.next();});
         postsTitle = section("Posts");
         body.addView(postsTitle);
@@ -104,7 +104,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         postsRv.setAdapter(postsAdapter);
         body.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
-        morePosts=Ui.tvBold(this,"More post results",14,Ui.BLUE);body.addView(morePosts);
+        morePosts=Ui.tvBold(this,"More post results",14,Ui.BLUE);morePosts.setVisibility(View.GONE);body.addView(morePosts);
         morePosts.setOnClickListener(v->{if(postPages!=null)postPages.next();});
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -174,6 +174,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
 
     private void search(String q) {
         if (q.isEmpty()) {
+            morePeople.setVisibility(View.GONE);morePosts.setVisibility(View.GONE);
             peopleTitle.setVisibility(View.GONE);
             postsTitle.setVisibility(View.GONE);
             usersAdapter.setData(new ArrayList<>());
@@ -182,11 +183,14 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             renderHistory();
             return;
         }
+        morePeople.setVisibility(View.VISIBLE);morePosts.setVisibility(View.VISIBLE);
         if (historyBox != null) historyBox.setVisibility(View.GONE);
         com.friendbook.social.core.Prefs.addSearch(this, q);
 
         // ---- people: displayName prefix search in both cases ----
         Map<String, Models.User> people = new LinkedHashMap<>();
+        Map<String, Models.User> firstSpelling=new LinkedHashMap<>(),secondSpelling=new LinkedHashMap<>();
+        Runnable mergePeople=()->{people.clear();people.putAll(firstSpelling);people.putAll(secondSpelling);};
         Runnable finishPeople = () -> {
             List<UsersAdapter.Row> rows = new ArrayList<>();
             for (Models.User u : people.values()) {
@@ -205,11 +209,11 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
         boolean same=cap.equals(q);
         peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
-            for(DocumentSnapshot doc:docs)people.put(doc.getId(),Models.User.fromDoc(doc));finishPeople.run();
+            firstSpelling.clear();for(DocumentSnapshot doc:docs)firstSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
             morePeople.setText(!error.isEmpty()?"Retry people":"More people");
         });
         peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
-            for(DocumentSnapshot doc:docs)people.put(doc.getId(),Models.User.fromDoc(doc));finishPeople.run();
+            secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
         peopleA.start();if(peopleB!=null)peopleB.start();
         // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.

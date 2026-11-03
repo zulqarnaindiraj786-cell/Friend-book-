@@ -646,12 +646,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         List<Models.Post> cachedPosts = new ArrayList<>();
         for (Models.Post p : FastCache.getFeed()) {
-            if (p != null && uid.equals(p.authorId)) cachedPosts.add(p);
+            if (p != null && uid.equals(p.authorId) && cachedPosts.size()<15) cachedPosts.add(p);
         }
         if (!cachedPosts.isEmpty()) {
             allLoadedPosts.addAll(cachedPosts);
             userPostCount = cachedPosts.size();
-            postsAdapter.setPosts(cachedPosts);
+            applyPostsFilter();
             if (user != null) updateStatsLine();
         }
     }

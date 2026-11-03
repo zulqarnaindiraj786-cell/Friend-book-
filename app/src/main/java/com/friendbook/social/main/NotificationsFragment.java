@@ -100,7 +100,7 @@ public class NotificationsFragment extends Fragment {
         List<Models.Notif> cached = com.friendbook.social.core.FastCache.getNotifications();
         if (!cached.isEmpty()) {
             data.clear();
-            data.addAll(cached);
+            data.addAll(cached.subList(0,Math.min(20,cached.size())));
             empty.setVisibility(View.GONE);
             adapter.notifyDataSetChanged();
         }
@@ -144,7 +144,8 @@ public class NotificationsFragment extends Fragment {
         super.onHiddenChanged(hidden);
         if (!hidden) {
             MainActivity.clearNotificationsBadgeNow();
-        }
+            if(adapter!=null)startPages();
+        } else if(pager!=null){pager.close();pager=null;}
     }
 
     @Override
@@ -154,7 +155,7 @@ public class NotificationsFragment extends Fragment {
             MainActivity.clearNotificationsBadgeNow();
         }
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || isHidden()) return;
         startPages();
     }
     private void startPages() {
