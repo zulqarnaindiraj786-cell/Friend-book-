@@ -38,6 +38,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     private RecyclerView rv;
     private CommentsAdapter adapter;
     private CommentsEngine.Handle commentsHandle;
+    private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, countHeader;
     private Models.Comment replyingTo;
@@ -79,11 +80,13 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         }));
         bar.addView(countHeader, new LinearLayout.LayoutParams(0, -2, 1));
         TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        olderCommentsButton=older;
         older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
         older.setOnClickListener(v -> {
             if(commentsHandle==null) return;
             if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
             if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+            updateCommentPager();
         });
         bar.addView(older);
         root.addView(bar);
@@ -181,12 +184,20 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     protected void onStart() {
         super.onStart();
         commentsHandle = CommentsEngine.watch(collection, reelId, commentsKey, (all, pinnedId) -> {
+            updateCommentPager();
             rawComments.clear();
             rawComments.addAll(all);
             adapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             updateHeaderText();
             adapter.setAll(rawComments);
         });
+    }
+
+    private void updateCommentPager() {
+        if(olderCommentsButton==null || commentsHandle==null) return;
+        olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
+                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 
     @Override

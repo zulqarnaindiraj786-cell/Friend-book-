@@ -38,7 +38,10 @@ public class CommentsEngine {
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
         private boolean active() { return !closed && java.util.Objects.equals(actor,Fb.uid()); }
-        public boolean hasMore() { return more || legacyLoaded<legacy.size(); }
+        public boolean hasMore() {
+            Set<String> loaded=new HashSet<>(older.keySet()); loaded.addAll(latest.keySet()); loaded.removeAll(deleted);
+            return more || legacyLoaded<legacy.size() || loaded.size()>visible;
+        }
         public boolean isLoading() { return loading; }
         private void emit() {
             if(!active()) return;
@@ -54,10 +57,10 @@ public class CommentsEngine {
             if(listener!=null) listener.onComments(result,pinned);
         }
         public void loadMore() {
-            if(!active() || loading) return;
+            if(!active() || loading || !hasMore()) return;
             if(!more) { legacyLoaded+=15; visible+=15; emit(); return; }
             if(!cursorReady || cursor==null) return;
-            loading=true; error="";
+            loading=true; error=""; emit();
             query.startAfter(cursor).limit(15).get().addOnSuccessListener(page -> {
                 if(!active()) return; loading=false; visible+=15; legacyLoaded+=15;
                 more=page.size()==15;
@@ -96,7 +99,7 @@ public class CommentsEngine {
                 }
             }
             handle.latest.clear();
-            for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); }
+            for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
                 handle.cursorReady=true; handle.more=page.size()==15;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
@@ -180,6 +183,7 @@ public class CommentsEngine {
         // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
         com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
         batch.set(parentRef.collection("comments").document(newId),commentMap);
+        local.canonicalStored=true;
         batch.set(Fb.db().collection("comments").document(newId),commentMap);
         Map<String,Object> patch=new HashMap<>();
         patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));

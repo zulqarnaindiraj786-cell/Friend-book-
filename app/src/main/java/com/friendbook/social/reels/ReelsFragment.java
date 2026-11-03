@@ -408,11 +408,6 @@ public class ReelsFragment extends Fragment {
         boolean wasEmpty = adapter.rawReels().isEmpty();
         adapter.setData(pager, merged, forceReset);
 
-        // Pre-warm first 4 Reels onto SSD cache immediately!
-        if (!merged.isEmpty()) {
-            int curReelIdx = pager != null ? Math.max(0, adapter.reelIndexForPos(pager.getCurrentItem())) : 0;
-        }
-
         if (!isHidden() && !merged.isEmpty() && pager != null && (wasEmpty || forceReset)) {
             pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
@@ -452,8 +447,12 @@ public class ReelsFragment extends Fragment {
         if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) return;
         Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
         if(reel.videoUrl==null || reel.videoUrl.isEmpty() || (Fb.me!=null && Fb.me.blocked.contains(reel.authorId))) return;
+        if(Prefs.isPostHidden(getActivity(),reel.id)) return;
+        if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) return;
         if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) (nativeReel?fromReels:fromPosts).add(reel);
-        rebuildMergedFeed(false);
+        boolean linked=initialReelId!=null && initialReelId.equals(doc.getId());
+        rebuildMergedFeed(linked);
+        if(linked && pager!=null) pager.setCurrentItem(0,false);
     }
     private void loadNextVideos() {
         if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
@@ -494,7 +493,6 @@ public class ReelsFragment extends Fragment {
         } else {
             pager.post(() -> {
                 adapter.playOnly(pager, pager.getCurrentItem());
-                int rIdx = adapter.reelIndexForPos(pager.getCurrentItem());
             });
         }
     }

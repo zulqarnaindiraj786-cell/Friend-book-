@@ -53,6 +53,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private RecyclerView mainRv;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
+    private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, sortLabel, whoReactedChip;
     private ImageView mediaThumb;
@@ -146,11 +147,13 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }));
         cHeader.addView(sortLabel, new LinearLayout.LayoutParams(0, -2, 1));
         TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        olderCommentsButton=older;
         older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
         older.setOnClickListener(v -> {
             if(commentsHandle==null) return;
             if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
             if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+            updateCommentPager();
         });
         cHeader.addView(older);
 
@@ -310,8 +313,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     : "See reactions");
         });
 
-        // Multi-user real-time CommentsEngine: merges posts/{postId}.commentsMap + subcollection + root comments!
+        // Latest canonical page stays live; older pages are explicit one-shot reads.
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+            updateCommentPager();
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
@@ -319,6 +323,13 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
 
         });
+    }
+
+    private void updateCommentPager() {
+        if(olderCommentsButton==null || commentsHandle==null) return;
+        olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
+                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 
     @Override

@@ -534,13 +534,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
         messageSnapshots.clear(); historyMessages.clear(); historyCursor=null; historyMore=true; historyLoading=false; historyGeneration++;
+        final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
         final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(15)
                 .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (snap == null) return;
+                    if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     if(historyCursor==null && !snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()) {
                         historyCursor=snap.getDocuments().get(0); historyMore=snap.size()==15;
                     }

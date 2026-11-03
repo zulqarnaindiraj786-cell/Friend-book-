@@ -389,7 +389,11 @@ public class Models {
                 Map<String,Object> data=new HashMap<>();
                 for(Map.Entry<?,?> entry:((Map<?,?>)latest).entrySet()) data.put(String.valueOf(entry.getKey()),entry.getValue());
                 Comment comment=fromMap(Format.str(data,"id"),data);
-                if(comment.id!=null && !comment.id.isEmpty()) out.add(comment);
+                if(comment.id!=null && !comment.id.isEmpty()) {
+                    if(comment.postId==null || comment.postId.isEmpty()) comment.postId=parentDocId;
+                    if(comment.id.equals(pinnedId)) comment.pinned=true;
+                    out.add(comment);
+                }
             }
             Object cm = docMap.get("commentsMap");
             if (cm instanceof Map) {
@@ -415,6 +419,7 @@ public class Models {
                             if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
                         }
                         Comment c = fromMap(Format.str(sub, "id"), sub);
+                        if(c.id==null || c.id.isEmpty()) continue;
                         if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
                         if(out.stream().noneMatch(existing -> existing.id.equals(c.id))) out.add(c);
                     }
