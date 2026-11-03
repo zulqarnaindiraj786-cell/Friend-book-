@@ -226,7 +226,7 @@ public class Reactions {
         DocumentReference reactRef = postRef.collection("reactions").document(me);
 
         if (nextType == null) {
-            reactRef.delete().addOnSuccessListener(v -> reconcileFromCollection(c, post.id, post.likes));
+            reactRef.delete();
             Map<String, Object> dot = new HashMap<>();
             dot.put("reactionsMap." + me, FieldValue.delete());
             dot.put("reactions." + me, FieldValue.delete());
@@ -245,7 +245,7 @@ public class Reactions {
         } else {
             final Map<String, Object> data = myData;
             reactRef.set(data).addOnSuccessListener(v -> {
-                reconcileFromCollection(c, post.id, post.likes);
+                // Counters are updated atomically below; do not scan 250 reactions after each tap.
                 com.friendbook.social.push.PushTrace.stage("reaction_write_ok",
                         "post=" + com.friendbook.social.push.PushTrace.id(post.id)
                         + " actor=" + com.friendbook.social.push.PushTrace.id(me)

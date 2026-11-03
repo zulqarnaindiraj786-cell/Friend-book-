@@ -57,7 +57,7 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 100;
+    private static final int PAGE = 15;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -68,6 +68,16 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private ListenerRegistration postsReg, storiesReg, friendsReg, livesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
+    private boolean loadingPosts, loadedPosts;
+    private int feedGeneration;
+    private long lastFeedFetch;
+    private String feedAccount;
+    private Query feedQuery, storyQuery;
+    private DocumentSnapshot storyCursor;
+    private boolean loadingStories, moreStories;
+    private int storyGeneration;
+    private final Set<String> storyIds=new HashSet<>();
+    private final Set<String> loadedPostIds = new HashSet<>();
     private final Set<String> friendIds = new HashSet<>();
     private final Map<String, StoriesAdapter.Group> storyGroups = new HashMap<>();
     private final List<Models.User> noteUsers = new ArrayList<>();
@@ -104,6 +114,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setItemViewCacheSize(24);
         adapter = new FeedAdapter(a, this);
         rv.setAdapter(adapter);
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView view,int dx,int dy) {
+                LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
+                if(dy>0 && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-4) loadMore();
+            }
+        });
         rv.setBackgroundColor(Ui.bg(a));
 
         // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via friendbook FeedAlgorithm!)
@@ -179,7 +195,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // User is already near top -> seamlessly apply fresh ranked feed & ads immediately!
             applyFilterOnCachedFeed();
             adapter.refreshSponsoredAds();
-            restartPostsListener();
+            if(android.os.SystemClock.elapsedRealtime()-lastFeedFetch>120_000L) restartPostsListener();
             loadPymk();
         } else if (freshPill != null) {
             // User was reading mid-scroll -> show friendbook's non-intrusive blue "↑ New posts & videos" pill!
@@ -440,7 +456,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
         startFriendsListener();
-        restartPostsListener();
+        if(!loadedPosts || !java.util.Objects.equals(feedAccount,Fb.uid())
+                || android.os.SystemClock.elapsedRealtime()-lastFeedFetch>120_000L) restartPostsListener();
         startStoriesListener();
         startLivesListener();
         loadNotesUsers();
@@ -455,6 +472,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onStop() {
         super.onStop();
         FastCache.removeReactionObserver(reactionObserver);
+        feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (postsReg != null) postsReg.remove();
         if (storiesReg != null) storiesReg.remove();
         if (friendsReg != null) friendsReg.remove();
@@ -531,39 +549,40 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean postsFallbackUsed;
 
     private void restartPostsListener() {
+        if(loadingPosts) return;
         postsFallbackUsed = false;
         startPostsQuery(true);
     }
 
     private void startPostsQuery(boolean ordered) {
-        if (postsReg != null) postsReg.remove();
-        lastDoc = null;
-        moreAvailable = true;
-        Query q = Fb.db().collection("posts");
-        if (ordered) q = q.orderBy("createdAt", Query.Direction.DESCENDING);
-        final Query finalQ = q.limit(PAGE);
-
-        // ⚡ Immediate disk-cache probe if RAM feed was cold
-        if (FastCache.cachedFeedCount() == 0) {
-            finalQ.get(Source.CACHE).addOnSuccessListener(cacheSnap -> {
-                if (cacheSnap != null && !cacheSnap.isEmpty() && FastCache.cachedFeedCount() == 0) {
-                    consumePostsSnapshot(cacheSnap.getDocuments(), ordered, false);
-                }
-            });
-        }
-
-        postsReg = finalQ.addSnapshotListener((snap, err) -> {
-            if (err != null || snap == null) {
-                if (!postsFallbackUsed) {
-                    postsFallbackUsed = true;
-                    startPostsQuery(false);
-                } else if (FastCache.cachedFeedCount() == 0 && adapter != null) {
-                    adapter.setPosts(new ArrayList<>());
-                }
-                return;
-            }
-            if (!snap.isEmpty()) lastDoc = snap.getDocuments().get(snap.size() - 1);
-            consumePostsSnapshot(snap.getDocuments(), ordered, true);
+        if (postsReg != null) { postsReg.remove(); postsReg=null; }
+        final int generation=++feedGeneration;
+        loadingPosts=true; loadedPosts=false; lastDoc=null; moreAvailable=true;
+        feedAccount=Fb.uid(); final String actor=feedAccount;
+        Query query=Fb.db().collection("posts");
+        // Same ordering/cursor is retained for subsequent pages, including the fallback.
+        query=ordered?query.orderBy("createdAt",Query.Direction.DESCENDING)
+                :query.orderBy(com.google.firebase.firestore.FieldPath.documentId());
+        feedQuery=query;
+        final Query first=query.limit(PAGE);
+        if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
+            if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty())
+                consumePostsSnapshot(cache.getDocuments(),ordered,false);
+        });
+        first.get().addOnSuccessListener(snapshot -> {
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            loadingPosts=false; loadedPosts=true;
+            lastFeedFetch=android.os.SystemClock.elapsedRealtime();
+            loadedPostIds.clear();
+            for(DocumentSnapshot doc:snapshot.getDocuments()) loadedPostIds.add(doc.getId());
+            moreAvailable=snapshot.size()==PAGE;
+            if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
+        }).addOnFailureListener(error -> {
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
+            loadingPosts=false;
+            if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); }
+            else if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
         });
     }
 
@@ -678,41 +697,50 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     // ---------- stories ----------
     private void startStoriesListener() {
-        storiesReg = Fb.db().collection("stories")
-                .whereGreaterThan("expiresAt", Timestamp.now())
-                .addSnapshotListener((snap, err) -> {
-                    storyGroups.clear();
-                    if (snap != null) {
-                        String me = Fb.uid();
-                        for (QueryDocumentSnapshot d : snap) {
-                            Models.Story s = Models.Story.fromDoc(d);
-                            if (s.authorId == null || s.authorId.isEmpty()) continue;
-                            if (Fb.me != null && Fb.me.blocked.contains(s.authorId)) continue;
-                            if (getActivity() != null && !s.authorId.equals(me)
-                                    && Prefs.isStoryAuthorMuted(getActivity(), s.authorId))
-                                continue;
-                            if ("Friends".equalsIgnoreCase(s.privacy)
-                                    && !s.authorId.equals(me) && !friendIds.contains(s.authorId))
-                                continue;
-                            StoriesAdapter.Group g = storyGroups.get(s.authorId);
-                            if (g == null) {
-                                g = new StoriesAdapter.Group();
-                                g.authorId = s.authorId;
-                                g.authorName = s.authorName;
-                                g.authorPhoto = s.authorPhoto;
-                                storyGroups.put(s.authorId, g);
-                            }
-                            g.stories.add(s);
-                            if (me != null && !s.authorId.equals(me) && !s.viewedBy.contains(me)) g.unseen = true;
-                        }
-                    }
-                    List<StoriesAdapter.Group> groups = new ArrayList<>(storyGroups.values());
-                    for (StoriesAdapter.Group g : groups)
-                        Collections.sort(g.stories, (x, y) -> Long.compare(x.createdAt, y.createdAt));
-                    FeedAlgorithm.rankStories(getActivity(), groups, Fb.uid());
-                    FastCache.saveStories(groups);
-                    if (adapter != null) adapter.setStories(groups);
-                });
+        if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
+        storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
+        storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",Timestamp.now())
+                .orderBy("expiresAt",Query.Direction.ASCENDING);
+        loadMoreStories();
+    }
+
+    @Override public boolean hasMoreStories() { return moreStories; }
+    @Override public void loadMoreStories() {
+        if(loadingStories || !moreStories || storyQuery==null) return;
+        loadingStories=true; final int generation=storyGeneration; final String actor=Fb.uid();
+        final boolean first=storyCursor==null;
+        Query page=first?storyQuery:storyQuery.startAfter(storyCursor);
+        page.limit(20).get().addOnSuccessListener(snapshot -> {
+            if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            loadingStories=false; moreStories=snapshot.size()==20;
+            if(first) { storyGroups.clear(); storyIds.clear(); }
+            if(!snapshot.isEmpty()) storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
+            for(DocumentSnapshot doc:snapshot.getDocuments()) {
+                if(!storyIds.add(doc.getId())) continue;
+                Models.Story story=Models.Story.fromDoc(doc);
+                if(story.authorId==null || story.authorId.isEmpty()) continue;
+                if(Fb.me!=null && Fb.me.blocked.contains(story.authorId)) continue;
+                if(!story.authorId.equals(actor) && Prefs.isStoryAuthorMuted(getActivity(),story.authorId)) continue;
+                if("Only me".equalsIgnoreCase(story.privacy) && !story.authorId.equals(actor)) continue;
+                if("Friends".equalsIgnoreCase(story.privacy) && !story.authorId.equals(actor) && !friendIds.contains(story.authorId)) continue;
+                StoriesAdapter.Group group=storyGroups.get(story.authorId);
+                if(group==null) {
+                    group=new StoriesAdapter.Group(); group.authorId=story.authorId;
+                    group.authorName=story.authorName; group.authorPhoto=story.authorPhoto;
+                    storyGroups.put(story.authorId,group);
+                }
+                group.stories.add(story);
+                if(actor!=null && !story.authorId.equals(actor) && !story.viewedBy.contains(actor)) group.unseen=true;
+            }
+            List<StoriesAdapter.Group> groups=new ArrayList<>(storyGroups.values());
+            for(StoriesAdapter.Group group:groups) Collections.sort(group.stories,(x,y)->Long.compare(x.createdAt,y.createdAt));
+            FeedAlgorithm.rankStories(getActivity(),groups,Fb.uid()); FastCache.saveStories(groups);
+            if(adapter!=null) adapter.setStories(groups);
+        }).addOnFailureListener(error -> {
+            if(generation!=storyGeneration) return;
+            loadingStories=false;
+            if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load stories — tap More stories to retry");
+        });
     }
 
     // ---------- Host ----------
@@ -752,23 +780,30 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public void loadMore() {
-        if (lastDoc == null || !moreAvailable) return;
-        Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .startAfter(lastDoc)
-                .limit(PAGE)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    if (snap == null) return;
-                    if (snap.size() < PAGE) moreAvailable = false;
-                    if (!snap.isEmpty()) lastDoc = snap.getDocuments().get(snap.size() - 1);
-                    List<Models.Post> list = new ArrayList<>();
-                    for (DocumentSnapshot d : snap) {
-                        Models.Post p = Models.Post.fromDoc(d);
-                        if (visible(p)) list.add(p);
-                    }
-                    adapter.addPosts(list);
-                });
+        if(loadingPosts || lastDoc==null || !moreAvailable || feedQuery==null) return;
+        loadingPosts=true;
+        final int generation=feedGeneration; final String actor=feedAccount;
+        feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            loadingPosts=false;
+            moreAvailable=snapshot.size()==PAGE;
+            if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            List<Models.Post> page=new ArrayList<>();
+            String filter=Prefs.feedFilter(getActivity());
+            for(DocumentSnapshot doc:snapshot.getDocuments()) {
+                if(!loadedPostIds.add(doc.getId())) continue;
+                Models.Post post=Models.Post.fromDoc(doc);
+                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                if(visible(post) && matchesFilter(post,filter)) { page.add(post); sessionOrderIds.add(post.id); }
+            }
+            adapter.addPosts(page);
+            // Also refresh footer on empty/filtered final pages. No automatic drain loop.
+            adapter.notifyDataSetChanged();
+        }).addOnFailureListener(error -> {
+            if(generation!=feedGeneration) return;
+            loadingPosts=false;
+            if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load more — tap Load more to retry");
+        });
     }
 
     @Override

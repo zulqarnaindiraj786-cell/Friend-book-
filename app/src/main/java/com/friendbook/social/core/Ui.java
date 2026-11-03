@@ -81,14 +81,14 @@ public class Ui {
 
     /** Dynamic Play Store versionName straight from PackageInfo (single source of truth). */
     public static String appVersionName(Context c) {
-        if (c == null) return "2.8.23";
+        if (c == null) return "2.8.24";
         try {
             android.content.pm.PackageInfo pi = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
             if (pi != null && pi.versionName != null && !pi.versionName.isEmpty()) {
                 return pi.versionName;
             }
         } catch (Throwable ignored) { }
-        return "2.8.23";
+        return "2.8.24";
     }
 
     /** Dynamic Play Store versionCode straight from PackageInfo (single source of truth). */
@@ -245,7 +245,7 @@ public class Ui {
         } else if (FastCache.isSlow2G(c) || Prefs.photoQuality(c) == 0) {
             transform = "w_480,c_limit,f_webp,q_auto:eco/";
         } else if (Prefs.photoQuality(c) == 1 || Prefs.turbo2g(c)) {
-            transform = "w_780,c_limit,f_webp,q_auto:good/";
+            transform = "w_600,c_limit,f_webp,q_auto:good/";
         } else {
             transform = "w_1200,c_limit,f_webp,q_auto:best/";
         }
