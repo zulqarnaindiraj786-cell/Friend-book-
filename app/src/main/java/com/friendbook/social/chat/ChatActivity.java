@@ -259,6 +259,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         historyButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
         historyButton.setOnClickListener(v -> loadOlderMessages());
         root.addView(historyButton);
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                LinearLayoutManager manager=(LinearLayoutManager)list.getLayoutManager();
+                if(dy<0 && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
+            }
+        });
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         readOnlyBanner = Ui.tvBold(this, "🛡 Official updates from friendbook Team", 13, Ui.sub(this));

@@ -16,7 +16,10 @@ public class PageWindowTest {
         IntStream.range(0,5000).parallel().forEach(session -> {
             List<Integer> first=PageWindow.latest(records,Comparator.naturalOrder(),15);
             assertEquals(15,first.size());assertEquals(Integer.valueOf(185),first.get(0));
-            assertEquals(45,PageWindow.latest(records,Comparator.naturalOrder(),45).size());
+            for(int batch:new int[]{10,15,20,30,50}) {
+                List<Integer> page=PageWindow.latest(records,Comparator.naturalOrder(),batch);
+                assertEquals(batch,page.size());assertEquals(Integer.valueOf(200-batch),page.get(0));
+            }
         });
         System.out.println("MODEL_ONLY: 5000 parallel PageWindow sessions passed; NOT a backend load certification");
     }

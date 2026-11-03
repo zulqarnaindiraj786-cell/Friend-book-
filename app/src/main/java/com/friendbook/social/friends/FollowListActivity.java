@@ -28,7 +28,8 @@ public class FollowListActivity extends Activity {
     private final List<String> ids = new ArrayList<>();
     private UsersAdapter adapter;
     private TextView empty;
-    private int loaded = 0;
+    private com.friendbook.social.core.CursorPager followPager;
+    private TextView moreButton;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -58,27 +59,22 @@ public class FollowListActivity extends Activity {
         };
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        moreButton=Ui.tvBold(this,"Load 20 more",14,Ui.BLUE);root.addView(moreButton);
         setContentView(root);
 
-        Fb.db().collection("users").document(uid).get().addOnSuccessListener(d -> {
-            ids.clear();
-            ids.addAll(followers ? Format.listOf(d.getData(), "followers")
-                    : Format.listOf(d.getData(), "following"));
-            if (ids.isEmpty()) { render(); return; }
-            loaded = ids.size();
-            for (String id : ids) {
-                Fb.getUser(id).addOnSuccessListener(u -> {
-                    if (u != null) {
-                        UsersAdapter.Row r = new UsersAdapter.Row();
-                        r.user = u;
-                        r.subtitle = u.bio == null ? "" : u.bio;
-                        (followers ? followersRows : followingRows).add(r);
-                    }
-                    if (--loaded <= 0) render();
-                });
-            }
-        }).addOnFailureListener(e -> render());
+        com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(
+            Fb.db().collection("users").whereArrayContains(followers?"following":"followers",uid),20,"follow:"+uid+":"+followers,
+            (docs,more,loading,error)-> {
+                if(isFinishing())return;
+                List<UsersAdapter.Row> rows=followers?followersRows:followingRows;rows.clear();
+                for(DocumentSnapshot doc:docs){Models.User u=Models.User.fromDoc(doc);if(u.deactivated)continue;
+                    com.friendbook.social.core.FastCache.putUser(u);UsersAdapter.Row row=new UsersAdapter.Row();row.user=u;row.subtitle=u.bio;rows.add(row);}
+                render();moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry":more?"Load 20 more":"All loaded");
+                moreButton.setEnabled(!loading && more);
+            });
+        followPager=pager;moreButton.setOnClickListener(v->pager.next());pager.start();
     }
+    @Override protected void onDestroy(){if(followPager!=null)followPager.close();super.onDestroy();}
 
     private final List<UsersAdapter.Row> followersRows = new ArrayList<>();
     private final List<UsersAdapter.Row> followingRows = new ArrayList<>();

@@ -153,9 +153,9 @@ jobs:
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
-            gh release edit "$TAG" --latest --title "$TITLE" --notes "$NOTES"
+            gh release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
           else
-            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip \
+            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --target "$GITHUB_SHA" \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"

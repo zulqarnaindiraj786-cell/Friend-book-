@@ -78,6 +78,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private static final int REQ_PICK_AVATAR = 801;
     private static final int REQ_PICK_COVER = 802;
 
+    private com.friendbook.social.core.CursorPager postPager,videoPager;
+    private TextView moreProfileVideos,moreProfileFriends;
+    private com.friendbook.social.core.CursorPager friendPager;
     private String uid;
     private boolean mine;
     private boolean viewAsPublic = false;
@@ -503,7 +506,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postsRv.setItemAnimator(null);
         postsAdapter = new FeedAdapter(this, this);
         postsAdapter.showHeader = false;
-        postsAdapter.showFooter = false;
+        postsAdapter.showFooter = true;
         postsRv.setAdapter(postsAdapter);
         allTabBox.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
@@ -536,6 +539,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         reelsAdapter = new ReelsGridAdapter();
         reelsRv.setAdapter(reelsAdapter);
         reelsBox.addView(reelsRv, new LinearLayout.LayoutParams(-1, -2));
+        moreProfileVideos=Ui.tvBold(this,"Load 10 more videos",14,Ui.BLUE);
+        moreProfileVideos.setOnClickListener(v->{if(videoPager!=null)videoPager.next();});reelsBox.addView(moreProfileVideos);
         body.addView(reelsBox);
 
         // 9. TAB 2 ("Photos"): 3-Column User Media Grid
@@ -761,6 +766,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             tabLabels[i].setTextColor(on ? Ui.BLUE : Ui.sub(this));
             tabBars[i].setVisibility(on ? View.VISIBLE : View.INVISIBLE);
         }
+        if(idx==1 && videoPager==null) startReelsWatcher();
+        if(idx==3 && friendPager==null)startFriendPages();
         if (idx == 3) renderFriendsTab();
         if (idx == 4) renderAbout();
     }
@@ -779,44 +786,25 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
+                    if(activeTab==3 && friendPager==null)startFriendPages();
                 });
         watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
-            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .addSnapshotListener((snap, err) -> {
-                        friendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap) {
-                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                                if (!parts.contains(me)) continue;
-                                for (String p : parts) if (!p.equals(me)) friendIds.add(p);
-                            }
-                        }
-                        computeFriendState();
-                        renderFriendsTab();
-                    });
-            ownerFriendsReg = Fb.db().collection("friends").whereArrayContains("participants", uid)
-                    .addSnapshotListener((snap, err) -> {
-                        ownerFriendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap) {
-                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                                if (!parts.contains(uid)) continue;
-                                for (String p : parts) if (!p.equals(uid)) ownerFriendIds.add(p);
-                            }
-                        }
-                        renderFriendsTab();
-                        for (String f : ownerFriendIds) ensureUser(f);
-                    });
+            // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
+            friendsReg=Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
+                    java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
+                friendIds.clear();if(snap!=null && !snap.isEmpty())friendIds.add(uid);
+                computeFriendState();applyPostsFilter();renderFriendsTab();
+            });
             outReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending")
+                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         hasOut = snap != null && !snap.isEmpty();
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending")
+                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         hasIn = snap != null && !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
@@ -833,35 +821,32 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     presenceT.setVisibility(View.GONE);
                 }
             });
-        } else if (mine && me != null) {
-            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .addSnapshotListener((snap, err) -> {
-                        friendIds.clear();
-                        ownerFriendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap)
-                                for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                    if (!p.equals(me)) {
-                                        friendIds.add(p);
-                                        ownerFriendIds.add(p);
-                                    }
-                        }
-                        renderFriendsTab();
-                        for (String f : ownerFriendIds) ensureUser(f);
-                    });
         }
+        if(activeTab==3)startFriendPages();
         startPostsWatcher();
-        startReelsWatcher();
+        if(activeTab==1) startReelsWatcher();
+    }
+
+    private void startFriendPages() {
+        if(user==null || (!mine && ("Only me".equalsIgnoreCase(user.friendsListPrivacy) ||
+                ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && !"friends".equals(friendState)))))return;
+        if(friendPager!=null)friendPager.close();
+        if(moreProfileFriends==null){moreProfileFriends=Ui.tvBold(this,"Load 20 more friends",14,Ui.BLUE);friendsBox.addView(moreProfileFriends);}
+        friendPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("friends").whereArrayContains("participants",uid),20,"profile-friends:"+uid,(docs,more,busy,error)->{
+            ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
+                if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
+            renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
+        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
     }
 
     private void startPostsWatcher() {
-        postsReg = Fb.db().collection("posts").whereEqualTo("authorId", uid)
-                .addSnapshotListener((snap, err) -> {
+        if(postPager!=null) postPager.close();
+        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),15,"profile-posts:"+uid,(docs,more,loading,error)-> {
+            if(isFinishing())return;
                     allLoadedPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
+                    if (docs != null) {
+                        for (DocumentSnapshot d : docs) {
                             Models.Post p = Models.Post.fromDoc(d);
-                            if (!canSee(p)) continue;
                             allLoadedPosts.add(p);
                         }
                     }
@@ -876,27 +861,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             }
                         }
                     }
-                    userPostCount = allLoadedPosts.size();
+                    // Loaded page size is not the profile total.
+                    userPostCount = Math.max(userPostCount,allLoadedPosts.size());
                     if (user != null) updateStatsLine();
                     applyPostsFilter();
 
-                    List<String> media = new ArrayList<>();
-                    for (Models.Post p : allLoadedPosts) {
-                        if (p.mediaUrls != null) media.addAll(p.mediaUrls);
-                        if (p.mediaUrl != null && !p.mediaUrl.isEmpty() && !media.contains(p.mediaUrl)) {
-                            media.add(p.mediaUrl);
-                        }
-                    }
-                    photosAdapter.media.clear();
-                    photosAdapter.media.addAll(media);
-                    photosAdapter.notifyDataSetChanged();
-                });
+            if(!error.isEmpty())Ui.toast(this,error);
+        });
+        postPager.start();
     }
 
     private void applyPostsFilter() {
         List<Models.Post> shown = new ArrayList<>();
         String q = profileSearchQuery == null ? "" : profileSearchQuery.trim().toLowerCase();
         for (Models.Post p : allLoadedPosts) {
+            if(!canSee(p))continue;
             if (q.isEmpty() || (p.content != null && p.content.toLowerCase().contains(q))) {
                 shown.add(p);
             }
@@ -912,30 +891,38 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 && pin.equals(shown.get(0).id);
         if (pinnedTag != null) pinnedTag.setVisibility(hasPin ? View.VISIBLE : View.GONE);
         postsAdapter.setPosts(shown);
+        renderVisiblePhotos();
         if (emptyPostsBox != null) {
             emptyPostsBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
         }
     }
 
+    private void renderVisiblePhotos() {
+        List<String> media=new ArrayList<>();
+        for(Models.Post post:allLoadedPosts){if(!canSee(post))continue;
+            if(post.mediaUrls!=null)for(String url:post.mediaUrls)if(!media.contains(url))media.add(url);
+            if(post.mediaUrl!=null && !post.mediaUrl.isEmpty() && !media.contains(post.mediaUrl))media.add(post.mediaUrl);
+        }
+        photosAdapter.media.clear();photosAdapter.media.addAll(media);photosAdapter.notifyDataSetChanged();
+    }
+
     private void startReelsWatcher() {
-        reelsReg = Fb.db().collection("reels").whereEqualTo("authorId", uid)
-                .addSnapshotListener((snap, err) -> {
-                    List<Models.Reel> list = new ArrayList<>();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            list.add(Models.Reel.fromDoc(d));
-                        }
-                    }
-                    Collections.sort(list, (a, b) -> Long.compare(b.createdAt, a.createdAt));
-                    reelsAdapter.reels.clear();
-                    reelsAdapter.reels.addAll(list);
-                    reelsAdapter.notifyDataSetChanged();
-                });
+        if(videoPager!=null)videoPager.close();
+        videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
+            if(isFinishing())return;
+            List<Models.Reel> list=new ArrayList<>();for(DocumentSnapshot doc:docs)list.add(Models.Reel.fromDoc(doc));
+            list.sort((a,b)->Long.compare(b.createdAt,a.createdAt));
+            reelsAdapter.reels.clear();reelsAdapter.reels.addAll(list);reelsAdapter.notifyDataSetChanged();
+            if(moreProfileVideos!=null){moreProfileVideos.setText(loading?"Loading…":!error.isEmpty()?"Retry videos":more?"Load 10 more videos":"All videos loaded");moreProfileVideos.setEnabled(!loading && more);}
+        });videoPager.start();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        if(friendPager!=null){friendPager.close();friendPager=null;}
+        if(postPager!=null){postPager.close();postPager=null;}
+        if(videoPager!=null){videoPager.close();videoPager=null;}
         FastCache.removeReactionObserver(reactionObserver);
         if (userReg != null) userReg.remove();
         if (friendsReg != null) friendsReg.remove();
@@ -1914,6 +1901,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     @Override public void openStoryGroup(com.friendbook.social.story.StoriesAdapter.Group g) { }
-    @Override public void loadMore() { }
-    @Override public boolean hasMore() { return false; }
+    @Override public void loadMore() { if(postPager!=null)postPager.next(); }
+    @Override public boolean hasMore() { return postPager==null || postPager.hasMore(); }
 }

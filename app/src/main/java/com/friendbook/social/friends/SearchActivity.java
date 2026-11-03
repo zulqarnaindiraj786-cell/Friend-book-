@@ -42,6 +42,10 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     private LinearLayout historyBox;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable pending;
+    private com.friendbook.social.core.CursorPager peopleA,peopleB,postPages;
+    private TextView morePeople,morePosts;
+    private void closePages(){if(peopleA!=null)peopleA.close();if(peopleB!=null)peopleB.close();if(postPages!=null)postPages.close();}
+    @Override protected void onDestroy(){closePages();if(pending!=null)handler.removeCallbacks(pending);super.onDestroy();}
 
     @Override
     protected void onCreate(Bundle b) {
@@ -87,6 +91,8 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         usersRv.setAdapter(usersAdapter);
         body.addView(usersRv, new LinearLayout.LayoutParams(-1, -2));
 
+        morePeople=Ui.tvBold(this,"More people",14,Ui.BLUE);body.addView(morePeople);
+        morePeople.setOnClickListener(v->{if(peopleA!=null)peopleA.next();if(peopleB!=null)peopleB.next();});
         postsTitle = section("Posts");
         body.addView(postsTitle);
         RecyclerView postsRv = new RecyclerView(this);
@@ -98,6 +104,8 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         postsRv.setAdapter(postsAdapter);
         body.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
+        morePosts=Ui.tvBold(this,"More post results",14,Ui.BLUE);body.addView(morePosts);
+        morePosts.setOnClickListener(v->{if(postPages!=null)postPages.next();});
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
@@ -105,6 +113,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         input.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b2, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b2, int c) {
+                closePages();
                 if (pending != null) handler.removeCallbacks(pending);
                 final String q = s.toString().trim();
                 // ⚡ 0.0ms immediate local FastCache search on every keystroke!
@@ -115,7 +124,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                         if (p == null) continue;
                         String hay = ((p.authorName == null ? "" : p.authorName) + " "
                                 + (p.content == null ? "" : p.content)).toLowerCase();
-                        if (hay.contains(ql)) fastPosts.add(p);
+                        if (hay.contains(ql) && fastPosts.size()<20) fastPosts.add(p);
                     }
                     if (!fastPosts.isEmpty()) {
                         historyBox.setVisibility(View.GONE);
@@ -194,45 +203,25 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             if (rows.isEmpty()) noResults.setText("No results for \"" + q + "\"");
         };
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
-        final int[] done = {0};
-        Runnable tick = () -> { if (++done[0] >= 2) finishPeople.run(); };
-        Query q1 = Fb.db().collection("users")
-                .whereGreaterThanOrEqualTo("displayName", q)
-                .whereLessThanOrEqualTo("displayName", q + "").limit(15);
-        q1.get().addOnSuccessListener(snap -> {
-            for (DocumentSnapshot d : snap) people.put(d.getId(), Models.User.fromDoc(d));
-            tick.run();
-        }).addOnFailureListener(e -> tick.run());
-        Query q2 = Fb.db().collection("users")
-                .whereGreaterThanOrEqualTo("displayName", cap)
-                .whereLessThanOrEqualTo("displayName", cap + "").limit(15);
-        q2.get().addOnSuccessListener(snap -> {
-            for (DocumentSnapshot d : snap) people.put(d.getId(), Models.User.fromDoc(d));
-            tick.run();
-        }).addOnFailureListener(e -> tick.run());
-
-        // ---- posts: recent 100 filtered client-side ----
-        Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100).get()
-                .addOnSuccessListener(snap -> {
-                    List<Models.Post> list = new ArrayList<>();
-                    String needle = q.toLowerCase(Locale.ROOT);
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Post p = Models.Post.fromDoc(d);
-                            if (p.archived || p.trashedAt > 0) continue;
-                            if ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) continue;
-                            if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
-                            String hay = (p.content == null ? "" : p.content).toLowerCase(Locale.ROOT)
-                                    + " " + (p.authorName == null ? "" : p.authorName).toLowerCase(Locale.ROOT);
-                            if (hay.contains(needle)) list.add(p);
-                            if (list.size() >= 20) break;
-                        }
-                    }
-                    postsAdapter.setPosts(list);
-                    postsTitle.setVisibility(list.isEmpty() ? View.GONE : View.VISIBLE);
-                    noResults.setText("");
-                });
+        boolean same=cap.equals(q);
+        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
+            for(DocumentSnapshot doc:docs)people.put(doc.getId(),Models.User.fromDoc(doc));finishPeople.run();
+            morePeople.setText(!error.isEmpty()?"Retry people":"More people");
+        });
+        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
+            for(DocumentSnapshot doc:docs)people.put(doc.getId(),Models.User.fromDoc(doc));finishPeople.run();
+        });
+        peopleA.start();if(peopleB!=null)peopleB.start();
+        // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.
+        postPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING),20,"search-posts:"+q,(docs,more,loading,error)->{
+            List<Models.Post> list=new ArrayList<>();String needle=q.toLowerCase(Locale.ROOT);
+            for(DocumentSnapshot doc:docs){Models.Post p=Models.Post.fromDoc(doc);
+                if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;
+                String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(hay.contains(needle))list.add(p);
+            }
+            postsAdapter.setPosts(list);postsTitle.setVisibility(list.isEmpty()?View.GONE:View.VISIBLE);
+            morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"More post results":"All scanned");morePosts.setEnabled(!loading && more);
+        });postPages.start();
     }
 
     // ---- UsersAdapter.Handler ----

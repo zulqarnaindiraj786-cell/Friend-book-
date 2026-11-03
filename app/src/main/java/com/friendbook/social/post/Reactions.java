@@ -403,7 +403,7 @@ public class Reactions {
 
         final Map<String, ReactorEntry> byUid = new LinkedHashMap<>();
         final Runnable renderMerged = () -> {
-            if (activity.isFinishing()) return;
+            if (activity.isFinishing() || !dlg.isShowing()) return;
             List<ReactorEntry> all = new ArrayList<>(byUid.values());
             Map<String, Integer> counts = new LinkedHashMap<>();
             for (String t : TYPES) counts.put(t, 0);
@@ -435,29 +435,16 @@ public class Reactions {
                     }
                 });
 
-        // 2) Also merge from posts/{postId}/reactions subcollection
-        Fb.db().collection("posts").document(postId).collection("reactions")
-                .limit(200)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            ReactorEntry r = new ReactorEntry();
-                            r.uid = Format.str(d.getData(), "userId");
-                            if (r.uid.isEmpty()) r.uid = d.getId();
-                            r.name = Format.str(d.getData(), "userName");
-                            r.photo = Format.str(d.getData(), "userPhoto");
-                            r.tickLevel = Format.str(d.getData(), "userTickLevel");
-                            r.type = Format.strOr(d.getData(), "type", "like");
-                            r.createdAt = Format.ts(d.get("createdAt"));
-                            byUid.put(r.uid, r);
-                        }
-                    }
-                    renderMerged.run();
-                })
-                .addOnFailureListener(e -> {
-                    if (!byUid.isEmpty()) renderMerged.run();
-                });
+        TextView moreReactions=Ui.tvBold(activity,"Load 30 more reactions",14,Ui.BLUE);root.addView(moreReactions);
+        com.friendbook.social.core.CursorPager reactionPages=new com.friendbook.social.core.CursorPager(
+            Fb.db().collection("posts").document(postId).collection("reactions"),30,"post-reactions:"+postId,(docs,more,busy,error)->{
+                if(!dlg.isShowing())return;
+                for(DocumentSnapshot d:docs){ReactorEntry r=new ReactorEntry();r.uid=Format.str(d.getData(),"userId");if(r.uid.isEmpty())r.uid=d.getId();
+                    r.name=Format.str(d.getData(),"userName");r.photo=Format.str(d.getData(),"userPhoto");r.tickLevel=Format.str(d.getData(),"userTickLevel");
+                    r.type=Format.strOr(d.getData(),"type","like");r.createdAt=Format.ts(d.get("createdAt"));byUid.put(r.uid,r);}
+                renderMerged.run();moreReactions.setText(busy?"Loading…":!error.isEmpty()?"Retry reactions":more?"Load 30 more reactions":"All records loaded");moreReactions.setEnabled(!busy && more);
+            });
+        moreReactions.setOnClickListener(v->reactionPages.next());dlg.setOnDismissListener(d->reactionPages.close());reactionPages.start();
     }
 
     /**
@@ -581,7 +568,10 @@ public class Reactions {
             final List<ReactorEntry> all,
             final Map<String, Integer> counts,
             final String activeFilter) {
-
+        renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,30);
+    }
+    private static void renderReactorPage(Activity activity,AlertDialog dlg,LinearLayout filterRow,LinearLayout listCol,
+            List<ReactorEntry> all,Map<String,Integer> counts,String activeFilter,int visible) {
         filterRow.removeAllViews();
         addFilterChip(activity, filterRow, "All " + all.size(), "all".equals(activeFilter), () ->
                 renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all"));
@@ -607,7 +597,7 @@ public class Reactions {
             return;
         }
 
-        for (final ReactorEntry r : shown) {
+        for (final ReactorEntry r : shown.subList(0,Math.min(visible,shown.size()))) {
             LinearLayout row = Ui.row(activity);
             row.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(row, 4, 8, 4, 8);
@@ -708,6 +698,8 @@ public class Reactions {
             }
             listCol.addView(row);
         }
+        if(shown.size()>visible){TextView more=Ui.tvBold(activity,"Show 30 more",14,Ui.BLUE);
+            more.setOnClickListener(v->renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,visible+30));listCol.addView(more);}
     }
 
     private static void addFilterChip(Context c, LinearLayout row, String label, boolean active, Runnable click) {

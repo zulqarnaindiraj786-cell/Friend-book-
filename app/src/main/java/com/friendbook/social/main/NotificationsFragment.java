@@ -40,6 +40,8 @@ public class NotificationsFragment extends Fragment {
 
     private NotifAdapter adapter;
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager pager;
+    private TextView moreButton;
     private TextView empty;
     private TextView chipAll, chipUnread;
     private boolean unreadOnly;
@@ -76,6 +78,10 @@ public class NotificationsFragment extends Fragment {
         cup.leftMargin = Ui.dp(a, 8);
         chips.addView(chipUnread, cup);
         root.addView(chips);
+        moreButton=Ui.tvBold(a,"Load 20 more",14,Ui.BLUE);
+        moreButton.setOnClickListener(v->{if(pager!=null)pager.next();});root.addView(moreButton);
+        TextView refresh=Ui.tvBold(a,"Refresh notifications",13,Ui.BLUE);
+        refresh.setOnClickListener(v->startPages());root.addView(refresh);
 
         empty = Ui.tv(a, "No notifications yet.\nLikes, comments and friend requests appear here.", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
@@ -149,26 +155,20 @@ public class NotificationsFragment extends Fragment {
         }
         String me = Fb.uid();
         if (me == null) return;
-        reg = Fb.db().collection("notifications").whereEqualTo("toUserId", me)
-                .addSnapshotListener((snap, err) -> {
-                    android.app.Activity act = getActivity();
-                    data.clear();
-                    if (snap != null && act != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Notif n = Models.Notif.fromDoc(d);
-                            if (!allowedByPrefs(act, n.type)) continue; // Settings > Notifications toggles
-                            if (unreadOnly && n.isRead) continue;
-                            data.add(n);
-                        }
-                    }
-                    Collections.sort(data, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    if (data.size() > 80) data.subList(80, data.size()).clear();
-                    if (!unreadOnly && !data.isEmpty()) {
-                        com.friendbook.social.core.FastCache.saveNotifications(data);
-                    }
-                    adapter.notifyDataSetChanged();
-                    empty.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
-                });
+        startPages();
+    }
+    private void startPages() {
+        if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
+        com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
+        if(unreadOnly)query=query.whereEqualTo("isRead",false);
+        pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
+            android.app.Activity act=getActivity();if(act==null || adapter==null)return;
+            data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
+            Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
+            if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
+            adapter.notifyDataSetChanged();empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+            moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");moreButton.setEnabled(!loading && more);
+        });pager.start();
     }
 
     private void setUnreadOnly(boolean on) {
@@ -180,7 +180,7 @@ public class NotificationsFragment extends Fragment {
         chipUnread.setBackground(Ui.round(a, on ? Ui.BLUE : Ui.inputBg(a), 10));
         chipUnread.setTextColor(on ? 0xFFFFFFFF : Ui.sub(a));
         if (reg != null) { reg.remove(); reg = null; }
-        onStart(); // re-register listener so the new filter applies
+        startPages(); // Reset cursor and cache key when the filter changes.
     }
 
     /** Settings > Notifications switches define what appears here. */
@@ -210,6 +210,7 @@ public class NotificationsFragment extends Fragment {
     public void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        if(pager!=null){pager.close();pager=null;}
     }
 
     private void open(Models.Notif n) {

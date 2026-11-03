@@ -23,7 +23,7 @@ public class CommentsEngine {
         void onComments(List<Models.Comment> allComments, String pinnedCommentId);
     }
 
-    /** One latest-15 listener; older pages are explicit one-shot cursor reads. */
+    /** One latest-50 listener; older pages are explicit one-shot cursor reads. */
     public static class Handle {
         private final List<ListenerRegistration> regs=new ArrayList<>();
         private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
@@ -34,7 +34,7 @@ public class CommentsEngine {
         private String pinned="", actor=Fb.uid();
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, loading, more=true, cursorReady;
-        private int legacyLoaded=15, visible=15;
+        private int legacyLoaded=50, visible=50;
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
         private boolean active() { return !closed && java.util.Objects.equals(actor,Fb.uid()); }
@@ -58,12 +58,12 @@ public class CommentsEngine {
         }
         public void loadMore() {
             if(!active() || loading || !hasMore()) return;
-            if(!more) { legacyLoaded+=15; visible+=15; emit(); return; }
+            if(!more) { legacyLoaded+=50; visible+=50; emit(); return; }
             if(!cursorReady || cursor==null) return;
             loading=true; error=""; emit();
-            query.startAfter(cursor).limit(15).get().addOnSuccessListener(page -> {
-                if(!active()) return; loading=false; visible+=15; legacyLoaded+=15;
-                more=page.size()==15;
+            query.startAfter(cursor).limit(50).get().addOnSuccessListener(page -> {
+                if(!active()) return; loading=false; visible+=50; legacyLoaded+=50;
+                more=page.size()==50;
                 if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
                 for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); older.put(c.id,c); }
                 emit();
@@ -84,7 +84,7 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        handle.add(handle.query.limit(15).addSnapshotListener((page,error) -> {
+        handle.add(handle.query.limit(50).addSnapshotListener((page,error) -> {
             if(!handle.active()) return;
             if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
@@ -101,7 +101,7 @@ public class CommentsEngine {
             handle.latest.clear();
             for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.more=page.size()==15;
+                handle.cursorReady=true; handle.more=page.size()==50;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();

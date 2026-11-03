@@ -22,7 +22,7 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('ReelVideoCache.prefetchSingle(', (JAVA/'post/FeedAdapter.java').read_text())
     def test_comments_do_not_expand_frozen_map(self):
         source=(JAVA/'post/CommentsEngine.java').read_text()
-        self.assertIn('handle.query.limit(15).addSnapshotListener',source)
-        self.assertIn('query.startAfter(cursor).limit(15).get()',source)
+        self.assertIn('handle.query.limit(50).addSnapshotListener',source)
+        self.assertIn('query.startAfter(cursor).limit(50).get()',source)
         self.assertIn('patch.put("lastComment",commentMap)',source)
         self.assertNotIn('dot.put("commentsMap." + c.id + ".',source)
