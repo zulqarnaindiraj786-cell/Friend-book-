@@ -13,8 +13,11 @@ def main():
         return 1
     try:
         info = json.loads(raw)
-        if info.get('type') != 'service_account' or info.get('project_id') != PROJECT:
-            print('::error::Firebase secret must be the existing project service-account JSON.')
+        if not isinstance(info, dict) or info.get('type') != 'service_account':
+            print('::error::Firebase secret must contain the full Admin SDK service-account JSON, not Android google-services.json.')
+            return 1
+        if info.get('project_id') != PROJECT:
+            print('::error::Firebase service-account project does not match friendbook-17551.')
             return 1
         from google.oauth2 import service_account
         from google.auth.transport.requests import AuthorizedSession
