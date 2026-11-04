@@ -29,9 +29,9 @@ def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def checked(response):
+def checked(response, service='Remote API'):
     if response.status_code != 200:
-        raise BackupError(f'Remote request failed HTTP {response.status_code}; private response suppressed')
+        raise BackupError(f'{service} request failed HTTP {response.status_code}; private response suppressed')
     return response.json()
 
 
@@ -49,7 +49,7 @@ class Snapshot:
             'aggregations': [{'alias': 'total', 'count': {}}]}}
         if self.time:
             body['readTime'] = self.time
-        rows = checked(self.session.post(FIRESTORE + quote(parent, safe='/()') + ':runAggregationQuery', json=body, timeout=90))
+        rows = checked(self.session.post(FIRESTORE + quote(parent, safe='/()') + ':runAggregationQuery', json=body, timeout=90), 'Firebase snapshot read')
         results = [r for r in rows if r.get('result')]
         if len(results) != 1:
             raise BackupError('Unexpected authoritative count response')
@@ -64,7 +64,7 @@ class Snapshot:
             body = {'pageSize': 100, 'readTime': self.time}
             if token:
                 body['pageToken'] = token
-            data = checked(self.session.post(FIRESTORE + quote(parent, safe='/()') + ':listCollectionIds', json=body, timeout=90))
+            data = checked(self.session.post(FIRESTORE + quote(parent, safe='/()') + ':listCollectionIds', json=body, timeout=90), 'Firebase snapshot read')
             yield from data.get('collectionIds', [])
             token = data.get('nextPageToken')
             if not token:
@@ -86,7 +86,7 @@ class Snapshot:
             params = {'pageSize': 100, 'showMissing': 'true', 'readTime': self.time}
             if token:
                 params['pageToken'] = token
-            data = checked(self.session.get(FIRESTORE + quote(path, safe='/()'), params=params, timeout=90))
+            data = checked(self.session.get(FIRESTORE + quote(path, safe='/()'), params=params, timeout=90), 'Firebase document listing')
             for document in data.get('documents', []):
                 name = document.get('name', '')
                 if not name.startswith(path + '/') or '/' in name[len(path) + 1:]:
@@ -122,7 +122,7 @@ class Snapshot:
 
 
 def d1_query(session, sql, params=()):
-    payload = checked(session.post(D1, json={'sql': sql, 'params': list(params)}, timeout=90))
+    payload = checked(session.post(D1, json={'sql': sql, 'params': list(params)}, timeout=90), 'Cloudflare D1 backup')
     if not payload.get('success'):
         raise BackupError('D1 operation failed; private response suppressed')
     results = payload.get('result', [])
@@ -172,6 +172,11 @@ def main():
         token = os.environ['CLOUDFLARE_API_TOKEN']
         if not token:
             raise BackupError('Cloudflare secret unavailable')
+        # Confirm D1 query permission before spending reads on a full snapshot.
+        with requests.Session() as probe:
+            probe.headers['Authorization'] = 'Bearer ' + token
+            d1_query(probe, 'SELECT 1 AS connected')
+        print('::notice::Cloudflare D1 read-only preflight passed.')
         credentials = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/datastore'])
         batch = str(uuid.uuid4())
         print('Backup batch: ' + batch)
@@ -186,7 +191,7 @@ def main():
             os.chmod(output.name, 0o600)
             for name in sorted(docs):
                 output.write(docs[name] + '\n')
-        print('Source collection counts verified; starting INSERT-only D1 staging backup.')
+        print('::notice::Source collection counts verified; starting INSERT-only D1 staging backup.')
         with requests.Session() as destination:
             destination.headers['Authorization'] = 'Bearer ' + token
             copy_and_verify(destination, batch, docs)
