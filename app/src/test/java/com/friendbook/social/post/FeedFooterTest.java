@@ -12,7 +12,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
-@Config(application=Application.class,sdk=28)
+@Config(manifest=Config.NONE,application=Application.class,sdk=28)
 public class FeedFooterTest {
     private static class Host implements FeedAdapter.Host {
         boolean loading,more=true,error;int calls;

@@ -11,7 +11,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
-@Config(application=Application.class,sdk=28)
+@Config(manifest=Config.NONE,application=Application.class,sdk=28)
 public class PeopleControlTest {
     @Test public void inlineHeadersAndProgressRecycleWithoutStaleSpinnerOrProfileClick(){
         Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
