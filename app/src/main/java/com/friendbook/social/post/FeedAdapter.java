@@ -54,6 +54,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void openStoryGroup(StoriesAdapter.Group g);
         void loadMore();
         boolean hasMore();
+        default boolean automaticPaging(){return false;}
+        default boolean isLoadingMore(){return false;}
+        default boolean hasPageError(){return false;}
         default void openFindFriends() { }
         default void loadMoreStories() { }
         default boolean hasMoreStories() { return false; }
@@ -406,8 +409,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if (h instanceof FooterVH) {
             FooterVH fh = (FooterVH) h;
             boolean more = host != null && host.hasMore();
-            fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
-            fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
+            boolean loading=host!=null && host.isLoadingMore(), retry=host!=null && host.hasPageError();
+            fh.spinner.setVisibility(loading?View.VISIBLE:View.GONE);
+            fh.more.setVisibility(!loading && host!=null && (retry || (more && !host.automaticPaging()))?View.VISIBLE:View.GONE);
+            fh.more.setText(retry?"Tap to continue loading":"Load more posts");
+            fh.end.setVisibility(more || loading || retry?View.GONE:View.VISIBLE);
             // Never leave a blank white feed unexplained — say WHY it's empty
             fh.end.setText(posts.isEmpty()
                     ? "😴 No posts to show yet.\nPull down to refresh.\nIf posts exist but stay missing, check the internet & try re-login."
@@ -1773,14 +1779,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    public void pagingChanged(){if(getItemCount()>0)notifyItemChanged(getItemCount()-1,"paging");}
+
     class FooterVH extends RecyclerView.ViewHolder {
         final TextView more, end;
+        final android.widget.ProgressBar spinner;
         FooterVH(Context c) {
             super(Ui.col(c));
             LinearLayout col = (LinearLayout) itemView;
             col.setGravity(Gravity.CENTER);
             Ui.pad(col, 16, 12, 16, 16);
             col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+            spinner=new android.widget.ProgressBar(c);
+            spinner.setContentDescription("Loading more posts");
+            col.addView(spinner,new LinearLayout.LayoutParams(Ui.dp(c,28),Ui.dp(c,28)));
             more = Ui.btnGrey(c, "Load more posts");
             col.addView(more, new LinearLayout.LayoutParams(-1, Ui.dp(c, 42)));
             end = Ui.tv(c, "You're all caught up 🎉", 13, Ui.sub(c));

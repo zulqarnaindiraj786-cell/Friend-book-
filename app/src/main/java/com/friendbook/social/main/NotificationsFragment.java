@@ -79,9 +79,9 @@ public class NotificationsFragment extends Fragment {
         chips.addView(chipUnread, cup);
         root.addView(chips);
         moreButton=Ui.tvBold(a,"Load 20 more",14,Ui.BLUE);
-        moreButton.setOnClickListener(v->{if(pager!=null)pager.next();});root.addView(moreButton);
+        moreButton.setOnClickListener(v->{if(pager!=null)pager.next();});
         TextView refresh=Ui.tvBold(a,"Refresh notifications",13,Ui.BLUE);
-        refresh.setOnClickListener(v->startPages());root.addView(refresh);
+        refresh.setOnClickListener(v->startPages());refresh.setVisibility(View.GONE);
 
         empty = Ui.tv(a, "No notifications yet.\nLikes, comments and friend requests appear here.", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
@@ -96,6 +96,7 @@ public class NotificationsFragment extends Fragment {
         rv.setAdapter(adapter);
         com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(moreButton);
 
         // ⚡ 0.0ms Instant Cached Notifications Hydration!
         List<Models.Notif> cached = com.friendbook.social.core.FastCache.getNotifications();

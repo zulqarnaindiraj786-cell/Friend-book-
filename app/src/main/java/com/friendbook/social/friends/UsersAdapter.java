@@ -32,6 +32,9 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
     public Click onClick;
 
     public static class Row {
+        public String heading;
+        public boolean loading;
+        public Runnable action;
         public Models.User user;
         public String subtitle = "";
         public String primaryLabel = null;    // blue button
@@ -57,12 +60,22 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
 
     public boolean isEmpty() { return rows.isEmpty(); }
 
+    @Override public int getItemViewType(int position){return rows.get(position).user==null?1:0;}
+
     @Override public int getItemCount() { return rows.size(); }
 
     @NonNull
     @Override
     public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         Activity c = activity;
+        if(viewType==1){
+            LinearLayout box=Ui.col(c);box.setGravity(android.view.Gravity.CENTER_VERTICAL);Ui.pad(box,14,10,14,10);
+            box.setLayoutParams(new RecyclerView.LayoutParams(-1,-2));
+            TextView title=Ui.tvBold(c,"",16,Ui.txt(c));box.addView(title);
+            android.widget.ProgressBar progress=new android.widget.ProgressBar(c);
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(Ui.dp(c,24),Ui.dp(c,24));lp.gravity=android.view.Gravity.CENTER;box.addView(progress,lp);
+            VH holder=new VH(box,null,title,null,null,null,null);holder.progress=progress;return holder;
+        }
         LinearLayout outer = Ui.col(c);
         outer.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
         LinearLayout row = Ui.row(c);
@@ -115,6 +128,12 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
     @Override
     public void onBindViewHolder(@NonNull VH h, int position) {
         Row r = rows.get(position);
+        if(r.user==null){
+            h.name.setText(r.heading);h.name.setVisibility(r.heading==null || r.heading.isEmpty()?View.GONE:View.VISIBLE);
+            h.progress.setVisibility(r.loading?View.VISIBLE:View.GONE);
+            h.progress.setContentDescription("Loading people");
+            h.itemView.setOnClickListener(r.action==null?null:v->r.action.run());return;
+        }
         Ui.avatar(activity, h.av, r.user.photoUrl);
         h.name.setText(r.user.displayName);
         com.friendbook.social.core.Icons.setTickBadge(h.tick, r.user.tickLevel, false);
@@ -149,6 +168,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
     }
 
     static class VH extends RecyclerView.ViewHolder {
+        android.widget.ProgressBar progress;
         ImageView av, tick;
         TextView name, sub, primary, secondary;
         VH(View v, ImageView a, TextView n, ImageView tk, TextView s, TextView p, TextView sc) {

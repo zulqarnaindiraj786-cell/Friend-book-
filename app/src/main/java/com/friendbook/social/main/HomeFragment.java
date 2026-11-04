@@ -57,7 +57,7 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 15;
+    private static final int PAGE = 7;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -69,6 +69,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private boolean loadingPosts, loadedPosts;
+    private boolean pageError;
     private int feedGeneration;
     private long lastFeedFetch;
     private String feedAccount;
@@ -125,7 +126,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via friendbook FeedAlgorithm!)
         List<Models.Post> cachedFeed = FastCache.getFeed();
         if (!cachedFeed.isEmpty()) {
-            List<Models.Post> initialRanked = rankAccordingToMode(a, cachedFeed);
+            List<Models.Post> initialRanked = rankAccordingToMode(a, cachedFeed.subList(0,Math.min(PAGE,cachedFeed.size())));
             sessionOrderIds.clear();
             for (Models.Post p : initialRanked) {
                 if (p != null && p.id != null) sessionOrderIds.add(p.id);
@@ -143,13 +144,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
             refreshWithFriendbookAlgorithm(true);
-            swipe.postDelayed(() -> { if (swipe != null) swipe.setRefreshing(false); }, 420);
         });
 
         android.widget.FrameLayout feedWrap = new android.widget.FrameLayout(a);
         feedWrap.addView(swipe, new android.widget.FrameLayout.LayoutParams(-1, -1));
 
-        // Signature friendbook floating "↑ New posts" pill on background-resume discovery
+        // Keep the old discovery pill hidden: loading belongs at the scroll boundary.
         freshPill = Ui.roundChip(a, "↑  New posts & videos", Ui.BLUE, 0xFFFFFFFF, 13);
         Ui.pad(freshPill, 16, 8, 16, 8);
         freshPill.setElevation(Ui.dp(a, 6));
@@ -198,8 +198,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if(android.os.SystemClock.elapsedRealtime()-lastFeedFetch>120_000L) restartPostsListener();
             loadPymk();
         } else if (freshPill != null) {
-            // User was reading mid-scroll -> show friendbook's non-intrusive blue "↑ New posts & videos" pill!
-            freshPill.setVisibility(View.VISIBLE);
+            // Preserve the reading position; no floating refresh banner.
+            freshPill.setVisibility(View.GONE);
         }
     }
 
@@ -439,7 +439,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         forceReRank = true;
         lastAppliedFilter = filter;
         List<Models.Post> filtered = new ArrayList<>();
-        for (Models.Post p : FastCache.getFeed()) {
+        List<Models.Post> cache=FastCache.getFeed();
+        for (Models.Post p : cache.subList(0,Math.min(PAGE,cache.size()))) {
             if (visible(p) && matchesFilter(p, filter)) filtered.add(p);
         }
         List<Models.Post> ranked = rankAccordingToMode(a, filtered);
@@ -557,7 +558,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startPostsQuery(boolean ordered) {
         if (postsReg != null) { postsReg.remove(); postsReg=null; }
         final int generation=++feedGeneration;
-        loadingPosts=true; loadedPosts=false; lastDoc=null; moreAvailable=true;
+        pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
         Query query=Fb.db().collection("posts");
         // Same ordering/cursor is retained for subsequent pages, including the fallback.
@@ -571,7 +572,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
         first.get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingPosts=false; loadedPosts=true;
+            loadingPosts=false;updatePagingUi(); loadedPosts=true;
             lastFeedFetch=android.os.SystemClock.elapsedRealtime();
             loadedPostIds.clear();
             for(DocumentSnapshot doc:snapshot.getDocuments()) loadedPostIds.add(doc.getId());
@@ -580,7 +581,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
-            loadingPosts=false;
+            loadingPosts=false;pageError=true;updatePagingUi();
             if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); }
             else if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
         });
@@ -664,7 +665,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             lastAppliedFilter = filter;
             forceReRank = false;
         }
+        pageError=moreAvailable && finalFeed.isEmpty();
         if (adapter != null) adapter.setPosts(finalFeed);
+        updatePagingUi();
     }
 
     private boolean matchesFilter(Models.Post p, String filter) {
@@ -780,8 +783,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public void loadMore() {
-        if(loadingPosts || lastDoc==null || !moreAvailable || feedQuery==null) return;
-        loadingPosts=true;
+        if(loadingPosts)return;
+        if(lastDoc==null){if(pageError)restartPostsListener();return;}
+        if(!moreAvailable || feedQuery==null)return;
+        pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=feedGeneration; final String actor=feedAccount;
         feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
@@ -796,16 +801,24 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
                 if(visible(post) && matchesFilter(post,filter)) { page.add(post); sessionOrderIds.add(post.id); }
             }
+            pageError=moreAvailable && page.isEmpty();
             adapter.addPosts(page);
+            updatePagingUi();
             // Also refresh footer on empty/filtered final pages. No automatic drain loop.
             adapter.notifyDataSetChanged();
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration) return;
-            loadingPosts=false;
-            if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load more — tap Load more to retry");
+            loadingPosts=false;pageError=true;updatePagingUi();
         });
     }
 
+    private void updatePagingUi(){
+        if(rv!=null)rv.post(()->{if(adapter!=null)adapter.pagingChanged();});
+        if(swipe!=null && !loadingPosts)swipe.setRefreshing(false);
+    }
+    @Override public boolean automaticPaging(){return true;}
+    @Override public boolean isLoadingMore(){return loadingPosts;}
+    @Override public boolean hasPageError(){return pageError;}
     @Override
     public boolean hasMore() { return moreAvailable; }
 

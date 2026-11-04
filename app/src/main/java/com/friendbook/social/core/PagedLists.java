@@ -22,7 +22,7 @@ public final class PagedLists {
         LinearLayout row=Ui.row(activity);String label=key.split(":",2)[0].replace('-',' ');
         TextView refresh=Ui.tvBold(activity,"Refresh "+label,13,Ui.BLUE);
         TextView more=Ui.tvBold(activity,"Load "+size+" more",13,Ui.BLUE);
-        Ui.pad(refresh,12,8,12,8);Ui.pad(more,12,8,12,8);row.addView(refresh);row.addView(more);controls.addView(row);
+        Ui.pad(refresh,12,8,12,8);Ui.pad(more,12,8,12,8);refresh.setVisibility(android.view.View.GONE);row.addView(more);controls.addView(row);
         final CursorPager[] current={null};final boolean[] closed={false};
         Runnable start=()->{
             if(current[0]!=null)current[0].close();

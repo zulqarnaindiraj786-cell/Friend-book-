@@ -197,9 +197,10 @@ public class ConversationsActivity extends Activity {
         inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));
         TextView refreshChats=Ui.tvBold(this,"Refresh chats",13,Ui.BLUE);
         refreshChats.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
-        refreshChats.setOnClickListener(v -> loadInboxPage(true)); root.addView(refreshChats);
-        root.addView(inboxMoreButton);
+        refreshChats.setOnClickListener(v -> loadInboxPage(true)); refreshChats.setVisibility(View.GONE);
+
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(inboxMoreButton);
         setContentView(root);
 
         // ⚡ 0.0ms Instant Frame #1 Hydration from FastCache!
