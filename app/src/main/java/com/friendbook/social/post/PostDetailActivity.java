@@ -53,6 +53,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private RecyclerView mainRv;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
+    private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, sortLabel, whoReactedChip;
     private ImageView mediaThumb;
@@ -145,6 +146,16 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
         }));
         cHeader.addView(sortLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        olderCommentsButton=older;
+        older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
+        older.setOnClickListener(v -> {
+            if(commentsHandle==null) return;
+            if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
+            if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+            updateCommentPager();
+        });
+        cHeader.addView(older);
 
         TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
         seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
@@ -168,6 +179,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
         }
         mainRv.setAdapter(commentsAdapter);
+        com.friendbook.social.core.NearEndPaging.attachComments(mainRv,()->commentsAdapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
         root.addView(mainRv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Bottom Comment Composer Bar
@@ -198,6 +210,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         cancelReply.setVisibility(View.GONE);
         cancelReply.setPadding(Ui.dp(this, 8), 0, 0, 0);
         cancelReply.setOnClickListener(v -> {
+            com.friendbook.social.core.Mentions.clearReplyTarget(input);
             replyingTo = null;
             replyChip.setVisibility(View.GONE);
             cancelReply.setVisibility(View.GONE);
@@ -240,6 +253,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         composer.addView(camBtn);
 
         input = Ui.input(this, "Write a comment…");
+        com.friendbook.social.core.Mentions.attach(input, () -> post == null ? null : post.authorId);
         input.setBackground(Ui.round(this, Ui.inputBg(this), 20));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         ip.leftMargin = Ui.dp(this, 6);
@@ -300,18 +314,24 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     : "See reactions");
         });
 
-        // Multi-user real-time CommentsEngine: merges posts/{postId}.commentsMap + subcollection + root comments!
+        // Latest canonical page stays live; older pages are explicit one-shot reads.
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+            updateCommentPager();
+            if(commentsHandle!=null && commentsHandle.isLoading())return;
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-            if (post != null && post.comments != rawComments.size()) {
-                post.comments = rawComments.size();
-                postAdapter.notifyItemChanged(0, "META_ONLY");
-            }
+
         });
+    }
+
+    private void updateCommentPager() {
+        if(olderCommentsButton==null || commentsHandle==null) return;
+        olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
+                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 
     @Override
@@ -329,7 +349,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         String me = Fb.uid();
         if (me == null) return;
         busy = true;
-        Ui.hideKeyboard(this);
+        final List<Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
 
         if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
@@ -339,18 +359,18 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     .addOnSuccessListener(url -> {
                         pendingPhotoUri = null;
                         mediaPreviewRow.setVisibility(View.GONE);
-                        writeCommentDoc(me, text, url);
+                        writeCommentDoc(me, text, url, mentions);
                     })
                     .addOnFailureListener(err -> {
                         busy = false;
                         Ui.toast(PostDetailActivity.this, "Photo upload failed: " + err.getMessage());
                     });
         } else {
-            writeCommentDoc(me, text, "");
+            writeCommentDoc(me, text, "", mentions);
         }
     }
 
-    private void writeCommentDoc(String me, String text, String mediaUrl) {
+    private void writeCommentDoc(String me, String text, String mediaUrl, List<Map<String,Object>> mentions) {
         final Models.Comment replyTarget = replyingTo;
         String parentId = replyTarget != null ? replyTarget.id : "";
 
@@ -363,9 +383,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         refreshSendState();
 
         // Writes atomically to posts/{postId}.commentsMap.<newId> (100% visible to ALL users!) + mirrors!
-        Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId,
+        Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId, mentions,
                 (ok, errMsg) -> {
-                    busy = false;
                     if (ok) {
                         if (post != null && !me.equals(post.authorId)) {
                             Notify.send(post.authorId, "comment",
@@ -380,6 +399,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     }
                 });
 
+        busy = false; // Queueing is complete; never wait for a remote ACK to accept the next comment.
+        input.requestFocus();
         if (local != null) {
             rawComments.add(local);
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
@@ -393,6 +414,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     // ---------- hosts ----------
     @Override public void onReply(Models.Comment parent) {
         replyingTo = parent;
+        com.friendbook.social.core.Mentions.setReplyTarget(input, parent.authorId, parent.authorName);
         replyChip.setText("Replying to " + parent.authorName);
         replyChip.setVisibility(View.VISIBLE);
         ((LinearLayout) replyChip.getParent()).getChildAt(1).setVisibility(View.VISIBLE);

@@ -6,7 +6,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
-import android.text.util.Linkify;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -50,6 +49,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     private final Activity activity;
     private final Actions actions;
     private final List<Models.Message> data = new ArrayList<>();
+    private List<List<Object>> renderKeys = new ArrayList<>();
     private String peerPhoto = "";
     private boolean isGroup = false;
     private final List<String> groupAdminIds = new ArrayList<>();
@@ -74,36 +74,48 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     }
 
     public void setGroupMeta(boolean group, List<String> admins, Map<String, String> names, Map<String, String> photos) {
+        if (isGroup == group && groupAdminIds.equals(admins == null ? java.util.Collections.emptyList() : admins)
+                && groupNames.equals(names == null ? java.util.Collections.emptyMap() : names)
+                && groupPhotos.equals(photos == null ? java.util.Collections.emptyMap() : photos)) return;
         this.isGroup = group;
         this.groupAdminIds.clear();
         if (admins != null) this.groupAdminIds.addAll(admins);
-        this.groupNames = names != null ? names : new HashMap<>();
-        this.groupPhotos = photos != null ? photos : new HashMap<>();
+        this.groupNames = names != null ? new HashMap<>(names) : new HashMap<>();
+        this.groupPhotos = photos != null ? new HashMap<>(photos) : new HashMap<>();
         notifyDataSetChanged();
     }
 
     public void setData(List<Models.Message> list) {
-        data.clear();
-        data.addAll(list);
-        notifyDataSetChanged();
+        final List<Models.Message> before = new ArrayList<>(data);
+        final List<Models.Message> after = new ArrayList<>(list);
+        final List<List<Object>> oldKeys = renderKeys;
+        final List<List<Object>> newKeys = MessageRenderState.keys(after, Fb.uid());
+        if(oldKeys.equals(newKeys))return;
+        androidx.recyclerview.widget.DiffUtil.DiffResult diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(
+                new androidx.recyclerview.widget.DiffUtil.Callback() {
+                    @Override public int getOldListSize() { return before.size(); }
+                    @Override public int getNewListSize() { return after.size(); }
+                    @Override public boolean areItemsTheSame(int oldPos, int newPos) {
+                        return java.util.Objects.equals(before.get(oldPos).id, after.get(newPos).id);
+                    }
+                    @Override public boolean areContentsTheSame(int oldPos, int newPos) {
+                        return oldPos < oldKeys.size() && oldKeys.get(oldPos).equals(newKeys.get(newPos));
+                    }
+                }, false);
+        data.clear(); data.addAll(after); renderKeys = newKeys;
+        diff.dispatchUpdatesTo(this);
     }
 
     public void appendOptimistic(Models.Message m) {
         if (m == null || m.id == null) return;
-        for (int i = 0; i < data.size(); i++) {
-            if (m.id.equals(data.get(i).id)) {
-                data.set(i, m);
-                notifyItemChanged(i);
-                return;
-            }
+        List<Models.Message> next = new ArrayList<>(data);
+        for (int i = 0; i < next.size(); i++) {
+            if (m.id.equals(next.get(i).id)) { next.set(i, m); setData(next); return; }
         }
-        int prevLast = data.size() - 1;
-        data.add(m);
-        if (prevLast >= 0) notifyItemChanged(prevLast);
-        notifyItemInserted(data.size() - 1);
+        next.add(m); setData(next);
     }
 
-    public List<Models.Message> all() { return data; }
+    public List<Models.Message> all() { return new ArrayList<>(data); }
 
     @Override
     public int getItemViewType(int position) {
@@ -114,6 +126,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
     @Override
     public int getItemCount() { return data.size(); }
+    public String idAt(int position){return position>=0 && position<data.size()?data.get(position).id:null;}
 
     private boolean isGroupableBubble(Models.Message m) {
         if (m == null) return false;
@@ -175,7 +188,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         TextView text = Ui.tv(c, "", 15.5f, 0);
         text.setMaxWidth(maxBubbleW);
         text.setLineSpacing(Ui.dp(c, 1.5f), 1.0f);
-        Linkify.addLinks(text, Linkify.WEB_URLS);
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(text);
 
         ImageView img = new ImageView(c);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -212,10 +225,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
         bubble.addView(senderHeader);
         bubble.addView(quote, qlp);
+        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
         bubble.addView(text);
         bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 206), ViewGroup.LayoutParams.WRAP_CONTENT));
         bubble.addView(callRow);
-        bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
 
         TextView react = Ui.tvBold(c, "", 11.5f, 0);
         Ui.pad(react, 6, 2, 6, 2);
@@ -289,6 +302,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setTextColor(Ui.sub(c));
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
             h.text.setText(m.text == null ? "" : m.text);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
             h.itemView.setOnClickListener(null);
             h.itemView.setOnLongClickListener(null);
             return;
@@ -418,6 +432,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         // 6. Content payload: Deleted / Sticker / Call Card / Voice Note / Photo+Text
         boolean isCall = "call".equals(m.type);
         boolean isVoice = "voice".equals(m.type) && m.voiceUrl != null && !m.voiceUrl.isEmpty();
+        boolean hasVideo = m.videoUrl != null && !m.videoUrl.isEmpty();
         boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
 
         if (m.isDeleted) {
@@ -506,21 +521,31 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setVisibility(View.VISIBLE);
             h.text.setTextSize(15.5f);
             h.text.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-            if (hasImage) {
+            if (hasImage || hasVideo) {
                 h.img.setVisibility(View.VISIBLE);
-                Ui.img(c, h.img, m.imageUrl);
+                if (hasVideo) {
+                    h.img.setImageResource(android.R.drawable.ic_media_play);
+                    h.img.setBackgroundColor(0xFF202124);
+                    h.img.setContentDescription("Play official broadcast video");
+                } else {
+                    h.img.setBackgroundColor(Color.TRANSPARENT);
+                    h.img.setContentDescription("Message photo");
+                    Ui.img(c, h.img, m.imageUrl);
+                }
                 h.img.setOnClickListener(v -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
-                    i.putExtra("type", "image");
-                    i.putExtra("url", m.imageUrl);
+                    i.putExtra("type", hasVideo ? "video" : "image");
+                    i.putExtra("url", hasVideo ? m.videoUrl : m.imageUrl);
+                    i.putExtra("caption", m.text);
                     c.startActivity(i);
                 });
             } else {
                 h.img.setVisibility(View.GONE);
             }
             h.text.setText(m.text == null ? "" : m.text);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(h.text);
             h.text.setTextColor(h.mine ? mineTxt : incomingTxt);
-            if (hasImage && (m.text == null || m.text.isEmpty())) {
+            if ((hasImage || hasVideo) && (m.text == null || m.text.isEmpty())) {
                 h.text.setVisibility(View.GONE);
             }
         }

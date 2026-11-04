@@ -547,6 +547,19 @@ public class Prefs {
     public static void setReelsStartWithSound(Context c, boolean v) { p(c).edit().putBoolean("reelsSoundDefault", v).apply(); }
 
     // ---- 🔔 Top-Bar Badge Optimistic Seen-State Helpers (per-UID isolated) ----
+    /** Local badge acknowledgement IDs, never entity read/seen state. */
+    public static Set<String> dismissedFriendReqBadgeIds(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return new HashSet<>();
+        return new HashSet<>(p(c).getStringSet("dismissedFreqBadgeIds_" + uid, new HashSet<>()));
+    }
+    public static void dismissFriendRequestBadge(Context c, String uid, java.util.Collection<String> ids) {
+        if (uid == null || uid.isEmpty()) return;
+        Set<String> dismissed = dismissedFriendReqBadgeIds(c, uid);
+        if (ids != null) dismissed.addAll(ids);
+        p(c).edit().putStringSet("dismissedFreqBadgeIds_" + uid, dismissed)
+                .putLong("freqClearedAt_" + uid, System.currentTimeMillis()).apply();
+    }
+
     public static Set<String> seenFriendReqIds(Context c, String uid) {
         if (uid == null || uid.isEmpty()) return new HashSet<>();
         return new HashSet<>(p(c).getStringSet("seenFreqIds_" + uid, new HashSet<>()));

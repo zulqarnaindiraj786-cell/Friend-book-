@@ -32,6 +32,7 @@ import java.util.Set;
  * 3) Quick Snooze / Unsnooze per friend
  */
 public class FeedPreferencesActivity extends Activity {
+    private LinearLayout pageControls;
 
     private UsersAdapter adapter;
     private TextView countT, topSortBtn, recentSortBtn;
@@ -107,6 +108,7 @@ public class FeedPreferencesActivity extends Activity {
         });
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -151,8 +153,8 @@ public class FeedPreferencesActivity extends Activity {
                         favorites.addAll(com.friendbook.social.core.Format.listOf(d.getData(), "favoriteUids"));
                     render();
                 });
-        reg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
+        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("friends").whereArrayContains("participants",me),20,"feed-preference-friends",(snap,err)-> {
                     friends.clear();
                     if (snap != null) {
                         List<String> ids = new ArrayList<>();
@@ -174,7 +176,7 @@ public class FeedPreferencesActivity extends Activity {
         for (List<String> chunk : Ui.chunks(ids, 10)) {
             Fb.db().collection("users").whereIn(
                     com.google.firebase.firestore.FieldPath.documentId(), chunk)
-                    .get().addOnSuccessListener(snap -> {
+                    .limit(10).get().addOnSuccessListener(snap -> {
                         for (DocumentSnapshot d : snap) friends.add(Models.User.fromDoc(d));
                         render();
                     });

@@ -28,6 +28,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager pages;
     private TextView empty;
     private String filter = "all";
     private final TextView[] chips = new TextView[4];
@@ -72,7 +73,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         rv.setItemViewCacheSize(16);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
-        adapter.showFooter = false;
+        adapter.showFooter = true;
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
@@ -81,7 +82,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         String me0 = Fb.uid();
         if (me0 != null) {
             for (Models.Post p : com.friendbook.social.core.FastCache.getFeed()) {
-                if (p != null && p.savedBy != null && p.savedBy.contains(me0)) allSaved.add(p);
+                if (p != null && p.savedBy != null && p.savedBy.contains(me0) && allSaved.size()<15) allSaved.add(p);
             }
             if (!allSaved.isEmpty()) applyFilter();
         }
@@ -101,8 +102,11 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         super.onStart();
         String me = Fb.uid();
         if (me == null) return;
-        reg = Fb.db().collection("posts").whereArrayContains("savedBy", me)
-                .addSnapshotListener((snap, err) -> {
+        if(pages!=null)pages.close();
+        pages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereArrayContains("savedBy",me),15,"saved-posts",(docs,more,busy,error)-> {
+                    if(busy && docs.isEmpty())return;
+                    if(!error.isEmpty()){Ui.toast(this,error);return;}
+                    List<DocumentSnapshot> snap=docs;
                     allSaved.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -114,7 +118,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
                     }
                     Collections.sort(allSaved, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     applyFilter();
-                });
+                });pages.start();
     }
 
     private void applyFilter() {
@@ -133,6 +137,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
     protected void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        if(pages!=null){pages.close();pages=null;}
     }
 
     @Override
@@ -158,6 +163,6 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
     @Override public void createStory() { }
     @Override public void openStoryGroup(com.friendbook.social.story.StoriesAdapter.Group g) { }
-    @Override public void loadMore() { }
-    @Override public boolean hasMore() { return false; }
+    @Override public void loadMore() { if(pages!=null)pages.next(); }
+    @Override public boolean hasMore() { return pages==null || pages.hasMore(); }
 }

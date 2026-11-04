@@ -43,6 +43,7 @@ import java.util.Map;
  * - Create Public or Private Groups with Category, Rules & Post Approval settings!
  */
 public class GroupsActivity extends Activity {
+    private LinearLayout pageControls;
 
     private static final String[] CATEGORIES = {
             "Community", "Gaming", "Tech & Coding", "Sports", "Buy & Sell", "Education", "Entertainment"
@@ -107,9 +108,9 @@ public class GroupsActivity extends Activity {
         tabs.addView(mineTab, t2);
         tabs.addView(invitesTab, t3);
 
-        discoverTab.setOnClickListener(v -> { tabMode = 0; updateTabs(); applyFilter(); });
-        mineTab.setOnClickListener(v -> { tabMode = 1; updateTabs(); applyFilter(); });
-        invitesTab.setOnClickListener(v -> { tabMode = 2; updateTabs(); applyFilter(); });
+        discoverTab.setOnClickListener(v -> { tabMode = 0; updateTabs(); startGroupPages(); });
+        mineTab.setOnClickListener(v -> { tabMode = 1; updateTabs(); startGroupPages(); });
+        invitesTab.setOnClickListener(v -> { tabMode = 2; updateTabs(); startGroupPages(); });
         header.addView(tabs);
         root.addView(header);
         root.addView(Ui.divider(this));
@@ -126,6 +127,7 @@ public class GroupsActivity extends Activity {
         adapter = new GroupAdapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -141,8 +143,14 @@ public class GroupsActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("groups")
-                .addSnapshotListener((snap, err) -> {
+        startGroupPages();
+    }
+    private void startGroupPages() {
+        if(reg!=null)reg.remove();
+        com.google.firebase.firestore.Query groupQuery=Fb.db().collection("groups");
+        if(tabMode==1)groupQuery=groupQuery.whereArrayContains("members",Fb.uid());
+        if(tabMode==2)groupQuery=groupQuery.whereArrayContains("invitedUids",Fb.uid());
+        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,groupQuery,20,"groups:"+tabMode,(snap,err)-> {
                     allGroups.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap.getDocuments()) {
@@ -163,7 +171,7 @@ public class GroupsActivity extends Activity {
                 if (g.invitedUids.contains(me) && !g.members.contains(me)) inv++;
             }
         }
-        invitesTab.setText(inv > 0 ? "📨 Invites (" + inv + ")" : "📨 Invites");
+        invitesTab.setText(inv > 0 ? "📨 Invites (loaded " + inv + ")" : "📨 Invites");
     }
 
     private void applyFilter() {

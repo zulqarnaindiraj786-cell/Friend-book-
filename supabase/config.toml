@@ -1,0 +1,15 @@
+[functions.send-onesignal-notification]
+# App uses Firebase Auth, verified cryptographically inside the handler, NOT Supabase Auth.
+verify_jwt = false
+
+[functions.send-fcm-notification]
+# Firebase ID tokens are verified cryptographically in the handler.
+verify_jwt = false
+
+[functions.bulk-mentions]
+# Firebase ID tokens verified in-handler; only persisted owned public sources accepted.
+verify_jwt = false
+
+[functions.counter-state]
+# Firebase JWT verified inside handler. Not deployed/enabled by this repository patch.
+verify_jwt = false

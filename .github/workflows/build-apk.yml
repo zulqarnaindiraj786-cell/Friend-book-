@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
+    # Worker-only changes must not rebuild/re-upload the existing Android release.
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
 
 permissions:
   contents: write
@@ -17,11 +19,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node for gateway tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Guard message badge and read-state separation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
+      - name: Exercise 5000 virtual pagination sessions (model only, no production traffic)
+        run: python3 scripts/loadtest/paging_model.py
+
+      - name: Test direct FCM gateway with mocked providers
+        run: npm ci --prefix supabase && npm test --prefix supabase
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Test actual Firestore SDK queries in isolated demo emulator (no production traffic)
+        working-directory: scripts/firebase-tests
+        run: |
+          set +e
+          (npm ci --ignore-scripts && npm test) > emulator-tests.log 2>&1
+          RESULT=$?
+          if [ "$RESULT" != "0" ]; then
+            tail -100 emulator-tests.log | while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done
+          else
+            tail -25 emulator-tests.log
+          fi
+          exit "$RESULT"
 
       - name: Ensure Android SDK 36
         run: |
@@ -52,11 +83,22 @@ jobs:
             exit 1
           fi
 
+      - name: Reject private credentials in Android sources
+        run: |
+          if grep -RIlE -- 'BEGIN (RSA )?PRIVATE KEY|os_v2_app_' app/src app/build.gradle; then
+            echo "::error::Server credential found in Android sources"
+            exit 1
+          fi
+          if find app/src -type f \( -iname '*service_account*.json' -o -iname '*firebase-adminsdk*.json' \) | grep -q .; then
+            echo "::error::Service account file must never be packaged"
+            exit 1
+          fi
+
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
         run: |
           set +e
-          gradle bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+          gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -121,16 +163,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          publish() {
+            local OUTPUT CODE
+            if OUTPUT=$(gh "$@" 2>&1); then
+              printf '%s\n' "$OUTPUT"
+            else
+              CODE=$?
+              while IFS= read -r line; do echo "::error::${line:0:500}"; done <<< "$OUTPUT"
+              return "$CODE"
+            fi
+          }
           VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
           VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
           TAG="v${VER}"
           TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
-            gh release edit "$TAG" --latest --title "$TITLE" --notes "$NOTES"
+            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
+            publish release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
           else
-            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip \
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --target "$GITHUB_SHA" \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"

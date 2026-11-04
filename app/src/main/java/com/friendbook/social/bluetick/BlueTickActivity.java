@@ -184,10 +184,8 @@ public class BlueTickActivity extends Activity {
                         ctaBox[i].setVisibility(rank >= Icons.tickRank(LEVELS[i]) ? View.GONE : View.VISIBLE);
                     }
                 });
-        refsReg = Fb.db().collection("referrals")
-                .whereEqualTo("refBy", uid)
-                .addSnapshotListener((snap, err) -> {
-                    int count = snap == null ? 0 : snap.size();
+        refsReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",uid),total->{
+                    int count=(int)Math.min(Integer.MAX_VALUE,total);
                     for (int i = 0; i < 3; i++) {
                         bars[i].setProgress(Math.min(count, NEED[i]));
                         progT[i].setText(Math.min(count, NEED[i]) + "/" + NEED[i] + " invited"

@@ -20,6 +20,7 @@ import com.friendbook.social.core.Ui;
 public class App extends Application implements SensorEventListener {
 
     public static App instance;
+    public static boolean isForeground() { return instance != null && instance.resumedCount > 0; }
     private ShakeListener shakeListener;
     private long lastShake = 0;
     private float lastX, lastY, lastZ;
@@ -47,14 +48,22 @@ public class App extends Application implements SensorEventListener {
         }
     };
 
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+            com.friendbook.social.core.SoundEffects.release();
+    }
+
     public interface ShakeListener { void onShake(); }
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
+        com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
+        com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
         // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
@@ -76,13 +85,17 @@ public class App extends Application implements SensorEventListener {
                     timeHandler.postDelayed(timeTick, 30_000L);
                 }
                 resumedCount++;
+                com.friendbook.social.core.SoundEffects.warmUp(App.this);
             }
             @Override public void onActivityPaused(Activity a) {
                 if (Prefs.instantTransitions(App.this)) {
                     a.overridePendingTransition(0, 0);
                 }
                 resumedCount = Math.max(0, resumedCount - 1);
-                if (resumedCount == 0) timeHandler.removeCallbacks(timeTick);
+                if (resumedCount == 0) {
+                    timeHandler.removeCallbacks(timeTick);
+                    com.friendbook.social.core.SoundEffects.stopAll();
+                }
             }
             @Override public void onActivityCreated(Activity a, Bundle b) {
                 if (Prefs.instantTransitions(App.this)) {
@@ -113,7 +126,7 @@ public class App extends Application implements SensorEventListener {
                 startedCount = Math.max(0, startedCount - 1);
                 if (startedCount == 0) {
                     timeHandler.removeCallbacks(deferredOffline);
-                    timeHandler.postDelayed(deferredOffline, 1500L);
+                    timeHandler.postDelayed(deferredOffline, 500L);
                 }
             }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }

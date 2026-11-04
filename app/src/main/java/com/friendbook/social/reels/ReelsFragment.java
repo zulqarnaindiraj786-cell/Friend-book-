@@ -77,6 +77,10 @@ public class ReelsFragment extends Fragment {
     private ViewPager2 pager;
     private ReelAdapter adapter;
     private ListenerRegistration reelsReg, videoPostsReg;
+    private DocumentSnapshot reelsCursor, postsCursor;
+    private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
+    private int videoGeneration;
+    private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
     private LinearLayout emptyState;
     private LinearLayout uploadStatusBanner;
     private TextView uploadStatusText;
@@ -158,11 +162,11 @@ public class ReelsFragment extends Fragment {
         pager = new ViewPager2(a);
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
         // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes!
-        pager.setOffscreenPageLimit(2);
+        pager.setOffscreenPageLimit(1);
         if (pager.getChildAt(0) instanceof RecyclerView) {
             ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
         }
-        adapter = new ReelAdapter(a);
+        adapter = new ReelAdapter(a,()->isResumed() && !isHidden());
         pager.setAdapter(adapter);
         root.addView(pager, new FrameLayout.LayoutParams(-1, -1));
 
@@ -271,6 +275,9 @@ public class ReelsFragment extends Fragment {
         uploadStatusBanner.addView(uploadStatusBar, usblp);
         topStack.addView(uploadStatusBanner, ublp);
 
+        TextView moreVideos=Ui.tvBold(a,"More videos ›",12,Color.WHITE);
+        moreVideos.setPadding(Ui.dp(a,12),Ui.dp(a,6),Ui.dp(a,12),Ui.dp(a,6));
+        moreVideos.setOnClickListener(v -> loadNextVideos()); topStack.addView(moreVideos);
         root.addView(topStack, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
@@ -282,7 +289,7 @@ public class ReelsFragment extends Fragment {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
                 }
                 int rIdx = adapter.reelIndexForPos(position);
-                ReelVideoCache.prefetchWindow(getActivity(), adapter.rawReels(), Math.max(0, rIdx));
+                if(rIdx>=adapter.rawReels().size()-3) loadNextVideos();
             }
         });
         return root;
@@ -294,7 +301,7 @@ public class ReelsFragment extends Fragment {
         if (a == null) return;
         initialReelId = null;
         FeedAlgorithm.nextRefreshGeneration(a);
-        rebuildMergedFeed(true);
+        resetVideoPages();
         if (pager != null) pager.setCurrentItem(0, false);
     }
 
@@ -401,12 +408,6 @@ public class ReelsFragment extends Fragment {
         boolean wasEmpty = adapter.rawReels().isEmpty();
         adapter.setData(pager, merged, forceReset);
 
-        // Pre-warm first 4 Reels onto SSD cache immediately!
-        if (!merged.isEmpty()) {
-            int curReelIdx = pager != null ? Math.max(0, adapter.reelIndexForPos(pager.getCurrentItem())) : 0;
-            ReelVideoCache.prefetchWindow(act, merged, curReelIdx);
-        }
-
         if (!isHidden() && !merged.isEmpty() && pager != null && (wasEmpty || forceReset)) {
             pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
@@ -418,56 +419,7 @@ public class ReelsFragment extends Fragment {
     public void onStart() {
         super.onStart();
         ReelUploadManager.addListener(bgUploadListener);
-        reelsReg = Fb.db().collection("reels")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(60)
-                .addSnapshotListener((snap, err) -> {
-                    fromReels.clear();
-                    if (snap != null) {
-                        Activity act = getActivity();
-                        for (DocumentSnapshot d : snap) {
-                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
-                                ContentSafetyEngine.autoDeleteContent(
-                                        act, "reels", d.getId(), d.getString("authorId"),
-                                        "policy_violation", "Safety flagged reel", null);
-                                continue;
-                            }
-                            Models.Reel r = Models.Reel.fromDoc(d);
-                            if (r.videoUrl == null || r.videoUrl.isEmpty()) continue;
-                            if (ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
-                                    act, "reels", r.id, r.authorId, r.caption, r.videoUrl, null)) {
-                                continue;
-                            }
-                            if (act != null && Prefs.isPostHidden(act, r.id)) continue;
-                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.authorId)) continue;
-                            fromReels.add(r);
-                        }
-                    }
-                    rebuildMergedFeed(false);
-                });
-
-        videoPostsReg = Fb.db().collection("posts")
-                .whereEqualTo("mediaType", "video")
-                .limit(40)
-                .addSnapshotListener((snap, err) -> {
-                    fromPosts.clear();
-                    if (snap != null) {
-                        Activity act = getActivity();
-                        for (DocumentSnapshot d : snap) {
-                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                            Models.Post p = Models.Post.fromDoc(d);
-                            if (p.mediaUrl == null || p.mediaUrl.isEmpty()) continue;
-                            if (ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
-                                    act, "posts", p.id, p.authorId, p.content, p.mediaUrl, null)) {
-                                continue;
-                            }
-                            if (act != null && Prefs.isPostHidden(act, p.id)) continue;
-                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(p.authorId)) continue;
-                            fromPosts.add(Models.Reel.fromVideoPost(p));
-                        }
-                    }
-                    rebuildMergedFeed(false);
-                });
+        resetVideoPages();
 
         if (!isHidden() && pager != null && adapter != null && adapter.getItemCount() > 0) {
             pager.post(() -> {
@@ -475,6 +427,65 @@ public class ReelsFragment extends Fragment {
             });
         }
     }
+
+    private void resetVideoPages() {
+        videoGeneration++; pagingVideos=false; moreReels=true; moreVideoPosts=true;
+        reelsCursor=null; postsCursor=null; loadedVideoIds.clear(); fromReels.clear(); fromPosts.clear();
+        loadNextVideos();
+        if(initialReelId!=null && !initialReelId.isEmpty()) {
+            final int request=videoGeneration; final String target=initialReelId; final String actor=Fb.uid();
+            Fb.db().collection("reels").document(target).get().addOnSuccessListener(doc -> {
+                if(request!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+                if(doc.exists()) { addLinkedVideo(doc,true); return; }
+                Fb.db().collection("posts").document(target).get().addOnSuccessListener(post -> {
+                    if(request==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post.exists()) addLinkedVideo(post,false);
+                });
+            });
+        }
+    }
+    private void addLinkedVideo(DocumentSnapshot doc,boolean nativeReel) {
+        if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) return;
+        Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+        if(reel.videoUrl==null || reel.videoUrl.isEmpty() || (Fb.me!=null && Fb.me.blocked.contains(reel.authorId))) return;
+        if(Prefs.isPostHidden(getActivity(),reel.id)) return;
+        if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) return;
+        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) (nativeReel?fromReels:fromPosts).add(reel);
+        boolean linked=initialReelId!=null && initialReelId.equals(doc.getId());
+        rebuildMergedFeed(linked);
+        if(linked && pager!=null) pager.setCurrentItem(0,false);
+    }
+    private void loadNextVideos() {
+        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
+        pagingVideos=true; final int generation=videoGeneration; final String actor=Fb.uid();
+        // Two sources contribute five metadata documents each: at most ten per batch.
+        final int[] pending={(moreReels?1:0)+(moreVideoPosts?1:0)};
+        Runnable done=() -> { if(generation!=videoGeneration) return; if(--pending[0]==0) { pagingVideos=false; rebuildMergedFeed(false); } };
+        for(boolean nativeReel:new boolean[]{true,false}) {
+            if(nativeReel?!moreReels:!moreVideoPosts) continue;
+            Query query=nativeReel?Fb.db().collection("reels").orderBy("createdAt",Query.Direction.DESCENDING)
+                    :Fb.db().collection("posts").whereEqualTo("mediaType","video");
+            DocumentSnapshot cursor=nativeReel?reelsCursor:postsCursor;
+            if(cursor!=null) query=query.startAfter(cursor);
+            query.limit(5).get().addOnSuccessListener(page -> {
+                if(generation!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+                if(nativeReel) { moreReels=page.size()==5; if(!page.isEmpty()) reelsCursor=page.getDocuments().get(page.size()-1); }
+                else { moreVideoPosts=page.size()==5; if(!page.isEmpty()) postsCursor=page.getDocuments().get(page.size()-1); }
+                for(DocumentSnapshot doc:page) {
+                    if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                    Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+                    if(reel.videoUrl==null || reel.videoUrl.isEmpty()) continue;
+                    if(Fb.me!=null && Fb.me.blocked.contains(reel.authorId)) continue;
+                    if(Prefs.isPostHidden(getActivity(),reel.id)) continue;
+                    if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) continue;
+                    if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) (nativeReel?fromReels:fromPosts).add(reel);
+                }
+                done.run();
+            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load videos — tap More videos to retry"); } });
+        }
+    }
+
+    @Override public void onResume(){super.onResume();if(pager!=null && adapter!=null)pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));}
+    @Override public void onPause(){if(adapter!=null && pager!=null)adapter.pauseAll(pager);super.onPause();}
 
     @Override
     public void onHiddenChanged(boolean hidden) {
@@ -485,8 +496,6 @@ public class ReelsFragment extends Fragment {
         } else {
             pager.post(() -> {
                 adapter.playOnly(pager, pager.getCurrentItem());
-                int rIdx = adapter.reelIndexForPos(pager.getCurrentItem());
-                ReelVideoCache.prefetchWindow(getActivity(), adapter.rawReels(), Math.max(0, rIdx));
             });
         }
     }
@@ -494,6 +503,7 @@ public class ReelsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
+        videoGeneration++; pagingVideos=false;
         ReelUploadManager.removeListener(bgUploadListener);
         if (reelsReg != null) { reelsReg.remove(); reelsReg = null; }
         if (videoPostsReg != null) { videoPostsReg.remove(); videoPostsReg = null; }
@@ -512,7 +522,8 @@ public class ReelsFragment extends Fragment {
         private final List<Models.Reel> data = new ArrayList<>();
         private int playingPos = 0;
 
-        ReelAdapter(Activity a) { this.activity = a; }
+        private final java.util.function.BooleanSupplier visible;
+        ReelAdapter(Activity a,java.util.function.BooleanSupplier visible) { this.activity = a;this.visible=visible; }
 
         List<Models.Reel> rawReels() { return data; }
 
@@ -628,6 +639,7 @@ public class ReelsFragment extends Fragment {
         }
 
         void playOnly(ViewPager2 pager, int pos) {
+            if(!visible.getAsBoolean()){pauseAll(pager);return;}
             playingPos = pos;
             if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
             RecyclerView rv = (RecyclerView) pager.getChildAt(0);
@@ -666,9 +678,17 @@ public class ReelsFragment extends Fragment {
                 Models.Reel r = reelAtPosition(position);
                 if (r != null) {
                     VH vh = (VH) h;
-                    vh.bind(r, position == playingPos);
+                    vh.bind(r, visible.getAsBoolean() && position == playingPos);
                 }
             }
+        }
+
+        @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder h){
+            super.onViewAttachedToWindow(h);
+            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos)((VH)h).play();
+        }
+        @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder h){
+            if(h instanceof VH)((VH)h).pause();super.onViewDetachedFromWindow(h);
         }
 
         @Override
@@ -1385,6 +1405,7 @@ public class ReelsFragment extends Fragment {
 
                 boolean hasCap = reel.caption != null && !reel.caption.trim().isEmpty();
                 captionT.setText(hasCap ? reel.caption : "");
+                com.friendbook.social.core.LinkUtils.makeLinksClickable(captionT);
                 captionT.setVisibility(hasCap ? View.VISIBLE : View.GONE);
 
                 audioT.setText("♫ Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));
@@ -1396,6 +1417,7 @@ public class ReelsFragment extends Fragment {
                     followT.setText(Fb.me.following.contains(reel.authorId) ? "Following ✓" : "Follow");
                 }
             }
+
 
             void bind(Models.Reel r, boolean autoPlayNow) {
                 boolean sameVideo = (this.reel != null && boundVideoUrl.equals(r.videoUrl) && activeMp != null);
@@ -1415,6 +1437,7 @@ public class ReelsFragment extends Fragment {
                 }
 
                 releasePlayer();
+                this.wantPlay=autoPlayNow;
                 boundVideoUrl = r.videoUrl != null ? r.videoUrl : "";
                 triedRawFallback = false;
                 scrubBar.setProgress(0);
@@ -1430,7 +1453,8 @@ public class ReelsFragment extends Fragment {
                     posterView.setVisibility(View.GONE);
                 }
 
-                // Pre-prepare MediaPlayer right away if TextureView surface is ready (including offscreen pages!)
+                pausedBadge.setVisibility(View.GONE);
+                // Never prepare or download unrequested/offscreen videos.
                 if (textureView.isAvailable()) {
                     if (videoSurface == null && textureView.getSurfaceTexture() != null) {
                         videoSurface = new Surface(textureView.getSurfaceTexture());
@@ -1440,7 +1464,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void prepareMediaPlayerAsync() {
-                if (reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
+                if (!wantPlay || getBindingAdapterPosition()!=playingPos || reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
                 releasePlayerOnly();
 
                 final Context ctx = itemView.getContext();
@@ -1506,6 +1530,7 @@ public class ReelsFragment extends Fragment {
                     });
 
                     mp.setOnErrorListener((player, what, extra) -> {
+                        if(player!=activeMp || !java.util.Objects.equals(targetUrl,reel==null?null:reel.videoUrl)) return true;
                         bufferingSpinner.setVisibility(View.GONE);
                         // Automatic fallback to raw untransformed URL if CDN transform failed
                         if (!triedRawFallback && reel != null && reel.videoUrl != null) {
@@ -1527,8 +1552,7 @@ public class ReelsFragment extends Fragment {
                                 ? targetUrl
                                 : ReelVideoCache.optimizeStreamUrl(ctx, targetUrl);
                         mp.setDataSource(ctx, Uri.parse(fastUrl));
-                        // Cache in background so next loop / revisit plays from SSD!
-                        ReelVideoCache.prefetchSingle(ctx, targetUrl);
+                        // One stream only: a parallel full download competes with playback on mobile data.
                     }
                     mp.prepareAsync();
                 } catch (Throwable t) {
@@ -1541,6 +1565,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void prepareWithRawUrlFallback(Context ctx, String rawUrl) {
+                if(!wantPlay || getBindingAdapterPosition()!=playingPos || reel==null || !java.util.Objects.equals(rawUrl,reel.videoUrl)) return;
                 releasePlayerOnly();
                 try {
                     MediaPlayer mp = new MediaPlayer();
@@ -1599,7 +1624,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void startPreparedPlayer() {
-                if (activeMp == null || !mpPrepared) return;
+                if (!wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
                 try {
                     float vol = muted ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
@@ -1618,7 +1643,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void togglePlayPause() {
-                if (activeMp == null || !mpPrepared) return;
+                if (activeMp == null || !mpPrepared) { play(); return; }
                 try {
                     if (activeMp.isPlaying()) {
                         userPaused = true;
@@ -1634,6 +1659,7 @@ public class ReelsFragment extends Fragment {
             }
 
             void play() {
+                if(getBindingAdapterPosition()!=playingPos) return;
                 wantPlay = true;
                 userPaused = false;
                 pausedBadge.setVisibility(View.GONE);
@@ -1809,6 +1835,13 @@ public class ReelsFragment extends Fragment {
                 final Context ctx = itemView.getContext();
                 final int delta = (prev == null && nextType != null) ? 1 : (prev != null && nextType == null ? -1 : 0);
 
+                final String pushAuthor = reel.authorId;
+                final String pushReelId = reel.id;
+                Runnable notifyReaction = () -> {
+                    if (me.equals(Fb.uid()) && nextType != null && prev == null && !me.equals(pushAuthor)) {
+                        Notify.send(pushAuthor, "reel_like", Fb.myName() + " liked your reel", pushReelId);
+                    }
+                };
                 if (reel.isFromPost) {
                     // Video Post in Reels: sync posts/{id}.reactionsMap.<me> + posts/{id}/reactions/<me> + FastCache!
                     com.friendbook.social.core.FastCache.markLocalReactionTap(reel.id);
@@ -1849,7 +1882,7 @@ public class ReelsFragment extends Fragment {
                         rxEntry.put("userTickLevel", Fb.me != null ? Fb.me.tickLevel : "none");
                         rxEntry.put("type", nextType);
                         rxEntry.put("createdAt", System.currentTimeMillis());
-                        subRef.set(rxEntry);
+                        subRef.set(rxEntry).addOnSuccessListener(v -> notifyReaction.run());
 
                         Map<String, Object> dot = new HashMap<>();
                         dot.put("reactionsMap." + me, rxEntry);
@@ -1871,21 +1904,19 @@ public class ReelsFragment extends Fragment {
                     dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);
                     dot.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
                     dot.put("likes", reel.reactions.size());
-                    reelRef.update(dot).addOnFailureListener(err -> {
+                    reelRef.update(dot).addOnSuccessListener(v -> notifyReaction.run()).addOnFailureListener(err -> {
                         Map<String, Object> fallback = new HashMap<>();
                         Map<String, Object> rxMap = new HashMap<>();
                         rxMap.put(me, nextType == null ? FieldValue.delete() : nextType);
                         fallback.put("reactions", rxMap);
                         fallback.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
                         fallback.put("likes", reel.reactions.size());
-                        reelRef.set(fallback, SetOptions.merge());
+                        reelRef.set(fallback, SetOptions.merge()).addOnSuccessListener(v -> notifyReaction.run());
                     });
                 }
 
                 if (nextType != null && prev == null && !me.equals(reel.authorId)) {
                     FeedAlgorithm.recordCreatorAffinity(ctx, reel.authorId, 6);
-                    Notify.send(reel.authorId, "reel_like",
-                            Fb.myName() + " reacted " + Reactions.emojiFor(nextType) + " to your reel", reel.id);
                 }
             }
 
@@ -1911,12 +1942,8 @@ public class ReelsFragment extends Fragment {
                 if (reel == null) return;
                 String me = Fb.uid();
                 if (me == null) return;
-                Fb.db().collection("users").document(reel.authorId)
-                        .set(Fb.map("followers", FieldValue.arrayUnion(me)), SetOptions.merge());
-                Fb.db().collection("users").document(me)
-                        .set(Fb.map("following", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge());
+                Notify.follow(reel.authorId, true);
                 followT.setText("Following ✓");
-                Notify.send(reel.authorId, "follow", "started following you");
                 Ui.toast(itemView.getContext(), "Following " + reel.authorName + " ✓");
             }
 

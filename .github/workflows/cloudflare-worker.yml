@@ -1,0 +1,25 @@
+name: Validate Cloudflare Worker
+on:
+  pull_request:
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
+  push:
+    branches: [main, 'arena/**']
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: python3 cloudflare/test/schema_test.py
+      - name: Bundle only — no deployment or remote migrations
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
+        env:
+          WRANGLER_SEND_METRICS: 'false'

@@ -97,10 +97,11 @@ public class Models {
             long lsTs = Format.ts(m == null ? null : m.get("lastSeen"));
             long lsMs = (m != null && m.get("lastSeenMs") instanceof Number)
                     ? ((Number) m.get("lastSeenMs")).longValue() : 0L;
-            u.lastSeen = u.showActiveStatus ? Math.max(lsTs, lsMs) : 0L;
-            boolean rawOnline = Format.boolOf(m, "isOnline");
-            u.isOnline = u.showActiveStatus && rawOnline && u.lastSeen > 0L
-                    && (System.currentTimeMillis() - u.lastSeen) <= com.friendbook.social.core.Presence.ONLINE_TTL_MS;
+            u.lastSeen = u.showActiveStatus ? (lsTs > 0 ? lsTs : lsMs) : 0L;
+            boolean rawOnline = m != null && m.containsKey("isActive") ? Format.boolOf(m, "isActive") : Format.boolOf(m, "isOnline");
+            if (m != null && m.containsKey("isOnline") && !Format.boolOf(m, "isOnline")) rawOnline = false;
+            u.isOnline = u.showActiveStatus && com.friendbook.social.core.PresencePolicy.isFreshOnline(
+                    rawOnline, u.lastSeen, com.friendbook.social.core.Presence.now());
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");
@@ -140,6 +141,7 @@ public class Models {
     }
 
     public static class Post {
+        public List<Map<String,Object>> mentions = new ArrayList<>();
         public String id, authorId, authorName, authorPhoto, content, mediaUrl, mediaType,
                 feeling, privacy, sharedFromId, sharedFromAuthor, sharedFromContent,
                 sharedFromMediaUrl, sharedFromMediaType, location, groupId;
@@ -195,6 +197,7 @@ public class Models {
             p.authorName = Format.strOr(m, "authorName", "User");
             p.authorPhoto = Format.str(m, "authorPhotoUrl");
             p.content = Format.str(m, "content");
+            p.mentions = com.friendbook.social.core.Mentions.read(m.get("mentions"));
             p.mediaUrl = Format.str(m, "mediaUrl");
             p.mediaType = Format.strOr(m, "mediaType", "none");
             p.feeling = Format.str(m, "feeling");
@@ -323,6 +326,7 @@ public class Models {
     }
 
     public static class Comment {
+        public List<Map<String,Object>> mentions = new ArrayList<>();
         public String id, postId, authorId, authorName, authorPhoto, content, imageUrl, parentId;
         public boolean edited;
         public boolean pinned;
@@ -331,8 +335,11 @@ public class Models {
         public List<String> likedBy = new ArrayList<>();
         public Map<String, String> reactions = new HashMap<>(); // uid -> like|love|haha|wow|sad|angry
 
+        public transient boolean canonicalStored;
         public static Comment fromDoc(DocumentSnapshot d) {
-            return fromMap(d.getId(), d.getData());
+            Comment c=fromMap(d.getId(), d.getData());
+            c.canonicalStored=d.getReference().getParent().getParent()!=null;
+            return c;
         }
 
         @SuppressWarnings("unchecked")
@@ -347,6 +354,7 @@ public class Models {
                     Format.strOr(m, "authorPhoto", Format.str(m, "userPhoto")));
             c.content = Format.strOr(m, "content",
                     Format.strOr(m, "text", Format.str(m, "message")));
+            c.mentions = com.friendbook.social.core.Mentions.read(m == null ? null : m.get("mentions"));
             c.imageUrl = Format.strOr(m, "imageUrl", Format.str(m, "mediaUrl"));
             c.parentId = Format.str(m, "parentId");
             c.edited = m != null && Boolean.TRUE.equals(m.get("edited"));
@@ -376,6 +384,17 @@ public class Models {
         public static List<Comment> parseEmbeddedComments(String parentDocId, Map<String, Object> docMap, String pinnedId) {
             List<Comment> out = new ArrayList<>();
             if (docMap == null) return out;
+            Object latest=docMap.get("lastComment");
+            if(latest instanceof Map) {
+                Map<String,Object> data=new HashMap<>();
+                for(Map.Entry<?,?> entry:((Map<?,?>)latest).entrySet()) data.put(String.valueOf(entry.getKey()),entry.getValue());
+                Comment comment=fromMap(Format.str(data,"id"),data);
+                if(comment.id!=null && !comment.id.isEmpty()) {
+                    if(comment.postId==null || comment.postId.isEmpty()) comment.postId=parentDocId;
+                    if(comment.id.equals(pinnedId)) comment.pinned=true;
+                    out.add(comment);
+                }
+            }
             Object cm = docMap.get("commentsMap");
             if (cm instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) cm).entrySet()) {
@@ -387,7 +406,7 @@ public class Models {
                         Comment c = fromMap(String.valueOf(e.getKey()), sub);
                         if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
                         if (pinnedId != null && !pinnedId.isEmpty() && pinnedId.equals(c.id)) c.pinned = true;
-                        out.add(c);
+                        if(out.stream().noneMatch(existing -> existing.id.equals(c.id))) out.add(c);
                     }
                 }
             }
@@ -400,8 +419,9 @@ public class Models {
                             if (se.getKey() != null) sub.put(String.valueOf(se.getKey()), se.getValue());
                         }
                         Comment c = fromMap(Format.str(sub, "id"), sub);
+                        if(c.id==null || c.id.isEmpty()) continue;
                         if (c.postId == null || c.postId.isEmpty()) c.postId = parentDocId;
-                        out.add(c);
+                        if(out.stream().noneMatch(existing -> existing.id.equals(c.id))) out.add(c);
                     }
                 }
             }
@@ -546,7 +566,7 @@ public class Models {
     }
 
     public static class Message {
-        public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, type, voiceUrl;
+        public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, videoUrl, type, voiceUrl;
         public String replyToText, replyToSender;
         public String callType, callStatus;
         public int callDurationSec;
@@ -567,6 +587,7 @@ public class Models {
             m0.receiverId = Format.str(m, "receiverId");
             m0.text = Format.str(m, "text");
             m0.imageUrl = Format.str(m, "imageUrl");
+            m0.videoUrl = Format.str(m, "videoUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");

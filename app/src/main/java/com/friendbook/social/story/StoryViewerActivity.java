@@ -54,7 +54,14 @@ public class StoryViewerActivity extends Activity {
     private int index = 0;
     private ListenerRegistration reg;
     private String authorId, specificStoryId;
+    private boolean viewerFriend;
+    private String viewerActor;
     private FrameLayout root;
+    private com.friendbook.social.core.CursorPager storyPages;
+    private TextView moreStories;
+    private boolean storyMore=true,storyBusy,advanceAfterPage;
+    private int storyRequest;
+
     private ImageView img, headerAvatar;
     private VideoView video;
     private TextView textCanvas, moodBadge, nameT, timeT, captionT, viewersT;
@@ -84,6 +91,7 @@ public class StoryViewerActivity extends Activity {
         root.addView(video, new FrameLayout.LayoutParams(-1, -1));
 
         textCanvas = new TextView(this);
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(textCanvas);
         textCanvas.setGravity(Gravity.CENTER);
         textCanvas.setTextColor(Color.WHITE);
         textCanvas.setTextSize(26);
@@ -213,6 +221,11 @@ public class StoryViewerActivity extends Activity {
         replyArea.addView(inputRow);
 
         root.addView(replyArea);
+        moreStories=Ui.tvBold(this,"More stories",13,Color.WHITE);
+        Ui.pad(moreStories,12,8,12,8);moreStories.setBackgroundColor(0x88000000);
+        FrameLayout.LayoutParams moreParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);
+        moreParams.topMargin=Ui.dp(this,92);root.addView(moreStories,moreParams);
+        moreStories.setOnClickListener(v->{if(storyPages!=null)storyPages.next();});
         setContentView(root);
     }
 
@@ -225,30 +238,51 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("stories").whereEqualTo("authorId", authorId)
-                .addSnapshotListener((snap, err) -> {
-                    stories.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Story s = Models.Story.fromDoc(d);
-                            if (specificStoryId != null) {
-                                if (specificStoryId.equals(s.id)) stories.add(s);
-                            } else if (!s.expired()) {
-                                stories.add(s);
-                            }
-                        }
-                    }
-                    Collections.sort(stories, (a, b2) -> Long.compare(a.createdAt, b2.createdAt));
-                    if (stories.isEmpty()) { finish(); return; }
-                    if (index >= stories.size()) index = stories.size() - 1;
-                    show();
-                });
+        final int request=++storyRequest;final String actor=Fb.uid();viewerActor=actor;
+        if(actor==null){finish();return;}
+        if(actor.equals(authorId)){viewerFriend=true;loadStoryPages(request);return;}
+        Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(actor,authorId),java.util.Arrays.asList(authorId,actor)))
+                .count().get(com.google.firebase.firestore.AggregateSource.SERVER).addOnSuccessListener(count->{
+                    if(request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+                    viewerFriend=count.getCount()>0;
+                    if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else finish();
+                }).addOnFailureListener(error->{if(request==storyRequest)finish();});
+    }
+    private boolean allowedStory(Models.Story story){
+        return java.util.Objects.equals(viewerActor,Fb.uid()) && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,viewerFriend,
+                Fb.me!=null && Fb.me.following.contains(story.authorId),Fb.me!=null && Fb.me.blocked.contains(story.authorId),Prefs.isStoryAuthorMuted(this,story.authorId));
+    }
+    private void loadStoryPages(int request){
+        if(specificStoryId!=null){
+            moreStories.setVisibility(View.GONE);
+            Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
+                if(request!=storyRequest || isFinishing())return;
+                if(!doc.exists()){finish();return;}Models.Story story=Models.Story.fromDoc(doc);
+                if(!authorId.equals(story.authorId) || !allowedStory(story)){finish();return;}stories.clear();stories.add(story);index=0;show();
+            }).addOnFailureListener(e->{if(request==storyRequest)Ui.toast(this,"Couldn't load story. Reopen to retry.");});
+            return;
+        }
+        storyPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("stories").whereEqualTo("authorId",authorId),10,"story-viewer:"+authorId,(docs,more,busy,error)->{
+            if(request!=storyRequest || isFinishing())return;
+            storyMore=more;storyBusy=busy;moreStories.setEnabled(!busy && more);
+            moreStories.setText(busy?"Loading…":!error.isEmpty()?"Retry stories":more?"More stories":"All loaded");
+            if(busy || !error.isEmpty())return;
+            String current=stories.isEmpty()?null:stories.get(Math.min(index,stories.size()-1)).id;
+            stories.clear();for(DocumentSnapshot doc:docs){Models.Story story=Models.Story.fromDoc(doc);if(!story.expired() && allowedStory(story))stories.add(story);}
+            // Keep append order stable: cursor doc-ID order, never re-sort a growing sequence under the viewer.
+            if(advanceAfterPage){advanceAfterPage=false;int found=-1;for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))found=i;
+                if(found+1<stories.size())index=found+1;else if(!more){finish();return;}
+            }else if(current!=null){for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))index=i;}
+            if(stories.isEmpty()){if(!more)finish();return;}
+            index=Math.min(index,stories.size()-1);show();
+        });storyPages.start();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        storyRequest++;if(storyPages!=null){storyPages.close();storyPages=null;}
         stopTimer();
     }
 
@@ -455,7 +489,10 @@ public class StoryViewerActivity extends Activity {
     private void step(int delta) {
         int next = index + delta;
         if (next < 0) next = 0;
-        if (next >= stories.size()) { finish(); return; }
+        if (next >= stories.size()) {
+            if(storyPages!=null && storyMore){stopTimer();advanceAfterPage=true;if(!storyBusy)storyPages.next();return;}
+            finish();return;
+        }
         index = next;
         show();
     }
@@ -464,8 +501,10 @@ public class StoryViewerActivity extends Activity {
         if (stories.isEmpty()) return;
         Models.Story s = stories.get(index);
         Ui.confirm(this, "Delete this story?", "", "Delete", () -> {
-            Fb.db().collection("stories").document(s.id).delete();
-            Ui.toast(this, "Story deleted");
+            Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(v->{
+                if(storyPages!=null)storyPages.forget(s.id);stories.remove(s);
+                Ui.toast(this,"Story deleted");if(stories.isEmpty()){finish();return;}index=Math.min(index,stories.size()-1);show();
+            });
         });
     }
 

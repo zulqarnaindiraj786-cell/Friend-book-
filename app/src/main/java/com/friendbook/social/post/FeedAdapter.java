@@ -54,7 +54,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void openStoryGroup(StoriesAdapter.Group g);
         void loadMore();
         boolean hasMore();
+        default boolean automaticPaging(){return false;}
+        default boolean isLoadingMore(){return false;}
+        default boolean hasPageError(){return false;}
         default void openFindFriends() { }
+        default void loadMoreStories() { }
+        default boolean hasMoreStories() { return false; }
     }
 
     private static final int VT_HEADER = 0, VT_POST = 1, VT_FOOTER = 2, VT_AD = 3;
@@ -106,7 +111,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         }
         posts.clear();
-        posts.addAll(list);
+        java.util.Set<String> existing=new java.util.HashSet<>();
+        for(Models.Post post:posts) if(post!=null) existing.add(post.id);
+        for(Models.Post post:list) if(post!=null && existing.add(post.id)) posts.add(post);
         notifyDataSetChanged();
     }
 
@@ -308,6 +315,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (h instanceof HeaderVH) {
             HeaderVH hh = (HeaderVH) h;
             hh.storiesAdapter.setData(storyGroups);
+            hh.moreStories.setVisibility(host!=null && host.hasMoreStories()?View.VISIBLE:View.GONE);
+            hh.moreStories.setOnClickListener(v -> { if(host!=null) host.loadMoreStories(); });
             hh.storiesAdapter.listener = new StoriesAdapter.Listener() {
                 @Override public void onGroup(StoriesAdapter.Group g) { if (host != null) host.openStoryGroup(g); }
                 @Override public void onCreate() { if (host != null) host.createStory(); }
@@ -400,8 +409,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else if (h instanceof FooterVH) {
             FooterVH fh = (FooterVH) h;
             boolean more = host != null && host.hasMore();
-            fh.more.setVisibility(more ? View.VISIBLE : View.GONE);
-            fh.end.setVisibility(more ? View.GONE : View.VISIBLE);
+            boolean loading=host!=null && host.isLoadingMore(), retry=host!=null && host.hasPageError();
+            fh.spinner.setVisibility(loading?View.VISIBLE:View.GONE);
+            fh.more.setVisibility(!loading && host!=null && (retry || (more && !host.automaticPaging()))?View.VISIBLE:View.GONE);
+            fh.more.setText(retry?"Tap to continue loading":"Load more posts");
+            fh.end.setVisibility(more || loading || retry?View.GONE:View.VISIBLE);
             // Never leave a blank white feed unexplained — say WHY it's empty
             fh.end.setText(posts.isEmpty()
                     ? "😴 No posts to show yet.\nPull down to refresh.\nIf posts exist but stay missing, check the internet & try re-login."
@@ -719,9 +731,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setMinHeight(0);
             clp.setMargins(0, 0, 0, 0);
             Ui.pad(vh.content, 12, 2, 12, 8);
-            vh.content.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
             vh.content.setText(hasText ? styleHashtags(c, p.content) : "");
         }
+        vh.content.setText(com.friendbook.social.core.Mentions.styled(vh.content.getText(), p.mentions));
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(vh.content);
         vh.content.setLayoutParams(clp);
 
         // ---------- poll (unchanged logic, simple gray rows) ----------
@@ -884,9 +897,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             } else {
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
-            if (!Prefs.dataSaver(c)) {
-                com.friendbook.social.reels.ReelVideoCache.prefetchSingle(c, p.mediaUrl);
-            }
+            // Poster only. Full media is requested by the user's tap, never by feed binding.
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
@@ -917,9 +928,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
 
-        if (p.id != null && !com.friendbook.social.core.FastCache.isOffline(c)) {
-            Reactions.syncPostReactions(c, p);
-        }
+        // Render post counters/embedded own reaction without a 250-document reconciliation per bind.
+        // Explicit reaction-detail screens retain their bounded lookups.
     }
 
     /**
@@ -973,10 +983,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             bp.leftMargin = Ui.dp(c, 8);
 
             TextView authorT = Ui.tvBold(c, (cm.pinned ? "📌 " : "") + uName, 12.5f, Ui.txt(c));
+            if(cm.authorId!=null && cm.authorId.equals(p.authorId)) {
+                authorT.append("  ◆ Creator"); authorT.setTextColor(0xFF1A73E8);
+            }
+            authorT.setOnClickListener(v -> { if(host!=null) host.openProfile(cm.authorId); });
             bubble.addView(authorT);
             String bodyTxt = cm.content != null && !cm.content.isEmpty()
                     ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
             TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
+            bodyT.setText(com.friendbook.social.core.Mentions.styled(bodyTxt,cm.mentions));
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(bodyT);
             bodyT.setMaxLines(3);
             bubble.addView(bodyT);
             bubble.setOnClickListener(v -> { if (host != null) host.openComments(p); });
@@ -1446,14 +1462,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void deletePost(Models.Post p) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
             Fb.db().collection("posts").document(p.id).delete();
-            Fb.db().collection("comments").whereEqualTo("postId", p.id).get()
-                    .addOnSuccessListener((QuerySnapshot snap) -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
-                    });
-            Fb.db().collection("posts").document(p.id).collection("reactions").get()
-                    .addOnSuccessListener(snap -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
-                    });
+            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",p.id))
+                    .addOnFailureListener(e->Ui.toast(activity,"Post removed; some old comments could not be cleaned up."));
+            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("posts").document(p.id).collection("reactions"))
+                    .addOnFailureListener(e->Ui.toast(activity,"Some reactions could not be cleaned up."));
             Ui.toast(activity, "Post deleted");
         });
     }
@@ -1468,11 +1480,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void followUser(String uid) {
         String me = Fb.uid();
         if (me == null || uid == null || uid.isEmpty()) return;
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("followers", FieldValue.arrayUnion(me)), SetOptions.merge());
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("following", FieldValue.arrayUnion(uid)), SetOptions.merge());
-        Notify.send(uid, "follow", "started following you");
+        Notify.follow(uid, true);
         Ui.toast(activity, "Following ✓");
     }
 
@@ -1630,6 +1638,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final StoriesAdapter storiesAdapter;
         final ImageView composeAvatar;
         final TextView composeHint;
+        final TextView moreStories;
         final LinearLayout liveBox, pymkBox, liveCards, pymkCards;
         final TextView goLiveBtn;
 
@@ -1698,6 +1707,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             storiesAdapter = new StoriesAdapter();
             rail.setAdapter(storiesAdapter);
             col.addView(rail, new LinearLayout.LayoutParams(-1, Ui.dp(c, 206)));
+            moreStories=Ui.tvBold(c,"More stories ›",13,Ui.BLUE);
+            Ui.pad(moreStories,12,8,12,8); col.addView(moreStories);
+            rail.addOnScrollListener(new RecyclerView.OnScrollListener() {
+                @Override public void onScrolled(RecyclerView view,int dx,int dy) {
+                    LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
+                    if(dx>0 && manager!=null && manager.findLastVisibleItemPosition()>=storiesAdapter.getItemCount()-2
+                            && host!=null && host.hasMoreStories()) host.loadMoreStories();
+                }
+            });
 
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
@@ -1761,14 +1779,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    public void pagingChanged(){if(getItemCount()>0)notifyItemChanged(getItemCount()-1,"paging");}
+
     class FooterVH extends RecyclerView.ViewHolder {
         final TextView more, end;
+        final android.widget.ProgressBar spinner;
         FooterVH(Context c) {
             super(Ui.col(c));
             LinearLayout col = (LinearLayout) itemView;
             col.setGravity(Gravity.CENTER);
             Ui.pad(col, 16, 12, 16, 16);
             col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+            spinner=new android.widget.ProgressBar(c);
+            spinner.setContentDescription("Loading more posts");
+            col.addView(spinner,new LinearLayout.LayoutParams(Ui.dp(c,28),Ui.dp(c,28)));
             more = Ui.btnGrey(c, "Load more posts");
             col.addView(more, new LinearLayout.LayoutParams(-1, Ui.dp(c, 42)));
             end = Ui.tv(c, "You're all caught up 🎉", 13, Ui.sub(c));

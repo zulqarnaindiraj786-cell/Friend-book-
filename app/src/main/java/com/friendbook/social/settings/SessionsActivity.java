@@ -66,6 +66,7 @@ public class SessionsActivity extends Activity {
                 "Log out", () -> {
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
+                    com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                     Fb.auth().signOut();
                     Fb.me = null;
                     finishAffinity();

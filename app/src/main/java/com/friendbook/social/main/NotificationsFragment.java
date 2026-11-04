@@ -40,6 +40,8 @@ public class NotificationsFragment extends Fragment {
 
     private NotifAdapter adapter;
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager pager;
+    private TextView moreButton;
     private TextView empty;
     private TextView chipAll, chipUnread;
     private boolean unreadOnly;
@@ -76,6 +78,10 @@ public class NotificationsFragment extends Fragment {
         cup.leftMargin = Ui.dp(a, 8);
         chips.addView(chipUnread, cup);
         root.addView(chips);
+        moreButton=Ui.tvBold(a,"Load 20 more",14,Ui.BLUE);
+        moreButton.setOnClickListener(v->{if(pager!=null)pager.next();});
+        TextView refresh=Ui.tvBold(a,"Refresh notifications",13,Ui.BLUE);
+        refresh.setOnClickListener(v->startPages());refresh.setVisibility(View.GONE);
 
         empty = Ui.tv(a, "No notifications yet.\nLikes, comments and friend requests appear here.", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
@@ -88,13 +94,15 @@ public class NotificationsFragment extends Fragment {
         rv.setItemViewCacheSize(20);
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(moreButton);
 
         // ⚡ 0.0ms Instant Cached Notifications Hydration!
         List<Models.Notif> cached = com.friendbook.social.core.FastCache.getNotifications();
         if (!cached.isEmpty()) {
             data.clear();
-            data.addAll(cached);
+            data.addAll(cached.subList(0,Math.min(20,cached.size())));
             empty.setVisibility(View.GONE);
             adapter.notifyDataSetChanged();
         }
@@ -116,48 +124,55 @@ public class NotificationsFragment extends Fragment {
     }
 
     private void markAllReadReal() {
-        markAllReadOptimisticNow();
-        MainActivity.clearNotificationsBadgeNow();
+        // Only the explicit "Mark all read" button invokes this operation.
+        String me = Fb.uid();
+        if (me == null) return;
+        Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .limit(450).get().addOnSuccessListener(snap -> {
+                    if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
+                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+                    for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
+                    batch.commit().addOnSuccessListener(v -> {
+                        if (!me.equals(Fb.uid())) return;
+                        markAllReadOptimisticNow();
+                        MainActivity.clearNotificationsBadgeNow();
+                        if (snap.size() == 450) markAllReadReal();
+                    });
+                });
     }
 
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
         if (!hidden) {
-            markAllReadOptimisticNow();
             MainActivity.clearNotificationsBadgeNow();
-        }
+            if(adapter!=null)startPages();
+        } else if(pager!=null){pager.close();pager=null;}
     }
 
     @Override
     public void onStart() {
         super.onStart();
         if (!isHidden()) {
-            markAllReadOptimisticNow();
             MainActivity.clearNotificationsBadgeNow();
         }
         String me = Fb.uid();
-        if (me == null) return;
-        reg = Fb.db().collection("notifications").whereEqualTo("toUserId", me)
-                .addSnapshotListener((snap, err) -> {
-                    android.app.Activity act = getActivity();
-                    data.clear();
-                    if (snap != null && act != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Notif n = Models.Notif.fromDoc(d);
-                            if (!allowedByPrefs(act, n.type)) continue; // Settings > Notifications toggles
-                            if (unreadOnly && n.isRead) continue;
-                            data.add(n);
-                        }
-                    }
-                    Collections.sort(data, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    if (data.size() > 80) data.subList(80, data.size()).clear();
-                    if (!unreadOnly && !data.isEmpty()) {
-                        com.friendbook.social.core.FastCache.saveNotifications(data);
-                    }
-                    adapter.notifyDataSetChanged();
-                    empty.setVisibility(data.isEmpty() ? View.VISIBLE : View.GONE);
-                });
+        if (me == null || isHidden()) return;
+        startPages();
+    }
+    private void startPages() {
+        if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
+        com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
+        if(unreadOnly)query=query.whereEqualTo("isRead",false);
+        pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
+            android.app.Activity act=getActivity();if(act==null || adapter==null)return;
+            if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
+            data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
+            Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
+            if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
+            adapter.notifyDataSetChanged();empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+            moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");moreButton.setEnabled(!loading && more);
+        });pager.start();
     }
 
     private void setUnreadOnly(boolean on) {
@@ -169,7 +184,7 @@ public class NotificationsFragment extends Fragment {
         chipUnread.setBackground(Ui.round(a, on ? Ui.BLUE : Ui.inputBg(a), 10));
         chipUnread.setTextColor(on ? 0xFFFFFFFF : Ui.sub(a));
         if (reg != null) { reg.remove(); reg = null; }
-        onStart(); // re-register listener so the new filter applies
+        startPages(); // Reset cursor and cache key when the filter changes.
     }
 
     /** Settings > Notifications switches define what appears here. */
@@ -199,6 +214,7 @@ public class NotificationsFragment extends Fragment {
     public void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        if(pager!=null){pager.close();pager=null;}
     }
 
     private void open(Models.Notif n) {

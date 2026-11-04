@@ -1,12 +1,9 @@
 package com.friendbook.social.main;
 
-import android.Manifest;
 import android.app.Activity;
 import android.app.Fragment;
 import android.app.FragmentTransaction;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.Gravity;
@@ -224,7 +221,6 @@ public class MainActivity extends Activity {
             Presence.init();
             startBadgeListeners();
             watchReferralsForFreeTick();
-            askNotifPermission();
             AdsConfig.startWatching();
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
@@ -422,35 +418,19 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** ⚡ 0.0ms Optimistic Friends Badge Zeroing (on Friends icon tap, Requests tab open, Confirm or Delete). */
+    /** Dismiss ONLY the outer friend-request badge; pending requests and their seen flags stay untouched. */
     public static void clearFriendsBadgeNow() {
         String me = Fb.uid();
         MainActivity inst = activeInstance;
         android.content.Context ctx = inst != null ? inst : App.instance;
-        if (inst != null) {
-            inst.runOnUiThread(() -> Ui.setBadge(inst.friendsBadge, 0));
-        }
+        if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.friendsBadge, 0));
         if (me == null || ctx == null) return;
-        java.util.Set<String> toMark = new java.util.HashSet<>();
-        if (inst != null) {
-            synchronized (inst.currentPendingReqIds) {
-                toMark.addAll(inst.currentPendingReqIds);
-            }
-        }
-        Prefs.markFriendRequestsSeen(ctx, me, toMark);
-        if (!toMark.isEmpty()) {
-            com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-            int ops = 0;
-            for (String rid : toMark) {
-                if (rid == null || rid.isEmpty()) continue;
-                batch.update(Fb.db().collection("friend_requests").document(rid), "seenByReceiver", true);
-                if (++ops >= 450) break;
-            }
-            if (ops > 0) batch.commit();
-        }
+        java.util.Set<String> badgeIds = new java.util.HashSet<>();
+        if (inst != null) synchronized (inst.currentPendingReqIds) { badgeIds.addAll(inst.currentPendingReqIds); }
+        Prefs.dismissFriendRequestBadge(ctx, me, badgeIds);
     }
 
-    /** ⚡ 0.0ms Optimistic Message Badge Zeroing (clears entire count on opening Chat list!). */
+    /** Dismiss ONLY the top Messages badge. Inbox unread counts and message receipts are untouched. */
     public static void clearMessagesBadgeNow() {
         String me = Fb.uid();
         MainActivity inst = activeInstance;
@@ -459,106 +439,27 @@ public class MainActivity extends Activity {
             inst.runOnUiThread(() -> Ui.setBadge(inst.msgBadge, 0));
         }
         if (me == null || ctx == null) return;
+        // Device/account-scoped badge acknowledgement, NOT a conversation read operation.
+        // ChatActivity remains responsible for marking only the conversation actually opened.
         Prefs.setChatBadgeClearedAt(ctx, me, System.currentTimeMillis());
-
-        java.util.Set<String> roomIds = new java.util.HashSet<>();
-        if (inst != null) {
-            synchronized (inst.currentUnreadChatIds) {
-                roomIds.addAll(inst.currentUnreadChatIds);
-                inst.currentUnreadChatIds.clear();
-            }
-        }
-        if (!roomIds.isEmpty()) {
-            com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-            int ops = 0;
-            for (String cid : roomIds) {
-                if (cid == null || cid.isEmpty()) continue;
-                batch.update(Fb.db().collection("chats").document(cid), "unreadCount." + me, 0);
-                if (++ops >= 450) break;
-            }
-            if (ops > 0) batch.commit();
-        } else {
-            Fb.db().collection("chats").whereArrayContains("participants", me).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap == null || snap.isEmpty()) return;
-                        com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-                        int ops = 0;
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            Object u = d.get("unreadCount");
-                            if (u instanceof Map) {
-                                Object n = ((Map<?, ?>) u).get(me);
-                                if (n instanceof Number && ((Number) n).intValue() > 0) {
-                                    batch.update(d.getReference(), "unreadCount." + me, 0);
-                                    if (++ops >= 450) break;
-                                }
-                            }
-                        }
-                        if (ops > 0) batch.commit();
-                    });
-        }
     }
 
-    /** ⚡ 0.0ms Optimistic Bell Badge Zeroing + Automatic markAllAsRead! */
+    /** Dismiss ONLY the outer bell badge. Notifications remain unread until individually opened. */
     public static void clearNotificationsBadgeNow() {
         String me = Fb.uid();
         MainActivity inst = activeInstance;
         android.content.Context ctx = inst != null ? inst : App.instance;
-        if (inst != null) {
-            inst.runOnUiThread(() -> {
-                Ui.setBadge(inst.notifBadge, 0);
-                if (inst.tabFragments[TAB_NOTIFS] instanceof NotificationsFragment) {
-                    ((NotificationsFragment) inst.tabFragments[TAB_NOTIFS]).markAllReadOptimisticNow();
-                }
-            });
-        }
+        if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.notifBadge, 0));
         if (me == null || ctx == null) return;
         Prefs.setNotifBadgeClearedAt(ctx, me, System.currentTimeMillis());
-
-        java.util.Set<String> unreadIds = new java.util.HashSet<>();
-        if (inst != null) {
-            synchronized (inst.currentUnreadNotifIds) {
-                unreadIds.addAll(inst.currentUnreadNotifIds);
-                inst.currentUnreadNotifIds.clear();
-            }
-        }
-        if (!unreadIds.isEmpty()) {
-            com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-            int ops = 0;
-            for (String nid : unreadIds) {
-                if (nid == null || nid.isEmpty()) continue;
-                batch.update(Fb.db().collection("notifications").document(nid), "isRead", true);
-                if (++ops >= 450) break;
-            }
-            if (ops > 0) batch.commit();
-        }
-        Fb.db().collection("notifications")
-                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .get().addOnSuccessListener(snap -> {
-                    if (snap == null || snap.isEmpty()) return;
-                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-                    int ops = 0;
-                    for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                        batch.update(d.getReference(), "isRead", true);
-                        ops++;
-                        if (ops >= 450) {
-                            batch.commit();
-                            batch = Fb.db().batch();
-                            ops = 0;
-                        }
-                    }
-                    if (ops > 0) batch.commit();
-                });
     }
 
     private void watchReferralsForFreeTick() {
         String me = Fb.uid();
         if (me == null) return;
-        referralReg = Fb.db().collection("referrals")
-                .whereEqualTo("refBy", me)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null) return;
-                    com.friendbook.social.core.Admin.autoGrantByReferrals(this, snap.size());
-                });
+        if(referralReg!=null)referralReg.remove();
+        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->
+                com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
     private void startBadgeListeners() {
@@ -657,10 +558,10 @@ public class MainActivity extends Activity {
                     if (active == TAB_FRIENDS) {
                         Ui.setBadge(friendsBadge, 0);
                         if (snap != null && !snap.isEmpty()) {
-                            java.util.Set<String> seenIds = Prefs.seenFriendReqIds(this, me);
+                            java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
                             boolean hasUnseen = false;
                             for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                                if (!seenIds.contains(d.getId()) && !Boolean.TRUE.equals(d.getBoolean("seenByReceiver"))) {
+                                if (!seenIds.contains(d.getId())) {
                                     hasUnseen = true;
                                     break;
                                 }
@@ -669,13 +570,12 @@ public class MainActivity extends Activity {
                         }
                         return;
                     }
-                    java.util.Set<String> seenIds = Prefs.seenFriendReqIds(this, me);
+                    java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
                     long clearedAt = Prefs.friendRequestsClearedAt(this, me);
                     int count = 0;
                     if (snap != null) {
                         for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
                             if (seenIds.contains(d.getId())) continue;
-                            if (Boolean.TRUE.equals(d.getBoolean("seenByReceiver"))) continue;
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt > 0L && ts > 0L && ts <= clearedAt) continue;
                             count++;
@@ -685,11 +585,16 @@ public class MainActivity extends Activity {
                 });
     }
 
-    private void askNotifPermission() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 44);
-        }
+    private final android.os.Handler notificationPermissionHandler =
+            new android.os.Handler(Looper.getMainLooper());
+    private boolean permissionHostResumed;
+    private final Runnable notificationPermissionPrompt = () ->
+            com.friendbook.social.push.NotificationPermissionPrompt.requestOnce(this);
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        com.friendbook.social.push.NotificationPermissionPrompt.onResult(this, requestCode, results);
     }
 
     private void feedbackDialog() {
@@ -729,6 +634,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        permissionHostResumed = false;
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         FeedAlgorithm.onAppBackgrounded(this);
         super.onPause();
     }
@@ -736,6 +643,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
@@ -745,13 +653,32 @@ public class MainActivity extends Activity {
                 ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
         }
+        if (getIntent().getBooleanExtra("push_friends", false)) {
+            getIntent().removeExtra("push_friends");
+            select(TAB_FRIENDS);
+        }
+        com.friendbook.social.push.PushManager.sync(this);
+        com.friendbook.social.push.PushOpenActivity.resumePending(this);
         refreshLiteUi();
         Fb.ensureMeFresh();
         Presence.init();
+        // Delay until Main is visible; never show a permission dialog from background/PIN/login.
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
+        notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
+        if (hasFocus && permissionHostResumed) {
+            notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
+        }
     }
 
     @Override
     protected void onDestroy() {
+        notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
         if (referralReg != null) referralReg.remove();

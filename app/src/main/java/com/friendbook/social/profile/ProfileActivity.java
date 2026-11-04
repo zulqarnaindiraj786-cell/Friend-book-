@@ -78,6 +78,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private static final int REQ_PICK_AVATAR = 801;
     private static final int REQ_PICK_COVER = 802;
 
+    private com.friendbook.social.core.CursorPager postPager,videoPager;
+    private TextView moreProfileVideos,moreProfileFriends;
+    private com.friendbook.social.core.CursorPager friendPager;
     private String uid;
     private boolean mine;
     private boolean viewAsPublic = false;
@@ -191,6 +194,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         // NestedScrollView ensures 100% of profile posts, reels & photos measure and scroll cleanly!
         NestedScrollView sv = new NestedScrollView(this);
         sv.setFillViewport(true);
+        final com.friendbook.social.core.ScrollPageGate[] pageGates={new com.friendbook.social.core.ScrollPageGate(),new com.friendbook.social.core.ScrollPageGate(),new com.friendbook.social.core.ScrollPageGate()};
+        sv.setOnScrollChangeListener((androidx.core.widget.NestedScrollView.OnScrollChangeListener)(view,x,y,oldX,oldY)->{
+            if(view.getChildCount()==0)return;
+            boolean nearEnd=view.getChildAt(0).getBottom()-(y+view.getHeight())<Ui.dp(this,700);
+            if(activeTab==0 && postsAdapter!=null && pageGates[0].shouldLoad(y-oldY,nearEnd,postsAdapter.getItemCount()))loadMore();
+            else if(activeTab==1 && reelsAdapter!=null && pageGates[1].shouldLoad(y-oldY,nearEnd,reelsAdapter.getItemCount())){if(videoPager!=null)videoPager.next();}
+            else if(activeTab==3 && friendsAdapter!=null && pageGates[2].shouldLoad(y-oldY,nearEnd,friendsAdapter.getItemCount())){if(friendPager!=null)friendPager.next();}
+        });
         LinearLayout body = Ui.col(this);
         body.setClipChildren(false);
 
@@ -503,7 +514,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postsRv.setItemAnimator(null);
         postsAdapter = new FeedAdapter(this, this);
         postsAdapter.showHeader = false;
-        postsAdapter.showFooter = false;
+        postsAdapter.showFooter = true;
         postsRv.setAdapter(postsAdapter);
         allTabBox.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
@@ -536,6 +547,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         reelsAdapter = new ReelsGridAdapter();
         reelsRv.setAdapter(reelsAdapter);
         reelsBox.addView(reelsRv, new LinearLayout.LayoutParams(-1, -2));
+        moreProfileVideos=Ui.tvBold(this,"Load 10 more videos",14,Ui.BLUE);
+        moreProfileVideos.setOnClickListener(v->{if(videoPager!=null)videoPager.next();});reelsBox.addView(moreProfileVideos);
         body.addView(reelsBox);
 
         // 9. TAB 2 ("Photos"): 3-Column User Media Grid
@@ -641,12 +654,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         List<Models.Post> cachedPosts = new ArrayList<>();
         for (Models.Post p : FastCache.getFeed()) {
-            if (p != null && uid.equals(p.authorId)) cachedPosts.add(p);
+            if (p != null && uid.equals(p.authorId) && cachedPosts.size()<15) cachedPosts.add(p);
         }
         if (!cachedPosts.isEmpty()) {
             allLoadedPosts.addAll(cachedPosts);
             userPostCount = cachedPosts.size();
-            postsAdapter.setPosts(cachedPosts);
+            applyPostsFilter();
             if (user != null) updateStatsLine();
         }
     }
@@ -761,6 +774,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             tabLabels[i].setTextColor(on ? Ui.BLUE : Ui.sub(this));
             tabBars[i].setVisibility(on ? View.VISIBLE : View.INVISIBLE);
         }
+        if(idx==1 && videoPager==null) startReelsWatcher();
+        if(idx==3 && friendPager==null)startFriendPages();
         if (idx == 3) renderFriendsTab();
         if (idx == 4) renderAbout();
     }
@@ -779,44 +794,25 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
+                    if(activeTab==3 && friendPager==null)startFriendPages();
                 });
         watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
-            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .addSnapshotListener((snap, err) -> {
-                        friendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap) {
-                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                                if (!parts.contains(me)) continue;
-                                for (String p : parts) if (!p.equals(me)) friendIds.add(p);
-                            }
-                        }
-                        computeFriendState();
-                        renderFriendsTab();
-                    });
-            ownerFriendsReg = Fb.db().collection("friends").whereArrayContains("participants", uid)
-                    .addSnapshotListener((snap, err) -> {
-                        ownerFriendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap) {
-                                List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                                if (!parts.contains(uid)) continue;
-                                for (String p : parts) if (!p.equals(uid)) ownerFriendIds.add(p);
-                            }
-                        }
-                        renderFriendsTab();
-                        for (String f : ownerFriendIds) ensureUser(f);
-                    });
+            // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
+            friendsReg=Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
+                    java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
+                friendIds.clear();if(snap!=null && !snap.isEmpty())friendIds.add(uid);
+                computeFriendState();applyPostsFilter();renderFriendsTab();
+            });
             outReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending")
+                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         hasOut = snap != null && !snap.isEmpty();
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending")
+                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         hasIn = snap != null && !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
@@ -833,35 +829,33 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     presenceT.setVisibility(View.GONE);
                 }
             });
-        } else if (mine && me != null) {
-            friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .addSnapshotListener((snap, err) -> {
-                        friendIds.clear();
-                        ownerFriendIds.clear();
-                        if (snap != null) {
-                            for (DocumentSnapshot d : snap)
-                                for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                    if (!p.equals(me)) {
-                                        friendIds.add(p);
-                                        ownerFriendIds.add(p);
-                                    }
-                        }
-                        renderFriendsTab();
-                        for (String f : ownerFriendIds) ensureUser(f);
-                    });
         }
+        if(activeTab==3)startFriendPages();
         startPostsWatcher();
-        startReelsWatcher();
+        if(activeTab==1) startReelsWatcher();
+    }
+
+    private void startFriendPages() {
+        if(user==null || (!mine && ("Only me".equalsIgnoreCase(user.friendsListPrivacy) ||
+                ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && !"friends".equals(friendState)))))return;
+        if(friendPager!=null)friendPager.close();
+        if(moreProfileFriends==null){moreProfileFriends=Ui.tvBold(this,"Load 20 more friends",14,Ui.BLUE);friendsBox.addView(moreProfileFriends);}
+        friendPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("friends").whereArrayContains("participants",uid),20,"profile-friends:"+uid,(docs,more,busy,error)->{
+            if(busy){moreProfileFriends.setText("Loading…");moreProfileFriends.setEnabled(false);return;}
+            ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
+                if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
+            renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
+        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
     }
 
     private void startPostsWatcher() {
-        postsReg = Fb.db().collection("posts").whereEqualTo("authorId", uid)
-                .addSnapshotListener((snap, err) -> {
+        if(postPager!=null) postPager.close();
+        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+            if(isFinishing() || loading)return;
                     allLoadedPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
+                    if (docs != null) {
+                        for (DocumentSnapshot d : docs) {
                             Models.Post p = Models.Post.fromDoc(d);
-                            if (!canSee(p)) continue;
                             allLoadedPosts.add(p);
                         }
                     }
@@ -876,27 +870,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             }
                         }
                     }
-                    userPostCount = allLoadedPosts.size();
+                    // Loaded page size is not the profile total.
+                    userPostCount = Math.max(userPostCount,allLoadedPosts.size());
                     if (user != null) updateStatsLine();
                     applyPostsFilter();
 
-                    List<String> media = new ArrayList<>();
-                    for (Models.Post p : allLoadedPosts) {
-                        if (p.mediaUrls != null) media.addAll(p.mediaUrls);
-                        if (p.mediaUrl != null && !p.mediaUrl.isEmpty() && !media.contains(p.mediaUrl)) {
-                            media.add(p.mediaUrl);
-                        }
-                    }
-                    photosAdapter.media.clear();
-                    photosAdapter.media.addAll(media);
-                    photosAdapter.notifyDataSetChanged();
-                });
+            if(!error.isEmpty())Ui.toast(this,error);
+        });
+        postPager.start();
     }
 
     private void applyPostsFilter() {
         List<Models.Post> shown = new ArrayList<>();
         String q = profileSearchQuery == null ? "" : profileSearchQuery.trim().toLowerCase();
         for (Models.Post p : allLoadedPosts) {
+            if(!canSee(p))continue;
             if (q.isEmpty() || (p.content != null && p.content.toLowerCase().contains(q))) {
                 shown.add(p);
             }
@@ -912,30 +900,39 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 && pin.equals(shown.get(0).id);
         if (pinnedTag != null) pinnedTag.setVisibility(hasPin ? View.VISIBLE : View.GONE);
         postsAdapter.setPosts(shown);
+        renderVisiblePhotos();
         if (emptyPostsBox != null) {
             emptyPostsBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
         }
     }
 
+    private void renderVisiblePhotos() {
+        List<String> media=new ArrayList<>();
+        for(Models.Post post:allLoadedPosts){if(!canSee(post))continue;
+            if(post.mediaUrls!=null)for(String url:post.mediaUrls)if(!media.contains(url))media.add(url);
+            if(post.mediaUrl!=null && !post.mediaUrl.isEmpty() && !media.contains(post.mediaUrl))media.add(post.mediaUrl);
+        }
+        photosAdapter.media.clear();photosAdapter.media.addAll(media);photosAdapter.notifyDataSetChanged();
+    }
+
     private void startReelsWatcher() {
-        reelsReg = Fb.db().collection("reels").whereEqualTo("authorId", uid)
-                .addSnapshotListener((snap, err) -> {
-                    List<Models.Reel> list = new ArrayList<>();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            list.add(Models.Reel.fromDoc(d));
-                        }
-                    }
-                    Collections.sort(list, (a, b) -> Long.compare(b.createdAt, a.createdAt));
-                    reelsAdapter.reels.clear();
-                    reelsAdapter.reels.addAll(list);
-                    reelsAdapter.notifyDataSetChanged();
-                });
+        if(videoPager!=null)videoPager.close();
+        videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
+            if(isFinishing())return;
+            if(loading){if(moreProfileVideos!=null){moreProfileVideos.setText("Loading…");moreProfileVideos.setEnabled(false);}return;}
+            List<Models.Reel> list=new ArrayList<>();for(DocumentSnapshot doc:docs)list.add(Models.Reel.fromDoc(doc));
+            list.sort((a,b)->Long.compare(b.createdAt,a.createdAt));
+            reelsAdapter.reels.clear();reelsAdapter.reels.addAll(list);reelsAdapter.notifyDataSetChanged();
+            if(moreProfileVideos!=null){moreProfileVideos.setText(loading?"Loading…":!error.isEmpty()?"Retry videos":more?"Load 10 more videos":"All videos loaded");moreProfileVideos.setEnabled(!loading && more);}
+        });videoPager.start();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        if(friendPager!=null){friendPager.close();friendPager=null;}
+        if(postPager!=null){postPager.close();postPager=null;}
+        if(videoPager!=null){videoPager.close();videoPager=null;}
         FastCache.removeReactionObserver(reactionObserver);
         if (userReg != null) userReg.remove();
         if (friendsReg != null) friendsReg.remove();
@@ -1001,6 +998,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         boolean hasBio = user.bio != null && !user.bio.isEmpty();
         bioT.setText(hasBio ? user.bio : "");
+        com.friendbook.social.core.LinkUtils.makeLinksClickable(bioT);
         bioT.setVisibility(hasBio ? View.VISIBLE : View.GONE);
 
         Ui.avatarLarge(this, avatar, user.photoUrl);
@@ -1310,11 +1308,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 break;
             case "outgoing":
                 Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () ->
-                        Fb.db().collection("friend_requests")
-                                .whereEqualTo("fromUid", Fb.uid()).whereEqualTo("toUid", uid)
-                                .get().addOnSuccessListener(snap -> {
-                                    for (DocumentSnapshot d : snap) d.getReference().delete();
-                                }));
+                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
+                                .whereEqualTo("fromUid",Fb.uid()).whereEqualTo("toUid",uid))
+                                .addOnFailureListener(e->Ui.toast(this,"Couldn't cancel. Please retry.")));
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1358,11 +1354,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         boolean following = user.followers != null && user.followers.contains(me);
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)), SetOptions.merge());
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("following", following ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid)), SetOptions.merge());
-        if (!following) Notify.send(uid, "follow", "started following you");
+        Notify.follow(uid, !following);
     }
 
     private void message() {
@@ -1375,8 +1367,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void unfriend() {
         Ui.confirm(this, "Unfriend " + user.displayName + "?", "", "Unfriend", () -> {
             String me = Fb.uid();
-            Fb.db().collection("friends").whereArrayContains("participants", me)
-                    .get().addOnSuccessListener(snap -> {
+            Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
+                    .limit(1).get().addOnSuccessListener(snap -> {
                         for (DocumentSnapshot d : snap) {
                             List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             if (parts.contains(uid)) {
@@ -1746,7 +1738,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendUsers.add(u);
             UsersAdapter.Row r = new UsersAdapter.Row();
             r.user = u;
-            r.subtitle = u.isOnline ? "🟢 Active now" : "Friend";
+            r.subtitle = "Friend"; // Live profile/chat status comes from Presence.watch, never this cached user card.
             rows.add(r);
         }
         friendsAdapter.setData(rows);
@@ -1917,6 +1909,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     @Override public void openStoryGroup(com.friendbook.social.story.StoriesAdapter.Group g) { }
-    @Override public void loadMore() { }
-    @Override public boolean hasMore() { return false; }
+    @Override public void loadMore() { if(postPager!=null)postPager.next(); }
+    @Override public boolean hasMore() { return postPager==null || postPager.hasMore(); }
 }

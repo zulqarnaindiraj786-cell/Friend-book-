@@ -487,6 +487,21 @@ public class SettingsActivity extends Activity {
                 "Your account stays saved for quick 1-tap login unless you remove it.", "Log out",
                 this::performLogout));
 
+        // Attach settings in local12-row pages; no artificial network calls or timed delay.
+        List<View> settingsRows=new ArrayList<>();for(int i=0;i<body.getChildCount();i++)settingsRows.add(body.getChildAt(i));body.removeAllViews();
+        android.widget.ProgressBar nextSettings=new android.widget.ProgressBar(this);nextSettings.setVisibility(View.GONE);
+        nextSettings.setContentDescription("Loading next settings page");
+        final int[] attached={0};final boolean[] attaching={false};
+        Runnable appendSettings=()->{
+            body.removeView(nextSettings);int end=Math.min(attached[0]+12,settingsRows.size());
+            while(attached[0]<end)body.addView(settingsRows.get(attached[0]++));
+            if(attached[0]<settingsRows.size())body.addView(nextSettings,new LinearLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26)));
+            nextSettings.setVisibility(View.GONE);attaching[0]=false;
+        };appendSettings.run();
+        sv.setOnScrollChangeListener((View.OnScrollChangeListener)(v,x,y,oldX,oldY)->{
+            if(y<=oldY || attaching[0] || attached[0]>=settingsRows.size() || y+sv.getHeight()<body.getHeight()-Ui.dp(this,180))return;
+            attaching[0]=true;nextSettings.setVisibility(View.VISIBLE);body.postOnAnimation(appendSettings);
+        });
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
@@ -495,6 +510,9 @@ public class SettingsActivity extends Activity {
         searchIn.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) { }
             @Override public void onTextChanged(CharSequence s, int st, int b2, int c) {
+                if(s!=null && s.length()>0){
+                    body.removeView(nextSettings);while(attached[0]<settingsRows.size())body.addView(settingsRows.get(attached[0]++));
+                }
                 filterSettings(s == null ? "" : s.toString());
             }
             @Override public void afterTextChanged(Editable s) { }
@@ -657,6 +675,7 @@ public class SettingsActivity extends Activity {
                     Presence.goOffline();
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
+                    com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                     Fb.auth().signOut();
                     Fb.me = null;
                     Prefs.setUnlockedSession(this, false);
@@ -766,6 +785,16 @@ public class SettingsActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Notification settings")
                 .setView(sc)
+                .setNeutralButton("Preview sound", (d, w) -> {
+                    String uid = Fb.uid();
+                    if (uid == null) return;
+                    java.util.Map<String, String> preview = new java.util.HashMap<>();
+                    preview.put("toUserId", uid); preview.put("fromUserId", uid);
+                    preview.put("type", "push_test");
+                    preview.put("eventId", "sound_preview_" + java.util.UUID.randomUUID());
+                    preview.put("title", "friendbook"); preview.put("body", "Your friendbook notification sound");
+                    com.friendbook.social.push.PushManager.show(this, preview);
+                })
                 .setPositiveButton("Save", (d, w) -> {
                     Prefs.setNotifLikes(this, sLikes.isChecked());
                     Prefs.setNotifComments(this, sComms.isChecked());
@@ -915,18 +944,11 @@ public class SettingsActivity extends Activity {
             } else {
                 Ui.confirm(this, "Limit past posts?",
                         "All past Public posts on your timeline will change to Friends-only.",
-                        "Limit Past Posts", () -> Fb.db().collection("posts")
-                                .whereEqualTo("authorId", Fb.uid()).get()
-                                .addOnSuccessListener(snap -> {
-                                    int changed = 0;
-                                    for (DocumentSnapshot d : snap) {
-                                        if ("Public".equalsIgnoreCase(d.getString("privacy"))) {
-                                            d.getReference().update("privacy", "Friends");
-                                            changed++;
-                                        }
-                                    }
-                                    Ui.toast(this, changed + " past post(s) limited to Friends 🔒");
-                                }));
+                        "Limit Past Posts", () -> com.friendbook.social.core.QueryActions.updateMatching(
+                                Fb.db().collection("posts").whereEqualTo("authorId",Fb.uid()).whereEqualTo("privacy","Public"),
+                                Fb.map("privacy","Friends"))
+                                .addOnSuccessListener(changed->Ui.toast(this,changed+" past post(s) limited to Friends"))
+                                .addOnFailureListener(e->Ui.toast(this,"Some posts could not be updated. Retry to continue.")));
             }
         });
     }
@@ -995,52 +1017,20 @@ public class SettingsActivity extends Activity {
     }
 
     private void restrictedListDialog() {
-        String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("friends").whereArrayContains("participants", me).get()
-                .addOnSuccessListener(snap -> {
-                    List<String> fids = new ArrayList<>();
-                    for (DocumentSnapshot d : snap) {
-                        for (String p : Models.ChatRoom.fromDoc(d).participants)
-                            if (!p.equals(me)) fids.add(p);
-                    }
-                    if (fids.isEmpty()) {
-                        Ui.toast(this, "Add friends first to manage your Restricted list");
-                        return;
-                    }
-                    Fb.db().collection("users").whereIn(
-                            com.google.firebase.firestore.FieldPath.documentId(),
-                            fids.subList(0, Math.min(10, fids.size()))).get()
-                            .addOnSuccessListener(usnap -> {
-                                List<Models.User> users = new ArrayList<>();
-                                List<String> cur = Fb.me != null ? Fb.me.restrictedUids : new ArrayList<>();
-                                for (DocumentSnapshot ud : usnap) users.add(Models.User.fromDoc(ud));
-                                String[] labels = new String[users.size()];
-                                for (int i = 0; i < users.size(); i++) {
-                                    Models.User u = users.get(i);
-                                    labels[i] = (cur.contains(u.uid) ? "🔒 Restricted: " : "👥 Friend: ") + u.displayName;
-                                }
-                                Ui.choose(this, "Tap a friend to toggle Restricted (Public-only)", labels, w -> {
-                                    Models.User target = users.get(w);
-                                    List<String> next = new ArrayList<>(cur);
-                                    boolean remove = next.contains(target.uid);
-                                    if (remove) next.remove(target.uid); else next.add(target.uid);
-                                    patchUser("restrictedUids", next);
-                                    if (Fb.me != null) Fb.me.restrictedUids = next;
-                                    Ui.toast(this, remove ? target.displayName + " removed from Restricted"
-                                            : target.displayName + " added to Restricted list");
-                                    recreate();
-                                });
-                            });
-                });
+        com.friendbook.social.core.FriendPicker.single(this,"Tap a friend to toggle Restricted (Public-only)",target->{
+            List<String> next=new ArrayList<>(Fb.me!=null?Fb.me.restrictedUids:new ArrayList<>());
+            boolean remove=next.contains(target.uid);if(remove)next.remove(target.uid);else next.add(target.uid);
+            patchUser("restrictedUids",next);if(Fb.me!=null)Fb.me.restrictedUids=next;
+            Ui.toast(this,remove?target.displayName+" removed from Restricted":target.displayName+" added to Restricted");recreate();
+        });
     }
 
     private void accessInfoDialog() {
         String me = Fb.uid();
         if (me == null) return;
         Ui.toast(this, "Loading your account summary…");
-        Fb.db().collection("posts").whereEqualTo("authorId", me).get()
-                .addOnSuccessListener(ps -> {
+        com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+                    if(isFinishing() || isDestroyed())return;
                     Models.User u = Fb.me;
                     Ui.info(this, "📋 Your friendbook information",
                             "• Name: " + (u != null ? u.displayName : "") + "\n"
@@ -1049,7 +1039,7 @@ public class SettingsActivity extends Activity {
                                     + "• Friends: " + (u != null ? u.friendsCount : 0) + "\n"
                                     + "• Followers / Following: " + (u != null ? u.followers.size() : 0)
                                     + " / " + (u != null ? u.following.size() : 0) + "\n"
-                                    + "• Total posts: " + ps.size() + "\n"
+                                    + "• Total posts: " + totalPosts + "\n"
                                     + "• Verification tick: " + (u != null ? Admin.tickLabel(u.tickLevel) : "none") + "\n"
                                     + "• Stars balance: " + (u != null ? u.stars : 0) + " ⭐\n"
                                     + "• Saved reels/highlights: " + (u != null ? u.highlightStoryIds.size() : 0));
@@ -1314,7 +1304,8 @@ public class SettingsActivity extends Activity {
         Presence.goOffline();
         com.friendbook.social.core.FastCache.clearAll(this);
         com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
-        Fb.auth().signOut();
+        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
         Fb.me = null;
         Prefs.setUnlockedSession(this, false);
         Intent i = new Intent(this, LoginActivity.class);

@@ -186,6 +186,14 @@ public class FullscreenMediaActivity extends Activity {
         titleTv.setSingleLine(true);
         topOverlay.addView(titleTv, new LinearLayout.LayoutParams(0, -2, 1));
 
+        String caption = getIntent().getStringExtra("caption");
+        if (caption != null && !caption.trim().isEmpty()) {
+            TextView captionView = Ui.tv(this, caption, 14, Color.WHITE);
+            Ui.pad(captionView, 14, 10, 14, 10);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(captionView);
+            bottomOverlay.addView(captionView, new LinearLayout.LayoutParams(-1, -2));
+        }
+
         final boolean hasRealUrl = Ui.hasRealPhoto(url);
         if (!guarded && hasRealUrl) {
             TextView saveBtn = Ui.roundChip(this, "⬇ Save", 0x44FFFFFF, Color.WHITE, 12);

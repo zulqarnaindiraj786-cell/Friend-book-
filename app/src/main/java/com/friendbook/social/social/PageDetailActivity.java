@@ -43,6 +43,7 @@ import java.util.Map;
  * Post-as-Page composer for Page owner, and live Page posts feed.
  */
 public class PageDetailActivity extends Activity implements FeedAdapter.Host {
+    private LinearLayout pageControls;
 
     private String pageId;
     private Map<String, Object> pageData;
@@ -190,6 +191,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
 
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -227,8 +229,8 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     ownerRow.setVisibility(mine ? View.VISIBLE : View.GONE);
                 });
 
-        postsReg = Fb.db().collection("posts").whereEqualTo("pageId", pageId)
-                .addSnapshotListener((snap, err) -> {
+        postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("posts").whereEqualTo("pageId",pageId),15,"page-posts:"+pageId,(snap,err)-> {
                     List<Models.Post> list = new ArrayList<>();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {

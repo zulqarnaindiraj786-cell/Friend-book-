@@ -36,6 +36,7 @@ import java.util.Map;
  * Tab 2: 🗑 Recycle Bin / Trash (30-day soft delete — Restore or Delete Forever)
  */
 public class ArchiveTrashActivity extends Activity {
+    private LinearLayout pageControls;
 
     private int activeTab = 0;
     private final TextView[] tabViews = new TextView[3];
@@ -55,7 +56,7 @@ public class ArchiveTrashActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Archive & Recycle Bin");
-        emptyAllBtn = Ui.roundChip(this, "Empty Trash", Ui.RED, Color.WHITE, 12);
+        emptyAllBtn = Ui.roundChip(this, "Delete loaded trash", Ui.RED, Color.WHITE, 12);
         Ui.pad(emptyAllBtn, 10, 5, 10, 5);
         emptyAllBtn.setVisibility(View.GONE);
         emptyAllBtn.setOnClickListener(v -> emptyTrash());
@@ -94,6 +95,7 @@ public class ArchiveTrashActivity extends Activity {
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         updateTabs();
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
@@ -120,8 +122,8 @@ public class ArchiveTrashActivity extends Activity {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
 
-        storiesReg = Fb.db().collection("stories").whereEqualTo("authorId", me)
-                .addSnapshotListener((snap, err) -> {
+        storiesReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("stories").whereEqualTo("authorId",me),20,"archive-stories",(snap,err)-> {
                     myStories.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) myStories.add(Models.Story.fromDoc(d));
@@ -130,8 +132,8 @@ public class ArchiveTrashActivity extends Activity {
                     render();
                 });
 
-        postsReg = Fb.db().collection("posts").whereEqualTo("authorId", me)
-                .addSnapshotListener((snap, err) -> {
+        postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("posts").whereEqualTo("authorId",me),15,"archive-posts",(snap,err)-> {
                     myPosts.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) myPosts.add(Models.Post.fromDoc(d));
@@ -218,7 +220,7 @@ public class ArchiveTrashActivity extends Activity {
             del.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 4), 0);
             del.setOnClickListener(v -> Ui.confirm(this, "Delete story?",
                     "This removes the story permanently from your archive.", "Delete",
-                    () -> Fb.db().collection("stories").document(s.id).delete()));
+                    () -> Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(x->{myStories.remove(s);render();})));
             btns.addView(del);
 
             info.addView(btns);
@@ -311,7 +313,7 @@ public class ArchiveTrashActivity extends Activity {
             upd.put("archived", false);
             upd.put("trashedAt", 0L);
             Fb.db().collection("posts").document(p.id).update(upd)
-                    .addOnSuccessListener(x -> Ui.toast(this, "Restored to your profile ✓"));
+                    .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");});
         });
         btns.addView(restore);
 
@@ -322,11 +324,11 @@ public class ArchiveTrashActivity extends Activity {
             if (isTrash) {
                 Ui.confirm(this, "Delete forever?", "This post cannot be recovered.", "Delete",
                         () -> Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> Ui.toast(this, "Deleted permanently")));
+                                .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");}));
             } else {
                 Fb.db().collection("posts").document(p.id)
                         .update("archived", false, "trashedAt", System.currentTimeMillis())
-                        .addOnSuccessListener(x -> Ui.toast(this, "Moved to Recycle Bin 🗑"));
+                        .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=System.currentTimeMillis();render();Ui.toast(this, "Moved to Recycle Bin 🗑");});
             }
         });
         btns.addView(second, sp);
@@ -341,13 +343,13 @@ public class ArchiveTrashActivity extends Activity {
     }
 
     private void emptyTrash() {
-        Ui.confirm(this, "Empty Recycle Bin?",
-                "All posts in Recycle Bin will be permanently deleted. This cannot be undone.",
-                "Empty Trash", () -> {
-                    for (Models.Post p : myPosts) {
-                        if (p.trashedAt > 0) Fb.db().collection("posts").document(p.id).delete();
+        Ui.confirm(this, "Delete loaded Recycle Bin items?",
+                "Only the loaded Recycle Bin items will be permanently deleted. Load more first to include more items. This cannot be undone.",
+                "Delete loaded items", () -> {
+                    for (Models.Post p : new ArrayList<>(myPosts)) {
+                        if (p.trashedAt > 0) Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(x->{myPosts.remove(p);render();});
                     }
-                    Ui.toast(this, "Recycle Bin emptied 🧹");
+                    Ui.toast(this, "Loaded trash items deleted");
                 });
     }
 

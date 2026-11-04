@@ -38,6 +38,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     private RecyclerView rv;
     private CommentsAdapter adapter;
     private CommentsEngine.Handle commentsHandle;
+    private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, countHeader;
     private Models.Comment replyingTo;
@@ -78,6 +79,16 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             adapter.setAll(rawComments);
         }));
         bar.addView(countHeader, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView older=Ui.tvBold(this,"View more comments",12,Ui.BLUE);
+        olderCommentsButton=older;
+        older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
+        older.setOnClickListener(v -> {
+            if(commentsHandle==null) return;
+            if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
+            if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
+            updateCommentPager();
+        });
+        bar.addView(older);
         root.addView(bar);
         root.addView(Ui.divider(this));
 
@@ -90,6 +101,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         adapter.postAuthorId = author == null ? "" : author;
         adapter.sortMode = Prefs.commentSort(this);
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attachComments(rv,()->adapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Composer + Quick Emoji Strip
@@ -131,6 +143,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         row.addView(av, new LinearLayout.LayoutParams(s, s));
         Ui.avatar(this, av, Fb.myPhoto());
         input = Ui.input(this, "Add a public comment…");
+        com.friendbook.social.core.Mentions.attach(input, () -> author);
         input.setBackground(Ui.round(this, Ui.inputBg(this), 20));
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1);
         ip.leftMargin = Ui.dp(this, 8);
@@ -159,6 +172,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     }
 
     private void cancelReply() {
+        com.friendbook.social.core.Mentions.clearReplyTarget(input);
         replyingTo = null;
         replyChip.setVisibility(View.GONE);
         if (replyChip.getParent() instanceof LinearLayout) {
@@ -171,12 +185,21 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     protected void onStart() {
         super.onStart();
         commentsHandle = CommentsEngine.watch(collection, reelId, commentsKey, (all, pinnedId) -> {
+            updateCommentPager();
+            if(commentsHandle!=null && commentsHandle.isLoading())return;
             rawComments.clear();
             rawComments.addAll(all);
             adapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             updateHeaderText();
             adapter.setAll(rawComments);
         });
+    }
+
+    private void updateCommentPager() {
+        if(olderCommentsButton==null || commentsHandle==null) return;
+        olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
+                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 
     @Override
@@ -188,6 +211,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     public void onReply(Models.Comment c) {
         replyingTo = c;
+        com.friendbook.social.core.Mentions.setReplyTarget(input, c.authorId, c.authorName);
         replyChip.setVisibility(View.VISIBLE);
         if (replyChip.getParent() instanceof LinearLayout) {
             ((LinearLayout) replyChip.getParent()).getChildAt(1).setVisibility(View.VISIBLE);
@@ -215,25 +239,26 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         final Models.Comment replyTarget = replyingTo;
         String parentId = replyTarget == null ? "" : replyTarget.id;
 
+        java.util.List<java.util.Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
         cancelReply();
         input.setText("");
-        Ui.hideKeyboard(this);
 
-        Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId,
+        Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId, mentions,
                 (ok, errMsg) -> {
-                    busy = false;
                     if (ok) {
                         if (author != null && !me.equals(author)) {
                             Notify.send(author, "reel_comment", Fb.myName() + " commented on your reel", reelId);
                         }
                         if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "comment_reply", Fb.myName() + " replied to your comment", reelId);
+                            Notify.send(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", reelId);
                         }
                     } else {
                         Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");
                     }
                 });
 
+        busy = false; // Local queue accepted; allow another comment before network acknowledgement.
+        input.requestFocus();
         if (local != null) {
             rawComments.add(local);
             updateHeaderText();

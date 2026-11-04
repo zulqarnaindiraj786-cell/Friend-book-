@@ -18,11 +18,32 @@ public class Notify {
         send(toUid, type, text, null);
     }
 
+    /** Commit both sides before creating a follow notification / calling the push gateway. */
+    public static void follow(String toUid, boolean following) {
+        String me = Fb.uid();
+        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
+        WriteBatch batch = Fb.db().batch();
+        batch.set(Fb.db().collection("users").document(toUid),
+                Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
+        batch.set(Fb.db().collection("users").document(me),
+                Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
+        batch.commit().addOnSuccessListener(v -> {
+            if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
+        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
+    }
+
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
         String me = Fb.uid();
-        if (me == null || toUid == null || toUid.isEmpty()) return;
-        if (toUid.equals(me) && !"security".equals(type)) return;
+        if (me == null || toUid == null || toUid.isEmpty()) {
+            com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=missing_actor_or_receiver"); return;
+        }
+        if (toUid.equals(me) && !"security".equals(type)) {
+            com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=self_notification"); return;
+        }
+        com.friendbook.social.push.PushTrace.stage("notification_write_start", "type="
+                + com.friendbook.social.push.PushTrace.label(type) + " actor="
+                + com.friendbook.social.push.PushTrace.id(me) + " receiver=" + com.friendbook.social.push.PushTrace.id(toUid));
         boolean asTeam = "team".equals(type) || "announcement".equals(type)
                 || "tick".equals(type) || "ban".equals(type);
         Map<String, Object> n = new HashMap<>();
@@ -31,11 +52,16 @@ public class Notify {
         n.put("fromUserName", asTeam ? "friendbook Team" : Fb.myName());
         n.put("fromUserPhotoUrl", asTeam ? Ui.TEAM_AVATAR_TOKEN : Fb.myPhoto());
         n.put("type", type);
+        if (type != null && type.startsWith("reel_")) n.put("contentType", "reel");
         n.put("text", text);
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+            com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
+                    + com.friendbook.social.push.PushTrace.id(ref.getId()));
+            if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
+        }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
     }
 
     /**
@@ -54,7 +80,8 @@ public class Notify {
         n.put("text", text);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
+                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
 
         if (!alsoInChat) return;
         String chatId = "team_" + toUid;
@@ -106,7 +133,8 @@ public class Notify {
         n.put("text", "invited you to join group \"" + groupName + "\" 👥");
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
+                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
     }
 
     /** Like/love/etc. on a post (respects local preference of the sender device). */

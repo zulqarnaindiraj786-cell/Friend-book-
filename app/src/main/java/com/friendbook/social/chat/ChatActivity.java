@@ -43,6 +43,21 @@ import java.util.Set;
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private static final int PICK_IMG = 51;
+    private DocumentSnapshot historyCursor,historyEnd,lastServerMessage;
+    private Set<String> maskedHistoryIds=new HashSet<>();
+    private final java.util.Deque<HistoryResume> historyRanges=new java.util.ArrayDeque<>();
+    private static final class HistoryResume {
+        final DocumentSnapshot cursor,end;final boolean more;final Set<String> masked;
+        HistoryResume(DocumentSnapshot c,DocumentSnapshot e,boolean m,Set<String> ids){cursor=c;end=e;more=m;masked=new HashSet<>(ids);}
+    }
+    private boolean historyLoading, historyMore=true,historyFailed;
+    private int historyGeneration;
+    private TextView historyButton;
+    private android.widget.ProgressBar historySpinner;
+    private boolean chatVisible;
+    private String messageActor;
+    private final Set<String> receiptInFlight=new HashSet<>(),receiptFailed=new HashSet<>();
+    private final Map<String,Models.Message> historyMessages=new HashMap<>();
 
     private String peerId, peerName = "", peerPhoto = "", chatId;
     private boolean isGroupChat = false;
@@ -64,7 +79,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private long peerLastSeen = 0L;
     private boolean typingSent;
     private long lastTypingPush;
-    private boolean busy;
     private boolean initialScrollDone = false;
     private boolean forceScrollBottom = false;
     private boolean unreadResetOnce = false;
@@ -243,14 +257,28 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         lm.setStackFromEnd(true);
         rv.setLayoutManager(lm);
         rv.setItemAnimator(null);
+        rv.setItemViewCacheSize(20);
         adapter = new MessagesAdapter(this, this);
         rv.setAdapter(adapter);
         rv.addOnLayoutChangeListener((v, l, t, r, bo, ol, ot, or2, obo) -> {
-            if (bo < obo && adapter.getItemCount() > 0) {
+            if (bo < obo && adapter.getItemCount() > 0 && (forceScrollBottom || ((LinearLayoutManager)rv.getLayoutManager()).findLastVisibleItemPosition()>=adapter.getItemCount()-3)) {
                 rv.post(() -> rv.scrollToPosition(adapter.getItemCount() - 1));
             }
         });
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        historyButton=Ui.tvBold(this,"View older messages",13,Ui.BLUE);
+        historyButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
+        historyButton.setOnClickListener(v -> {historyFailed=false;loadOlderMessages();});
+        historyButton.setVisibility(View.GONE);root.addView(historyButton);
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                LinearLayoutManager manager=(LinearLayoutManager)list.getLayoutManager();
+                if(dy<0 && !historyFailed && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
+            }
+        });
+        android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(rv,new android.widget.FrameLayout.LayoutParams(-1,-1));
+        historySpinner=new android.widget.ProgressBar(this);historySpinner.setVisibility(View.GONE);historySpinner.setContentDescription("Loading older messages");
+        messageWrap.addView(historySpinner,new android.widget.FrameLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26),Gravity.TOP|Gravity.CENTER_HORIZONTAL));
+        root.addView(messageWrap, new LinearLayout.LayoutParams(-1, 0, 1));
 
         readOnlyBanner = Ui.tvBold(this, "🛡 Official updates from friendbook Team", 13, Ui.sub(this));
         readOnlyBanner.setGravity(Gravity.CENTER);
@@ -437,6 +465,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStart() {
         super.onStart();
+        if(Fb.uid()==null || (messageActor!=null && !java.util.Objects.equals(messageActor,Fb.uid()))){finish();return;}
 
         if (isGroupChat) {
             roomReg = Fb.db().collection("chats").document(chatId)
@@ -523,61 +552,152 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             });
         }
 
-        // messages (realtime via onSnapshot)
+        // Parse only changed documents, not 200 message bodies on every receipt/typing update.
+        if(!java.util.Objects.equals(messageActor,Fb.uid())){
+            messageSnapshots.clear();historyMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;messageActor=Fb.uid();
+        }
+        historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
+        final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
+        final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
+        final boolean[] firstServer={true};
+        final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(200)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null) return;
+                .limitToLast(40)
+                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
+                    if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    boolean bridged=false;
+                    if(!snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()){
+                        Set<String> known=firstServer[0]?knownAtAttach:new HashSet<>(historyMessages.keySet());
+                        if(!firstServer[0])known.addAll(messageSnapshots.keySet());
+                        Set<String> headIds=new HashSet<>();for(DocumentSnapshot doc:snap)headIds.add(doc.getId());
+                        if(lastServerMessage!=null && historyCursor!=null && !known.isEmpty() && java.util.Collections.disjoint(known,headIds)){
+                            historyRanges.push(new HistoryResume(historyCursor,historyEnd,historyMore,maskedHistoryIds));
+                            historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=new HashSet<>(known);bridged=true;
+                        }
+                        if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==40;}
+                        lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
+                    }
+                    if(snap.getDocumentChanges(com.google.firebase.firestore.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
+                        boolean cached=snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites(),playSound=false;
+                        boolean eligible=soundGate.begin(cached);Set<String> hidden=hiddenMsgs();
+                        for(DocumentSnapshot doc:snap){Models.Message m=messageSnapshots.get(doc.getId());
+                            if(m!=null && soundGate.observe(m.id,m.createdAt,Presence.now(),eligible) && !hidden.contains(m.id)
+                                    && !java.util.Objects.equals(Fb.uid(),m.senderId) && !m.isDeleted && !"system".equals(m.type) && !"call".equals(m.type))playSound=true;}
+                        soundGate.end(cached);if(playSound)com.friendbook.social.core.SoundManager.playNewMessage(this);
+                        markVisibleReceipts();return;
+                    }
+                    Set<String> liveIds=new HashSet<>();for(DocumentSnapshot doc:snap)liveIds.add(doc.getId());
+                    for(String id:new ArrayList<>(messageSnapshots.keySet()))if(!liveIds.contains(id))historyMessages.put(id,messageSnapshots.remove(id));
                     LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
                     int prevCount = adapter.getItemCount();
                     int lastVis = lm != null ? lm.findLastVisibleItemPosition() : prevCount - 1;
                     boolean nearBottom = !initialScrollDone || forceScrollBottom || (prevCount - lastVis <= 4);
 
+                    boolean soundEligible = soundGate.begin(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    boolean incomingSound = false;
                     List<Models.Message> list = new ArrayList<>();
                     Set<String> hidden = hiddenMsgs();
-                    List<DocumentSnapshot> toMark = new ArrayList<>();
                     String me = Fb.uid();
-                    for (DocumentSnapshot d : snap) {
-                        Models.Message m = Models.Message.fromDoc(d);
-                        if (hidden.contains(m.id)) continue;
-                        list.add(m);
-                        if (me != null && me.equals(m.receiverId) && (!m.isSeen || !m.isDelivered) && !m.isDeleted) {
-                            boolean needsSeen = !m.isSeen && Prefs.readReceipts(this);
-                            boolean needsDeliv = !m.isDelivered;
-                            if (needsSeen || needsDeliv) toMark.add(d);
+                    for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
+                        String id = change.getDocument().getId();
+                        if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+                            Models.Message evicted=messageSnapshots.remove(id);
+                            if(evicted!=null) historyMessages.put(id,evicted);
+                        } else {
+                            messageSnapshots.put(id, Models.Message.fromDoc(change.getDocument()));
                         }
                     }
-                    list.sort((a2, b2) -> Long.compare(a2.createdAt, b2.createdAt));
+                    for (DocumentSnapshot d : snap) {
+                        Models.Message m = messageSnapshots.get(d.getId());
+                        if (m == null) { m = Models.Message.fromDoc(d); messageSnapshots.put(d.getId(), m); }
+                        boolean freshSound = soundGate.observe(m.id, m.createdAt, Presence.now(), soundEligible);
+                        if (hidden.contains(m.id)) continue;
+                        list.add(m);
+                        if (freshSound && me != null && !me.equals(m.senderId) && !m.isDeleted
+                                && !"system".equals(m.type) && !"call".equals(m.type)) incomingSound = true;
+                    }
+                    markVisibleReceipts();
+                    soundGate.end(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    if (incomingSound) com.friendbook.social.core.SoundManager.playNewMessage(this);
+                    Map<String,Models.Message> combined=new HashMap<>(historyMessages);
+                    for(Models.Message message:list) combined.put(message.id,message);
+                    list=new ArrayList<>(combined.values()); list.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id));
+                    list.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
                     adapter.setData(list);
-                    if (nearBottom && !list.isEmpty()) {
+                    historyButton.setVisibility(View.GONE);
+                    if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
                         initialScrollDone = true;
                         forceScrollBottom = false;
                         rv.scrollToPosition(list.size() - 1);
                     }
-                    if (!toMark.isEmpty()) {
-                        WriteBatch batch = Fb.db().batch();
-                        for (DocumentSnapshot d : toMark) {
-                            Map<String, Object> patch = new HashMap<>();
-                            patch.put("isDelivered", true);
-                            if (Prefs.readReceipts(this)) patch.put("isSeen", true);
-                            batch.set(d.getReference(), patch, SetOptions.merge());
-                        }
-                        batch.commit();
-                        resetUnread();
-                    } else if (!unreadResetOnce && !list.isEmpty()) {
-                        unreadResetOnce = true;
-                        resetUnread();
-                    }
+
                 });
+    }
+
+    private void loadOlderMessages() {
+        if(historyLoading || !historyMore || historyCursor==null) return;
+        historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
+        historyButton.setVisibility(View.GONE);historySpinner.setVisibility(View.VISIBLE);
+        Query older=Fb.db().collection("chats").document(chatId).collection("messages")
+                .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
+        if(historyEnd!=null)older=older.endBefore(historyEnd);
+        older.limit(40).get(com.google.firebase.firestore.Source.SERVER)
+                .addOnSuccessListener(page -> {
+                    if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==40;
+                    if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
+                    if(historyEnd!=null && page.size()<40){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
+                    LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
+                    int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
+                    int top=anchor==null?0:anchor.getTop();
+                    String anchorId=adapter.idAt(first);
+                    for(DocumentSnapshot doc:page) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
+                    Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots);
+                    Set<String> hidden=hiddenMsgs(); List<Models.Message> rows=new ArrayList<>(combined.values());
+                    rows.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id)); rows.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
+                    adapter.setData(rows);int restored=-1;
+                    for(int i=0;i<rows.size();i++)if(java.util.Objects.equals(anchorId,rows.get(i).id)){restored=i;break;}
+                    if(restored>=0)manager.scrollToPositionWithOffset(restored,top);
+                    historyButton.setVisibility(View.GONE);
+                    // History does not trigger sounds or bulk seen/delivered writes.
+                }).addOnFailureListener(error -> {
+                    if(generation!=historyGeneration) return;
+                    historyLoading=false;historyFailed=true;historySpinner.setVisibility(View.GONE);historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
+                });
+    }
+
+    /** Dispatch receipts before rendering; only the foreground open conversation, no history scan. */
+    private void markVisibleReceipts(){
+        String me=Fb.uid();if(!chatVisible || me==null || !me.equals(messageActor) || messageSnapshots.isEmpty())return;
+        WriteBatch batch=Fb.db().batch();List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+        for(Models.Message m:messageSnapshots.values()){
+            if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
+            if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
+            Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
+            batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
+            receiptInFlight.add(m.id);claimed.add(m.id);
+        }
+        if(claimed.isEmpty() && unreadResetOnce)return;
+        unreadResetOnce=true;
+        batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
+        batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
     }
 
     private boolean typingOn = false;
 
+    @Override protected void onResume() {
+        super.onResume();chatVisible=true;receiptFailed.clear();unreadResetOnce=false;markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+    }
+    @Override protected void onPause() {
+        chatVisible=false;com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
+    }
+
     @Override
     protected void onStop() {
         super.onStop();
+        historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();
@@ -587,6 +707,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         MessagesAdapter.stopVoice();
         if (recording) { stopRecording(false); }
     }
+
+    private final Map<String, Models.Message> messageSnapshots = new HashMap<>();
 
     private Set<String> hiddenMsgs() {
         return Prefs.hiddenMsgs(this, chatId);
@@ -706,12 +828,22 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "isDeleted", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
+        Models.Message optimistic = new Models.Message();
+        optimistic.id = msgRef.getId(); optimistic.senderId = me; optimistic.receiverId = peerId;
+        optimistic.type = "voice"; optimistic.voiceUrl = url; optimistic.voiceDurationSec = durSec;
+        optimistic.createdAt = now; optimistic.text = "";
+        adapter.appendOptimistic(optimistic);
+        rv.scrollToPosition(adapter.getItemCount() - 1);
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
         forceScrollBottom = true;
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
+        batch.commit().addOnSuccessListener(x -> {
+            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        })
+                .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
 
     // ---------- chat theme ----------
@@ -769,10 +901,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void sendSticker(String emoji) {
-        if (busy) return;
         String me = Fb.uid();
         if (me == null) return;
-        busy = true;
         long now = System.currentTimeMillis();
         com.google.firebase.firestore.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
@@ -804,9 +934,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit()
-                .addOnSuccessListener(x -> busy = false)
-                .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Queued offline — will sync automatically"); });
+                .addOnSuccessListener(x -> {
+                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                })
+                .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
@@ -878,7 +1011,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        batch.commit().addOnFailureListener(e ->
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
+        batch.commit().addOnSuccessListener(x -> {
+            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        }).addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));
     }
 

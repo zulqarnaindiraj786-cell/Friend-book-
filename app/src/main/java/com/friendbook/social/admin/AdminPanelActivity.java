@@ -113,34 +113,8 @@ public class AdminPanelActivity extends Activity {
         }
     }
 
-    /** 📣 Broadcast: one notification doc per user, batched. Called from Earnings tab tools. */
+    /** Photo/video + linked text composer; delivery runs in durable paginated background work. */
     public void showBroadcastDialog() {
-        LinearLayout box = Ui.col(this);
-        Ui.pad(box, 20, 10, 20, 0);
-        EditText msg = Ui.multi(this, "Message for every friendbook user…", 3);
-        box.addView(msg, new LinearLayout.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this)
-                .setTitle("📣 Broadcast to all users")
-                .setMessage("Everyone with an account will get this in Notifications.")
-                .setView(box)
-                .setPositiveButton("Send to everyone", (d, w) -> {
-                    String text = msg.getText().toString().trim();
-                    if (!text.isEmpty()) sendBroadcast(text);
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
-
-    private void sendBroadcast(String text) {
-        Ui.toast(this, "Sending broadcast from friendbook Team…");
-        Fb.db().collection("users").limit(400).get().addOnSuccessListener(snap -> {
-            List<com.google.firebase.firestore.DocumentSnapshot> docs = snap.getDocuments();
-            int total = docs.size();
-            for (com.google.firebase.firestore.DocumentSnapshot u : docs) {
-                com.friendbook.social.core.Notify.sendOfficialTeamMessage(
-                        u.getId(), "announcement", "📣 " + text, true);
-            }
-            Ui.toast(this, "Broadcast sent to " + total + " users from friendbook Team ✓");
-        }).addOnFailureListener(e -> Ui.toast(this, "Failed: " + e.getMessage()));
+        startActivity(new android.content.Intent(this, OfficialBroadcastActivity.class));
     }
 }

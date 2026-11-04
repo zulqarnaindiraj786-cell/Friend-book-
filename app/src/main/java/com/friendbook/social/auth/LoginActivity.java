@@ -218,7 +218,8 @@ public class LoginActivity extends Activity {
     private void verifyAndFinishLogin(String uid, String em, DocumentSnapshot d, TextView btn) {
         boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
         if (banned && !Admin.isOwnerEmail(em)) {
-            Fb.auth().signOut();
+            com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
             btn.setText("Log In");
             btn.setEnabled(true);
             Ui.info(this, "Account suspended",
@@ -242,14 +243,16 @@ public class LoginActivity extends Activity {
                         if (twoFa.equals(code.getText().toString().trim())) {
                             completePostLogin(uid, em, d);
                         } else {
-                            Fb.auth().signOut();
+                            com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
                             btn.setText("Log In");
                             btn.setEnabled(true);
                             Ui.toast(this, "Incorrect security PIN");
                         }
                     })
                     .setNegativeButton("Cancel", (dlg, w) -> {
-                        Fb.auth().signOut();
+                        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                    Fb.auth().signOut();
                         btn.setText("Log In");
                         btn.setEnabled(true);
                     })
