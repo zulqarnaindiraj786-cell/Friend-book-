@@ -41,4 +41,14 @@ public class MessageRenderStateTest {
         a.reactions.put("me", "love");
         assertNotEquals(before, MessageRenderState.keys(Collections.singletonList(a), "me"));
     }
+    @Test public void equalBodiesWithDifferentIdsMustNotBeDropped() {
+        Models.Message a=row("a","me"),b=row("b","me");b.text=a.text;
+        assertNotEquals(MessageRenderState.keys(Collections.singletonList(a),"me"),MessageRenderState.keys(Collections.singletonList(b),"me"));
+    }
+    @Test public void repeatedSnapshotKeysAreIdenticalButSeenChangesImmediately() {
+        Models.Message a=row("a","me");List<Models.Message> rows=Collections.singletonList(a);
+        List<List<Object>> before=MessageRenderState.keys(rows,"me");
+        assertEquals(before,MessageRenderState.keys(rows,"me"));a.isSeen=true;
+        assertNotEquals(before,MessageRenderState.keys(rows,"me"));
+    }
 }

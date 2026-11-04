@@ -90,6 +90,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         final List<Models.Message> after = new ArrayList<>(list);
         final List<List<Object>> oldKeys = renderKeys;
         final List<List<Object>> newKeys = MessageRenderState.keys(after, Fb.uid());
+        if(oldKeys.equals(newKeys))return;
         androidx.recyclerview.widget.DiffUtil.DiffResult diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(
                 new androidx.recyclerview.widget.DiffUtil.Callback() {
                     @Override public int getOldListSize() { return before.size(); }
@@ -125,6 +126,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
 
     @Override
     public int getItemCount() { return data.size(); }
+    public String idAt(int position){return position>=0 && position<data.size()?data.get(position).id:null;}
 
     private boolean isGroupableBubble(Models.Message m) {
         if (m == null) return false;

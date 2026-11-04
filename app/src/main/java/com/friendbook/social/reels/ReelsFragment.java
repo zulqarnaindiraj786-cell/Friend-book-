@@ -166,7 +166,7 @@ public class ReelsFragment extends Fragment {
         if (pager.getChildAt(0) instanceof RecyclerView) {
             ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
         }
-        adapter = new ReelAdapter(a);
+        adapter = new ReelAdapter(a,()->isResumed() && !isHidden());
         pager.setAdapter(adapter);
         root.addView(pager, new FrameLayout.LayoutParams(-1, -1));
 
@@ -484,6 +484,9 @@ public class ReelsFragment extends Fragment {
         }
     }
 
+    @Override public void onResume(){super.onResume();if(pager!=null && adapter!=null)pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));}
+    @Override public void onPause(){if(adapter!=null && pager!=null)adapter.pauseAll(pager);super.onPause();}
+
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
@@ -519,7 +522,8 @@ public class ReelsFragment extends Fragment {
         private final List<Models.Reel> data = new ArrayList<>();
         private int playingPos = 0;
 
-        ReelAdapter(Activity a) { this.activity = a; }
+        private final java.util.function.BooleanSupplier visible;
+        ReelAdapter(Activity a,java.util.function.BooleanSupplier visible) { this.activity = a;this.visible=visible; }
 
         List<Models.Reel> rawReels() { return data; }
 
@@ -635,6 +639,7 @@ public class ReelsFragment extends Fragment {
         }
 
         void playOnly(ViewPager2 pager, int pos) {
+            if(!visible.getAsBoolean()){pauseAll(pager);return;}
             playingPos = pos;
             if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
             RecyclerView rv = (RecyclerView) pager.getChildAt(0);
@@ -673,9 +678,17 @@ public class ReelsFragment extends Fragment {
                 Models.Reel r = reelAtPosition(position);
                 if (r != null) {
                     VH vh = (VH) h;
-                    vh.bind(r, position == playingPos);
+                    vh.bind(r, visible.getAsBoolean() && position == playingPos);
                 }
             }
+        }
+
+        @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder h){
+            super.onViewAttachedToWindow(h);
+            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos)((VH)h).play();
+        }
+        @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder h){
+            if(h instanceof VH)((VH)h).pause();super.onViewDetachedFromWindow(h);
         }
 
         @Override
@@ -1405,11 +1418,9 @@ public class ReelsFragment extends Fragment {
                 }
             }
 
-            private boolean userRequestedVideo;
 
             void bind(Models.Reel r, boolean autoPlayNow) {
                 boolean sameVideo = (this.reel != null && boundVideoUrl.equals(r.videoUrl) && activeMp != null);
-                if(this.reel==null || !java.util.Objects.equals(this.reel.videoUrl,r.videoUrl)) userRequestedVideo=false;
                 this.reel = r;
                 this.userPaused = false;
                 this.wantPlay = autoPlayNow;
@@ -1426,6 +1437,7 @@ public class ReelsFragment extends Fragment {
                 }
 
                 releasePlayer();
+                this.wantPlay=autoPlayNow;
                 boundVideoUrl = r.videoUrl != null ? r.videoUrl : "";
                 triedRawFallback = false;
                 scrubBar.setProgress(0);
@@ -1441,7 +1453,7 @@ public class ReelsFragment extends Fragment {
                     posterView.setVisibility(View.GONE);
                 }
 
-                pausedBadge.setText("▶ Tap to play"); pausedBadge.setVisibility(userRequestedVideo?View.GONE:View.VISIBLE);
+                pausedBadge.setVisibility(View.GONE);
                 // Never prepare or download unrequested/offscreen videos.
                 if (textureView.isAvailable()) {
                     if (videoSurface == null && textureView.getSurfaceTexture() != null) {
@@ -1452,7 +1464,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void prepareMediaPlayerAsync() {
-                if (!userRequestedVideo || !wantPlay || getBindingAdapterPosition()!=playingPos || reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
+                if (!wantPlay || getBindingAdapterPosition()!=playingPos || reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
                 releasePlayerOnly();
 
                 final Context ctx = itemView.getContext();
@@ -1554,7 +1566,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void prepareWithRawUrlFallback(Context ctx, String rawUrl) {
-                if(!userRequestedVideo || !wantPlay || getBindingAdapterPosition()!=playingPos || reel==null || !java.util.Objects.equals(rawUrl,reel.videoUrl)) return;
+                if(!wantPlay || getBindingAdapterPosition()!=playingPos || reel==null || !java.util.Objects.equals(rawUrl,reel.videoUrl)) return;
                 releasePlayerOnly();
                 try {
                     MediaPlayer mp = new MediaPlayer();
@@ -1613,7 +1625,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void startPreparedPlayer() {
-                if (!userRequestedVideo || !wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
+                if (!wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
                 try {
                     float vol = muted ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
@@ -1632,7 +1644,6 @@ public class ReelsFragment extends Fragment {
             }
 
             private void togglePlayPause() {
-                if(!userRequestedVideo) { userRequestedVideo=true; play(); return; }
                 if (activeMp == null || !mpPrepared) { play(); return; }
                 try {
                     if (activeMp.isPlaying()) {
@@ -1650,7 +1661,6 @@ public class ReelsFragment extends Fragment {
 
             void play() {
                 if(getBindingAdapterPosition()!=playingPos) return;
-                if(!userRequestedVideo) { pausedBadge.setText("▶ Tap to play"); pausedBadge.setVisibility(View.VISIBLE); return; }
                 wantPlay = true;
                 userPaused = false;
                 pausedBadge.setVisibility(View.GONE);

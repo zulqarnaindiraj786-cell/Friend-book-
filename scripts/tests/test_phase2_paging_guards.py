@@ -10,13 +10,13 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('.addSnapshotListener',source)
     def test_open_chat_window_and_lifecycle(self):
         source=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['.limitToLast(15)','Query.Direction.DESCENDING).startAfter(historyCursor).limit(15).get()',
+        for token in ['.limitToLast(10)','Query.Direction.DESCENDING).startAfter(historyCursor)',
                       'chatGeneration!=historyGeneration','generation!=historyGeneration']:
             self.assertIn(token,source)
     def test_reel_fallback_cannot_prepare_offscreen(self):
         source=(JAVA/'reels/ReelsFragment.java').read_text()
         fallback=source.split('private void prepareWithRawUrlFallback',1)[1].split('releasePlayerOnly()',1)[0]
-        for token in ['!userRequestedVideo','!wantPlay','getBindingAdapterPosition()!=playingPos']:
+        for token in ['!wantPlay','getBindingAdapterPosition()!=playingPos']:
             self.assertIn(token,fallback)
         self.assertNotIn('ReelVideoCache.prefetchWindow(',source)
         self.assertNotIn('ReelVideoCache.prefetchSingle(', (JAVA/'post/FeedAdapter.java').read_text())

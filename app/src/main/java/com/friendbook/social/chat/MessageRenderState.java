@@ -22,7 +22,7 @@ final class MessageRenderState {
         List<List<Object>> out = new ArrayList<>();
         for (int i = 0; i < rows.size(); i++) {
             Models.Message m = rows.get(i);
-            out.add(Arrays.asList(m.senderId, m.senderName, m.senderPhoto, m.receiverId,
+            out.add(Arrays.asList(m.id, m.senderId, m.senderName, m.senderPhoto, m.receiverId,
                     m.text, m.imageUrl, m.videoUrl, m.type, m.voiceUrl, m.replyToText, m.replyToSender,
                     m.callType, m.callStatus, m.callDurationSec, m.forwarded, m.voiceDurationSec,
                     m.isSeen, m.isDelivered, m.isDeleted, m.createdAt,

@@ -2,7 +2,7 @@ import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {initializeTestEnvironment} from '@firebase/rules-unit-testing';
-import {collection,doc,query,where,orderBy,limit,limitToLast,startAfter,getDocs,getDoc,writeBatch,setDoc,increment} from 'firebase/firestore';
+import {collection,doc,query,where,orderBy,limit,limitToLast,startAfter,endBefore,getDocs,getDoc,writeBatch,setDoc,increment} from 'firebase/firestore';
 if(!/^(127\.0\.0\.1|localhost):[0-9]+$/.test(process.env.FIRESTORE_EMULATOR_HOST||''))throw Error('Refusing to run without a loopback Firestore emulator');
 let env,db;
 const id=(n)=>String(n).padStart(3,'0');
@@ -54,12 +54,12 @@ test('comments latest50 and older50/20 use snapshot cursors',async()=>{
  const base=query(collection(db,'posts','post','comments'),orderBy('createdAt','desc'));
  const ids=await allPages(base,50);assert.equal(ids.length,120);assert.equal(ids[0],'comment119');assert.equal(ids.at(-1),'comment000');
 });
-test('open-chat latest15 plus older15 with reversed query direction',async()=>{
+test('open-chat latest10 plus older10 with reversed query direction',async()=>{
  const messages=collection(db,'chats','room','messages');
- const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(15)));
- assert.equal(head.size,15);assert.equal(head.docs[0].id,'message065');
- const older=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(head.docs[0]),limit(15)));
- assert.equal(older.size,15);assert.equal(older.docs[0].id,'message064');assert.equal(older.docs.at(-1).id,'message050');
+ const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(10)));
+ assert.equal(head.size,10);assert.equal(head.docs[0].id,'message070');
+ const older=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(head.docs[0]),limit(10)));
+ assert.equal(older.size,10);assert.equal(older.docs[0].id,'message069');assert.equal(older.docs.at(-1).id,'message060');
 });
 test('Reels metadata first batch reads5 native +5 video posts',async()=>{
  const a=await getDocs(query(collection(db,'reels'),orderBy('createdAt','desc'),limit(5)));
@@ -73,4 +73,13 @@ test('new canonical comment batch preserves old parent maps',async()=>{
  batch.update(doc(db,'posts','post'),{lastComment:fresh,comments:increment(1),commentsStorageVersion:2});await batch.commit();
  const after=await getDoc(doc(db,'posts','post'));assert.deepEqual(after.data().commentsMap,legacy);assert.equal(after.data().comments,2);
  assert.equal((await getDoc(doc(db,'posts','post','comments','new'))).data().content,'New format');
+});
+test('resume gap fills ten at a time without redownloading already cached older rows',async()=>{
+ const messages=collection(db,'chats','room','messages');
+ const oldNewest=await getDoc(doc(db,'chats','room','messages','message029'));
+ const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(10)));
+ let cursor=head.docs[0],ids=[];
+ for(;;){const page=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(cursor),endBefore(oldNewest),limit(10)));
+  assert.ok(page.size<=10);ids.push(...page.docs.map(d=>d.id));if(page.size<10)break;cursor=page.docs.at(-1);}
+ assert.equal(ids.length,40);assert.equal(new Set(ids).size,40);assert.equal(ids[0],'message069');assert.equal(ids.at(-1),'message030');
 });

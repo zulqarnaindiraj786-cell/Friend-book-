@@ -82,8 +82,10 @@ public class ConversationsActivity extends Activity {
 
     private com.google.firebase.firestore.DocumentSnapshot inboxCursor;
     private boolean inboxLoading, inboxMore=true;
+    private String inboxActor;
     private int inboxGeneration;
     private TextView inboxMoreButton;
+    private android.widget.ProgressBar inboxSpinner;
     private final List<Room> allRooms = new ArrayList<>();
     private final List<Room> rooms = new ArrayList<>();
 
@@ -194,21 +196,25 @@ public class ConversationsActivity extends Activity {
         com.friendbook.social.core.NearEndPaging.attach(rv,()->{loadInboxPage(false);});
         inboxMoreButton=Ui.tvBold(this,"Load more chats",13,Ui.BLUE);
         inboxMoreButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
-        inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));
+        inboxMoreButton.setOnClickListener(v -> loadInboxPage(inboxCursor==null));
+        inboxMoreButton.setVisibility(View.GONE);
         TextView refreshChats=Ui.tvBold(this,"Refresh chats",13,Ui.BLUE);
         refreshChats.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
         refreshChats.setOnClickListener(v -> loadInboxPage(true)); refreshChats.setVisibility(View.GONE);
 
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(inboxMoreButton);
+        inboxSpinner=new android.widget.ProgressBar(this);inboxSpinner.setVisibility(View.GONE);inboxSpinner.setContentDescription("Loading more conversations");
+        root.addView(inboxSpinner,new LinearLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26)));
         setContentView(root);
 
         // ⚡ 0.0ms Instant Frame #1 Hydration from FastCache!
         String me0 = Fb.uid();
         if (me0 != null) {
+            inboxActor=me0;
             int cachedRooms=0;
             for (Models.ChatRoom cr : com.friendbook.social.core.FastCache.getChats()) {
-                if(cachedRooms++>=15) break;
+                if(cachedRooms++>=10) break;
                 Room r = new Room();
                 r.room = cr;
                 r.other = cr.otherUid(me0);
@@ -250,7 +256,7 @@ public class ConversationsActivity extends Activity {
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
         // Live snapshot listener on users so Active Now strip updates green online dots in real time!
         usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
-            if (isFinishing() || usnap == null) return;
+            if (isFinishing() || usnap == null || !java.util.Objects.equals(me,Fb.uid())) return;
             for (DocumentSnapshot ud : usnap) {
                 Models.User u = Models.User.fromDoc(ud);
                 if (u.uid == null || u.uid.equals(me)) continue;
@@ -263,20 +269,23 @@ public class ConversationsActivity extends Activity {
             renderActiveNow();
             applyFilter();
         });
+        if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
         inboxGeneration++; inboxLoading=false;
         loadInboxPage(true);
     }
 
     private void loadInboxPage(boolean reset) {
-        if(inboxLoading || (!reset && !inboxMore)) return;
-        inboxLoading=true; final int generation=inboxGeneration; final String me=Fb.uid();
+        if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) return;
+        inboxLoading=true;inboxSpinner.setVisibility(View.VISIBLE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
         com.google.firebase.firestore.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
         if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
-        query.limit(15).get().addOnSuccessListener(snap -> {
+        java.util.function.Consumer<com.google.firebase.firestore.QuerySnapshot> apply=snap -> {
             if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
-            inboxLoading=false; inboxMore=snap.size()==15;
-            if(!snap.isEmpty()) inboxCursor=snap.getDocuments().get(snap.size()-1);
-                    if(reset) allRooms.clear();
+            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);
+            if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
+                if(reset)allRooms.clear();inboxMore=snap.size()==10;
+                if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(snap.size()-1);
+            }
                     if (snap != null) {
                         Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
                                 .getStringSet("hiddenChats", new HashSet<>());
@@ -313,11 +322,17 @@ public class ConversationsActivity extends Activity {
                     com.friendbook.social.core.FastCache.saveChats(toCache);
                     renderActiveNow();
                     applyFilter();
-            inboxMoreButton.setText(inboxMore?"Load more chats":"All chats loaded");
-        }).addOnFailureListener(error -> {
-            if(generation!=inboxGeneration) return;
-            inboxLoading=false; inboxMoreButton.setText("Retry loading chats");
-        });
+            inboxMoreButton.setText("Continue loading chats");
+            inboxMoreButton.setVisibility(inboxMore && rooms.isEmpty()?View.VISIBLE:View.GONE);
+        };
+        java.util.function.Consumer<Exception> failed=error->{
+            if(generation!=inboxGeneration)return;
+            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setVisibility(View.VISIBLE);
+        };
+        if(reset){
+            if(reg!=null)reg.remove();
+            reg=query.limit(10).addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});
+        }else query.limit(10).get(com.google.firebase.firestore.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
     }
 
     private void renderActiveNow() {

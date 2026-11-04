@@ -7,11 +7,12 @@
     20,
     50,
     30,
-    20
+    20,
+    10
   ],
-  "simulated_pages": 200000,
+  "simulated_pages": 250000,
   "duplicate_or_missing_records": 0,
-  "elapsed_model_seconds": 0.412,
+  "elapsed_model_seconds": 0.494,
   "real_backend_requests": 0,
   "real_devices": 0,
   "certified_5000_users": false
