@@ -27,3 +27,6 @@ __pycache__/
 .dev.vars
 .env
 .env.*
+
+# Generated allowlisted Cloudflare website bundle.
+.worker-assets/

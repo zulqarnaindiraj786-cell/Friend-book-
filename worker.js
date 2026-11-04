@@ -24,6 +24,16 @@ export function createWorker(verify = verifyFirebaseToken) {
   return {
     async fetch(request, env) {
       const path = new URL(request.url).pathname;
+      // API namespaces must never fall through to HTML, even for unknown endpoints.
+      const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/');
+      if (!api) {
+        if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
+        if (!env.ASSETS) return json({ error: 'Frontend unavailable' }, 503);
+        const assetURL = new URL(request.url);
+        if (['/', '/login', '/signup', '/login/', '/signup/'].includes(path)) assetURL.pathname = '/index.html';
+        try { return await env.ASSETS.fetch(new Request(assetURL, request)); }
+        catch { return json({ error: 'Frontend unavailable' }, 503); }
+      }
       if (path !== '/health' && path !== '/v1/me') return json({ error: 'Not found' }, 404);
       if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health') {

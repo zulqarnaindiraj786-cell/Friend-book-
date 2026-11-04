@@ -17,7 +17,7 @@ test('missing binding and failed DB return no internal details', async () => {
   assert.equal(response.status, 503); assert.deepEqual(await response.json(), { ok: false });
 });
 test('unknown and write routes are closed', async () => {
-  assert.equal((await call('/users')).status, 404);
+  assert.equal((await call('/v1/users')).status, 404);
   assert.equal((await call('/health', {}, {}, 'POST')).status, 405);
 });
 test('profile route requires verified Firebase identity before accessing D1', async () => {
