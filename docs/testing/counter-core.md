@@ -20,7 +20,8 @@ Do not call this "all four paths fixed". Android/FCM behavior is unchanged.
 1. Trusted canonical before/after event adapter for ALL create/read/delete/accept/cancel and
    chat room unread changes, with durable retry. FCM success is NOT an authoritative change
    stream; missing devices, failed deliveries and duplicate pushes must not lose/double counts.
-2. Authenticated snapshot/ack endpoint deriving UID from verified Firebase session, never body.
+2. Snapshot/ack endpoint is now implemented/tested locally; deploy only after trusted adapters
+   and baselines are ready. Android integration and live identity/device tests remain.
 3. Read-only legacy baseline at a consistent source read time; use decimal-string nanoseconds
    (not JS Number), matching canonical event commit times and stable event IDs.
 4. Graph: exact per-peer relationship state, not friend count. Calls: targeted inbox pointer
@@ -28,7 +29,7 @@ Do not call this "all four paths fixed". Android/FCM behavior is unchanged.
 5. Device/emulator integration and real PostgreSQL multi-connection race tests, then explicit
    deployment/cutover. No Blaze/paid trigger is assumed or authorized by this commit.
 
-Local validation: `npm test --prefix supabase` =34 passed:9 new real PostgreSQL/WASM tests
-plus25 existing mocked backend tests. PGlite is test-only; Promise.all duplicates do not prove
+Local validation: `npm test --prefix supabase` =44 passed:13 real PostgreSQL/WASM tests,
+6 endpoint/JWT tests using synthetic local signing keys, plus25 existing mocked backend tests. PGlite is test-only; Promise.all duplicates do not prove
 multi-connection locking/load. The event ledger grows; no automatic pruning or lifetime-free
 capacity guarantee is supplied. Event adapters and operational retention need a separate patch.

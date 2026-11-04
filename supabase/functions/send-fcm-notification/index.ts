@@ -1,7 +1,7 @@
-import { createRemoteJWKSet, jwtVerify, importPKCS8, SignJWT } from "npm:jose@5.9.6";
+import { importPKCS8, SignJWT } from "npm:jose@5.9.6";
 
 const PROJECT = "friendbook-17551";
-const keys = createRemoteJWKSet(new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"));
+import { verifyFirebaseSession } from "../_shared/firebase-session.ts";
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const validId = (v: unknown): v is string => typeof v === "string" && /^[\w-]{1,256}$/.test(v);
 function decode(v: any): any {
@@ -34,11 +34,6 @@ async function googleToken() {
   cachedToken = result.access_token;
   tokenUntil = Date.now() + (Number(result.expires_in || 3600) - 120) * 1000;
   return cachedToken;
-}
-async function verifyFirebaseSession(token: string): Promise<string> {
-  const { payload } = await jwtVerify(token, keys, { issuer: `https://securetoken.google.com/${PROJECT}`, audience: PROJECT, algorithms: ["RS256"] });
-  if (!validId(payload.sub)) throw new Error("Invalid subject");
-  return payload.sub;
 }
 // Dependency injection is ONLY for local tests; HTTP callers cannot select or bypass the verifier.
 export async function handleRequest(req: Request, verifySession = verifyFirebaseSession): Promise<Response> {

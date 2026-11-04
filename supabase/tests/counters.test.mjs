@@ -6,7 +6,9 @@ let db;
 before(async()=>{
   db=new PGlite();
   await db.exec('create role anon; create role authenticated; create role service_role;');
+  await db.exec(readFileSync(new URL('../migrations/202611010002_fcm_devices.sql',import.meta.url),'utf8'));
   await db.exec(readFileSync(new URL('../migrations/202611040001_counter_core.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../migrations/202611040002_counter_access.sql',import.meta.url),'utf8'));
 });
 after(async()=>{await db?.close();});
 const apply=(uid,event,version,delta,arrival=true,kind='messages')=>db.query('select public.counter_v1_apply($1,$2,$3,$4,$5,$6)',[uid,kind,event,String(version),delta,arrival]);
@@ -82,4 +84,40 @@ test('mobile/anonymous roles cannot read tables or call server RPCs',async()=>{
   }
   await db.exec('set role service_role');
   try{assert.equal((await snapshot('ack')).ready,true);}finally{await db.exec('reset role');}
+});
+
+const register=(uid,device)=>db.query('insert into public.fcm_device_tokens(device_id,user_id,token) values($1,$2,$3) on conflict(device_id) do update set user_id=excluded.user_id',[device,uid,'test-token-12345678901234567890']);
+const access=async(uid,device,action='snapshot',kind=null,observed=null)=>(await db.query('select public.counter_v1_access($1,$2,$3,$4,$5) result',[uid,device,action,kind,observed])).rows[0].result;
+test('access binds device ownership, does not fabricate ready counters, handles device reassignment',async()=>{
+  await register('owner','phone-owned');
+  assert.equal((await access('intruder','phone-owned')).error,'DEVICE_NOT_REGISTERED');
+  assert.deepEqual(await access('owner','phone-owned'),{ready:false,counters:[]});
+  assert.equal((await access('owner','phone-owned','ack','messages',1)).error,'COUNTER_NOT_READY');
+  await register('new-owner','phone-owned');
+  assert.equal((await access('owner','phone-owned')).error,'DEVICE_NOT_REGISTERED');
+});
+test('one access RPC returns exact string counters and acknowledges only its authenticated owner',async()=>{
+  await register('reader','reader-phone');
+  for(const kind of ['messages','notifications','requests'])await seed('reader',2,0,kind);
+  let result=await access('reader','reader-phone');assert.equal(result.ready,true);
+  assert.equal(result.counters.length,3);assert.equal(result.counters[0].unread_count,'2');
+  result=await access('reader','reader-phone','ack','messages','1');
+  const messages=result.counters.find(c=>c.kind==='messages');assert.equal(messages.badge_count,'1');assert.equal(messages.unread_count,'2');
+  await seed('large-counter','9223372036854775807');await register('large-counter','large-phone');
+  assert.equal((await access('large-counter','large-phone')).counters[0].unread_count,'9223372036854775807');
+});
+test('per-account access cap is shared across devices; window resets without truncating counts',async()=>{
+  await register('limited','limit-a');await register('limited','limit-b');await seed('limited',99);
+  for(let i=0;i<30;i++)assert.equal((await access('limited',i%2?'limit-a':'limit-b')).error,undefined);
+  assert.equal((await access('limited','limit-a')).error,'RATE_LIMITED');
+  assert.equal(Number((await snapshot('limited')).unread_count),99);
+  await db.exec("update public.counter_v1_access_window set opened_at=now()-interval '2 minutes' where uid='limited'");
+  assert.equal((await access('limited','limit-a')).error,undefined);
+});
+test('access RPC and access-window table stay server-only',async()=>{
+  await db.exec('set role authenticated');
+  try{
+    await assert.rejects(()=>access('reader','reader-phone'),/permission denied/);
+    await assert.rejects(()=>db.query('select * from public.counter_v1_access_window'),/permission denied/);
+  }finally{await db.exec('reset role');}
 });
