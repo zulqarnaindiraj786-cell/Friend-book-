@@ -1,0 +1,78 @@
+name: Deploy existing Cloudflare Worker (D1 OFF)
+on:
+  push:
+    branches: [main, 'arena/15a53658-friend-book']
+    paths:
+      - 'worker.js'
+      - 'wrangler.toml'
+      - 'package*.json'
+      - 'cloudflare/**'
+      - 'docs/**'
+      - '.github/workflows/deploy-cloudflare.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Require existing resources and BOTH D1 gates OFF
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, tomllib
+          cfg = tomllib.loads(pathlib.Path('wrangler.toml').read_text())
+          assert cfg['name'] == 'rough-firefly-dd7b'
+          assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'false'
+          assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'
+          assert cfg['d1_databases'] == [{
+              'binding': 'DB', 'database_name': 'friendbook-db',
+              'database_id': 'e1c605ca-a50b-46c6-9deb-56dd1f70d163',
+              'migrations_dir': 'cloudflare/migrations',
+          }]
+          android = pathlib.Path('app/build.gradle').read_text()
+          gates = re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", android)
+          assert gates == ['false'], 'Android D1 gate must remain OFF'
+          print('Existing Worker + DB verified; both gates OFF. No migrations/imports.')
+          PY
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Local schema and migration tests only
+        run: |
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+      - name: Deploy existing Worker and bind existing database (no migration)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo '::error::CLOUDFLARE_API_TOKEN repository secret is missing or unavailable to this workflow. Do not paste it in chat.'
+            exit 1
+          fi
+          npm run deploy
+      - name: Verify read-only Worker and D1 connectivity
+        run: |
+          curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health -o /tmp/friendbook-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/friendbook-health.json') as f:
+              assert json.load(f).get('ok') is True, 'Worker/D1 health check failed'
+          print('Worker health + read-only D1 SELECT 1 passed. No user data was written.')
+          PY
+          code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
+          test "$code" = 401
+          echo 'Unauthenticated profile request rejected (401).'
+          echo 'Deployment passed; both D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
