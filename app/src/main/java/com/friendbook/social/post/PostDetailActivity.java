@@ -53,6 +53,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private RecyclerView mainRv;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
+    private String retryD1Media="";
     private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, sortLabel, whoReactedChip;
@@ -156,6 +157,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             updateCommentPager();
         });
         cHeader.addView(older);
+        if(com.friendbook.social.core.D1Client.enabled("posts")){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
 
         TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
         seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
@@ -345,13 +347,14 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private void send() {
         if (busy) return;
         String text = input.getText().toString().trim();
-        if (text.isEmpty() && pendingPhotoUri == null) return;
+        if (text.isEmpty() && pendingPhotoUri == null && retryD1Media.isEmpty()) return;
         String me = Fb.uid();
         if (me == null) return;
         busy = true;
         final List<Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
 
-        if (pendingPhotoUri != null) {
+        if(com.friendbook.social.core.D1Client.enabled("posts") && pendingPhotoUri==null && !retryD1Media.isEmpty()){String media=retryD1Media;retryD1Media="";writeCommentDoc(me,text,media,mentions);}
+        else if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
             Ui.toast(this, "Uploading comment photo…");
             String path = "comments/" + me + "_" + System.currentTimeMillis() + ".jpg";
@@ -408,6 +411,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             mainRv.scrollToPosition(Math.max(0, commentsAdapter.getItemCount() - 1));
         } else {
             busy = false;
+            if(com.friendbook.social.core.D1Client.enabled("posts")){com.friendbook.social.core.Mentions.restore(input,text,mentions);retryD1Media=mediaUrl;}
         }
     }
 

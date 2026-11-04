@@ -89,6 +89,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             updateCommentPager();
         });
         bar.addView(older);
+        if(com.friendbook.social.core.D1Client.enabled(collection)){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,collection,reelId));bar.addView(drafts);}
         root.addView(bar);
         root.addView(Ui.divider(this));
 
@@ -266,6 +267,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             rv.scrollToPosition(Math.max(0, adapter.getItemCount() - 1));
         } else {
             busy = false;
+            if(com.friendbook.social.core.D1Client.enabled(collection))com.friendbook.social.core.Mentions.restore(input,text,mentions);
         }
     }
 }

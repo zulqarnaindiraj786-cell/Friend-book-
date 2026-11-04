@@ -1,7 +1,7 @@
 const reply = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
 const types = new Set(['like','love','haha','wow','sad','angry']);
-const select = `SELECT c.*,d.media_url,d.mentions,d.name,d.photo,d.edited,d.removed,
+export const commentSelect = `SELECT c.*,d.media_url,d.mentions,d.name,d.photo,d.edited,d.removed,
  (SELECT COUNT(*) FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.type IS NOT NULL) AS likes,
  (SELECT type FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.uid=?) AS mine
  FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id`;
@@ -10,7 +10,7 @@ function dto(row, uid) {
     content:row.text,imageUrl:row.media_url || '',parentId:row.parent_id || '',createdAt:row.created_at,
     edited:!!row.edited,mentions:JSON.parse(row.mentions || '[]'), reactions:row.mine?{[uid]:row.mine}:{} };
 }
-function normalized(row, uid) { return dto(row,uid); }
+export function normalized(row, uid) { return dto(row,uid); }
 function input(data) {
   const text = data.text, media = data.mediaUrl || '', mentions=data.mentions || [];
   if(typeof text!=='string' || text.length>5000 || (!text.trim() && !media) || typeof media!=='string' || media.length>4096 ||
@@ -22,15 +22,15 @@ function input(data) {
 }
 export async function commentsAPI(request, db, identity, resource, data, context={}) {
   const uid=identity.uid;
-  const read = id => db.prepare(select+' WHERE c.resource=? AND c.id=?').bind(uid,resource,id).first();
+  const read = id => db.prepare(commentSelect+' WHERE c.resource=? AND c.id=?').bind(uid,resource,id).first();
   const pin = async () => (await db.prepare('SELECT id FROM friendbook_cf_comment_pins WHERE resource=?').bind(resource).first())?.id || '';
   if(request.method==='GET') {
     const url=new URL(request.url), single=url.searchParams.get('id');
-    if(single!==null){if(!validId(single))return reply({error:'Invalid ID'},400);const row=await read(single);return row&&!row.removed?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);}
+    if(single!==null){if(!validId(single))return reply({error:'Invalid ID'},400);const row=await read(single);return row&&!row.removed&&!(context.blocked||[]).includes(row.uid)?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);}
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
-    const page=await db.prepare(select+` WHERE c.resource=? AND COALESCE(d.removed,0)=0
-      AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 50`).bind(uid,resource,before[0],before[0],before[1]).all();
+    const page=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
+      AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 50`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all();
     const last=page.results.at(-1);
     return reply({comments:page.results.map(row=>normalized(row,uid)),pinned:await pin(),next:page.results.length===50?btoa(JSON.stringify([last.created_at,last.id])):null});
   }
@@ -40,9 +40,10 @@ export async function commentsAPI(request, db, identity, resource, data, context
     let content;try{content=input(data);}catch{return reply({error:'Invalid comment'},400);}
     const parent=data.parentId || null;
     if(parent && (!validId(parent) || !(await read(parent)) || (await read(parent)).removed))return reply({error:'Parent not found'},400);
+    const replyTo=parent?(await read(parent))?.uid||'':'';
     const existing=await read(data.id);
     if(existing){return existing.uid===uid && !existing.removed && existing.text===content.text && existing.parent_id===parent &&
-      (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid)}):reply({error:'Comment ID conflict'},409);}
+      (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo}):reply({error:'Comment ID conflict'},409);}
     await db.batch([
       db.prepare(`INSERT INTO friendbook_cf_comments VALUES(?,?,?,?,?,?) ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now()),
       db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,media_url,mentions,name,photo)
@@ -51,7 +52,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
     ]);
     const saved=await read(data.id);
     if(saved?.uid!==uid || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
-    return reply({comment:normalized(saved,uid)});
+    return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo});
   }
   const row=await read(data.id);if(!row || row.removed)return reply({error:'Not found'},404);
   if(data.op==='react') {
@@ -77,6 +78,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
 export async function reactorsAPI(request,db,resource) {
   const url=new URL(request.url),id=url.searchParams.get('commentId'),after=url.searchParams.get('after')||'';
   if(after.length>128 || (id!==null && !validId(id)))return reply({error:'Invalid cursor/ID'},400);
+  if(id!==null){const row=await db.prepare('SELECT c.id FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0').bind(resource,id).first();if(!row)return reply({error:'Not found'},404);}
   const page=id===null?await db.prepare(`SELECT uid,type,updated_at AS createdAt FROM friendbook_cf_reactions WHERE resource=? AND uid>? AND type IS NOT NULL ORDER BY uid LIMIT 30`).bind(resource,after).all():
     await db.prepare(`SELECT uid,type FROM friendbook_cf_comment_reactions WHERE resource=? AND id=? AND uid>? AND type IS NOT NULL ORDER BY uid LIMIT 30`).bind(resource,id,after).all();
   return reply({reactors:page.results,next:page.results.length===30?page.results.at(-1).uid:null});

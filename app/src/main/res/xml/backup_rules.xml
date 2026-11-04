@@ -3,4 +3,5 @@
     <!-- Prompt history must not survive an uninstall/reinstall via cloud restore. -->
     <exclude domain="sharedpref" path="notification_permission_install.xml" />
         <exclude domain="sharedpref" path="fcm_install.xml" />
+        <exclude domain="sharedpref" path="d1_unsent_comments.xml" />
 </full-backup-content>

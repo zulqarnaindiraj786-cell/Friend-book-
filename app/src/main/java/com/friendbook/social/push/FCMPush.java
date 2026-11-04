@@ -20,7 +20,8 @@ public final class FCMPush {
     }
     public static void bulkMention(String postId,String commentId) {
         try { PushDeliveryWorker.enqueue(new JSONObject().put("action","bulk_mention")
-                .put("post_id",postId).put("comment_id",commentId==null?"":commentId)); }
+                .put("post_id",postId).put("comment_id",commentId==null?"":commentId)
+                .put("comment_backend",com.friendbook.social.core.D1Client.enabled("posts")?"d1":"firebase")); }
         catch(Exception ignored) { }
     }
     public static void friendPost(String postId) {

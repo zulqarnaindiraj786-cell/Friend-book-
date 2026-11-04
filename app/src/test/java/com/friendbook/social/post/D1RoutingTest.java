@@ -20,7 +20,8 @@ import org.robolectric.annotation.Config;
 public class D1RoutingTest {
  private static JSONObject comment(){return D1Client.object("id","c1","authorId","u1","authorName","User","content","hello","createdAt",1000,"parentId","");}
  @Test public void commentsRouteAllActionsToD1WithoutTouchingFirestore()throws Exception{
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<D1Drafts> drafts=mockStatic(D1Drafts.class)){
+   drafts.when(()->D1Drafts.keep(nullable(android.content.Context.class),anyString(),anyString(),anyString(),any(JSONObject.class))).thenReturn(true);
    fb.when(Fb::uid).thenReturn("u1");fb.when(Fb::myName).thenReturn("User");fb.when(Fb::myPhoto).thenReturn("");
    d1.when(()->D1Client.enabled("posts")).thenReturn(true);
    List<String> methods=new ArrayList<>();List<JSONObject> bodies=new ArrayList<>();
@@ -41,7 +42,8 @@ public class D1RoutingTest {
   }
  }
  @Test public void failedD1SendDoesNotFallbackAndClosedOrChangedActorCannotRender(){
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<D1Drafts> drafts=mockStatic(D1Drafts.class)){
+   drafts.when(()->D1Drafts.keep(nullable(android.content.Context.class),anyString(),anyString(),anyString(),any(JSONObject.class))).thenReturn(true);
    fb.when(Fb::uid).thenReturn("u1");fb.when(Fb::myName).thenReturn("User");fb.when(Fb::myPhoto).thenReturn("");d1.when(()->D1Client.enabled("posts")).thenReturn(true);
    TaskCompletionSource<JSONObject> page=new TaskCompletionSource<>();
    d1.when(()->D1Client.request(eq("posts"),eq("p1"),eq("comments"),eq("GET"),isNull(),isNull())).thenReturn(page.getTask());

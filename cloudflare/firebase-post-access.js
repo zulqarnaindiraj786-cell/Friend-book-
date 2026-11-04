@@ -9,13 +9,21 @@ export async function authorizePost({ project, token, uid }, collection, id, fet
     return (await r.json()).fields || {};
   }
   const string = (f, key) => f[key]?.stringValue || '';
-  const list = (f, key) => (f[key]?.arrayValue?.values || []).map(v => v.stringValue);
+  const list = (f, key) => [...(f[key]?.arrayValue?.values || []),...(key==='blocked'?(f.blockedUsers?.arrayValue?.values||[]):[])].map(v => v.stringValue);
   const post = await fields(`${collection}/${encodeURIComponent(id)}`);
   const owner = string(post, 'authorId');
-  if (!owner || post.archived?.booleanValue || post.trashedAt?.integerValue > 0 || string(post, 'groupId')) return false;
+  if (!owner || post.archived?.booleanValue || post.trashedAt?.integerValue > 0) return false;
   const me = await fields(`users/${encodeURIComponent(uid)}`);
   if (me.banned?.booleanValue || me.deactivated?.booleanValue) return false;
-  if(context)Object.assign(context,{owner,name:string(me,'displayName'),photo:string(me,'photoUrl'),moderator:!!(me.isAdmin?.booleanValue||me.isModerator?.booleanValue)});
+  if(context)Object.assign(context,{owner,name:string(me,'displayName'),photo:string(me,'photoUrl'),blocked:list(me,'blocked'),moderator:!!(me.isAdmin?.booleanValue||me.isModerator?.booleanValue)});
+  const groupId=string(post,'groupId');
+  if(groupId){const group=await fields(`groups/${encodeURIComponent(groupId)}`);
+    if(list(group,'bannedMemberIds').includes(uid))return false;
+    const manager=string(group,'adminId')===uid||list(group,'adminIds').includes(uid)||list(group,'moderatorIds').includes(uid);
+    if(context&&manager)context.moderator=true;
+    const privacy=(string(group,'privacy')||'').toLowerCase();
+    if(privacy!=='public' && !(privacy==='private'&&(manager||list(group,'members').includes(uid))))return false;
+  }
   if (owner === uid) return true;
   const author = await fields(`users/${encodeURIComponent(owner)}`);
   if (author.banned?.booleanValue || author.deactivated?.booleanValue || list(me, 'blocked').includes(owner) || list(author, 'blocked').includes(uid)) return false;

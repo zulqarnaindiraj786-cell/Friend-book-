@@ -134,3 +134,12 @@ test('reactor pages are bounded to thirty and scoped to resource/comment',async 
  const page=await(await call(f.env,'reactors')).json();assert.equal(page.reactors.length,30);
  const next=await(await call(f.env,'reactors','GET',undefined,{query:'?after='+page.next})).json();assert.equal(next.reactors.length,1);
 });
+test('blockedUsers and private group membership are checked against live source fields',async()=>{
+ const s=stringValue=>({stringValue}),a=ids=>({arrayValue:{values:ids.map(s)}});
+ for(const [member,blocked,expected] of [[false,false,false],[true,false,true],[true,true,false]]){
+  const fetcher=async url=>Response.json({fields:url.endsWith('/posts/p1')?{authorId:s('owner'),privacy:s('Public'),groupId:s('g1')}:
+   url.endsWith('/users/user1')?{blockedUsers:a(blocked?['owner']:[])}:
+   url.endsWith('/groups/g1')?{privacy:s('Private'),members:a(member?['user1']:[])}:{}});
+  assert.equal(await authorizePost(identity,'posts','p1',fetcher,{}),expected);
+ }
+});

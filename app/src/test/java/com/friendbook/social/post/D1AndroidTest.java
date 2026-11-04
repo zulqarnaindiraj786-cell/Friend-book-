@@ -36,4 +36,14 @@ public class D1AndroidTest {
   int[] events={0};Runnable close=D1Client.observe("posts/p1",()->events[0]++);
   D1Client.changed("posts/p1");assertEquals(1,events[0]);close.run();D1Client.changed("posts/p1");assertEquals(1,events[0]);
  }
+ @Test public void unsentDraftsPreserveMediaAndIdAcrossRetriesAndSeparateAccounts(){
+  android.content.Context context=org.robolectric.RuntimeEnvironment.getApplication();
+  JSONObject body=D1Client.object("id","stable-c1","text","draft","mediaUrl","https://res.cloudinary.com/demo/image/upload/x.jpg");
+  assertTrue(D1Drafts.keep(context,"owner","posts","p1",body));
+  assertEquals(1,D1Drafts.list(context,"owner","posts","p1").size());
+  assertTrue(D1Drafts.list(context,"different","posts","p1").isEmpty());
+  assertEquals("stable-c1",D1Drafts.list(context,"owner","posts","p1").get(0).optString("id"));
+  assertTrue(D1Drafts.list(context,"owner","posts","p1").get(0).optString("mediaUrl").startsWith("https://res.cloudinary.com/"));
+  D1Drafts.ack(context,"owner","posts","p1","stable-c1");assertTrue(D1Drafts.list(context,"owner","posts","p1").isEmpty());
+ }
 }

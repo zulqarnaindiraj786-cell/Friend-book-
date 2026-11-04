@@ -1,4 +1,4 @@
-import { commentsAPI, reactorsAPI } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized } from './comment-api.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -59,7 +59,9 @@ export async function interactions(request, env, identity, match, authorize = au
       const summary = await db.prepare(`SELECT s.type,s.total AS count,CASE WHEN r.type=s.type THEN 1 ELSE 0 END AS mine
         FROM friendbook_cf_reaction_totals s LEFT JOIN friendbook_cf_reactions r ON r.resource=s.resource AND r.uid=?
         WHERE s.resource=? AND s.total>0 ORDER BY s.type`).bind(identity.uid, resource).all();
-      return json({ types: summary.results });
+      const count=await db.prepare(`SELECT COUNT(*) AS total FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND COALESCE(d.removed,0)=0`).bind(resource).first();
+      const preview=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 2`).bind(identity.uid,resource,JSON.stringify(context.blocked||[])).all();
+      return json({ owner:context.owner,types: summary.results,comments:count.total,preview:preview.results.map(row=>normalized(row,identity.uid)) });
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }
 }

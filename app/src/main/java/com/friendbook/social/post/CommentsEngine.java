@@ -18,6 +18,14 @@ import java.util.Set;
 
 /** Paged canonical comment history; legacy parent maps are read-only compatibility data. */
 public class CommentsEngine {
+    public static void showD1Drafts(android.app.Activity activity,String collection,String id){
+        D1Drafts.show(activity,collection,id,data->{d1Changed(collection,id,data);
+            String me=Fb.uid(),owner=data.optString("owner"),reply=data.optString("replyTo");org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
+            if(!owner.isEmpty()&&!owner.equals(me))com.friendbook.social.core.Notify.send(owner,"posts".equals(collection)?"comment":"reel_comment",Fb.myName()+" commented",id);
+            if(!reply.isEmpty()&&!reply.equals(me))com.friendbook.social.core.Notify.send(reply,"reply",Fb.myName()+" replied to your comment",id);
+            Models.Comment comment=fromD1(row,id);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(comment.mentions))com.friendbook.social.push.FCMPush.bulkMention(id,comment.id);
+        });
+    }
     private static final List<Handle> D1_HANDLES=new ArrayList<>();
     private static boolean d1(String collection){return com.friendbook.social.core.D1Client.enabled(collection);}
     private static Models.Comment fromD1(org.json.JSONObject row,String key) {
@@ -219,10 +227,11 @@ public class CommentsEngine {
 
         if(d1(collection)){
             org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
+            if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
-                if(!java.util.Objects.equals(me,Fb.uid()))return;d1Changed(collection,docId,data);if(cb!=null)cb.onComplete(true,null);
+                if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);
             }).addOnFailureListener(e->{if(!java.util.Objects.equals(me,Fb.uid()))return;
-                d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"D1 comment failed; retry your draft. No Firebase write was made.");});
+                d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"Comment not confirmed. Use Unsent comments to retry the same draft safely.");});
             return local;
         }
         final Map<String, Object> commentMap = toMap(local, local.postId);
