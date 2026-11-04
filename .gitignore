@@ -30,3 +30,6 @@ __pycache__/
 
 # Generated allowlisted Cloudflare website bundle.
 .worker-assets/
+
+# Private migration exports, generated SQL, counts and verification reports.
+migration-artifacts/
