@@ -51,6 +51,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private com.friendbook.social.core.CursorPager activePager;
     private TextView moreButton;
     private int generation;
+    private boolean started;
     private String pageActor;
     private final Set<String> checkingUsers=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
     private final Map<String,String> sentIds=new HashMap<>();
@@ -130,13 +131,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     @Override public void onHiddenChanged(boolean hidden){
         super.onHiddenChanged(hidden);
-        if(hidden)closePage();else if(adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
+        if(hidden)closePage();else if(started && adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
     }
-    @Override public void onStart(){super.onStart();if(!isHidden()){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}}
-    @Override public void onStop(){closePage();super.onStop();}
+    @Override public void onStart(){super.onStart();started=true;if(!isHidden()){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}}
+    @Override public void onStop(){started=false;closePage();super.onStop();}
 
     private void startSection(){
-        closePage();String me=Fb.uid();if(me==null || getActivity()==null || isHidden())return;
+        closePage();String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden())return;
         if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();}
         pageActor=me;final int token=generation, selected=section;
         checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();

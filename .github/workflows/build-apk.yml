@@ -37,6 +37,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test actual Firestore SDK queries in isolated demo emulator (no production traffic)
+        working-directory: scripts/firebase-tests
+        run: npm ci --ignore-scripts && npm test
+
       - name: Ensure Android SDK 36
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
