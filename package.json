@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test cloudflare/test/*.test.js",
-    "deploy": "npx --yes wrangler@4.157.0 deploy"
+    "deploy": "npx --yes wrangler@4.157.0 deploy",
+    "build:assets": "node cloudflare/build-assets.mjs"
   },
-  "dependencies": { "jose": "6.1.3" }
+  "dependencies": {
+    "jose": "6.1.3"
+  }
 }

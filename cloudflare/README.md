@@ -21,7 +21,7 @@ may vary). Authorize Cloudflare's GitHub integration and select:
 - Deploy command: `npm run deploy` (pinned Wrangler; runs `wrangler deploy` only)
 - Non-production branch deployments: disable for now
 - If watch paths are offered: `worker.js`, `wrangler.toml`, `package.json`,
-  `package-lock.json`, `cloudflare/**`
+  `package-lock.json`, `cloudflare/**`, `docs/**`
 
 If Connect repository is unavailable, send a screenshot with private details hidden
 so the correct Dashboard path can be identified. Do not create a duplicate Worker
@@ -60,3 +60,23 @@ Do not run Time Travel/restore; this PR does not alter retention settings.
 
 Tests: `npm ci && npm test` (mock D1 plus real local RSA signature verification).
 Bundle check: `npx --yes wrangler@4.157.0 deploy --dry-run` (not a real deployment).
+
+## Frontend assets and routing
+
+The existing frontend is `docs/index.html` (Android download/landing page), not
+an existing web authentication SPA. `cloudflare/build-assets.mjs` copies only
+seven allowlisted public files into ignored `.worker-assets/`. Test reports,
+source code, server configs and credentials are not published. Wrangler's custom
+build generates these assets automatically; the existing Git build/deploy
+commands remain valid. Include `docs/**` if Cloudflare watch paths are configured.
+
+`/`, `/login`, `/signup` (also trailing slash/query variants) serve that existing
+HTML page. These aliases do not implement new web login/signup forms or alter
+Firebase authentication. `<base href="/">` keeps relative images/legal links
+working on deep routes. APK download uses GitHub Releases rather than a missing
+local APK. Other static paths resolve normally; missing assets remain 404.
+
+`run_worker_first = true` ensures `/health`, `/v1` and `/v1/*` are handled by
+Worker API routing, never an HTML fallback. Unknown API routes remain JSON 404,
+invalid Firebase tokens remain 401, and API writes remain disabled. No schema,
+D1 row, Firebase login or Cloudinary upload changes accompany this routing fix.

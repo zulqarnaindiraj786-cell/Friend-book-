@@ -1,10 +1,10 @@
 name: Validate Cloudflare Worker
 on:
   pull_request:
-    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml']
   push:
     branches: [main, 'arena/**']
-    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml']
 permissions:
   contents: read
 jobs:

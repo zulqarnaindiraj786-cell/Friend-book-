@@ -11,3 +11,14 @@ binding = "DB"
 database_name = "friendbook-db"
 database_id = "e1c605ca-a50b-46c6-9deb-56dd1f70d163"
 migrations_dir = "cloudflare/migrations"
+
+# Publish only the allowlisted website files, not docs/testing or source code.
+[build]
+command = "npm run build:assets"
+
+[assets]
+directory = "./.worker-assets"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+not_found_handling = "none"
