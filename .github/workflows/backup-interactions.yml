@@ -1,3 +1,4 @@
+# Recheck owner-replaced token; keep existing data and both D1 gates OFF.
 name: Back up interaction snapshot to D1 staging (switches OFF)
 on:
   push:
