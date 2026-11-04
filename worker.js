@@ -1,3 +1,4 @@
+import { interactions } from './cloudflare/interactions.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const googleKeys = createRemoteJWKSet(new URL(
@@ -34,8 +35,9 @@ export function createWorker(verify = verifyFirebaseToken) {
         try { return await env.ASSETS.fetch(new Request(assetURL, request)); }
         catch { return json({ error: 'Frontend unavailable' }, 503); }
       }
-      if (path !== '/health' && path !== '/v1/me') return json({ error: 'Not found' }, 404);
-      if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
+      const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments)$/.exec(path);
+      if (path !== '/health' && path !== '/v1/me' && !engagement) return json({ error: 'Not found' }, 404);
+      if (!engagement && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health') {
         if (!env.DB) return json({ ok: false }, 503);
         try {
@@ -49,6 +51,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       let uid;
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
+      if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID }, engagement);
       try {
         // UID comes only from a verified Firebase token, never from query/client JSON.
         const profile = await env.DB.prepare(

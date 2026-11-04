@@ -5,6 +5,8 @@ compatibility_date = "2024-01-01"
 
 [vars]
 FIREBASE_PROJECT_ID = "friendbook-17551"
+# Keep disabled until historical imports, permissions and app adapters are verified.
+D1_INTERACTIONS_ENABLED = "false"
 
 [[d1_databases]]
 binding = "DB"
