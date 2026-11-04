@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {initializeTestEnvironment} from '@firebase/rules-unit-testing';
 import {collection,doc,query,where,orderBy,limit,limitToLast,startAfter,getDocs,getDoc,writeBatch,setDoc,increment} from 'firebase/firestore';
-if(!process.env.FIRESTORE_EMULATOR_HOST)throw Error('Refusing to run without local Firestore emulator');
+if(!/^(127\.0\.0\.1|localhost):[0-9]+$/.test(process.env.FIRESTORE_EMULATOR_HOST||''))throw Error('Refusing to run without a loopback Firestore emulator');
 let env,db;
 const id=(n)=>String(n).padStart(3,'0');
 before(async()=>{

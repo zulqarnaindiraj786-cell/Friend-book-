@@ -161,16 +161,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          publish() {
+            local OUTPUT CODE
+            if OUTPUT=$(gh "$@" 2>&1); then
+              printf '%s\n' "$OUTPUT"
+            else
+              CODE=$?
+              while IFS= read -r line; do echo "::error::${line:0:500}"; done <<< "$OUTPUT"
+              return "$CODE"
+            fi
+          }
           VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
           VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
           TAG="v${VER}"
           TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
-            gh release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
+            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
+            publish release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
           else
-            gh release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --target "$GITHUB_SHA" \
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --target "$GITHUB_SHA" \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"
