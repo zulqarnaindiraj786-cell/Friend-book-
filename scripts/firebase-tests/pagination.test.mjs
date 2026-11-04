@@ -7,7 +7,7 @@ if(!process.env.FIRESTORE_EMULATOR_HOST)throw Error('Refusing to run without loc
 let env,db;
 const id=(n)=>String(n).padStart(3,'0');
 before(async()=>{
- env=await initializeTestEnvironment({projectId:'demo-friendbook-pagination',firestore:{rules:fs.readFileSync('../../firebase/firestore.rules','utf8')}});
+ env=await initializeTestEnvironment({projectId:'demo-friendbook-pagination',firestore:{rules:fs.readFileSync(new URL('../../firebase/firestore.rules',import.meta.url),'utf8')}});
  await env.clearFirestore();
  await env.withSecurityRulesDisabled(async ctx=>{
   const store=ctx.firestore(),batch=writeBatch(store);
