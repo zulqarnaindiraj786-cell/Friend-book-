@@ -179,6 +179,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.setAll(rawComments);
         }
         mainRv.setAdapter(commentsAdapter);
+        com.friendbook.social.core.NearEndPaging.attachComments(mainRv,()->commentsAdapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
         root.addView(mainRv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Bottom Comment Composer Bar
@@ -316,6 +317,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         // Latest canonical page stays live; older pages are explicit one-shot reads.
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
             updateCommentPager();
+            if(commentsHandle!=null && commentsHandle.isLoading())return;
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;

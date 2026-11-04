@@ -4,7 +4,7 @@ from pathlib import Path
 JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/social'
 class RemainingPaging(unittest.TestCase):
     def test_remaining_screen_controls_and_cache_adapter(self):
-        for name in ['groups/GroupsActivity.java','social/PageDetailActivity.java','social/PokesActivity.java','settings/ArchiveTrashActivity.java','chat/NewChatActivity.java','friends/BirthdaysActivity.java','friends/FriendsFragment.java','settings/FeedPreferencesActivity.java']:
+        for name in ['groups/GroupsActivity.java','social/PageDetailActivity.java','social/PokesActivity.java','settings/ArchiveTrashActivity.java','chat/NewChatActivity.java','friends/BirthdaysActivity.java','settings/FeedPreferencesActivity.java']:
             source=(JAVA/name).read_text();self.assertIn('PagedLists.attach',source);self.assertIn('pageControls',source)
         source=(JAVA/'core/PagedLists.java').read_text()
         for token in ['new CursorPager(query,size,key','current[0].next()','current[0].close()','controls.removeView(row)','Refresh ']:self.assertIn(token,source)

@@ -94,6 +94,7 @@ public class NotificationsFragment extends Fragment {
         rv.setItemViewCacheSize(20);
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // ⚡ 0.0ms Instant Cached Notifications Hydration!
@@ -164,6 +165,7 @@ public class NotificationsFragment extends Fragment {
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
+            if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
             Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
             if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);

@@ -191,6 +191,7 @@ public class ConversationsActivity extends Activity {
         rv.setItemViewCacheSize(20);
         adapter = new ConvAdapter();
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attach(rv,()->{loadInboxPage(false);});
         inboxMoreButton=Ui.tvBold(this,"Load more chats",13,Ui.BLUE);
         inboxMoreButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
         inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));

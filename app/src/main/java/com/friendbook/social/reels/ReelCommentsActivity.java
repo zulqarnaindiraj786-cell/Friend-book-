@@ -101,6 +101,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         adapter.postAuthorId = author == null ? "" : author;
         adapter.sortMode = Prefs.commentSort(this);
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attachComments(rv,()->adapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Composer + Quick Emoji Strip
@@ -185,6 +186,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         super.onStart();
         commentsHandle = CommentsEngine.watch(collection, reelId, commentsKey, (all, pinnedId) -> {
             updateCommentPager();
+            if(commentsHandle!=null && commentsHandle.isLoading())return;
             rawComments.clear();
             rawComments.addAll(all);
             adapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;

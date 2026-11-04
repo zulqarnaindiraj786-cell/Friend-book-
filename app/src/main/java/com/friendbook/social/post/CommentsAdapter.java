@@ -64,6 +64,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final Host host;
     private final List<Row> rows = new ArrayList<>();
     private View headerView;
+    private RecyclerView attachedList;
     private boolean showEmptyWhenNone = true;
     /** Collection holding the parent counter ("posts" or "reels"), and its document id. */
     public String counterCollection = "posts";
@@ -84,7 +85,19 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         this.showEmptyWhenNone = show;
     }
 
+    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView list){super.onAttachedToRecyclerView(list);attachedList=list;}
+    @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView list){if(attachedList==list)attachedList=null;super.onDetachedFromRecyclerView(list);}
+
     public void setAll(List<Models.Comment> all) {
+        final int oldCount=rows.size();
+        String anchorId=null;int anchorTop=0;
+        androidx.recyclerview.widget.LinearLayoutManager layout=attachedList!=null && attachedList.getLayoutManager() instanceof androidx.recyclerview.widget.LinearLayoutManager
+                ?(androidx.recyclerview.widget.LinearLayoutManager)attachedList.getLayoutManager():null;
+        if(layout!=null){
+            int first=layout.findFirstVisibleItemPosition();int row=first-headerOffset();
+            View anchor=layout.findViewByPosition(first);
+            if(row>=0 && row<rows.size() && anchor!=null){anchorId=rows.get(row).c.id;anchorTop=anchor.getTop()-attachedList.getPaddingTop();}
+        }
         rows.clear();
         if (all == null || all.isEmpty()) {
             notifyDataSetChanged();
@@ -153,6 +166,10 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
         }
         notifyDataSetChanged();
+        // Older chronological pages may prepend; keep the reader on the same comment/pixel.
+        if(layout!=null && anchorId!=null && rows.size()>oldCount){
+            for(int i=0;i<rows.size();i++)if(anchorId.equals(rows.get(i).c.id)){layout.scrollToPositionWithOffset(i+headerOffset(),anchorTop);break;}
+        }
     }
 
     private void appendThread(Models.Comment node, int depth,

@@ -194,6 +194,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         // NestedScrollView ensures 100% of profile posts, reels & photos measure and scroll cleanly!
         NestedScrollView sv = new NestedScrollView(this);
         sv.setFillViewport(true);
+        final com.friendbook.social.core.ScrollPageGate[] pageGates={new com.friendbook.social.core.ScrollPageGate(),new com.friendbook.social.core.ScrollPageGate(),new com.friendbook.social.core.ScrollPageGate()};
+        sv.setOnScrollChangeListener((androidx.core.widget.NestedScrollView.OnScrollChangeListener)(view,x,y,oldX,oldY)->{
+            if(view.getChildCount()==0)return;
+            boolean nearEnd=view.getChildAt(0).getBottom()-(y+view.getHeight())<Ui.dp(this,700);
+            if(activeTab==0 && postsAdapter!=null && pageGates[0].shouldLoad(y-oldY,nearEnd,postsAdapter.getItemCount()))loadMore();
+            else if(activeTab==1 && reelsAdapter!=null && pageGates[1].shouldLoad(y-oldY,nearEnd,reelsAdapter.getItemCount())){if(videoPager!=null)videoPager.next();}
+            else if(activeTab==3 && friendsAdapter!=null && pageGates[2].shouldLoad(y-oldY,nearEnd,friendsAdapter.getItemCount())){if(friendPager!=null)friendPager.next();}
+        });
         LinearLayout body = Ui.col(this);
         body.setClipChildren(false);
 
@@ -833,6 +841,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if(friendPager!=null)friendPager.close();
         if(moreProfileFriends==null){moreProfileFriends=Ui.tvBold(this,"Load 20 more friends",14,Ui.BLUE);friendsBox.addView(moreProfileFriends);}
         friendPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("friends").whereArrayContains("participants",uid),20,"profile-friends:"+uid,(docs,more,busy,error)->{
+            if(busy){moreProfileFriends.setText("Loading…");moreProfileFriends.setEnabled(false);return;}
             ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
@@ -842,7 +851,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void startPostsWatcher() {
         if(postPager!=null) postPager.close();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),15,"profile-posts:"+uid,(docs,more,loading,error)-> {
-            if(isFinishing())return;
+            if(isFinishing() || loading)return;
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
@@ -910,6 +919,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if(videoPager!=null)videoPager.close();
         videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
             if(isFinishing())return;
+            if(loading){if(moreProfileVideos!=null){moreProfileVideos.setText("Loading…");moreProfileVideos.setEnabled(false);}return;}
             List<Models.Reel> list=new ArrayList<>();for(DocumentSnapshot doc:docs)list.add(Models.Reel.fromDoc(doc));
             list.sort((a,b)->Long.compare(b.createdAt,a.createdAt));
             reelsAdapter.reels.clear();reelsAdapter.reels.addAll(list);reelsAdapter.notifyDataSetChanged();

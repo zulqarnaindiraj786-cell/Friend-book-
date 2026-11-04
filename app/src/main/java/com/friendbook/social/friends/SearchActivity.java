@@ -107,6 +107,12 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         morePosts=Ui.tvBold(this,"More post results",14,Ui.BLUE);morePosts.setVisibility(View.GONE);body.addView(morePosts);
         morePosts.setOnClickListener(v->{if(postPages!=null)postPages.next();});
         sv.addView(body);
+        final com.friendbook.social.core.ScrollPageGate searchGate=new com.friendbook.social.core.ScrollPageGate();
+        sv.setOnScrollChangeListener((View.OnScrollChangeListener)(view,x,y,oldX,oldY)->{
+            if(body.getHeight()-(y+sv.getHeight())<Ui.dp(this,650) && searchGate.shouldLoad(y-oldY,true,usersAdapter.getItemCount()+postsAdapter.getItemCount())){
+                if(peopleA!=null)peopleA.next();if(peopleB!=null)peopleB.next();if(postPages!=null)postPages.next();
+            }else if(body.getHeight()-(y+sv.getHeight())>=Ui.dp(this,650))searchGate.shouldLoad(y-oldY,false,1);
+        });
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
 
@@ -209,15 +215,18 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
         boolean same=cap.equals(q);
         peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
+            if(loading)return;
             firstSpelling.clear();for(DocumentSnapshot doc:docs)firstSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
             morePeople.setText(!error.isEmpty()?"Retry people":"More people");
         });
         peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
+            if(loading)return;
             secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
         peopleA.start();if(peopleB!=null)peopleB.start();
         // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.
         postPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING),20,"search-posts:"+q,(docs,more,loading,error)->{
+            if(loading){morePosts.setText("Loading…");morePosts.setEnabled(false);return;}
             List<Models.Post> list=new ArrayList<>();String needle=q.toLowerCase(Locale.ROOT);
             for(DocumentSnapshot doc:docs){Models.Post p=Models.Post.fromDoc(doc);
                 if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;

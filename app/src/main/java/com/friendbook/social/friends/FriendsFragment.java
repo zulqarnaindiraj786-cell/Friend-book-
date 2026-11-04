@@ -21,7 +21,6 @@ import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.WriteBatch;
 
@@ -32,12 +31,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Friends tab: friend requests, suggestions, your friends — all realtime. */
+/** Bounded, cached friends pages. Only the selected section fetches; no whole-list listeners. */
 public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
-    private static final int SEC_REQUESTS = 0, SEC_SUGGESTIONS = 1, SEC_FRIENDS = 2;
+    private static final int SEC_REQUESTS = 0, SEC_SUGGESTIONS = 1, SEC_FRIENDS = 2, SEC_SENT = 3;
 
-    private final TextView[] tabs = new TextView[3];
+    private final TextView[] tabs = new TextView[4];
     private LinearLayout tabRow;
     private TextView empty;
     private UsersAdapter adapter;
@@ -45,12 +44,24 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     private final List<Models.FriendRequest> incoming = new ArrayList<>();
     private final Set<String> dismissedReqIds = new HashSet<>();
-    private final Set<String> outgoing = new HashSet<>();
-    private LinearLayout pageControls;
+    private final Set<String> outgoing = new java.util.LinkedHashSet<>();
     private final List<String> friendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
     private final List<Models.User> suggestions = new ArrayList<>();
-    private ListenerRegistration inReg, outReg, friendsReg, usersReg;
+    private com.friendbook.social.core.CursorPager activePager;
+    private TextView moreButton;
+    private int generation;
+    private String pageActor;
+    private final Set<String> checkingUsers=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
+    private final Map<String,String> sentIds=new HashMap<>();
+    private final Set<String> cancelledRequestIds=new HashSet<>(),removedFriendIds=new HashSet<>(),requestWrites=new HashSet<>();
+    private final android.os.Handler frameHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean renderQueued;
+    private final Runnable renderFrame=()->{renderQueued=false;render();};
+    private void requestRender(){if(!renderQueued){renderQueued=true;frameHandler.postDelayed(renderFrame,16);}}
+    private boolean current(int token,String actor){return token==generation && java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null && !isHidden();}
+    private void closePage(){generation++;if(activePager!=null){activePager.close();activePager=null;}checkingUsers.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
+
 
     @Nullable
     @Override
@@ -63,16 +74,17 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         Ui.pad(title, 14, 12, 14, 4);
         root.addView(title);
 
-        String[] labels = {"Requests", "Suggestions", "All friends"};
+        String[] labels = {"Requests", "Suggestions", "All friends", "Sent"};
         tabRow = Ui.row(a);
         Ui.pad(tabRow, 12, 4, 12, 8);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < tabs.length; i++) {
             final int sec = i;
             TextView t = Ui.tvBold(a, labels[i], 14, Ui.sub(a));
             t.setGravity(Gravity.CENTER);
             t.setBackground(Ui.round(a, Ui.inputBg(a), 18));
             Ui.pad(t, 10, 8, 10, 8);
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1);
+            t.setSingleLine(true);t.setMinWidth(Ui.dp(a,80));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2,-2);
             if (i > 0) p.leftMargin = Ui.dp(a, 8);
             tabRow.addView(t, p);
             tabs[i] = t;
@@ -82,10 +94,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
                 }
                 refreshTabs();
-                render();
+                startSection();
             });
         }
-        root.addView(tabRow);
+        android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(a);
+        tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabRow);root.addView(tabScroll);
 
         empty = Ui.tv(a, "", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
@@ -98,113 +111,87 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         rv.setItemViewCacheSize(20);
         adapter = new UsersAdapter(a, this);
         rv.setAdapter(adapter);
+        com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(activePager!=null)activePager.next();});
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
-        pageControls=Ui.col(a);root.addView(pageControls);
+        moreButton=Ui.tvBold(a,"Load 20 more",14,Ui.BLUE);
+        Ui.pad(moreButton,14,10,14,10);moreButton.setOnClickListener(v->{if(activePager!=null)activePager.next();});root.addView(moreButton);
+        TextView refresh=Ui.tvBold(a,"Refresh",13,Ui.BLUE);Ui.pad(refresh,14,8,14,8);refresh.setOnClickListener(v->startSection());root.addView(refresh);
         refreshTabs();
         return root;
     }
 
     private void refreshTabs() {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < tabs.length; i++) {
             boolean on = i == section;
             tabs[i].setBackground(Ui.round(getActivity(), on ? Ui.BLUE : Ui.inputBg(getActivity()), 18));
             tabs[i].setTextColor(on ? 0xFFFFFFFF : Ui.sub(getActivity()));
         }
     }
 
-    @Override
-    public void onHiddenChanged(boolean hidden) {
+    @Override public void onHiddenChanged(boolean hidden){
         super.onHiddenChanged(hidden);
-        if (!hidden) {
-            com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
+        if(hidden)closePage();else if(adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
+    }
+    @Override public void onStart(){super.onStart();if(!isHidden()){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}}
+    @Override public void onStop(){closePage();super.onStop();}
+
+    private void startSection(){
+        closePage();String me=Fb.uid();if(me==null || getActivity()==null || isHidden())return;
+        if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();}
+        pageActor=me;final int token=generation, selected=section;
+        checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();
+        Query query;
+        if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending");
+        else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
+        else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
+        else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
+        activePager=new com.friendbook.social.core.CursorPager(query,20,"friends-section:"+selected,(docs,more,loading,error)->{
+            if(!current(token,me) || section!=selected)return;
+            moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry this page":more?"Load 20 more":"All loaded");moreButton.setEnabled(!loading && more);
+            if(loading)return;
+            if(selected==SEC_REQUESTS){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
+                if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);ensureUser(req.fromUid);}}
+                tabs[SEC_REQUESTS].setText("Requests");
+            }else if(selected==SEC_SENT){outgoing.clear();sentIds.clear();for(DocumentSnapshot doc:docs){if(cancelledRequestIds.contains(doc.getId()))continue;String other=doc.getString("toUid");if(other!=null){outgoing.add(other);sentIds.put(other,doc.getId());ensureUser(other);}}}
+            else if(selected==SEC_FRIENDS){friendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
+                if(!me.equals(other) && !removedFriendIds.contains(other) && !friendIds.contains(other)){friendIds.add(other);ensureUser(other);}}
+            else{suggestions.clear();for(DocumentSnapshot doc:docs){Models.User user=Models.User.fromDoc(doc);
+                if(me.equals(user.uid) || user.deactivated || "Only me".equalsIgnoreCase(user.lookupPrivacy) || (Fb.me!=null && Fb.me.blocked.contains(user.uid)))continue;
+                suggestions.add(user);userCache.put(user.uid,user);com.friendbook.social.core.FastCache.putUser(user);}
+                checkCandidates(me,token);
+            }
+            render();
+        });render();activePager.start();
+    }
+
+    /** Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships. */
+    private void checkCandidates(String me,int token){
+        List<String> unchecked=new ArrayList<>();for(Models.User u:suggestions)if(!checkedCandidates.contains(u.uid) && !checkingUsers.contains(u.uid) && !failedCandidates.contains(u.uid))unchecked.add(u.uid);
+        for(int offset=0;offset<unchecked.size();offset+=10){
+            final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
+            List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
+            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(20).get();
+            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(20).get();
+            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(20).get();
+            com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
+                if(!current(token,me))return;checkingUsers.removeAll(ids);
+                com.google.firebase.firestore.QuerySnapshot a=(com.google.firebase.firestore.QuerySnapshot)results.get(0),b=(com.google.firebase.firestore.QuerySnapshot)results.get(1),c=(com.google.firebase.firestore.QuerySnapshot)results.get(2);
+                // Saturated legacy duplicate data is not evidence that other candidates have no relationship.
+                if(a.getMetadata().isFromCache() || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || a.size()==20 || b.size()==20 || c.size()==20){failedCandidates.addAll(ids);requestRender();return;}
+                for(DocumentSnapshot doc:a)for(String other:Models.ChatRoom.fromDoc(doc).participants)if(!other.equals(me))candidateFriends.add(other);
+                for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
+                checkedCandidates.addAll(ids);requestRender();
+            }).addOnFailureListener(error->{if(current(token,me)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
         }
     }
 
-    @Override
-    public void onStart() {
-        super.onStart();
-        if (!isHidden()) {
-            com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
-        }
-        String me = Fb.uid();
-        if (me == null) return;
-
-        inReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friend_requests").whereEqualTo("toUid", me),20,"Incoming requests",(snap,err)-> {
-                    incoming.clear();
-                    List<String> allIds = new ArrayList<>();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.FriendRequest r = Models.FriendRequest.fromDoc(d);
-                            if ("pending".equals(r.status) && !dismissedReqIds.contains(r.id)) {
-                                incoming.add(r);
-                                allIds.add(r.id);
-                            }
-                        }
-                    }
-                    incoming.sort((a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    tabs[SEC_REQUESTS].setText(incoming.isEmpty() ? "Requests"
-                            : "Requests (" + incoming.size() + ")");
-                    // resolve sender profiles
-                    for (Models.FriendRequest r : incoming) ensureUser(r.fromUid);
-                    render();
-                });
-
-        outReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friend_requests").whereEqualTo("fromUid", me),20,"Sent requests",(snap,err)-> {
-                    outgoing.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            if ("pending".equals(d.getString("status")))
-                                outgoing.add(d.getString("toUid"));
-                        }
-                    }
-                    render();
-                });
-
-        friendsReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,Fb.db().collection("friends").whereArrayContains("participants", me),20,"Friends",(snap,err)-> {
-                    friendIds.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                if (!p.equals(me)) friendIds.add(p);
-                        }
-                    }
-                    for (String uid : friendIds) ensureUser(uid);
-                    render();
-                });
-
-        usersReg=com.friendbook.social.core.PagedLists.attach(getActivity(),pageControls,
-                Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),20,"People",(snap,err)-> {
-                    suggestions.clear();
-                    String me2 = Fb.uid();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.User u = Models.User.fromDoc(d);
-                            if (u.uid.equals(me2)) continue;
-                            if (friendIds.contains(u.uid)) continue;
-                            if (Fb.me != null && Fb.me.blocked.contains(u.uid)) continue;
-                            if (u.followers != null && u.followers.contains(me2)) { /* still suggest */ }
-                            suggestions.add(u);
-                            userCache.put(u.uid, u);
-                        }
-                    }
-                    render();
-                });
-    }
-
-    @Override
-    public void onStop() {
-        super.onStop();
-        if (inReg != null) inReg.remove();
-        if (outReg != null) outReg.remove();
-        if (friendsReg != null) friendsReg.remove();
-        if (usersReg != null) usersReg.remove();
-    }
-
-    private void ensureUser(String uid) {
-        if (uid == null || userCache.containsKey(uid)) return;
-        Fb.getUser(uid).addOnSuccessListener(u -> {
-            if (u != null) { userCache.put(uid, u); render(); }
-        });
+    private void ensureUser(String uid){
+        if(uid==null || userCache.containsKey(uid) || checkingUsers.contains(uid))return;
+        Models.User cached=com.friendbook.social.core.FastCache.getUser(uid);if(cached!=null){userCache.put(uid,cached);return;}
+        final int token=generation;final String actor=Fb.uid();checkingUsers.add(uid);
+        Fb.getUser(uid).addOnSuccessListener(user->{if(!current(token,actor))return;checkingUsers.remove(uid);
+            if(user!=null){userCache.put(uid,user);com.friendbook.social.core.FastCache.putUser(user);requestRender();}
+        }).addOnFailureListener(error->{if(current(token,actor))checkingUsers.remove(uid);});
     }
 
     private void render() {
@@ -233,22 +220,25 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         } else if (section == SEC_SUGGESTIONS) {
             empty.setText("No more suggestions right now.");
             for (Models.User u : suggestions) {
-                if (outgoing.contains(u.uid)) continue;
+                if(candidateFriends.contains(u.uid) || candidateIncoming.contains(u.uid) || candidateOutgoing.contains(u.uid))continue;
                 boolean requestedByThem = false;
                 for (Models.FriendRequest r : incoming) if (r.fromUid.equals(u.uid)) { requestedByThem = true; break; }
                 if (requestedByThem) continue;
                 UsersAdapter.Row row = new UsersAdapter.Row();
                 row.user = u;
-                row.subtitle = u.bio != null && !u.bio.isEmpty() ? u.bio : "New on friendbook";
-                row.primaryLabel = "＋ Add friend";
+                row.subtitle = !checkedCandidates.contains(u.uid)?(failedCandidates.contains(u.uid)?"Connection check failed. Tap Refresh to retry.":"Checking connection…"):(u.bio != null && !u.bio.isEmpty() ? u.bio : "New on friendbook");
+                row.primaryLabel = com.friendbook.social.core.FriendCandidatePages.canOfferRequest(checkedCandidates.contains(u.uid),candidateFriends.contains(u.uid),candidateIncoming.contains(u.uid),candidateOutgoing.contains(u.uid)) && !requestWrites.contains(u.uid)?"＋ Add friend":null;
+                if(requestWrites.contains(u.uid))row.subtitle="Sending request…";
                 rows.add(row);
             }
-            // show outgoing requests as "Requested"
+        } else if(section==SEC_SENT){
+            empty.setText("No pending sent requests.");
             for (String uid : outgoing) {
                 Models.User u = userCache.get(uid);
-                if (u == null || friendIds.contains(uid)) continue;
+                if(u==null){u=new Models.User();u.uid=uid;u.displayName="Loading…";}
                 UsersAdapter.Row row = new UsersAdapter.Row();
                 row.user = u;
+                row.requestId=sentIds.get(uid);
                 row.subtitle = "Request sent";
                 row.primaryLabel = "✓ Requested";
                 rows.add(row);
@@ -261,7 +251,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 UsersAdapter.Row row = new UsersAdapter.Row();
                 row.user = u;
                 row.subtitle = u.bio != null && !u.bio.isEmpty() ? u.bio
-                        : (u.isOnline ? "Active now" : "Friend");
+                        : "Friend";
                 row.primaryLabel = "💬 Message";
                 row.secondaryLabel = "Unfriend";
                 rows.add(row);
@@ -279,11 +269,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         if (me == null) return;
         if ("Confirm".equals(r.primaryLabel)) {
             acceptRequest(r);
-        } else if (r.primaryLabel.contains("Add friend")) {
+        } else if (r.primaryLabel!=null && r.primaryLabel.contains("Add friend")) {
             sendRequest(r.user);
-        } else if (r.primaryLabel.contains("Requested")) {
-            cancelRequest(r.user);
-        } else if (r.primaryLabel.contains("Message")) {
+        } else if (r.primaryLabel!=null && r.primaryLabel.contains("Requested")) {
+            cancelRequest(r);
+        } else if (r.primaryLabel!=null && r.primaryLabel.contains("Message")) {
             Intent i = new Intent(getActivity(), ChatActivity.class);
             i.putExtra("uid", r.user.uid);
             i.putExtra("name", r.user.displayName);
@@ -294,10 +284,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void removeRequestOptimistic(String reqId) {
         if (reqId == null) return;
         dismissedReqIds.add(reqId);
+        if(section==SEC_REQUESTS && activePager!=null)activePager.forget(reqId);
         incoming.removeIf(req -> reqId.equals(req.id));
         if (tabs[SEC_REQUESTS] != null) {
-            tabs[SEC_REQUESTS].setText(incoming.isEmpty() ? "Requests"
-                    : "Requests (" + incoming.size() + ")");
+            tabs[SEC_REQUESTS].setText("Requests");
         }
         com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();
         render();
@@ -309,7 +299,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         if ("Delete".equals(r.secondaryLabel) && r.requestId != null) {
             String rid = r.requestId;
             removeRequestOptimistic(rid);
-            Fb.db().collection("friend_requests").document(rid).delete();
+            final String actor=Fb.uid();
+            Fb.db().collection("friend_requests").document(rid).delete().addOnFailureListener(error->{
+                if(java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);Ui.toast(getActivity(),"Couldn't remove request. Try again.");startSection();}
+            });
             Ui.toast(getActivity(), "Request removed");
         } else if ("Unfriend".equals(r.secondaryLabel)) {
             unfriend(r.user);
@@ -317,38 +310,26 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     }
 
     private void sendRequest(Models.User target) {
-        String me = Fb.uid();
-        if (me == null) return;
-        // guard duplicates
-        Fb.db().collection("friend_requests")
-                .whereEqualTo("fromUid", me).whereEqualTo("toUid", target.uid)
-                .limit(1).get().addOnSuccessListener(snap -> {
-                    if (snap != null && !snap.isEmpty()) {
-                        Ui.toast(getActivity(), "Request already sent");
-                        return;
-                    }
-                    Map<String, Object> m = Fb.map(
-                            "fromUid", me,
-                            "toUid", target.uid,
-                            "fromUserName", Fb.myName(),
-                            "fromUserPhotoUrl", Fb.myPhoto(),
-                            "status", "pending",
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("friend_requests").add(m)
-                            .addOnSuccessListener(ref -> {
-                                Notify.send(target.uid, "friend_request", "sent you a friend request");
-                                Ui.toast(getActivity(), "Friend request sent ✓");
-                            });
-                });
+        String me=Fb.uid();if(me==null || !requestWrites.add(target.uid))return;render();
+        Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("toUid",target.uid).whereEqualTo("status","pending").limit(1).get().addOnSuccessListener(page->{
+            if(!me.equals(Fb.uid()) || getActivity()==null)return;
+            if(page.getMetadata().isFromCache()){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Reconnect to verify this request. Nothing changed.");return;}
+            if(!page.isEmpty()){requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Ui.toast(getActivity(),"Request already sent");return;}
+            Fb.db().collection("friend_requests").add(Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",FieldValue.serverTimestamp()))
+                .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                    requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
+                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}});
+        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't check request. Try again.");}});
     }
 
-    private void cancelRequest(Models.User target) {
-        String me = Fb.uid();
-        if (me == null) return;
-        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
-                .whereEqualTo("fromUid",me).whereEqualTo("toUid",target.uid))
-                .addOnSuccessListener(v->Ui.toast(getActivity(),"Request cancelled"))
-                .addOnFailureListener(e->Ui.toast(getActivity(),"Couldn't cancel. Please retry."));
+    private void cancelRequest(UsersAdapter.Row row) {
+        String me=Fb.uid();if(me==null || row.requestId==null)return;
+        final String requestId=row.requestId,other=row.user.uid;
+        Fb.db().collection("friend_requests").document(requestId).delete().addOnSuccessListener(v->{
+            if(!me.equals(Fb.uid()) || getActivity()==null)return;
+            cancelledRequestIds.add(requestId);if(section==SEC_SENT && activePager!=null)activePager.forget(requestId);outgoing.remove(other);sentIds.remove(other);candidateOutgoing.remove(other);render();
+            Ui.toast(getActivity(),"Request cancelled");
+        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't cancel. Try again.");});
     }
 
     private void acceptRequest(UsersAdapter.Row r) {
@@ -358,6 +339,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         String from = r.user.uid;
         // ⚡ 0.0ms Optimistic UI removal + badge reset to 0!
         removeRequestOptimistic(rid);
+        removedFriendIds.remove(from);candidateFriends.add(from);
         if (!friendIds.contains(from)) friendIds.add(from);
 
         WriteBatch batch = Fb.db().batch();
@@ -369,31 +351,26 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
         batch.commit().addOnSuccessListener(x -> {
+            if(!me.equals(Fb.uid()) || getActivity()==null)return;
             Notify.send(from, "friend_accept", "accepted your friend request");
             Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
-        });
+        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
     }
 
-    private void unfriend(Models.User u) {
-        Ui.confirm(getActivity(), "Unfriend " + u.displayName + "?", "You'll have to send a new request to reconnect.",
-                "Unfriend", () -> {
-                    String me = Fb.uid();
-                    if (me == null) return;
-                    Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,u.uid),java.util.Arrays.asList(u.uid,me)))
-                            .limit(1).get().addOnSuccessListener(snap -> {
-                                if (snap == null) return;
-                                for (DocumentSnapshot d : snap) {
-                                    List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                                    if (parts.contains(u.uid)) {
-                                        d.getReference().delete();
-                                        Fb.db().collection("users").document(me)
-                                                .update("friendsCount", FieldValue.increment(-1));
-                                        Fb.db().collection("users").document(u.uid)
-                                                .update("friendsCount", FieldValue.increment(-1));
-                                        Ui.toast(getActivity(), "Unfriended");
-                                    }
-                                }
-                            });
-                });
+    private void unfriend(Models.User user) {
+        Ui.confirm(getActivity(),"Unfriend "+user.displayName+"?","You'll have to send a new request to reconnect.","Unfriend",()->{
+            String me=Fb.uid();if(me==null)return;
+            Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,user.uid),java.util.Arrays.asList(user.uid,me))).limit(20).get().addOnSuccessListener(page->{
+                if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                if(page.getMetadata().isFromCache() || page.size()==20){Ui.toast(getActivity(),"Couldn't verify all relationship records. Nothing changed; retry online.");return;}
+                if(page.isEmpty()){removedFriendIds.add(user.uid);friendIds.remove(user.uid);render();return;}
+                WriteBatch batch=Fb.db().batch();for(DocumentSnapshot doc:page)batch.delete(doc.getReference());
+                batch.update(Fb.db().collection("users").document(me),"friendsCount",FieldValue.increment(-page.size()));
+                batch.update(Fb.db().collection("users").document(user.uid),"friendsCount",FieldValue.increment(-page.size()));
+                batch.commit().addOnSuccessListener(v->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                    removedFriendIds.add(user.uid);friendIds.remove(user.uid);candidateFriends.remove(user.uid);render();Ui.toast(getActivity(),"Unfriended");
+                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't unfriend. Try again.");});
+            }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't check relationship. Try again.");});
+        });
     }
 }

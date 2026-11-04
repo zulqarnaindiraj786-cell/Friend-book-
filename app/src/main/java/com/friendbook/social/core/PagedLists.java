@@ -31,7 +31,7 @@ public final class PagedLists {
                 more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load "+size+" more":"All loaded");
                 more.setEnabled(!busy && hasMore);refresh.setEnabled(!busy);
                 // An empty in-flight cache isn't an authoritative empty result.
-                if((!busy || !docs.isEmpty()) && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
+                if(!busy && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
                 if(!error.isEmpty())Ui.toast(activity,error);
             });current[0].start();
         };
