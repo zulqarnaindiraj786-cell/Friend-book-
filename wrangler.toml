@@ -1,3 +1,4 @@
+# Recheck Git-connected deployment after outage; both D1 gates remain OFF.
 # Git-connected build trigger; no runtime or database changes.
 name = "rough-firefly-dd7b"
 main = "worker.js"
