@@ -21,3 +21,9 @@ supabase/.test-build/
 
 # Python regression test cache
 __pycache__/
+
+# Local Cloudflare authorization/build artifacts (never commit secrets).
+.wrangler/
+.dev.vars
+.env
+.env.*

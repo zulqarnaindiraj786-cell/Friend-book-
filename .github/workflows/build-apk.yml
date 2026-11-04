@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
+    # Worker-only changes must not rebuild/re-upload the existing Android release.
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
 
 permissions:
   contents: write
