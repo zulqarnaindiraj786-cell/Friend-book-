@@ -180,7 +180,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
-        restartPostsListener();
+        // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
+        loadingPosts=false;restartPostsListener();
         loadPymk();
         loadNotesUsers();
         if (scrollTop && rv != null) rv.scrollToPosition(0);

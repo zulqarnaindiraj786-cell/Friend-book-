@@ -12,12 +12,15 @@ class ScrollLoadingUx(unittest.TestCase):
         self.assertIn('if(loading){requestRender();return;}',code)
         self.assertNotIn('root.addView(refresh)',code)
         self.assertNotIn('moreButton',code)
+        self.assertNotIn('HorizontalScrollView',code)
+        self.assertIn('LayoutParams(0,-2,1)',code)
     def test_home_has_no_sticky_refresh_or_fake_spinner_timer(self):
         code=(JAVA/'main/HomeFragment.java').read_text()
         self.assertNotIn('freshPill.setVisibility(View.VISIBLE)',code)
         self.assertNotIn('swipe.postDelayed',code)
         self.assertIn('if(swipe!=null && !loadingPosts)swipe.setRefreshing(false)',code)
         self.assertIn('rv.post(()->',code)
+        self.assertIn('loadingPosts=false;restartPostsListener();',code)
     def test_loader_is_feed_footer_not_manual_paging(self):
         code=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('fh.spinner.setVisibility(loading?',code)

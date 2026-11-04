@@ -84,13 +84,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         Ui.pad(tabRow, 12, 4, 12, 8);
         for (int i = 0; i < tabs.length; i++) {
             final int sec = i;
-            TextView t = Ui.tvBold(a, labels[i], 14, Ui.sub(a));
+            TextView t = Ui.tvBold(a, labels[i], 12, Ui.sub(a));
             t.setGravity(Gravity.CENTER);
             t.setBackground(Ui.round(a, Ui.inputBg(a), 18));
-            Ui.pad(t, 10, 8, 10, 8);
-            t.setSingleLine(true);t.setMinWidth(Ui.dp(a,80));
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2,-2);
-            if (i > 0) p.leftMargin = Ui.dp(a, 8);
+            Ui.pad(t, 4, 8, 4, 8);
+            t.setMaxLines(2);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,-2,1);
+            if (i > 0) p.leftMargin = Ui.dp(a, 4);
             tabRow.addView(t, p);
             tabs[i] = t;
             t.setOnClickListener(v -> {
@@ -102,8 +102,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 startSection();
             });
         }
-        android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(a);
-        tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabRow);root.addView(tabScroll);
+        root.addView(tabRow);
 
         empty = Ui.tv(a, "", 14, Ui.sub(a));
         empty.setGravity(Gravity.CENTER);
