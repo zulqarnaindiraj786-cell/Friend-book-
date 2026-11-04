@@ -102,6 +102,10 @@ jobs:
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Surface bounded unit-test failure details
+        if: steps.rel.outputs.exit != '0'
+        run: python3 scripts/ci/report_android_failure.py
+
       - name: Surface compiler errors as annotations
         if: steps.rel.outputs.exit != '0'
         run: |
