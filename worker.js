@@ -35,7 +35,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         try { return await env.ASSETS.fetch(new Request(assetURL, request)); }
         catch { return json({ error: 'Frontend unavailable' }, 503); }
       }
-      const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments)$/.exec(path);
+      const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
       if (path !== '/health' && path !== '/v1/me' && !engagement) return json({ error: 'Not found' }, 404);
       if (!engagement && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health') {

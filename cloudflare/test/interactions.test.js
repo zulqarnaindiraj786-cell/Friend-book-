@@ -6,12 +6,13 @@ import { interactions } from '../interactions.js';
 import { authorizePost } from '../firebase-post-access.js';
 import { createWorker } from '../../worker.js';
 const identity = { uid: 'user1', project: 'friendbook-17551', token: 'test' };
-function fixture() {
+export function fixture() {
   const sql = new DatabaseSync(':memory:');
   sql.exec('PRAGMA foreign_keys=ON');
   sql.exec(readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0004_additive_comment_details.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");
-  const DB = { withSession: () => DB, prepare(query) {
+  const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);
     return { bind: (...args) => ({ first: async () => stmt.get(...args) || null,
       all: async () => ({ results: stmt.all(...args) }), run: async () => stmt.run(...args) }) };
@@ -103,4 +104,33 @@ test('live Firebase authorization enforces privacy, bans, blocks, archives and e
     assert.equal(await authorizePost(identity, 'posts', 'p1', fetcher), expected, privacy + JSON.stringify(extra));
   }
   await assert.rejects(authorizePost(identity, 'posts', 'p1', async () => new Response('', { status: 403 })));
+});
+test('media, edits, pins, comment reactions and soft removal stay authorized',async t=>{
+ const f=fixture();t.after(f.close);
+ const media={id:'media1',text:'',mediaUrl:'https://res.cloudinary.com/demo/image/upload/x.jpg',mentions:[]};
+ assert.equal((await call(f.env,'comments','POST',media)).status,200);
+ assert.equal((await call(f.env,'comments','POST',{...media,id:'bad',mediaUrl:'http://example.invalid/x'})).status,400);
+ const owner=async(_a,_b,_c,_d,ctx)=>{ctx.owner='user1';return true;};
+ assert.equal((await call(f.env,'comments','PUT',{op:'edit',id:'media1',text:'edited',mentions:[]})).status,200);
+ assert.equal((await call(f.env,'comments','PUT',{op:'edit',id:'media1',text:'stolen'}, {identity:{...identity,uid:'other'}})).status,403);
+ assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true})).status,403);
+ assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true},{authorize:owner})).status,200);
+ await call(f.env,'comments','PUT',{op:'react',id:'media1',type:'love'});
+ const page=await(await call(f.env,'comments')).json();
+ assert.equal(page.pinned,'media1');assert.equal(page.comments[0].likes,1);assert.equal(page.comments[0].edited,true);
+ assert.deepEqual(page.comments[0].reactions,{user1:'love'});
+ const otherPage=await(await call(f.env,'comments','GET',undefined,{identity:{...identity,uid:'other'}})).json();
+ assert.deepEqual(otherPage.comments[0].reactions,{});
+ assert.equal((await call(f.env,'comments','PUT',{op:'remove',id:'media1'},{identity:{...identity,uid:'other'}})).status,403);
+ await call(f.env,'comments','PUT',{op:'remove',id:'media1'});
+ const removed=await(await call(f.env,'comments')).json();assert.equal(removed.comments.length,0);assert.equal(removed.pinned,'');
+ assert.equal(f.sql.prepare('SELECT text FROM friendbook_cf_comments').get().text,'edited');
+ assert.equal((await call(f.env,'comments','POST',media)).status,409);
+});
+test('reactor pages are bounded to thirty and scoped to resource/comment',async t=>{
+ const f=fixture();t.after(f.close);
+ const insert=f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)');
+ for(let i=0;i<31;i++)insert.run('posts/p1','u'+String(i).padStart(3,'0'),'like',1);
+ const page=await(await call(f.env,'reactors')).json();assert.equal(page.reactors.length,30);
+ const next=await(await call(f.env,'reactors','GET',undefined,{query:'?after='+page.next})).json();assert.equal(next.reactors.length,1);
 });

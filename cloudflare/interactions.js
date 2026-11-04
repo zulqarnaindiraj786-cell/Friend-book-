@@ -1,3 +1,4 @@
+import { commentsAPI, reactorsAPI } from './comment-api.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -30,14 +31,14 @@ export async function interactions(request, env, identity, match, authorize = au
   // BOTH a deployment gate and independently verified resource migration are required.
   if (env.D1_INTERACTIONS_ENABLED !== 'true') return json({ error: 'D1 interactions not enabled' }, 503);
   const [, collection, encodedId, kind] = match;
-  if (!(kind === 'reactions' ? ['GET', 'PUT'] : ['GET', 'POST']).includes(request.method)) return json({ error: 'Method not allowed' }, 405);
+  if (!(kind === 'reactions' ? ['GET', 'PUT'] : kind === 'reactors' ? ['GET'] : ['GET', 'POST','PUT']).includes(request.method)) return json({ error: 'Method not allowed' }, 405);
   let id; try { id = identifier(encodedId); } catch { return json({ error: 'Invalid resource' }, 400); }
-  let db;
+  let db;const context={};
   try {
     db = env.DB.withSession('first-primary');
     const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(`${collection}/${id}`).first();
     if (ready?.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
-    if (!await authorize(identity, collection, id)) return json({ error: 'Forbidden' }, 403);
+    if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }
   const resource = `${collection}/${id}`;
   let data;
@@ -45,6 +46,8 @@ export async function interactions(request, env, identity, match, authorize = au
     try { data = await body(request); } catch { return json({ error: 'Invalid JSON body' }, 400); }
   }
   try {
+    if (kind === 'reactors') return await reactorsAPI(request,db,resource);
+    if (kind === 'comments') return await commentsAPI(request,db,identity,resource,data,context);
     if (kind === 'reactions') {
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
@@ -58,32 +61,5 @@ export async function interactions(request, env, identity, match, authorize = au
         WHERE s.resource=? AND s.total>0 ORDER BY s.type`).bind(identity.uid, resource).all();
       return json({ types: summary.results });
     }
-    if (request.method === 'POST') {
-      if (Object.keys(data).some(k => !['id', 'text', 'parentId'].includes(k)) ||
-          !/^[a-zA-Z0-9_-]{1,128}$/.test(data.id || '') || typeof data.text !== 'string' || !data.text.trim() || data.text.length > 5000 ||
-          (data.parentId != null && !/^[a-zA-Z0-9_-]{1,128}$/.test(data.parentId))) return json({ error: 'Invalid comment' }, 400);
-      const parent = data.parentId || null;
-      if (parent && !await db.prepare('SELECT id FROM friendbook_cf_comments WHERE resource=? AND id=?').bind(resource, parent).first()) return json({ error: 'Parent not found' }, 400);
-      // Immutable client ID makes duplicate delivery safe; conflicting payloads are rejected.
-      await db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
-        VALUES (?,?,?,?,?,?) ON CONFLICT(resource,id) DO NOTHING`).bind(resource, data.id, identity.uid, data.text, parent, Date.now()).run();
-      const saved = await db.prepare('SELECT * FROM friendbook_cf_comments WHERE resource=? AND id=?').bind(resource, data.id).first();
-      if (saved?.uid !== identity.uid || saved.text !== data.text || saved.parent_id !== parent) return json({ error: 'Comment ID conflict' }, 409);
-      return json({ comment: saved });
-    }
-    let before = [Number.MAX_SAFE_INTEGER, ''];
-    const cursor = new URL(request.url).searchParams.get('before');
-    if (cursor !== null) {
-      try {
-        if (cursor.length > 512) throw Error();
-        before = JSON.parse(atob(cursor));
-        if (!Array.isArray(before) || before.length !== 2 || !Number.isSafeInteger(before[0]) || before[0] < 0 || !/^[a-zA-Z0-9_-]{1,128}$/.test(before[1])) throw Error();
-      } catch { return json({ error: 'Invalid cursor' }, 400); }
-    }
-    const page = await db.prepare(`SELECT * FROM friendbook_cf_comments WHERE resource=?
-      AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC,id DESC LIMIT 50`)
-      .bind(resource, before[0], before[0], before[1]).all();
-    const last = page.results.at(-1);
-    return json({ comments: page.results, next: page.results.length === 50 ? btoa(JSON.stringify([last.created_at, last.id])) : null });
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }
 }

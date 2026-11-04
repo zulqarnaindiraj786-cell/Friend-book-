@@ -1,6 +1,6 @@
 // Live source authorization until a reviewed D1 ACL synchronization exists.
 // Never trust an author/visibility/UID supplied by an Android request.
-export async function authorizePost({ project, token, uid }, collection, id, fetcher = fetch) {
+export async function authorizePost({ project, token, uid }, collection, id, fetcher = fetch, context) {
   const root = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(project)}/databases/(default)/documents`;
   const headers = { Authorization: `Bearer ${token}` };
   async function fields(path) {
@@ -15,6 +15,7 @@ export async function authorizePost({ project, token, uid }, collection, id, fet
   if (!owner || post.archived?.booleanValue || post.trashedAt?.integerValue > 0 || string(post, 'groupId')) return false;
   const me = await fields(`users/${encodeURIComponent(uid)}`);
   if (me.banned?.booleanValue || me.deactivated?.booleanValue) return false;
+  if(context)Object.assign(context,{owner,name:string(me,'displayName'),photo:string(me,'photoUrl'),moderator:!!(me.isAdmin?.booleanValue||me.isModerator?.booleanValue)});
   if (owner === uid) return true;
   const author = await fields(`users/${encodeURIComponent(owner)}`);
   if (author.banned?.booleanValue || author.deactivated?.booleanValue || list(me, 'blocked').includes(owner) || list(author, 'blocked').includes(uid)) return false;
