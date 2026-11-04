@@ -850,7 +850,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void startPostsWatcher() {
         if(postPager!=null) postPager.close();
-        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),15,"profile-posts:"+uid,(docs,more,loading,error)-> {
+        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
                     allLoadedPosts.clear();
                     if (docs != null) {

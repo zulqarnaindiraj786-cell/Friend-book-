@@ -487,6 +487,21 @@ public class SettingsActivity extends Activity {
                 "Your account stays saved for quick 1-tap login unless you remove it.", "Log out",
                 this::performLogout));
 
+        // Attach settings in local12-row pages; no artificial network calls or timed delay.
+        List<View> settingsRows=new ArrayList<>();for(int i=0;i<body.getChildCount();i++)settingsRows.add(body.getChildAt(i));body.removeAllViews();
+        android.widget.ProgressBar nextSettings=new android.widget.ProgressBar(this);nextSettings.setVisibility(View.GONE);
+        nextSettings.setContentDescription("Loading next settings page");
+        final int[] attached={0};final boolean[] attaching={false};
+        Runnable appendSettings=()->{
+            body.removeView(nextSettings);int end=Math.min(attached[0]+12,settingsRows.size());
+            while(attached[0]<end)body.addView(settingsRows.get(attached[0]++));
+            if(attached[0]<settingsRows.size())body.addView(nextSettings,new LinearLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26)));
+            nextSettings.setVisibility(View.GONE);attaching[0]=false;
+        };appendSettings.run();
+        sv.setOnScrollChangeListener((View.OnScrollChangeListener)(v,x,y,oldX,oldY)->{
+            if(y<=oldY || attaching[0] || attached[0]>=settingsRows.size() || y+sv.getHeight()<body.getHeight()-Ui.dp(this,180))return;
+            attaching[0]=true;nextSettings.setVisibility(View.VISIBLE);body.postOnAnimation(appendSettings);
+        });
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
@@ -495,6 +510,9 @@ public class SettingsActivity extends Activity {
         searchIn.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) { }
             @Override public void onTextChanged(CharSequence s, int st, int b2, int c) {
+                if(s!=null && s.length()>0){
+                    body.removeView(nextSettings);while(attached[0]<settingsRows.size())body.addView(settingsRows.get(attached[0]++));
+                }
                 filterSettings(s == null ? "" : s.toString());
             }
             @Override public void afterTextChanged(Editable s) { }

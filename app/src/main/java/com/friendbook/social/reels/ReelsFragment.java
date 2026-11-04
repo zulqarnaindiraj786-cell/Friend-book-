@@ -1552,8 +1552,7 @@ public class ReelsFragment extends Fragment {
                                 ? targetUrl
                                 : ReelVideoCache.optimizeStreamUrl(ctx, targetUrl);
                         mp.setDataSource(ctx, Uri.parse(fastUrl));
-                        // Cache in background so next loop / revisit plays from SSD!
-                        ReelVideoCache.prefetchSingle(ctx, targetUrl);
+                        // One stream only: a parallel full download competes with playback on mobile data.
                     }
                     mp.prepareAsync();
                 } catch (Throwable t) {

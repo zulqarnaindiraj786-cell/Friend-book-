@@ -50,7 +50,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         final DocumentSnapshot cursor,end;final boolean more;final Set<String> masked;
         HistoryResume(DocumentSnapshot c,DocumentSnapshot e,boolean m,Set<String> ids){cursor=c;end=e;more=m;masked=new HashSet<>(ids);}
     }
-    private boolean historyLoading, historyMore=true;
+    private boolean historyLoading, historyMore=true,historyFailed;
     private int historyGeneration;
     private TextView historyButton;
     private android.widget.ProgressBar historySpinner;
@@ -267,12 +267,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
         historyButton=Ui.tvBold(this,"View older messages",13,Ui.BLUE);
         historyButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
-        historyButton.setOnClickListener(v -> loadOlderMessages());
+        historyButton.setOnClickListener(v -> {historyFailed=false;loadOlderMessages();});
         historyButton.setVisibility(View.GONE);root.addView(historyButton);
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView list,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)list.getLayoutManager();
-                if(dy<0 && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
+                if(dy<0 && !historyFailed && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
             }
         });
         android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(rv,new android.widget.FrameLayout.LayoutParams(-1,-1));
@@ -564,7 +564,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(10)
+                .limitToLast(40)
                 .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     boolean bridged=false;
@@ -576,7 +576,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             historyRanges.push(new HistoryResume(historyCursor,historyEnd,historyMore,maskedHistoryIds));
                             historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=new HashSet<>(known);bridged=true;
                         }
-                        if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==10;}
+                        if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==40;}
                         lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
                     }
                     if(snap.getDocumentChanges(com.google.firebase.firestore.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
@@ -643,12 +643,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(10).get(com.google.firebase.firestore.Source.SERVER)
+        older.limit(40).get(com.google.firebase.firestore.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
-                    historyLoading=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==40;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
-                    if(historyEnd!=null && page.size()<10){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
+                    if(historyEnd!=null && page.size()<40){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
                     LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
                     int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
                     int top=anchor==null?0:anchor.getTop();
@@ -664,7 +664,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     // History does not trigger sounds or bulk seen/delivered writes.
                 }).addOnFailureListener(error -> {
                     if(generation!=historyGeneration) return;
-                    historyLoading=false;historySpinner.setVisibility(View.GONE);historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
+                    historyLoading=false;historyFailed=true;historySpinner.setVisibility(View.GONE);historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
                 });
     }
 

@@ -10,7 +10,7 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('.addSnapshotListener',source)
     def test_open_chat_window_and_lifecycle(self):
         source=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['.limitToLast(10)','Query.Direction.DESCENDING).startAfter(historyCursor)',
+        for token in ['.limitToLast(40)','Query.Direction.DESCENDING).startAfter(historyCursor)',
                       'chatGeneration!=historyGeneration','generation!=historyGeneration']:
             self.assertIn(token,source)
     def test_reel_fallback_cannot_prepare_offscreen(self):

@@ -107,7 +107,13 @@ public final class ReelVideoCache {
             String rest = u.substring(idx + "/video/upload/".length());
             // Avoid double-injecting if transformations are already present
             if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
-                boolean eco = c != null && (Prefs.dataSaver(c) || FastCache.isSlow2G(c));
+                boolean cellular=false;
+                if(c!=null)try{
+                    android.net.ConnectivityManager manager=(android.net.ConnectivityManager)c.getSystemService(Context.CONNECTIVITY_SERVICE);
+                    android.net.NetworkCapabilities caps=manager==null?null:manager.getNetworkCapabilities(manager.getActiveNetwork());
+                    cellular=caps!=null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
+                }catch(SecurityException ignored){}
+                boolean eco = c != null && (cellular || Prefs.dataSaver(c) || FastCache.isSlow2G(c));
                 String transform = eco
                         ? "f_mp4,vc_h264,ac_aac,q_auto:eco,w_480,c_limit/"
                         : "f_mp4,vc_h264,ac_aac,q_auto:good,w_720,c_limit/";

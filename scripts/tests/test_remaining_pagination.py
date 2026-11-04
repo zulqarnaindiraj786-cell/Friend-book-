@@ -19,9 +19,9 @@ class RemainingPaging(unittest.TestCase):
         source=(JAVA/'core/FriendPicker.java').read_text()
         self.assertIn('new LinkedHashMap<>(initial)',source);self.assertIn('if(on)selected.put(uid,user.displayName);else selected.remove(uid)',source)
         self.assertIn('reg.remove()',source);self.assertIn('request!=generation[0]',source)
-    def test_story_links_and_next_twenty(self):
+    def test_story_links_and_next_ten(self):
         source=(JAVA/'story/StoryViewerActivity.java').read_text()
-        for token in ['document(specificStoryId).get()','20,"story-viewer:"','advanceAfterPage=true','storyPages.next()','storyPages.close()','storyPages.forget(s.id)']:self.assertIn(token,source)
+        for token in ['document(specificStoryId).get()','10,"story-viewer:"','advanceAfterPage=true','storyPages.next()','storyPages.close()','storyPages.forget(s.id)']:self.assertIn(token,source)
     def test_no_migration_executed_by_application(self):
         # No runtime admin sweep or silent removal of old user data accompanies this rollout.
         for p in JAVA.rglob('*.java'):

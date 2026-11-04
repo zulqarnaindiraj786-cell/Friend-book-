@@ -159,7 +159,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
-        activePager=new com.friendbook.social.core.CursorPager(query,20,"friends-section:"+selected,(docs,more,loading,error)->{
+        activePager=new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20,"friends-section:"+selected,(docs,more,loading,error)->{
             if(!current(token,me) || section!=selected)return;
             pageMore=more;pageLoading=loading;pageError=error;
             if(loading){requestRender();return;}
@@ -173,7 +173,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             render();
         });render();activePager.start();
         if(selected==SEC_REQUESTS){
-            suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),20,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
+            suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
                 if(!current(token,me) || section!=SEC_REQUESTS)return;
                 suggestionMore=more;suggestionLoading=loading;suggestionError=error;
                 if(loading){requestRender();return;}consumeSuggestions(docs,me,token);render();

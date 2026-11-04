@@ -21,7 +21,7 @@ before(async()=>{
   batch.set(doc(store,'friends','reverse'),{participants:['person049','viewer']});
   batch.set(doc(store,'posts','post'),{authorId:'viewer',comments:1,commentsMap:{legacy:{id:'legacy',content:'Keep me'}}});
   for(let i=0;i<120;i++)batch.set(doc(store,'posts','post','comments','comment'+id(i)),{createdAt:i,authorId:'viewer',content:'Comment '+i});
-  for(let i=0;i<80;i++)batch.set(doc(store,'chats','room','messages','message'+id(i)),{createdAt:i,senderId:'viewer'});
+  for(let i=0;i<160;i++)batch.set(doc(store,'chats','room','messages','message'+id(i)),{createdAt:i,senderId:'viewer'});
   for(let i=0;i<12;i++){
    batch.set(doc(store,'reels','reel'+id(i)),{createdAt:i});
    batch.set(doc(store,'posts','video'+id(i)),{authorId:'viewer',mediaType:'video',createdAt:i});
@@ -54,12 +54,12 @@ test('comments latest50 and older50/20 use snapshot cursors',async()=>{
  const base=query(collection(db,'posts','post','comments'),orderBy('createdAt','desc'));
  const ids=await allPages(base,50);assert.equal(ids.length,120);assert.equal(ids[0],'comment119');assert.equal(ids.at(-1),'comment000');
 });
-test('open-chat latest10 plus older10 with reversed query direction',async()=>{
+test('open-chat latest40 plus older40 with reversed query direction',async()=>{
  const messages=collection(db,'chats','room','messages');
- const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(10)));
- assert.equal(head.size,10);assert.equal(head.docs[0].id,'message070');
- const older=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(head.docs[0]),limit(10)));
- assert.equal(older.size,10);assert.equal(older.docs[0].id,'message069');assert.equal(older.docs.at(-1).id,'message060');
+ const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(40)));
+ assert.equal(head.size,40);assert.equal(head.docs[0].id,'message120');
+ const older=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(head.docs[0]),limit(40)));
+ assert.equal(older.size,40);assert.equal(older.docs[0].id,'message119');assert.equal(older.docs.at(-1).id,'message080');
 });
 test('Reels metadata first batch reads5 native +5 video posts',async()=>{
  const a=await getDocs(query(collection(db,'reels'),orderBy('createdAt','desc'),limit(5)));
@@ -74,12 +74,12 @@ test('new canonical comment batch preserves old parent maps',async()=>{
  const after=await getDoc(doc(db,'posts','post'));assert.deepEqual(after.data().commentsMap,legacy);assert.equal(after.data().comments,2);
  assert.equal((await getDoc(doc(db,'posts','post','comments','new'))).data().content,'New format');
 });
-test('resume gap fills ten at a time without redownloading already cached older rows',async()=>{
+test('resume gap fills forty at a time without redownloading already cached older rows',async()=>{
  const messages=collection(db,'chats','room','messages');
  const oldNewest=await getDoc(doc(db,'chats','room','messages','message029'));
- const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(10)));
+ const head=await getDocs(query(messages,orderBy('createdAt','asc'),limitToLast(40)));
  let cursor=head.docs[0],ids=[];
- for(;;){const page=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(cursor),endBefore(oldNewest),limit(10)));
-  assert.ok(page.size<=10);ids.push(...page.docs.map(d=>d.id));if(page.size<10)break;cursor=page.docs.at(-1);}
- assert.equal(ids.length,40);assert.equal(new Set(ids).size,40);assert.equal(ids[0],'message069');assert.equal(ids.at(-1),'message030');
+ for(;;){const page=await getDocs(query(messages,orderBy('createdAt','desc'),startAfter(cursor),endBefore(oldNewest),limit(40)));
+  assert.ok(page.size<=40);ids.push(...page.docs.map(d=>d.id));if(page.size<40)break;cursor=page.docs.at(-1);}
+ assert.equal(ids.length,90);assert.equal(new Set(ids).size,90);assert.equal(ids[0],'message119');assert.equal(ids.at(-1),'message030');
 });
