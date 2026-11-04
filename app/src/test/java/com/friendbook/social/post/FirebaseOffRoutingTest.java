@@ -44,8 +44,8 @@ public class FirebaseOffRoutingTest {
    when(db.batch()).thenReturn(batch);when(batch.commit()).thenReturn(Tasks.forResult(null));
    boolean[] ack={false};Models.Comment local=CommentsEngine.sendComment("posts","p1","p1","hello","","",(ok,error)->ack[0]=ok);
    Shadows.shadowOf(Looper.getMainLooper()).idle();assertNotNull(local);assertEquals("new-id",local.id);assertTrue(ack[0]);
-   verify(batch).set(eq(canonical),argThat(map->"hello".equals(map.get("content"))&&"off-user".equals(map.get("authorId"))));
-   verify(batch).set(eq(copy),anyMap());verify(batch).update(eq(parent),argThat(map->map.containsKey("lastComment")&&map.containsKey("comments")));verify(batch).commit();noD1(d1);
+   verify(batch).set(eq(canonical),ArgumentMatchers.<Map<String,Object>>argThat(map->"hello".equals(map.get("content"))&&"off-user".equals(map.get("authorId"))));
+   verify(batch).set(eq(copy),anyMap());verify(batch).update(eq(parent),ArgumentMatchers.<Map<String,Object>>argThat(map->map.containsKey("lastComment")&&map.containsKey("comments")));verify(batch).commit();noD1(d1);
   }
  }
  @Test public void offCommentWatchUsesFirebaseListenerAndRemovesItOnClose(){
@@ -77,7 +77,7 @@ public class FirebaseOffRoutingTest {
    when(reaction.set(anyMap())).thenReturn(Tasks.forResult(null));when(parent.update(anyMap())).thenReturn(Tasks.forResult(null));
    Models.Post post=new Models.Post();post.id="off-p2";post.authorId="off-owner";
    Reactions.apply(RuntimeEnvironment.getApplication(),post,"like");Shadows.shadowOf(Looper.getMainLooper()).idle();
-   verify(reaction).set(argThat(map->"like".equals(map.get("type"))&&"off-owner".equals(map.get("userId"))));
+   verify(reaction).set(ArgumentMatchers.<Map<String,Object>>argThat(map->"like".equals(map.get("type"))&&"off-owner".equals(map.get("userId"))));
    verify(parent).update(anyMap());noD1(d1);
   }
  }
