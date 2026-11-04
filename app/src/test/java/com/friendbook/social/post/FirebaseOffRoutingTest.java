@@ -60,6 +60,7 @@ public class FirebaseOffRoutingTest {
    ArgumentCaptor<com.google.firebase.firestore.EventListener<QuerySnapshot>> callback=ArgumentCaptor.forClass(com.google.firebase.firestore.EventListener.class);
    when(query.addSnapshotListener(callback.capture())).thenReturn(registration);
    when(page.getDocuments()).thenReturn(Collections.singletonList(doc));when(page.getDocumentChanges()).thenReturn(Collections.emptyList());when(page.getMetadata()).thenReturn(metadata);when(page.size()).thenReturn(1);
+   when(page.iterator()).thenAnswer(inv->Collections.singletonList(doc).iterator());
    when(doc.getId()).thenReturn("existing");when(doc.getReference()).thenReturn(child);when(child.getParent()).thenReturn(comments);when(comments.getParent()).thenReturn(parent);
    Map<String,Object> data=new HashMap<>();data.put("authorId","off-user");data.put("content","existing Firebase comment");data.put("createdAt",1000L);when(doc.getData()).thenReturn(data);
    List<Models.Comment> shown=new ArrayList<>();CommentsEngine.Handle handle=CommentsEngine.watch("posts","p1","p1",(all,pin)->{shown.clear();shown.addAll(all);});
