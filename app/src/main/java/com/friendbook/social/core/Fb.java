@@ -18,9 +18,6 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.PersistentCacheSettings;
 import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.firestore.Source;
-import com.google.firebase.storage.FirebaseStorage;
-import com.google.firebase.storage.StorageReference;
-import com.google.firebase.storage.UploadTask;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -80,10 +77,6 @@ public class Fb {
             rtdb = null;
         }
         return rtdb;
-    }
-
-    public static StorageReference storage() {
-        return FirebaseStorage.getInstance().getReference();
     }
 
     @Nullable

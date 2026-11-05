@@ -21,8 +21,6 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -362,8 +360,9 @@ public class Cloudinary {
     }
 
     /**
-     * Upload to Cloudinary (compressed for 2G!), and if that fails fall back to
-     * Firebase Storage using the compressed temp file if available.
+     * Compatibility entry point for existing callers. Media stays on Cloudinary;
+     * a failed upload is returned to the caller, never silently sent to Firebase.
+     * The legacy path argument is not a Cloudinary public ID or a deletion key.
      */
     public static Task<String> uploadOrFirebase(final Context ctx, final String path, final Uri uri) {
         return uploadOrFirebaseWithProgress(ctx, path, uri, null);
@@ -372,54 +371,6 @@ public class Cloudinary {
     public static Task<String> uploadOrFirebaseWithProgress(final Context ctx, final String path,
                                                             final Uri uri,
                                                             final ProgressListener progressListener) {
-        final TaskCompletionSource<String> tcs = new TaskCompletionSource<>();
-        uploadWithProgress(ctx, uri, progressListener).addOnCompleteListener(t -> {
-            if (t.isSuccessful()) { tcs.setResult(t.getResult()); return; }
-            android.util.Log.w("Cloudinary", "cloudinary failed, trying Firebase: " + t.getException());
-            new Thread(() -> {
-                Uri fallbackUri = uri;
-                File tempFile = null;
-                try {
-                    String mime = ctx.getContentResolver().getType(uri);
-                    byte[] compressed = compressImageFor2G(ctx, uri, mime);
-                    if (compressed != null) {
-                        tempFile = new File(ctx.getCacheDir(), "up_" + System.currentTimeMillis() + ".jpg");
-                        FileOutputStream fos = new FileOutputStream(tempFile);
-                        fos.write(compressed);
-                        fos.close();
-                        fallbackUri = Uri.fromFile(tempFile);
-                    }
-                } catch (Throwable ignored) { }
-                final File toClean = tempFile;
-                final long totalLen = queryUriLength(ctx, fallbackUri);
-                com.google.firebase.storage.StorageReference ref =
-                        com.google.firebase.storage.FirebaseStorage.getInstance().getReference().child(path);
-                com.google.firebase.storage.UploadTask ut = ref.putFile(fallbackUri);
-                if (progressListener != null) {
-                    ut.addOnProgressListener(snap -> {
-                        long sent = snap.getBytesTransferred();
-                        long tot = snap.getTotalByteCount() > 0 ? snap.getTotalByteCount() : totalLen;
-                        int pct = tot > 0 ? Math.min(99, (int) ((sent * 99L) / tot)) : 50;
-                        MAIN.post(() -> progressListener.onProgress(pct, sent, tot));
-                    });
-                }
-                ut.continueWithTask(task -> {
-                    if (!task.isSuccessful() && task.getException() != null) throw task.getException();
-                    return ref.getDownloadUrl();
-                }).addOnCompleteListener(fb -> {
-                    if (toClean != null) { try { toClean.delete(); } catch (Throwable ignored) { } }
-                    if (fb.isSuccessful() && fb.getResult() != null) {
-                        if (progressListener != null) {
-                            MAIN.post(() -> progressListener.onProgress(100, totalLen, totalLen));
-                        }
-                        tcs.setResult(fb.getResult().toString());
-                    } else {
-                        tcs.setException(fb.getException() != null ? fb.getException()
-                                : new Exception("Upload failed"));
-                    }
-                });
-            }, "fb-upload-fallback").start();
-        });
-        return tcs.getTask();
+        return uploadWithProgress(ctx, uri, progressListener);
     }
 }
