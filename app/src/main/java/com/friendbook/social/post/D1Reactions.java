@@ -63,9 +63,20 @@ public final class D1Reactions {
    }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,previous);render.run();Ui.toast(context,"Reaction not saved. Retry; Firebase was not used.");});
   });
  }
+ static void historicalNotice(Activity activity,TextView note,LinearLayout filter,LinearLayout rows,int historical,boolean identified){
+  note.setVisibility(historical>0?android.view.View.VISIBLE:android.view.View.GONE);
+  filter.setVisibility(historical>0&&!identified?android.view.View.GONE:android.view.View.VISIBLE);
+  if(historical<=0)return;
+  note.setText(historical+" historical reactions; individual details unavailable.");
+  if(!identified){
+   rows.removeAllViews();
+   TextView message=Ui.tv(activity,"No actor identities were recorded for these historical reactions.",14,Ui.sub(activity));
+   Ui.pad(message,8,20,8,20);rows.addView(message);
+  }
+ }
  public static void show(Activity activity,String collection,String id,String commentId){
   LinearLayout root=Ui.col(activity),rows=Ui.col(activity);Ui.pad(root,14,12,14,12);ScrollView scroll=new ScrollView(activity);scroll.addView(rows);root.addView(scroll,new LinearLayout.LayoutParams(-1,Ui.dp(activity,360)));
-  LinearLayout filter=Ui.row(activity);root.addView(filter,0);List<Reactions.ReactorEntry> entries=new ArrayList<>();
+  LinearLayout filter=Ui.row(activity);root.addView(filter,0);TextView history=Ui.tv(activity,"",13,Ui.sub(activity));history.setVisibility(android.view.View.GONE);root.addView(history,1);List<Reactions.ReactorEntry> entries=new ArrayList<>();
   TextView more=Ui.tvBold(activity,"Load reactions",14,Ui.BLUE);root.addView(more);
   AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("People who reacted").setView(root).setNegativeButton("Close",null).create();
   final String[] after={null};final boolean[] busy={false},done={false};final String uid=Fb.uid();final Set<String> seen=new HashSet<>();
@@ -75,7 +86,7 @@ public final class D1Reactions {
     JSONArray list=data.optJSONArray("reactors");if(list!=null)for(int i=0;i<list.length();i++){JSONObject r=list.optJSONObject(i);if(r==null||!seen.add(r.optString("uid")))continue;
      Reactions.ReactorEntry entry=new Reactions.ReactorEntry();entry.uid=r.optString("uid");entry.type=r.optString("type");entry.createdAt=r.optLong("createdAt");entries.add(entry);
     }Map<String,Integer> counts=new LinkedHashMap<>();for(String type:Reactions.TYPES)counts.put(type,0);for(Reactions.ReactorEntry entry:entries)counts.put(entry.type,counts.getOrDefault(entry.type,0)+1);
-    Reactions.renderReactorView(activity,dialog,filter,rows,entries,counts,"all");after[0]=data.isNull("next")?null:data.optString("next",null);done[0]=after[0]==null;more.setText(done[0]?"All loaded":"Load 30 more reactions");
+    Reactions.renderReactorView(activity,dialog,filter,rows,entries,counts,"all");historicalNotice(activity,history,filter,rows,Math.max(0,data.optInt("historicalUnattributed")),!entries.isEmpty());after[0]=data.isNull("next")?null:data.optString("next",null);done[0]=after[0]==null;more.setText(done[0]?"All loaded":"Load 30 more reactions");
    }).addOnFailureListener(e->{busy[0]=false;if(dialog.isShowing()&&Objects.equals(uid,Fb.uid()))more.setText("Retry reactions");});
   };more.setOnClickListener(v->load.run());dialog.show();load.run();
  }
