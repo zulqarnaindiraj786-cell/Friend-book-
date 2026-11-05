@@ -151,3 +151,9 @@ this must not be represented as an all-checks-green result. Local Python regress
   fence/control activation or staged-resource promotion performed by this work.
   Final observation/replay, enabled-device QA and coordinated legacy-client
   rollout/fence remain required. Deployment result must be recorded separately.
+- Actual deployment of commit `233fe83`: GitHub Actions run **41951547753**,
+  job **126996412153**, **SUCCESS (19 seconds)**. Existing Worker/database
+  retained, all 25 Worker tests and local schema tests passed in CI; read-only
+  production Worker/D1 connectivity verification passed. BOTH gates OFF guard
+  passed. No migrations or imports ran. This deploys the privacy fix but does
+  not activate interaction traffic.
