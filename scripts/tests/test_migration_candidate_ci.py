@@ -35,3 +35,20 @@ class MigrationCandidateCiTest(unittest.TestCase):
             self.write_suite(root, SUITES[0], cases='')
             with self.assertRaises(ValueError):
                 verify(root)
+
+    def test_dependency_failure_context_is_visible_without_raw_log_download(self):
+        import contextlib
+        import io
+        from scripts.ci.report_android_failure import report
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            log = root / 'gradle.log'
+            log.write_text('> Task :app:checkReleaseAarMetadata FAILED\n* What went wrong:\n'
+                           'Execution failed for task checkReleaseAarMetadata.\n'
+                           'Dependency example requires Android API 99.\n* Try:\n'
+                           'unrelated trailing details\n')
+            result = io.StringIO()
+            with contextlib.redirect_stdout(result):
+                report(root, log)
+            self.assertIn('Dependency example requires Android API 99', result.getvalue())
+            self.assertNotIn('unrelated trailing details', result.getvalue())

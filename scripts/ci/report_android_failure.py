@@ -23,7 +23,21 @@ def report(root, log):
                 if emitted == 8:
                     return
     if not emitted and Path(log).exists():
-        for line in Path(log).read_text(errors='replace').splitlines():
+        lines = Path(log).read_text(errors='replace').splitlines()
+        # Gradle AAR/dependency failures often put the actual cause on lines
+        # without the words "error"/"Exception". Preserve bounded causal context.
+        for index, line in enumerate(lines):
+            if '* What went wrong:' in line:
+                context = []
+                for detail in lines[index + 1:index + 26]:
+                    if detail.startswith(('* Try:', '* Exception is:')):
+                        break
+                    if detail.strip():
+                        context.append(detail)
+                if context:
+                    print('::error title=Gradle failure cause::' + escaped('\n'.join(context)[:6000]))
+                    return
+        for line in lines:
             if re.search(r'FAILED|FAILURE:|Exception|[Ee]rror|daemon disappeared|What went wrong|OutOfMemory', line):
                 print('::error::' + escaped(line[:500]))
                 emitted += 1
