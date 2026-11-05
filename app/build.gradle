@@ -11,6 +11,7 @@ android {
     defaultConfig {
         applicationId 'com.friendbook.social'
         buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
+        buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'false'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
@@ -61,6 +62,8 @@ android {
 }
 
 dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     testImplementation 'org.robolectric:robolectric:4.14.1'
@@ -68,7 +71,6 @@ dependencies {
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-firestore'
     implementation 'com.google.firebase:firebase-database'
-    implementation 'com.google.firebase:firebase-storage'
     implementation 'com.google.firebase:firebase-config'
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'androidx.work:work-runtime:2.10.0'
