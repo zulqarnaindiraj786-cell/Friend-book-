@@ -12,10 +12,10 @@ import uuid
 
 try:
     from .copy_interaction_snapshot import (Snapshot, BackupError, PROJECT, PREFIX,
-                                           canonical, copy_and_verify, d1_query)
+                                           canonical, digest, TABLE, d1_query)
 except ImportError:  # direct CLI invocation
     from copy_interaction_snapshot import (Snapshot, BackupError, PROJECT, PREFIX,
-                                          canonical, copy_and_verify, d1_query)
+                                          canonical, digest, TABLE, d1_query)
 
 
 class BudgetedDocuments(dict):
@@ -94,6 +94,64 @@ def private_source_copy(snapshot, directory):
             output.write(text)
 
 
+def copy_full_snapshot(session, batch, docs):
+    """Bounded multi-row INSERTs; exact key/content/hash verification, no updates.
+
+    At most 24 rows / 96 bound parameters per statement; small documents are
+    grouped to avoid one management API request per source document. This is
+    not a live account-rate/quota detector.
+    """
+    if not docs:
+        raise BackupError('Refusing an empty D1 snapshot copy')
+    for name, text in docs.items():
+        if not isinstance(name, str) or not name.startswith(PREFIX + '/') or not isinstance(text, str):
+            raise BackupError('Unexpected source identity or document encoding')
+        parts = name[len(PREFIX) + 1:].split('/')
+        if len(parts) % 2 or any(part in ('', '.', '..') for part in parts):
+            raise BackupError('Invalid source document path')
+        document = json.loads(text)
+        if (not isinstance(document, dict) or document.get('name') != name or
+                not isinstance(document.get('fields', {}), dict) or canonical(document) != text):
+            raise BackupError('Unexpected typed source document or noncanonical content')
+    d1_query(session, f'''CREATE TABLE IF NOT EXISTS {TABLE} (
+        batch_id TEXT NOT NULL, path TEXT NOT NULL,
+        document_json TEXT NOT NULL CHECK(json_valid(document_json)),
+        sha256 TEXT NOT NULL, PRIMARY KEY(batch_id,path))''')
+    pending, pending_bytes = [], 0
+
+    def insert(rows):
+        placeholders = ','.join('(?,?,?,?)' for _ in rows)
+        parameters = tuple(value for row in rows for value in row)
+        d1_query(session, f'INSERT INTO {TABLE} (batch_id,path,document_json,sha256) VALUES ' + placeholders,
+                 parameters)
+
+    for name, text in sorted(docs.items()):
+        size = len(text.encode('utf8'))
+        if pending and (len(pending) >= 24 or pending_bytes + size > 256 * 1024):
+            insert(pending)
+            pending, pending_bytes = [], 0
+        pending.append((batch, name[len(PREFIX) + 1:], text, digest(text)))
+        pending_bytes += size
+    if pending:
+        insert(pending)
+    actual, after = {}, ''
+    while True:
+        rows = d1_query(session, f'SELECT path,document_json,sha256 FROM {TABLE} WHERE batch_id=? AND path>? ORDER BY path LIMIT 100', (batch, after))
+        if not rows:
+            break
+        for row in rows:
+            name, text = PREFIX + '/' + row['path'], row['document_json']
+            if name in actual or name not in docs or text != docs[name] or row['sha256'] != digest(text):
+                raise BackupError('D1 snapshot identity/content/hash mismatch; cutover forbidden')
+            actual[name] = text
+        new_after = rows[-1]['path']
+        if new_after <= after:
+            raise BackupError('D1 snapshot verification pagination did not advance')
+        after = new_after
+    if actual != docs:
+        raise BackupError('D1 snapshot copy is incomplete; cutover forbidden')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true')
@@ -127,7 +185,7 @@ def main():
                 docs = snapshot.export()
             batch = str(uuid.uuid4())
             private_source_copy(snapshot, Path('migration-artifacts') / ('full-firestore-' + batch))
-            copy_and_verify(destination, batch, docs)
+            copy_full_snapshot(destination, batch, docs)
         # No UIDs, document paths, bodies, media URLs, tokens or credentials in logs.
         print(canonical({'batch': batch, 'read_time': snapshot.time,
                          'firestore_documents_copied_and_verified': len(docs),

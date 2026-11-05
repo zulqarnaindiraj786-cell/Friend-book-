@@ -123,3 +123,62 @@ class FullFirestoreSnapshotTest(unittest.TestCase):
             (Path(folder) / 'linked').symlink_to(Path(folder), target_is_directory=True)
             with self.assertRaises(BackupError):
                 private_source_copy(reader, Path(folder) / 'linked' / 'batch')
+
+    def test_batched_d1_insert_real_sqlite_bind_limits_and_exact_verification(self):
+        import sqlite3
+        from scripts.admin.full_firestore_snapshot import copy_full_snapshot, canonical
+
+        class SqliteDestination:
+            def __init__(self):
+                self.db = sqlite3.connect(':memory:')
+                self.db.row_factory = sqlite3.Row
+                self.insert_count = 0
+                self.corrupt = False
+
+            def post(self, url, json, timeout):
+                sql, params = json['sql'], json['params']
+                self.assert_params(params)
+                rows = []
+                if sql.startswith('INSERT'):
+                    self.insert_count += 1
+                cursor = self.db.execute(sql, params)
+                if sql.startswith('SELECT'):
+                    rows = [dict(row) for row in cursor.fetchall()]
+                    if self.corrupt and rows:
+                        rows[0]['sha256'] = 'bad-hash'
+                return Response({'success': True, 'result': [{'success': True, 'results': rows}]})
+
+            def assert_params(self, params):
+                if len(params) > 100:
+                    raise AssertionError('D1 statement bind budget exceeded')
+
+        destination = SqliteDestination()
+        try:
+            docs = {PREFIX + '/users/' + str(n): canonical({'name': PREFIX + '/users/' + str(n),
+                    'fields': {'counter': {'integerValue': '9007199254740993'}}}) for n in range(53)}
+            copy_full_snapshot(destination, 'batch-a', docs)
+            self.assertEqual(destination.insert_count, 3)
+            self.assertEqual(destination.db.execute('SELECT COUNT(*) FROM friendbook_cf_copy_staging').fetchone()[0], 53)
+            destination.corrupt = True
+            with self.assertRaises(BackupError):
+                copy_full_snapshot(destination, 'batch-b', docs)
+            self.assertEqual(destination.db.execute('SELECT COUNT(*) FROM friendbook_cf_copy_staging').fetchone()[0], 106)
+        finally:
+            destination.db.close()
+
+    def test_malformed_or_cross_project_input_is_rejected_before_any_d1_request(self):
+        from scripts.admin.full_firestore_snapshot import copy_full_snapshot, canonical
+        class NoRequests:
+            def post(self, *args, **kwargs):
+                raise AssertionError('Invalid source must not reach D1')
+        name = PREFIX + '/users/u'
+        invalid = [
+            {'projects/other/databases/(default)/documents/users/u': '{}'},
+            {PREFIX + '/users/../bad/u': '{}'},
+            {name: canonical({'name': PREFIX + '/users/other', 'fields': {}})},
+            {name: canonical({'name': name, 'fields': []})},
+            {name: '{"name":"' + name + '","fields":{},"fields":{}}'},
+        ]
+        for docs in invalid:
+            with self.assertRaises(BackupError):
+                copy_full_snapshot(NoRequests(), 'never-write', docs)
