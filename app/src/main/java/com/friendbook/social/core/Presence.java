@@ -26,6 +26,7 @@ public class Presence {
     public static final long HEARTBEAT_INTERVAL_MS = 25_000L;
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS;
     private static final Handler H = new Handler(Looper.getMainLooper());
+    private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
     private static DatabaseReference statusRef;
     private static ValueEventListener connListener;
     private static String boundUid;
@@ -106,15 +107,25 @@ public class Presence {
         Fb.rtdb().getReference(".info/connected").addValueEventListener(connListener);
     }
     private static void writeFirestore(@NonNull String uid, boolean online) {
+        long attempt = 0;
         try {
             Context ctx = com.friendbook.social.App.instance;
             boolean allowed = ctx == null || Prefs.activeStatus(ctx);
+            final boolean active = online && allowed;
+            final long ticket = FIRESTORE_WRITES.begin(uid, active, android.os.SystemClock.elapsedRealtime());
+            if (ticket == 0) return;
+            attempt = ticket;
             Map<String, Object> m = new HashMap<>();
-            m.put("isOnline", online && allowed); m.put("isActive", online && allowed);
+            m.put("isOnline", active); m.put("isActive", active);
             m.put("showActiveStatus", allowed);
             m.put("lastSeenMs", now()); m.put("lastSeen", FieldValue.serverTimestamp());
-            Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
-        } catch (Exception e) { android.util.Log.w("FriendBookPresence", "Presence write could not be queued"); }
+            Fb.db().collection("users").document(uid).set(m, SetOptions.merge())
+                    .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()))
+                    .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));
+        } catch (Exception e) {
+            if (attempt != 0) FIRESTORE_WRITES.complete(attempt, false, android.os.SystemClock.elapsedRealtime());
+            android.util.Log.w("FriendBookPresence", "Presence write could not be queued");
+        }
     }
     public static void goOffline() {
         foregroundActive = false; disconnectArmed = false; generation++;
