@@ -30,9 +30,31 @@ class CounterReviewTests(unittest.TestCase):
         docs.update([document('posts/p/comments/c',{'authorId':'u','content':'hello','createdAt':123,'likes':999})])
         rows,_=plan(docs)
         entries=m.comment_counters(docs,rows)
-        self.assertEqual(len(entries),1)
+        self.assertEqual(len(entries),2)
+        entries=[e for e in entries if e['source_path']=='posts/p/comments/c']
         self.assertEqual(entries[0]['status'],'unattributed_counter_surplus')
         self.assertEqual(entries[0]['identity_count'],0)
         self.assertIn('999',entries[0]['original_json'])
+
+    def test_negative_numeric_counter_is_not_mislabeled_as_non_numeric(self):
+        result=m.decision(self.entry('unsupported_counter',-1))
+        self.assertEqual(result['resolution'],'known_identities_with_invalid_numeric_counter_preserved')
+
+    def test_authoritative_canonical_absence_does_not_import_stale_mirror_count(self):
+        docs=fixture(); docs.update([document('comments/c',{'authorId':'u','postId':'p','content':'hello','createdAt':123,'likes':3})])
+        rows,_=plan(docs); entries=m.comment_counters(docs,rows)
+        self.assertEqual(m.legacy_aggregate_rows(entries,'batch'),[])
+
+    def test_historical_total_is_residual_not_fabricated_actor_rows(self):
+        docs=fixture()
+        for path in ('posts/p/comments/c','comments/c'):
+            docs.update([document(path,{'authorId':'u','postId':'p','content':'hello','createdAt':123,
+                                       'likes':5,'reactions':{'known':'like'}})])
+        rows,_=plan(docs); entries=m.comment_counters(docs,rows)
+        metadata=m.legacy_aggregate_rows(entries,'batch')
+        self.assertEqual(len(metadata),1)
+        self.assertEqual(metadata[0]['unattributed_count'],4)
+        self.assertEqual(metadata[0]['source_path'],'posts/p/comments/c')
+        self.assertEqual(len(rows['comments'][0]['reactions']),1)
 
 if __name__=='__main__': unittest.main()

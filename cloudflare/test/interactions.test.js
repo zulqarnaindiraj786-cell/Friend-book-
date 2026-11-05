@@ -13,6 +13,7 @@ export function fixture() {
   sql.exec(readFileSync(new URL('../migrations/0004_additive_comment_details.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0006_additive_comment_history.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0008_additive_legacy_comment_totals.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");
   const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);
@@ -179,4 +180,22 @@ test('unknown comment date is not invented; reply pagination still uses stable s
   assert.equal(page.comments[0].createdAt, null);
   assert.equal(page.comments[0].createdAtKnown, false);
   assert.equal(f.sql.prepare('SELECT created_at FROM friendbook_cf_comments').get().created_at, 0);
+});
+
+
+test('legacy unattributed comment counts survive without fabricated actors and new taps adjust known portion', async t => {
+  const f = fixture(); t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_comments VALUES ('posts/p1','legacy','user1','original',NULL,123)");
+  f.sql.exec("INSERT INTO friendbook_cf_comment_legacy_aggregates VALUES ('posts/p1','legacy',3,'synthetic/path','synthetic-hash','batch')");
+  let page = await (await call(f.env, 'comments')).json();
+  assert.equal(page.comments[0].likes,3);
+  assert.equal(page.comments[0].historical_unattributed,3);
+  let reactors=await (await call(f.env,'reactors','GET',undefined,{query:'?commentId=legacy'})).json();
+  assert.deepEqual(reactors.reactors,[]);
+  assert.equal(reactors.historicalUnattributed,3);
+  let action=await (await call(f.env,'comments','PUT',{id:'legacy',op:'react',type:'like'})).json();
+  assert.equal(action.comment.likes,4);
+  action=await (await call(f.env,'comments','PUT',{id:'legacy',op:'react',type:null})).json();
+  assert.equal(action.comment.likes,3);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_comment_reactions WHERE type IS NOT NULL').get().n,0);
 });

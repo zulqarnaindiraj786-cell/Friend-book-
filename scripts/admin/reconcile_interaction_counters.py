@@ -18,6 +18,8 @@ def decision(entry):
     if status == 'matches': result='matches'
     elif status == 'underreported_counter': result='known_identities_with_original_counter_preserved'
     elif status == 'counter_absent': result='known_identities_with_absence_preserved'
+    elif status == 'unsupported_counter' and isinstance(value,(int,float)) and not isinstance(value,bool):
+        result='known_identities_with_invalid_numeric_counter_preserved'
     elif status == 'unsupported_counter' and not isinstance(value,(dict,list)):
         # Android Format.intOf does not treat Boolean/String/null as a numeric count.
         result='known_identities_with_non_numeric_scalar_preserved'
@@ -30,12 +32,12 @@ def comment_counters(docs, rows):
     result=[]
     def add(source_path, resource, cid, data, raw):
         row=by_key.get((resource,cid))
-        if not row or 'likes' not in data: return
-        value=data['likes']; amount=len(row['reactions'])
+        if not row: return
+        value=data.get('likes'); amount=len(row['reactions'])
         valid=isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0 and value==int(value)
-        status='unsupported_counter' if not valid else 'matches' if value==amount else 'underreported_counter' if value<amount else 'unattributed_counter_surplus'
-        result.append({'source_path':source_path,'metric':'comment_likes',
-                       'original_json':canonical({'present':True,'value':value}),
+        status='counter_absent' if 'likes' not in data else 'unsupported_counter' if not valid else 'matches' if value==amount else 'underreported_counter' if value<amount else 'unattributed_counter_surplus'
+        result.append({'source_path':source_path,'resource':resource,'comment_id':cid,'metric':'comment_likes',
+                       'original_json':canonical({'present':'likes' in data,'value':value}),
                        'identity_count':amount,'status':status,'source_document_sha256':digest(raw)})
     for name,raw in sorted(docs.items()):
         path=name[len(PREFIX)+1:]; parts=path.split('/'); data=fields(json.loads(raw))
@@ -53,6 +55,33 @@ def comment_counters(docs, rows):
                 add(path+'#commentsList/'+str(index),path,item.get('id'),item,raw)
             item=data.get('lastComment')
             if isinstance(item,dict): add(path+'#lastComment',path,item.get('id'),item,raw)
+    return result
+
+
+def select_comment_counter_sources(entries):
+    grouped={}
+    def priority(entry):
+        path=entry['source_path']; resource=entry['resource']; cid=entry['comment_id']
+        rank=(5 if path==resource+'/comments/'+cid else 4 if path.endswith('#lastComment')
+              else 3 if '#commentsMap/' in path else 2 if '#commentsList/' in path else 1)
+        index=int(path.rsplit('/',1)[1]) if '#commentsList/' in path else 0
+        return (-rank,index,path)
+    for entry in entries:
+        key=entry['resource'],entry['comment_id']
+        if key not in grouped or priority(entry)<priority(grouped[key]): grouped[key]=entry
+    return grouped
+
+
+def legacy_aggregate_rows(entries,batch):
+    result=[]
+    for (resource,cid),entry in sorted(select_comment_counter_sources(entries).items()):
+        value=json.loads(entry['original_json'])['value']
+        if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0:
+            residual=max(0,int(value)-entry['identity_count'])
+            if residual:
+                result.append({'resource':resource,'id':cid,'unattributed_count':residual,
+                               'source_path':entry['source_path'],'source_sha256':entry['source_document_sha256'],
+                               'snapshot_batch':batch})
     return result
 
 
@@ -93,12 +122,26 @@ def main():
             hard=set(report['blockers'])-{'comment_reaction_counter_mismatch','resource_comment_counter_mismatch','resource_reaction_counter_mismatch','reaction_missing_resource'}
             if hard: raise BackupError('Unresolved identity/mapping blockers')
             verify_identity_tables(session,rows)
-            decisions=[decision(r) for r in counter_ledger(docs,rows)+comment_counters(docs,rows)]
+            comment_entries=comment_counters(docs,rows)
+            authorities=select_comment_counter_sources(comment_entries)
+            desired_aggregates={(r['resource'],r['id']):r for r in legacy_aggregate_rows(comment_entries,batch)}
+            available=d1_query(session,"SELECT name FROM sqlite_master WHERE type='table' AND name='friendbook_cf_comment_legacy_aggregates'")
+            decisions=[decision(r) for r in counter_ledger(docs,rows)+comment_entries]
+            for item in decisions:
+                if item['metric']!='comment_likes' or item['resolution']!='requires_identity_or_schema_review': continue
+                key=item['resource'],item['comment_id']
+                if item['source_path']!=authorities[key]['source_path']:
+                    item['resolution']='non_authoritative_cached_variant_preserved_in_archive'
+                    continue
+                wanted=desired_aggregates.get(key)
+                if available and wanted:
+                    actual=d1_query(session,'SELECT resource,id,unattributed_count,source_path,source_sha256,snapshot_batch FROM friendbook_cf_comment_legacy_aggregates WHERE resource=? AND id=?',key)
+                    if actual==[wanted]: item['resolution']='historical_unattributed_aggregate_preserved_without_fabricated_actors'
             unresolved=sum(r['resolution']=='requires_identity_or_schema_review' for r in decisions)
-            summary={'baseline_batch':batch,'observation_id':manifest['observation_id'],
+            summary={'review_policy_version':2,'baseline_batch':batch,'observation_id':manifest['observation_id'],
                      'observed_read_time':observation['read_time'],'staging_identity_verified':True,
                      'decisions':dict(Counter(r['resolution'] for r in decisions)),
-                     'non_numeric_source_types':dict(Counter(r['source_value_kind'] for r in decisions if r['status']=='unsupported_counter')),
+                     'unsupported_source_value_types':dict(Counter(r['source_value_kind'] for r in decisions if r['status']=='unsupported_counter')),
                      'unresolved_counter_cases':unresolved,
                      'orphan_reactions_preserved':report['blockers'].get('reaction_missing_resource',0),
                      'old_writer_fence_deployed':False,'application_rows_modified':0,
