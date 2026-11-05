@@ -15,8 +15,8 @@ def generate(base):
     // REVIEW-ONLY migration control; absent document keeps existing Firebase mode.
     // Any non-firebase phase fails closed for interaction writes, not chat/calls.
     function firebaseInteractionsOpen() {
-      return !exists(/databases/$(database)/documents/__interactionMigration__/control)
-        || get(/databases/$(database)/documents/__interactionMigration__/control).data.get('phase', 'unknown') == 'firebase';
+      return !exists(/databases/$(database)/documents/friendbookMigrationControl/interactions)
+        || get(/databases/$(database)/documents/friendbookMigrationControl/interactions).data.get('phase', 'unknown') == 'firebase';
     }
     function interactionFields() {
       return FIELDS;
@@ -30,7 +30,7 @@ def generate(base):
     function emptyInteractionInitializers() {
       return INITIALIZERS;
     }
-    match /__interactionMigration__/{document} {
+    match /friendbookMigrationControl/{document} {
       // Server-admin control only. Client admins cannot unfence old writers.
       allow read, write: if false;
     }

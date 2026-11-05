@@ -5,7 +5,7 @@ import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/ru
 import {doc,setDoc,getDoc,updateDoc,deleteDoc,writeBatch,increment} from 'firebase/firestore';
 if(!/^(127\.0\.0\.1|localhost):[0-9]+$/.test(process.env.FIRESTORE_EMULATOR_HOST||''))throw Error('Loopback emulator required; production forbidden');
 let env,db;
-const control='__interactionMigration__/control';
+const control='friendbookMigrationControl/interactions';
 async function gate(phase){await env.withSecurityRulesDisabled(async ctx=>{
  const ref=doc(ctx.firestore(),control);if(phase===null)await deleteDoc(ref);else await setDoc(ref,{phase});
 });}
