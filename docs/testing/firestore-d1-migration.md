@@ -1,12 +1,25 @@
-# Firebase → D1 migration: phase 1, OFFLINE preparation only
+# Firebase → D1 migration: normalized STAGING import, gates OFF
 
-**Production status: NOT copied, NOT count-verified, NOT switched.**
-This PR deliberately does not change Android queries, Worker API routes, Firebase
-Auth, RTDB presence, Cloudinary, existing D1 tables/rows or Time Travel. It must
-not be represented as the requested complete migration. This environment cannot
-reach the Firebase/Cloudflare production APIs under its outbound network policy;
-Cloudflare connector/deployment authorization is unavailable. Do not send tokens,
-passwords or private keys in chat. Existing Firebase credentials are not re-requested.
+## Current verified status
+
+Owner-authorized GitHub Actions now uses repository secrets (never chat/source).
+Raw interaction snapshot backup passed in run `41941688251`. Normalized **staging**
+import/read-back passed in run `41944815062` (commit `94ae2fa`). These supersede
+older offline-only status statements. This is NOT a completed live migration.
+
+- 949 raw typed snapshot documents remain in the original per-batch archive.
+- Application staging contains 83 resources, 407 reactions, 271 comments/details,
+  68 comment reactions, plus explicit timestamp provenance. No pins were present.
+- 84 additional preservation rows retain original resource documents/counters and
+  the orphan reaction. No Firebase mutations, resets, deletion or Time Travel.
+- All resources remain `staging`; **zero** are marked `verified`. Both switches
+  remain OFF. Firebase Auth/realtime and Cloudinary remain unchanged.
+- Source counter discrepancies and one orphan remain unresolved for LIVE cutover.
+  Snapshot-time reconciliation does not account for later/old-client writes.
+
+See [current staging evidence and remaining gates](interaction-staging-status.md).
+The sections below describe the original offline tools and safety checklist;
+raw staging alone never substitutes for an application import or live-write fence.
 
 ## What is included
 

@@ -1,8 +1,11 @@
 # Android D1 integration / v2.8.33 (65) — BOTH SWITCHES OFF
 
-No production migration/import/count verification, remote schema execution,
-Firebase rule deployment, Time Travel operation or activation is performed.
-Firebase Auth, chats/calls/presence and Cloudinary are unchanged.
+Current status: raw backup and normalized STAGING import/read-back have passed
+through owner-authorized GitHub Actions. Additive schemas 0003–0006 were applied
+for that staging import. No live activation, Firebase rule deployment, Time Travel,
+Firebase data writes or deletion was performed. Both switches remain OFF and zero
+resources are marked verified. Firebase Auth, chats/calls/presence and Cloudinary
+are unchanged. See [staging evidence and remaining gates](interaction-staging-status.md).
 
 ## Android paths wired
 
@@ -88,5 +91,5 @@ transactional triggers and permissions with mocked source responses.
 8. Keep Firebase source data and both backups. Rollback is not simply toggling a
    flag after new D1 writes; reconcile new writes first or they would be hidden.
 
-No secrets need to be sent to this conversation. No production migration has been
-run and no production counts match has been claimed by this integration work.
+No secrets need to be sent to this conversation. The normalized staging counts/content have been verified, but live source counter
+discrepancies and post-snapshot writes remain unresolved; no live cutover is claimed.
