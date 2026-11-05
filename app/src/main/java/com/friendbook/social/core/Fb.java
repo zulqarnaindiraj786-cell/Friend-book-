@@ -1,7 +1,6 @@
 package com.friendbook.social.core;
 
 import android.content.Context;
-import android.net.Uri;
 
 import androidx.annotation.Nullable;
 
@@ -89,16 +88,6 @@ public class Fb {
     /** Canonical 1:1 chat id (same scheme as the Flutter app). */
     public static String chatId(String a, String b) {
         return a.compareTo(b) < 0 ? a + "_" + b : b + "_" + a;
-    }
-
-    /** Upload a local file and resolve its download URL. */
-    public static Task<Uri> upload(String path, Uri file) {
-        StorageReference ref = storage().child(path);
-        UploadTask up = ref.putFile(file);
-        return up.continueWithTask(t -> {
-            if (!t.isSuccessful()) throw t.getException();
-            return ref.getDownloadUrl();
-        });
     }
 
     /** Start (or restart) the live listener that keeps {@link #me} fresh. */

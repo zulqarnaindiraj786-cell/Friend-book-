@@ -18,7 +18,7 @@ STATE_PATTERNS = {
     'realtime_database': re.compile(r'com\.google\.firebase\.database\b|FirebaseDatabase\b|'
                                     r'\bFb\.rtdb\s*\(|firebaseio\.com|firebasedatabase\.app|'
                                     r'firebase-admin/database|\bgetDatabase\s*\(|\badmin\.database\s*\('),
-    'firebase_storage': re.compile(r'com\.google\.firebase\.storage\b|FirebaseStorage\b|'
+    'firebase_storage': re.compile(r'com\.google\.firebase\.storage\b|FirebaseStorage\b|\b(?:StorageReference|UploadTask)\b|'
                                    r'\bFb\.storage\s*\(|firebasestorage\.googleapis\.com|'
                                    r'firebase-admin/storage|\badmin\.storage\s*\('),
 }

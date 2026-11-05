@@ -90,6 +90,7 @@ class CloudinaryOnlySourceGuards(unittest.TestCase):
             text = source.read_text()
             self.assertNotIn('com.google.firebase.storage', text, str(source))
             self.assertNotIn('Fb.storage(', text, str(source))
+            self.assertNotRegex(text, r'\b(?:StorageReference|UploadTask)\b', str(source))
         self.assertNotIn('com.google.firebase:firebase-storage', (ROOT / 'app/build.gradle').read_text())
         uploader = (JAVA / 'core/Cloudinary.java').read_text()
         wrapper = uploader[uploader.index('public static Task<String> uploadOrFirebaseWithProgress'):]
