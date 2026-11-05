@@ -31,25 +31,13 @@ public final class D1Client {
         FirebaseUser user=Fb.auth().getCurrentUser();final String actor=Fb.uid();
         if(!enabled(collection)||user==null||actor==null){result.setException(new IOException("D1 route is disabled or not signed in"));return result.getTask();}
         try{IO.execute(()->{
-            HttpURLConnection connection=null;
             try{
                 if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
-                connection=(HttpURLConnection)url.openConnection();connection.setConnectTimeout(10000);connection.setReadTimeout(15000);
-                connection.setInstanceFollowRedirects(false);connection.setRequestMethod(method);connection.setRequestProperty("Authorization","Bearer "+token);
-                connection.setRequestProperty("Accept","application/json");
-                if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>32768)throw new IOException("Comment request too large");
-                    connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);connection.setRequestProperty("Content-Type","application/json");
-                    try(OutputStream out=connection.getOutputStream()){out.write(bytes);}}
-                int status=connection.getResponseCode();
-                if(status<200||status>=300)throw new IOException("D1 request failed ("+status+"). Retry here; no Firebase write was made.");
-                String text;try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
-                    byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(out.size()+n>1048576)throw new IOException("Response too large");out.write(buffer,0,n);}text=out.toString("UTF-8");}
-                JSONObject data=new JSONObject(text);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
+                JSONObject data=D1HttpTransport.send(url,method,token,body);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
             }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));}
-            finally{if(connection!=null)connection.disconnect();}
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
     }

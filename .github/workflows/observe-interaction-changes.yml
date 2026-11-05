@@ -38,8 +38,8 @@ jobs:
           PY
       - name: Install read-only audit dependency
         run: python3 -m pip install 'requests==2.32.5' 'google-auth==2.40.3'
-      - name: Test append-only observations, reconstruction and counter classification
-        run: python3 -m unittest discover -s scripts/tests -p 'test_interaction*.py'
+      - name: Test full preservation, observation and counter regression suite
+        run: python3 -m unittest discover -s scripts/tests
       - name: Observe consistent Firebase snapshot and append verified delta/counter ledger
         env:
           FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
