@@ -55,7 +55,7 @@ jobs:
       - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
         run: |
           mkdir -p "$RUNNER_TEMP/presence-coordinators"
-          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
+          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
           java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
           java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
           java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
