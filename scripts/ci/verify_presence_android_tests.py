@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-SUITES = ('CloudPresenceSocketTest', 'PresenceSessionPolicyTest', 'PresenceWritePolicyTest')
+SUITES = ('CloudPresenceSocketTest', 'PresenceSessionPolicyTest', 'PresenceWritePolicyTest', 'R2VideoClientTest')
 
 
 def verify(root):

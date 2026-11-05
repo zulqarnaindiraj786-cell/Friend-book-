@@ -215,7 +215,10 @@ public class Cloudinary {
                 br.close();
 
                 if (code >= 200 && code < 300) {
-                    String secure = new JSONObject(sb.toString()).optString("secure_url", "");
+                    JSONObject asset = new JSONObject(sb.toString());
+                    if ("video".equals(asset.optString("resource_type")) && asset.has("video"))
+                        throw new java.io.IOException("Video requires R2 processing; choose a recognized video file");
+                    String secure = asset.optString("secure_url", "");
                     if (!secure.isEmpty()) tcs.setResult(secure);
                     else tcs.setException(new Exception("No secure_url"));
                 } else {
@@ -237,10 +240,15 @@ public class Cloudinary {
     public static Task<String> uploadWithProgress(final Context ctx, final Uri uri,
                                                   final ProgressListener progressListener) {
         final TaskCompletionSource<String> tcs = new TaskCompletionSource<>();
+        final String uploadActor = Fb.uid();
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
                 String mime = ctx.getContentResolver().getType(uri);
+                if (R2VideoClient.isVideo(ctx, uri, mime)) {
+                    tcs.setResult(R2VideoClient.uploadBlocking(ctx, uri, uploadActor, progressListener));
+                    return; // No direct Cloudinary video upload/playback fallback.
+                }
                 if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
 
                 byte[] compressedImg = compressImageFor2G(ctx, uri, mime);
@@ -336,7 +344,10 @@ public class Cloudinary {
                 br.close();
 
                 if (code >= 200 && code < 300) {
-                    String secure = new JSONObject(sb.toString()).optString("secure_url", "");
+                    JSONObject asset = new JSONObject(sb.toString());
+                    if ("video".equals(asset.optString("resource_type")) && asset.has("video"))
+                        throw new java.io.IOException("Video requires R2 processing; choose a recognized video file");
+                    String secure = asset.optString("secure_url", "");
                     if (!secure.isEmpty()) {
                         if (progressListener != null) {
                             final long finalBytes = totalBytes > 0 ? totalBytes : sent;

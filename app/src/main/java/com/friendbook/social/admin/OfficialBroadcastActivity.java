@@ -54,7 +54,7 @@ public final class OfficialBroadcastActivity extends Activity {
         body.addView(preview, new LinearLayout.LayoutParams(-1, Ui.dp(this, 200)));
         TextView remove = Ui.btnGrey(this, "Remove attachment"); body.addView(remove);
         remove.setOnClickListener(v -> { if (!busy) { selected = null; mediaUrl = ""; mediaType = ""; uploadPath = ""; renderAttachment(); } });
-        status = Ui.tv(this, "Image limit 20 MB; video limit 100 MB. New attachments upload to Cloudinary.", 13, Ui.sub(this));
+        status = Ui.tv(this, "Images: Cloudinary (20 MB). Videos: 480p, R2 Save Forever (99 MB per upload).", 13, Ui.sub(this));
         body.addView(status);
         send = Ui.btn(this, "Send to everyone"); body.addView(send); send.setOnClickListener(v -> send());
         ScrollView scroll = new ScrollView(this); scroll.addView(body); setContentView(scroll);
@@ -84,7 +84,7 @@ public final class OfficialBroadcastActivity extends Activity {
         try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) size = cursor.getLong(0);
         } catch (Exception ignored) {}
-        long limit = mime.startsWith("image/") ? 20L * 1024 * 1024 : 100L * 1024 * 1024;
+        long limit = mime.startsWith("image/") ? 20L * 1024 * 1024 : 99_000_000L;
         if (size < 0 || size > limit) { Ui.toast(this, "Cannot determine file size, or attachment exceeds the size limit"); return; }
         try { getContentResolver().takePersistableUriPermission(uri, data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION); }
         catch (SecurityException | IllegalArgumentException ignored) {}
@@ -130,6 +130,9 @@ public final class OfficialBroadcastActivity extends Activity {
         spec.put("adminId", uid); spec.put("text", text); spec.put("mediaUrl", mediaUrl);
         spec.put("mediaType", mediaType); spec.put("storagePath", uploadPath);
         if (mediaUrl.startsWith("https://res.cloudinary.com/")) spec.put("mediaProvider", "cloudinary");
+        else if (mediaUrl.startsWith("https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/videos/")) {
+            spec.put("mediaProvider", "r2"); spec.put("mediaRetention", "forever");
+        }
         spec.put("createdAt", FieldValue.serverTimestamp()); spec.put("status", "queued"); spec.put("processed", 0);
         Fb.db().runTransaction(tx -> { if (!tx.get(ref).exists()) tx.set(ref, spec); return null; })
                 .addOnSuccessListener(v -> {

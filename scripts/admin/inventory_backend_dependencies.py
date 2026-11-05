@@ -80,7 +80,7 @@ def inventory(root):
             allowed.append({'path': path, 'services': permitted})
     return {
         'inventory_kind': 'offline_production_source_heuristic',
-        'target': {'app_data_and_realtime': 'cloudflare', 'new_media_uploads': 'cloudinary',
+        'target': {'app_data_and_realtime': 'cloudflare', 'new_media_uploads': 'cloudinary_images_r2_videos',
                    'firebase_allowed': ['auth', 'fcm_delivery_only']},
         'source_files_scanned': files,
         'remaining_state_dependency_files': len(remaining),
