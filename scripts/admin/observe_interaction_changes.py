@@ -8,9 +8,36 @@ import os
 from pathlib import Path
 import sys
 import uuid
-from copy_interaction_snapshot import PREFIX, Snapshot, BackupError, canonical, digest, d1_query
+import time
+from copy_interaction_snapshot import PREFIX, FIRESTORE, Snapshot, BackupError, canonical, digest, d1_query
 from import_interaction_staging import ensure_row, statements
 from plan_interaction_import import fields, load_snapshot, plan
+
+
+class ReadOnlySourceRetry:
+    """Bounded retries for snapshot reads only, never destination/user writes."""
+    def __init__(self, session, errors, sleep=time.sleep):
+        self.session, self.errors, self.sleep = session, errors, sleep
+
+    def _request(self, method, url, **kwargs):
+        if not url.startswith(FIRESTORE + PREFIX):
+            raise BackupError('Unexpected snapshot destination')
+        if method == 'post' and not url.endswith((':runAggregationQuery', ':listCollectionIds')):
+            raise BackupError('Non-read snapshot operation forbidden')
+        for attempt in range(3):
+            try:
+                return getattr(self.session, method)(url, **kwargs)
+            except self.errors:
+                if attempt == 2:
+                    raise
+                # Do not log request URLs, tokens, document content or exception text.
+                self.sleep(2 ** attempt)
+
+    def get(self, url, **kwargs):
+        return self._request('get', url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._request('post', url, **kwargs)
 
 
 def snapshot_hash(docs):
@@ -134,7 +161,7 @@ def main():
             ready = d1_query(destination,"SELECT COUNT(*) AS n FROM friendbook_cf_interaction_resources WHERE state!='staging'")
             if ready != [{'n':0}]: raise BackupError('Unexpected live resource marker: observation stopped')
             with AuthorizedSession(credential) as source:
-                snapshot = Snapshot(source); after = snapshot.export()
+                snapshot = Snapshot(ReadOnlySourceRetry(source, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))); after = snapshot.export()
             rows, report = plan(after)
             result = store_observation(destination,str(uuid.uuid4()),batch,snapshot.time,before,after,rows,report)
         print('::notice::'+canonical(result))
