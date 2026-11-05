@@ -48,6 +48,8 @@ def first(data, *keys):
 
 def plan(docs):
     issues = Counter()
+    warnings = Counter()
+    invalid_comment_reasons = Counter()
     counts = Counter()
     parents = {}
     comments = {}
@@ -78,28 +80,42 @@ def plan(docs):
             text = first(data, 'content', 'text', 'message')
             media = first(data, 'imageUrl', 'mediaUrl')
             parent = data.get('parentId') or None
-            if not isinstance(uid, str) or not uid or len(uid) > 128: raise ValueError()
-            if not isinstance(text, str) or not isinstance(media, str): raise ValueError()
-            if parent is not None and (not isinstance(parent, str) or not ID.fullmatch(parent)): raise ValueError()
+            if not isinstance(uid, str) or not uid or len(uid) > 128: raise ValueError('author_identity')
+            if not isinstance(text, str) or not isinstance(media, str): raise ValueError('content_or_media_type')
+            if parent is not None and (not isinstance(parent, str) or not ID.fullmatch(parent)): raise ValueError('parent_id')
             mentions = data.get('mentions', [])
-            if not isinstance(mentions, list): raise ValueError()
-            if any(k in data and not isinstance(data[k], bool) for k in ('edited', 'removed', 'pinned')): raise ValueError()
+            if not isinstance(mentions, list): raise ValueError('mentions_type')
+            if any(k in data and not isinstance(data[k], bool) for k in ('edited', 'removed', 'pinned')): raise ValueError('boolean_flags')
             rx = data.get('reactions') or {}
-            if not isinstance(rx, dict): raise ValueError()
+            if not isinstance(rx, dict): raise ValueError('reaction_map_type')
             rx = dict(rx)
             liked = data.get('likedBy') or []
-            if not isinstance(liked, list): raise ValueError()
-            for actor in liked: rx.setdefault(actor, 'like')
-            if any(not isinstance(actor, str) or not actor or (not isinstance(kind, str) or kind not in TYPES) for actor, kind in rx.items()): raise ValueError()
+            if not isinstance(liked, list): raise ValueError('liked_by_type')
+            for actor in liked:
+                if not isinstance(actor, str) or not actor: raise ValueError('reactor_identity')
+                rx.setdefault(actor, 'like')
+            for actor, raw in list(rx.items()):
+                kind = raw.get('type') if isinstance(raw, dict) else raw
+                if isinstance(kind, str): kind = kind.strip().lower()
+                if not isinstance(actor, str) or not actor or not isinstance(kind, str) or kind not in TYPES:
+                    raise ValueError('reaction_value')
+                rx[actor] = kind
+            try: created_at = timestamp(data.get('createdAt'))
+            except (ValueError, TypeError): raise ValueError('created_at') from None
             row = {'resource': resource, 'id': cid, 'uid': uid, 'text': text,
-                   'parent_id': parent, 'created_at': timestamp(data.get('createdAt')),
+                   'parent_id': parent, 'created_at': created_at,
                    'media_url': media, 'mentions': mentions,
                    'name': first(data, 'authorName', 'userName', 'name'),
                    'photo': first(data, 'authorPhotoUrl', 'authorPhoto', 'userPhoto'),
                    'edited': bool(data.get('edited', False)), 'removed': bool(data.get('removed', False)),
                    'reactions': rx}
             if int(data.get('likes', len(rx))) != len(rx): issues['comment_reaction_counter_mismatch'] += 1
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as error:
+            reason = str(error)
+            labels = {'author_identity', 'content_or_media_type', 'parent_id', 'mentions_type',
+                      'boolean_flags', 'reaction_map_type', 'liked_by_type', 'reactor_identity',
+                      'reaction_value', 'created_at'}
+            invalid_comment_reasons[reason if reason in labels else 'numeric_counter'] += 1
             issues['invalid_comment_fields'] += 1; return
         key = resource, cid
         if key in comments and comments[key] != row:
@@ -126,7 +142,9 @@ def plan(docs):
         pinned = first(data, 'pinnedCommentId', 'pinnedComment')
         if isinstance(pinned, str) and pinned: pins[resource].add(pinned)
         embedded = {}
-        for field in ('reactions', 'reactionsMap'):
+        # Keep the exact existing Android display precedence; both raw variants remain archived.
+        reaction_fields = ('reactionsMap', 'reactions') if resource.startswith('posts/') else ('reactions', 'reactionsMap')
+        for field in reaction_fields:
             value = data.get(field) or {}
             if not isinstance(value, dict): issues['invalid_embedded_reactions'] += 1; continue
             for actor, raw in value.items():
@@ -136,7 +154,9 @@ def plan(docs):
                 if isinstance(kind, str): kind = kind.strip().lower()
                 if not isinstance(kind, str) or kind not in TYPES or not actor:
                     issues['unsupported_reaction'] += 1; continue
-                if actor in embedded and embedded[actor] != kind: issues['conflicting_embedded_reactions'] += 1
+                if actor in embedded and embedded[actor] != kind:
+                    warnings['existing_android_reaction_precedence_preserved'] += 1
+                    continue
                 embedded[actor] = kind
                 if isinstance(raw, dict):
                     try:
@@ -153,11 +173,31 @@ def plan(docs):
                 embedded.setdefault(actor, 'love' if resource.startswith('reels/') else 'like')
         for actor, kind in embedded.items(): reactions[resource, actor] = kind
 
-    for path, data in entries:
+    # Canonical reactions precede legacy membership records regardless of input ordering.
+    for path, data in sorted(entries, key=lambda item: (0 if len(item[0]) == 4 and item[0][2] == 'reactions' else 1, item[0])):
         if len(path) == 2 and path[0] in ('posts', 'reels'): continue
         if len(path) == 4 and path[0] in ('posts', 'reels'):
             resource = '/'.join(path[:2])
             if path[2] == 'comments': add_comment(resource, path[3], data); continue
+            if path[2] == 'likes':
+                actor = path[3]; key = resource, actor
+                if resource not in parents: issues['legacy_like_missing_resource'] += 1; continue
+                if first(data, 'userId', 'uid') not in ('', actor):
+                    issues['legacy_like_actor_mismatch'] += 1; continue
+                kind = data.get('type', 'like')
+                if isinstance(kind, str): kind = kind.strip().lower()
+                if not isinstance(kind, str) or kind not in TYPES:
+                    issues['unsupported_legacy_like_type'] += 1; continue
+                if key in reactions and reactions[key] != kind:
+                    if 'type' in data: issues['legacy_like_type_conflict'] += 1
+                    else: warnings['legacy_like_membership_with_richer_reaction'] += 1
+                else:
+                    reactions[key] = kind
+                    if key not in reaction_times:
+                        try: reaction_times[key] = timestamp(data.get('updatedAt', data.get('createdAt')))
+                        except (ValueError, TypeError): pass
+                counts['legacy_like_records_mapped'] += 1
+                continue
             if path[2] == 'reactions':
                 if resource not in parents: issues['reaction_missing_resource'] += 1; continue
                 kind = data.get('type')
@@ -201,13 +241,19 @@ def plan(docs):
             if (resource, cid) not in comments: issues['missing_pinned_comment'] += 1
             rows['pins'].append({'resource': resource, 'id': cid})
     for (resource, actor), kind in sorted(reactions.items()):
-        if (resource, actor) not in reaction_times:
-            issues['missing_historical_reaction_timestamp'] += 1
+        known = (resource, actor) in reaction_times
+        if not known: warnings['unknown_historical_reaction_timestamp_preserved'] += 1
+        # Zero is only an internal encoding, never exposed as a historical date.
+        # 0005 provenance + reactorsAPI return null when timestamp_known=0.
         rows['reactions'].append({'resource': resource, 'uid': actor, 'type': kind,
-                                  'updated_at': reaction_times.get((resource, actor))})
+                                  'updated_at': reaction_times.get((resource, actor), 0)})
+        rows['reaction_history'].append({'resource': resource, 'uid': actor, 'timestamp_known': int(known)})
     counts.update({'comments': len(comments), 'reactions': len(reactions), 'snapshot_documents': len(docs)})
     return dict(rows), {'counts': dict(counts), 'blockers': dict(issues),
                         'unmapped_path_shapes': dict(unmapped_shapes),
+                        'invalid_comment_reasons': dict(invalid_comment_reasons),
+                        'warnings': dict(warnings),
+                        'requires_reaction_history_schema_0005': True,
                         'normalized_import_applied': False, 'safe_to_cutover': False,
                         'requires_live_write_reconciliation': True}
 

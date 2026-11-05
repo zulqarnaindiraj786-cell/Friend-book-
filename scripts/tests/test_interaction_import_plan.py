@@ -72,8 +72,46 @@ class PlanTests(unittest.TestCase):
     def test_missing_historical_timestamp_not_invented(self):
         docs = fixture(); docs.pop(m.PREFIX + '/posts/p/reactions/u')
         rows, report = m.plan(docs)
-        self.assertEqual(report['blockers']['missing_historical_reaction_timestamp'], 1)
-        self.assertIsNone(rows['reactions'][0]['updated_at'])
+        self.assertNotIn('missing_historical_reaction_timestamp', report['blockers'])
+        self.assertEqual(report['warnings']['unknown_historical_reaction_timestamp_preserved'], 1)
+        self.assertEqual(rows['reactions'][0]['updated_at'], 0)
+        self.assertEqual(rows['reaction_history'][0]['timestamp_known'], 0)
+    def test_legacy_likes_membership_does_not_downgrade_love(self):
+        docs = fixture()
+        docs.update([document('posts/p/reactions/u', {'type': 'love', 'createdAt': 123}),
+                     document('posts/p', {'likes': 1, 'comments': 1}),
+                     document('posts/p/likes/u', {'userId': 'u'})])
+        rows, report = m.plan(docs)
+        self.assertEqual(rows['reactions'][0]['type'], 'love')
+        self.assertEqual(report['counts']['legacy_like_records_mapped'], 1)
+        self.assertNotIn('unmapped_snapshot_document', report['blockers'])
+
+    def test_reconciliation_is_independent_of_source_document_order(self):
+        docs = fixture(); docs.update([document('posts/p/likes/u', {'userId': 'u'})])
+        forward, first = m.plan(docs)
+        reverse, second = m.plan(dict(reversed(list(docs.items()))))
+        self.assertEqual(forward, reverse)
+        self.assertEqual(first, second)
+
+    def test_embedded_reaction_priority_matches_existing_android(self):
+        docs = fixture(); docs.update([document('posts/p', {'likes': 1, 'comments': 1,
+                     'reactionsMap': {'u': 'like'}, 'reactions': {'u': 'love'}})])
+        rows, report = m.plan(docs)
+        self.assertEqual(report['blockers'], {})
+        self.assertEqual(rows['reactions'][0]['type'], 'like')
+        self.assertEqual(report['warnings']['existing_android_reaction_precedence_preserved'], 1)
+
+    def test_legacy_likes_actor_mismatch_blocks(self):
+        docs = fixture(); docs.update([document('posts/p/likes/u', {'userId': 'different'})])
+        _, report = m.plan(docs)
+        self.assertEqual(report['blockers']['legacy_like_actor_mismatch'], 1)
+
+    def test_comment_diagnostics_do_not_print_user_identity(self):
+        docs = fixture(); docs.update([document('comments/bad', {'authorId': '', 'postId': 'p'})])
+        _, report = m.plan(docs)
+        self.assertEqual(report['invalid_comment_reasons']['author_identity'], 1)
+        self.assertNotIn('bad', m.canonical(report))
+
     def test_typed_integer_not_coerced_to_float(self):
         self.assertEqual(m.decode({'integerValue': '9007199254740993'}), 9007199254740993)
     def test_timestamp_rejects_missing_timezone(self):
