@@ -41,16 +41,20 @@ staging importer. No private exports or user records were uploaded as CI artifac
 
 ## Unresolved LIVE migration gates — do not hide these
 
-- 30 resources have reaction counters differing from known normalized identities.
-- Two resources have comment counter discrepancies; three comment representations
-  have reaction counter discrepancies. Original counters are retained, not reset.
+- Baseline cached-counter differences were reviewed and preserved (see current
+  evidence below). Original fields are not reset. Historical unknown actors are
+  represented as aggregates, not fabricated identities. This review is not a live
+  writer fence, final replay or an authenticated device certification.
 - One reaction has no source parent resource. It is preserved in quarantine, not
   attached to an invented post or exposed through authorization-free routing.
 - Snapshot-time coverage is not a live change journal. Old and current OFF apps
   still write Firebase; final replay/watermark and a scoped old-writer fence are
-  not implemented/deployed. Auth/chat/calls/presence must remain usable.
-- Enabled build/device tests, backend notification dependency deployment, permission
-  parity, rollback/reconciliation and reviewed activation remain required.
+  not deployed. A REVIEW-ONLY interaction fence has passed isolated SDK tests;
+  deploying it while existing OFF clients are in use would reject their writes.
+  An enabled-client rollout and explicit cutover sequencing are still required.
+- Enabled build/device tests, authenticated notification delivery, permission
+  parity, rollback/reconciliation and reviewed activation remain required. The
+  bulk-mention backend prerequisite itself is now ACTIVE v3 (details below).
 
 `safe_to_cutover=false`. Do NOT mark resources verified or enable either switch
 just because the staging import passed. Cloudinary media remains remote; Firebase
@@ -81,3 +85,46 @@ unchanged. [41948533932](https://github.com/zulqarnaindiraj786-cell/Friend-book-
 PASSED all 45 mocked backend tests and production anonymous checks: POST returns
 401/AUTH_REQUIRED; GET returns 405/POST_REQUIRED. No recipients or user notifications
 were used. Enabled D1 notification delivery/device behavior remains unverified.
+
+## Baseline counter reconciliation and old-writer fence draft
+
+Historical aggregate preservation and baseline review passed in run
+[41949901943](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/41949901943).
+Three comments have **36 historical unattributed reactions** in total. Source
+actor IDs for this portion were absent; no users/reaction identities were invented.
+Schema 0008 and three verified provenance rows retain the residual aggregate
+separately from known actor rows. New known reactions increment/decrement their
+own portion; the historical portion remains preserved. Reactor responses expose
+`historicalUnattributed` instead of creating fake people. Android's D1-only dialog
+now explains missing historical identities and avoids a false "No reactions yet".
+
+Counter review policy v2 verified staged identities/content against the sealed
+snapshot: 857 matches, 29 original underreported caches retained, ten missing
+counter fields retained as absent, one invalid numeric cache retained, and three
+historical aggregates reconciled by exact metadata read-back. **Zero unresolved
+baseline counter cases under this preservation policy**. This does not recover
+unknown actor identities, repair source fields or certify post-observation writes.
+One orphan reaction remains preserved in quarantine, not attached to an invented
+parent. `safe_to_cutover=false`; application rows are still state `staging`.
+
+The generated `firebase/firestore.interaction-fence.review.rules` is NOT referenced
+by production `firebase.json`, and has NOT been deployed. The server-only control
+would be `friendbookMigrationControl/interactions`. Missing control or explicit
+`firebase` keeps legacy writes; a fenced/unknown phase blocks interaction writes
+while preserving reads, unrelated post edits, empty initial post creation, profiles
+and Firestore chat/message paths. RTDB rules/Auth/Cloudinary are not changed.
+
+[41949527257](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/41949527257)
+passed eight isolated demo-emulator SDK tests including atomic batch rejection,
+server-only control, no-op updates, source comment preservation and re-opening.
+This is NOT production rule deployment or a real-device chat/call/Auth test. Never
+activate this fence before the enabled-app rollout and final backup/replay plan:
+current OFF clients would otherwise receive permission-denied on interactions.
+
+Android commit `0a8599d` passed signed release build job `126992035163` in run
+[41950189062](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/41950189062):
+compilation, release tests (including three historical-notice UI tests), R8,
+signed APK/AAB and uploads. This OFF build keeps package `com.friendbook.social`.
+GitHub Pages deployment still fails with an unrelated integration permission error;
+this must not be represented as an all-checks-green result. Local Python regressions:
+114 PASS; Worker tests: 21 PASS. Enabled physical-device behavior remains unverified.
