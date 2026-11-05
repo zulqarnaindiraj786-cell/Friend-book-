@@ -1,0 +1,131 @@
+// Final video bytes stay in R2. No R2 delete, age expiration or total-storage cap.
+export const VIDEO_ORIGIN = 'https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev';
+export const TEMP_PREFIX = 'friendbook_r2_processing/';
+export const MAX_VIDEO_BYTES = 99_000_000; // Per-request transport limit, NOT a bucket quota.
+const TRANSFORM = 'c_limit,w_854,h_480,vc_h264,ac_aac,q_auto:eco';
+const json = (body, status = 200) => Response.json(body, {status, headers: {'Cache-Control':'no-store'}});
+const hex = bytes => Array.from(new Uint8Array(bytes), x=>x.toString(16).padStart(2,'0')).join('');
+const hash = async value => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+export async function signedCloudinaryFields(fields, secret) {
+ const canonical = Object.keys(fields).sort().map(key=>`${key}=${fields[key]}`).join('&') + secret;
+ return hex(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(canonical)));
+}
+function configured(env) {
+ return env.VIDEO_R2_ENABLED === 'true' && env.VIDEO_R2_RETENTION_VERIFIED === 'true' && env.VIDEO_BUCKET && env.DB
+  && /^[a-z0-9_-]+$/.test(env.CLOUDINARY_CLOUD_NAME || '') && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET;
+}
+function ownTemporary(id) {
+ return /^friendbook_r2_processing\/[a-f0-9]{64}\/[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
+}
+function result(key, object) {
+ return json({url:`${VIDEO_ORIGIN}/${key}`, bytes:object.size, retention:'forever', provider:'r2', resolution:'480p'});
+}
+function existingValid(object, owner, id) {
+ return object && object.size > 0 && object.customMetadata?.owner === owner
+  && object.customMetadata?.video_id === id && object.customMetadata?.retention === 'forever' && object.customMetadata?.resolution === '480p';
+}
+async function cloudFields(env, fields) {
+ return {...fields, api_key:env.CLOUDINARY_API_KEY, signature:await signedCloudinaryFields(fields,env.CLOUDINARY_API_SECRET)};
+}
+// Streaming multipart avoids loading the video into a Worker's 128 MB heap.
+function multipart(fields, body, boundary) {
+ const enc = new TextEncoder();
+ let prefix = '';
+ for(const [key,value] of Object.entries(fields)) prefix += `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
+ prefix += `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="video.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+ const reader = body.getReader(); let first=true, finished=false;
+ return new ReadableStream({async pull(controller) {
+  if(first){first=false;controller.enqueue(enc.encode(prefix));return;}
+  const chunk = await reader.read();
+  if(!chunk.done){controller.enqueue(chunk.value);return;}
+  if(!finished){finished=true;controller.enqueue(enc.encode(`\r\n--${boundary}--\r\n`));}
+  controller.close();
+ },cancel(reason){return reader.cancel(reason);}});
+}
+async function smallJson(response) {
+ const reader=response.body?.getReader(); if(!reader)throw Error('Invalid provider response');
+ const parts=[];let bytes=0;
+ while(true){const item=await reader.read();if(item.done)break;bytes+=item.value.byteLength;
+  if(bytes>65536){await reader.cancel();throw Error('Oversized provider response');}parts.push(item.value);}
+ const all=new Uint8Array(bytes);let offset=0;for(const part of parts){all.set(part,offset);offset+=part.length;}
+ return JSON.parse(new TextDecoder().decode(all));
+}
+export async function cleanTemporary(env, publicId, fetcher=fetch) {
+ if(!ownTemporary(publicId))throw Error('Not a pipeline temporary asset');
+ const fields=await cloudFields(env,{invalidate:'true',public_id:publicId,timestamp:Math.floor(Date.now()/1000)});
+ try {
+  const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/destroy`, {
+   method:'POST',redirect:'error',body:new URLSearchParams(fields),signal:AbortSignal.timeout(20000)});
+  if(!response.ok)return false;
+  const data=await smallJson(response);
+  if(!['ok','not found'].includes(data.result))return false;
+  await env.DB.prepare("UPDATE friendbook_video_processing SET state='cleaned',finished_at=? WHERE public_id=?").bind(Date.now(),publicId).run();
+  return true;
+ } catch {return false;}
+}
+export async function retryVideoCleanup(env, fetcher=fetch) {
+ if(!configured(env))return;
+ const rows=await env.DB.prepare("SELECT public_id FROM friendbook_video_processing WHERE state='pending' AND cleanup_after<=? ORDER BY cleanup_after LIMIT 20").bind(Date.now()).all();
+ for(const row of rows.results || []) {
+  const cleaned=await cleanTemporary(env,row.public_id,fetcher);
+  if(!cleaned)await env.DB.prepare("UPDATE friendbook_video_processing SET cleanup_after=? WHERE public_id=? AND state='pending'").bind(Date.now()+3600000,row.public_id).run();
+ }
+}
+export async function uploadVideo(request, env, uid, fetcher=fetch) {
+ if(!configured(env))return json({error:'R2 video processing is not configured'},503);
+ if(!['GET','POST'].includes(request.method))return json({error:'Method not allowed'},405);
+ if(new URL(request.url).search)return json({error:'Query parameters forbidden'},400);
+ const id=request.headers.get('X-Video-Id') || '';
+ if(request.method==='GET') {
+  if(!/^[a-f0-9]{64}$/.test(id))return json({error:'Video identity required'},400);
+  try {const owner=await hash(uid),key=`videos/${owner}/${id}.mp4`,object=await env.VIDEO_BUCKET.head(key);
+   return existingValid(object,owner,id)?result(key,object):json({error:'Video not found'},404);
+  }catch{return json({error:'Video lookup unavailable'},503);}
+ }
+ const length=request.headers.get('Content-Length') || '';
+ if(!/^[a-f0-9]{64}$/.test(id)||!/^\d+$/.test(length)||!request.body)return json({error:'Video identity and length required'},400);
+ const bytes=Number(length);
+ if(!Number.isSafeInteger(bytes)||bytes<1||bytes>MAX_VIDEO_BYTES)return json({error:'Video must be under 99 MB per upload'},413);
+ const owner=await hash(uid),key=`videos/${owner}/${id}.mp4`;
+ let sourceId;
+ try {
+  const previous=await env.VIDEO_BUCKET.head(key);
+  if(previous){await request.body.cancel();return existingValid(previous,owner,id)?result(key,previous):json({error:'Video identity conflict'},409);}
+  sourceId=TEMP_PREFIX+owner+'/'+crypto.randomUUID();
+  // Persist cleanup intent BEFORE sending any bytes to Cloudinary. Never queues R2 deletion.
+  await env.DB.prepare("INSERT INTO friendbook_video_processing(public_id,created_at,cleanup_after,state) VALUES(?,?,?,'pending')")
+   .bind(sourceId,Date.now(),Date.now()+3600000).run();
+  const fields=await cloudFields(env,{backup:'false',format:'mp4',overwrite:'false',public_id:sourceId,
+   timestamp:Math.floor(Date.now()/1000),transformation:TRANSFORM});
+  const boundary='fb'+crypto.randomUUID().replaceAll('-','');
+  const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/upload`, {
+   method:'POST',headers:{'Content-Type':`multipart/form-data; boundary=${boundary}`},
+   body:multipart(fields,request.body,boundary),duplex:'half',redirect:'error',signal:AbortSignal.timeout(300000)});
+  if(!response.ok)throw Error('Processing failed');
+  const asset=await smallJson(response);
+  if(asset.public_id!==sourceId||asset.resource_type!=='video'||asset.format!=='mp4'
+   ||!Number.isSafeInteger(asset.width)||asset.width<1||asset.width>854
+   ||!Number.isSafeInteger(asset.height)||asset.height<1||asset.height>480
+   ||!Number.isSafeInteger(asset.bytes)||asset.bytes<1||asset.bytes>MAX_VIDEO_BYTES
+   ||!/^[a-f0-9]{32}$/.test(asset.etag||''))throw Error('Invalid compressed video');
+  const url=new URL(asset.secure_url);
+  if(url.protocol!=='https:'||url.hostname!=='res.cloudinary.com'||url.username||url.password||url.port
+   ||!url.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/video/upload/`)||url.search||url.hash)throw Error('Invalid download origin');
+  const download=await fetcher(url.toString(),{redirect:'error',signal:AbortSignal.timeout(300000)});
+  if(!download.ok||!download.body||Number(download.headers.get('Content-Length'))!==asset.bytes)throw Error('Invalid compressed download');
+  const md5=Uint8Array.from(asset.etag.match(/../g),part=>parseInt(part,16)).buffer;
+  const stored=await env.VIDEO_BUCKET.put(key,download.body,{md5,onlyIf:{etagDoesNotMatch:'*'},
+   httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+   customMetadata:{owner,video_id:id,retention:'forever',processing_id:sourceId,resolution:'480p'}});
+  const verified=await env.VIDEO_BUCKET.head(key);
+  if(!existingValid(verified,owner,id)||(stored&&verified.size!==asset.bytes))throw Error('R2 verification failed');
+  // Only this origin/key is ever returned; no Cloudinary video URL enters app metadata.
+  return result(key,verified);
+ } catch {return json({error:'Video was not confirmed saved. Retry the same upload; no Cloudinary playback fallback.'},502);}
+ finally {
+  if(sourceId) {
+   try {await env.DB.prepare("UPDATE friendbook_video_processing SET cleanup_after=? WHERE public_id=? AND state='pending'").bind(Date.now(),sourceId).run();}catch{}
+   await cleanTemporary(env,sourceId,fetcher);
+  }
+ }
+}
