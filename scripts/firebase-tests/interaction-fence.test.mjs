@@ -49,7 +49,10 @@ test('fenced phase denies old-client interaction writes and atomic canonical/mir
 });
 test('fence covers parent maps, legacy aliases, counts and pins but permits unrelated edits',async()=>{
  await gate('fenced');
- for(const [field,value] of Object.entries({likes:2,reactionsMap:{u:{type:'like'}},reactions:{u:'love'},likedBy:['u'],comments:5,commentsMap:{c:{}},commentsList:[{}],lastComment:{id:'x'},pinnedCommentId:'x',likeCount:9})){
+ // Earlier OFF-mode tests increment likes to two; an unchanged value is not a write to interactions.
+ const unchanged=(await getDoc(doc(db,'posts/p'))).data().likes;
+ await assertSucceeds(updateDoc(doc(db,'posts/p'),{likes:unchanged}));
+ for(const [field,value] of Object.entries({likes:999,reactionsMap:{u:{type:'like'}},reactions:{u:'love'},likedBy:['u'],comments:5,commentsMap:{c:{}},commentsList:[{}],lastComment:{id:'x'},pinnedCommentId:'x',likeCount:9})){
   await assertFails(updateDoc(doc(db,'posts/p'),{[field]:value}));
  }
  await assertFails(updateDoc(doc(db,'reels/r'),{likedBy:['viewer']}));
