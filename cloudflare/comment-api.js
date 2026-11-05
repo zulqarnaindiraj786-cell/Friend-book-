@@ -77,15 +77,15 @@ export async function commentsAPI(request, db, identity, resource, data, context
   } else return reply({error:'Unknown operation'},400);
   return reply({comment:normalized(await read(data.id),uid)});
 }
-export async function reactorsAPI(request,db,resource) {
+export async function reactorsAPI(request,db,resource,context={}) {
   const url=new URL(request.url),id=url.searchParams.get('commentId'),after=url.searchParams.get('after')||'';
   if(after.length>128 || (id!==null && !validId(id)))return reply({error:'Invalid cursor/ID'},400);
-  if(id!==null){const row=await db.prepare('SELECT c.id FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0').bind(resource,id).first();if(!row)return reply({error:'Not found'},404);}
+  if(id!==null){const row=await db.prepare('SELECT c.id,c.uid FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0').bind(resource,id).first();if(!row||(context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);}
   const page=id===null?await db.prepare(`SELECT r.uid,r.type,CASE WHEN COALESCE(h.timestamp_known,1)=0 THEN NULL ELSE r.updated_at END AS createdAt,
     COALESCE(h.timestamp_known,1) AS timestampKnown FROM friendbook_cf_reactions r
     LEFT JOIN friendbook_cf_reaction_history h ON h.resource=r.resource AND h.uid=r.uid
-    WHERE r.resource=? AND r.uid>? AND r.type IS NOT NULL ORDER BY r.uid LIMIT 30`).bind(resource,after).all():
-    await db.prepare(`SELECT uid,type FROM friendbook_cf_comment_reactions WHERE resource=? AND id=? AND uid>? AND type IS NOT NULL ORDER BY uid LIMIT 30`).bind(resource,id,after).all();
+    WHERE r.resource=? AND r.uid>? AND r.uid NOT IN (SELECT value FROM json_each(?)) AND r.type IS NOT NULL ORDER BY r.uid LIMIT 30`).bind(resource,after,JSON.stringify(context.blocked||[])).all():
+    await db.prepare(`SELECT uid,type FROM friendbook_cf_comment_reactions WHERE resource=? AND id=? AND uid>? AND uid NOT IN (SELECT value FROM json_each(?)) AND type IS NOT NULL ORDER BY uid LIMIT 30`).bind(resource,id,after,JSON.stringify(context.blocked||[])).all();
   const historical=id===null?0:((await db.prepare('SELECT unattributed_count FROM friendbook_cf_comment_legacy_aggregates WHERE resource=? AND id=?').bind(resource,id).first())?.unattributed_count||0);
   return reply({reactors:page.results,historicalUnattributed:historical,next:page.results.length===30?page.results.at(-1).uid:null});
 }

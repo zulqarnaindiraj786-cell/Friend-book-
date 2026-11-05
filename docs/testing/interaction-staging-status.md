@@ -128,3 +128,26 @@ signed APK/AAB and uploads. This OFF build keeps package `com.friendbook.social`
 GitHub Pages deployment still fails with an unrelated integration permission error;
 this must not be represented as an all-checks-green result. Local Python regressions:
 114 PASS; Worker tests: 21 PASS. Enabled physical-device behavior remains unverified.
+
+## HTTP integration and reactor privacy follow-up (2026-11-05)
+
+- Added four loopback HTTP integration scenarios: real Worker router, real RSA-signed
+  test-token verification and real in-memory SQLite queries. The Firestore source
+  provider and keys are synthetic fixtures; these are **not physical-device,
+  production Firebase-token, Cloudinary-upload or notification delivery proof**.
+- Covered unauthenticated/wrong-project rejection, both OFF/staging fail-closed
+  paths before source access, comment/media URL/reply creation and idempotency,
+  reactions/pinning/edit ownership, soft removal with original rows retained,
+  50+11 comment cursor paging and 30+1 reactor paging, private-source/banned-user
+  denial, and blocked actor/comment visibility.
+- Confirmed and fixed a reactor-list privacy gap: source authorization's blocked
+  context now reaches reactor queries. Blocked actors are filtered before LIMIT;
+  reactors for a blocked comment return 404, matching single-comment access.
+  Post and comment reaction rows themselves are not removed or rewritten.
+- Local results: **25 Worker tests PASS**, **114 Python tests PASS**.
+- Shared SQLite test adapter extracted without importing/registering another test
+  suite; supports unbound reads as well as bound SQL and transactional batches.
+- Both production gates remain OFF. No production user writes, schema import,
+  fence/control activation or staged-resource promotion performed by this work.
+  Final observation/replay, enabled-device QA and coordinated legacy-client
+  rollout/fence remain required. Deployment result must be recorded separately.

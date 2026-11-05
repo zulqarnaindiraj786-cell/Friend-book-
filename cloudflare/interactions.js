@@ -46,7 +46,7 @@ export async function interactions(request, env, identity, match, authorize = au
     try { data = await body(request); } catch { return json({ error: 'Invalid JSON body' }, 400); }
   }
   try {
-    if (kind === 'reactors') return await reactorsAPI(request,db,resource);
+    if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') return await commentsAPI(request,db,identity,resource,data,context);
     if (kind === 'reactions') {
       if (request.method === 'PUT') {
