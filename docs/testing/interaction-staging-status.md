@@ -200,3 +200,32 @@ this must not be represented as an all-checks-green result. Local Python regress
   interactions until that coordinated transition; Cloudinary media and Firebase
   Auth/chat/calls/presence remain unchanged. Never deploy the fence ahead of
   readiness while released clients still use the OFF/Firebase path.
+
+## Owner-selected rollout: upgrade first (2026-11-05)
+
+Owner selected **APK upgrade first**, not immediate interruption of old clients.
+Activation remains conditional on successful tests, preservation and coordinated
+cutover; this decision is not permission to run concurrent authoritative writers.
+
+Version 2.8.34/code 66 adds an optional background update notice and a manual
+Settings > Check for APK update action. A bounded public JSON metadata endpoint
+contains only the package/version and allowlisted official APK download URL.
+The app rejects foreign package names/URLs, malformed versions and JSON errors;
+network failure never blocks launch. No silent install, uninstall, clearing data,
+backend switch or account token is involved. It is preparation, **not an enabled
+D1 release**: both gates stay OFF, package/signing identity remain unchanged.
+Older installed APKs do not retroactively acquire this update notice; those users
+must install the official signed update over the old app. Installing this build
+alone does not prove rollout/adoption or migrate interactions.
+
+Local tests: 27 Worker PASS and 119 Python PASS. Three new Robolectric update UI/
+policy tests are submitted to the signed Android build; CI evidence follows on
+PR29. Public metadata gets a production read-back check in the OFF-only deployment
+workflow. APK/AAB publishing remains Android-only; docs/backend-deploy-only edits
+no longer trigger an unrelated Android release.
+
+Additional confirmed activation blocker: unknown/new posts or reels have no
+verified D1 resource marker, and the current API correctly returns 503 for them.
+A secure post-cutover registration path is still required before global routing
+can be enabled. Existing staging markers must never be automatically promoted
+just to make a health check pass. No production fence/control is deployed here.
