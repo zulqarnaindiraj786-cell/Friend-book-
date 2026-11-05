@@ -1,6 +1,5 @@
 package com.friendbook.social.core;
 
-import com.sun.net.httpserver.HttpServer;
 import java.net.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -16,26 +15,47 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class D1HttpTransportTest {
- private HttpServer server;
+ private ServerSocket server;
+ private Thread responder;
+ private volatile boolean stopped;
  private URL url;
  private final AtomicInteger calls=new AtomicInteger();
  private final AtomicReference<String> method=new AtomicReference<>(),auth=new AtomicReference<>(),body=new AtomicReference<>();
  private volatile int status=200;private volatile String response="{\"ok\":true}";
  @Before public void start()throws Exception{
-  server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-  server.createContext("/",exchange->{
-   calls.incrementAndGet();method.set(exchange.getRequestMethod());auth.set(exchange.getRequestHeaders().getFirst("Authorization"));
-   try(InputStream in=exchange.getRequestBody();ByteArrayOutputStream out=new ByteArrayOutputStream()){
-    byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);
-    body.set(out.toString("UTF-8"));
+  server=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));
+  responder=new Thread(()->{
+   while(!stopped){
+    try(Socket socket=server.accept()){
+     socket.setSoTimeout(5000);
+     InputStream in=socket.getInputStream();String request=line(in);if(request==null)continue;
+     calls.incrementAndGet();method.set(request.split(" ")[0]);
+     int length=0;String header;
+     while((header=line(in))!=null&&!header.isEmpty()){
+      int colon=header.indexOf(':');if(colon<0)continue;
+      String key=header.substring(0,colon),value=header.substring(colon+1).trim();
+      if(key.equalsIgnoreCase("Authorization"))auth.set(value);
+      if(key.equalsIgnoreCase("Content-Length"))length=Integer.parseInt(value);
+     }
+     ByteArrayOutputStream received=new ByteArrayOutputStream();
+     for(int i=0;i<length;i++){int next=in.read();if(next<0)throw new EOFException();received.write(next);}
+     body.set(received.toString("UTF-8"));
+     byte[] bytes=response.getBytes(StandardCharsets.UTF_8);
+     String headers="HTTP/1.1 "+status+" Fixture\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+
+      "\r\nConnection: close\r\n"+(status==302?"Location: /redirect-target\r\n":"")+"\r\n";
+     OutputStream out=socket.getOutputStream();out.write(headers.getBytes(StandardCharsets.US_ASCII));out.write(bytes);out.flush();
+    }catch(IOException expectedOnCloseOrOversize){}
    }
-   if(status==302)exchange.getResponseHeaders().set("Location","/redirect-target");
-   byte[] bytes=response.getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(status,bytes.length);
-   try(OutputStream out=exchange.getResponseBody()){out.write(bytes);}catch(IOException expectedWhenClientRejectsOversize){}
   });
-  server.start();url=new URL("http://127.0.0.1:"+server.getAddress().getPort()+"/comments");
+  responder.setDaemon(true);responder.start();
+  url=new URL("http://127.0.0.1:"+server.getLocalPort()+"/comments");
  }
- @After public void stop(){server.stop(0);}
+ private static String line(InputStream in)throws IOException{
+  ByteArrayOutputStream out=new ByteArrayOutputStream();int c;
+  while((c=in.read())!=-1){if(c=='\n')return out.toString("US-ASCII").replace("\r","");out.write(c);}
+  return out.size()==0?null:out.toString("US-ASCII");
+ }
+ @After public void stop()throws Exception{stopped=true;server.close();responder.join(6000);assertFalse(responder.isAlive());}
  private void rejected()throws Exception{
   try{D1HttpTransport.send(url,"POST","synthetic-token",new JSONObject().put("text","fixture"));fail("Expected rejection");}
   catch(IOException expected){}
