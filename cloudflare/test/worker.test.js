@@ -55,3 +55,20 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
   const other = await generateKeyPair('RS256');
   await assert.rejects(verifyFirebaseToken(await sign({}, other.privateKey), claims.aud, keys));
 });
+test('realtime presence routes require verified Firebase identity and return fresh online state', async () => {
+  const now = Date.now();
+  const app = createWorker(async () => 'verified-user');
+  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare() {
+    return { bind(uid) { return { first: async () => ({ online: 1, visible: 1, last_seen: now - 5000 }) }; } };
+  } } };
+  assert.equal((await call('/v1/presence/me', env)).status, 401);
+  const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
+  assert.equal(me.status, 200);
+  const body = await me.json();
+  assert.equal(body.uid, 'verified-user');
+  assert.equal(body.online, true);
+  const contact = await call('/v1/presence/contact/peer-1', env, { Authorization: 'Bearer test' }, 'GET', app);
+  assert.equal(contact.status, 200);
+  assert.equal((await contact.json()).uid, 'peer-1');
+  assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
+});

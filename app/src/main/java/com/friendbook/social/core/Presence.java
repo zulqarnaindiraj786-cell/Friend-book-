@@ -27,6 +27,7 @@ public class Presence {
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS;
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
+    private static CloudPresenceSocket cloudSocket;
     private static DatabaseReference statusRef;
     private static ValueEventListener connListener;
     private static String boundUid;
@@ -65,15 +66,21 @@ public class Presence {
             H.postDelayed(this, HEARTBEAT_INTERVAL_MS);
         }
     };
+    private static synchronized CloudPresenceSocket ensureCloudSocket() {
+        if (cloudSocket == null) cloudSocket = new CloudPresenceSocket(Fb.auth());
+        return cloudSocket;
+    }
     public static void init() {
         String uid = Fb.uid();
         if (uid == null) { goOffline(); return; }
         Context c = com.friendbook.social.App.instance;
         if (c != null && !Prefs.activeStatus(c)) {
+            if (cloudSocket != null) cloudSocket.activeStatus(false);
             goOffline(); writeOfflineInternal(uid); return;
         }
         if (boundUid != null && !uid.equals(boundUid)) goOffline();
         foregroundActive = true;
+        try { ensureCloudSocket().foreground(true); } catch (Throwable ignored) { }
         writeFirestore(uid, true);
         H.removeCallbacks(HEARTBEAT); H.postDelayed(HEARTBEAT, HEARTBEAT_INTERVAL_MS);
         if (uid.equals(boundUid) && connListener != null) return;
@@ -130,6 +137,9 @@ public class Presence {
     public static void goOffline() {
         foregroundActive = false; disconnectArmed = false; generation++;
         H.removeCallbacks(HEARTBEAT);
+        if (cloudSocket != null) {
+            try { cloudSocket.background(); } catch (Throwable ignored) { }
+        }
         String uid = boundUid != null ? boundUid : Fb.uid();
         if (Fb.rtdb() != null && connListener != null)
             Fb.rtdb().getReference(".info/connected").removeEventListener(connListener);

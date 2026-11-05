@@ -75,3 +75,24 @@ test('no 10GB bucket stop or age deletion: existing large usage does not block n
   assert.equal(f.objects.size,2);
  }finally{f.sql.close();}
 });
+test('unsigned preset mode fetches 480p compressed MP4 into R2 and deletes temporary token when provided',async()=>{
+ const f=setup();try{
+  const presetEnv={VIDEO_R2_ENABLED:'true',VIDEO_R2_RETENTION_VERIFIED:'true',CLOUDINARY_CLOUD_NAME:'fixture',CLOUDINARY_UPLOAD_PRESET:'Myapp_upload',DB:f.env.DB,
+   VIDEO_BUCKET:{async head(key){return f.objects.get(key)||null;},async put(key,body,options){
+    assert.deepEqual(options.onlyIf,{etagDoesNotMatch:'*'});assert.equal(options.customMetadata.retention,'forever');
+    const data=new Uint8Array(await new Response(body).arrayBuffer());
+    const value={key,size:data.length,customMetadata:options.customMetadata};f.objects.set(key,value);return value;
+   }}};
+  const seen=[];
+  const response=await uploadVideo(f.request(),presetEnv,'actor',async(url,options)=>{
+   seen.push(String(url));
+   if(String(url).endsWith('/upload'))return Response.json({public_id:'temp_preset_video',version:12,resource_type:'video',delete_token:'del_tok_1'});
+   if(String(url).endsWith('/delete_by_token'))return Response.json({result:'ok'});
+   assert.match(String(url),/c_limit,w_854,h_480,vc_h264,ac_aac,q_auto:eco,f_mp4\/v12\/temp_preset_video\.mp4$/);
+   return new Response(bytes);
+  });
+  const body=await response.json();
+  assert.equal(response.status,200);assert.equal(body.provider,'r2');assert.equal(body.retention,'forever');
+  assert.ok(seen.some(u=>u.endsWith('/delete_by_token')));
+ }finally{f.sql.close();}
+});

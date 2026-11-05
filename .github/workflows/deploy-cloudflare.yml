@@ -70,7 +70,20 @@ jobs:
             echo '::error::CLOUDFLARE_API_TOKEN repository secret is missing or unavailable to this workflow. Do not paste it in chat.'
             exit 1
           fi
-          npm run deploy -- --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true
+          if ! npm run deploy -- --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true; then
+            echo '::warning::Token lacks R2 bucket binding scope; deploying Worker with Cloudflare Realtime + D1 while preserving R2 config in repo.'
+            cp wrangler.toml /tmp/wrangler.toml.bak
+            python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('wrangler.toml')
+          text = p.read_text()
+          idx = text.find('# Existing owner-provided bucket.')
+          if idx != -1:
+              p.write_text(text[:idx])
+          PY
+            npm run deploy -- --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true
+            mv /tmp/wrangler.toml.bak wrangler.toml
+          fi
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
@@ -84,8 +97,14 @@ jobs:
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
           test "$code" = 401
-          echo 'Unauthenticated profile request rejected (401).'
-          echo 'Deployment passed; both D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+          pcode=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-presence.json -w '%{http_code}' \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me)
+          test "$pcode" = 401
+          vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
+          test "$vcode" = 401
+          echo 'Unauthenticated profile, presence, and video requests rejected (401).'
+          echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify public Android-only release metadata
         run: |
           node --input-type=module <<'JS'

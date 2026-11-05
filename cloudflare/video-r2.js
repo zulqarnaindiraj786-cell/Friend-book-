@@ -10,9 +10,15 @@ export async function signedCloudinaryFields(fields, secret) {
  const canonical = Object.keys(fields).sort().map(key=>`${key}=${fields[key]}`).join('&') + secret;
  return hex(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(canonical)));
 }
+function hasSigned(env) {
+ return Boolean(env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET);
+}
+function hasPreset(env) {
+ return /^[A-Za-z0-9_-]+$/.test(env.CLOUDINARY_UPLOAD_PRESET || '');
+}
 function configured(env) {
  return env.VIDEO_R2_ENABLED === 'true' && env.VIDEO_R2_RETENTION_VERIFIED === 'true' && env.VIDEO_BUCKET && env.DB
-  && /^[a-z0-9_-]+$/.test(env.CLOUDINARY_CLOUD_NAME || '') && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET;
+  && /^[a-z0-9_-]+$/.test(env.CLOUDINARY_CLOUD_NAME || '') && (hasSigned(env) || hasPreset(env));
 }
 function ownTemporary(id) {
  return /^friendbook_r2_processing\/[a-f0-9]{64}\/[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
@@ -50,8 +56,18 @@ async function smallJson(response) {
  const all=new Uint8Array(bytes);let offset=0;for(const part of parts){all.set(part,offset);offset+=part.length;}
  return JSON.parse(new TextDecoder().decode(all));
 }
+async function boundedBytes(response, maxBytes) {
+ const reader=response.body?.getReader(); if(!reader)throw Error('Invalid stream');
+ const parts=[];let bytes=0;
+ while(true){const item=await reader.read();if(item.done)break;bytes+=item.value.byteLength;
+  if(bytes>maxBytes){await reader.cancel();throw Error('Stream too large');}parts.push(item.value);}
+ if(bytes<1)throw Error('Empty stream');
+ const all=new Uint8Array(bytes);let offset=0;for(const part of parts){all.set(part,offset);offset+=part.length;}
+ return all;
+}
 export async function cleanTemporary(env, publicId, fetcher=fetch) {
  if(!ownTemporary(publicId))throw Error('Not a pipeline temporary asset');
+ if(!hasSigned(env))return false;
  const fields=await cloudFields(env,{invalidate:'true',public_id:publicId,timestamp:Math.floor(Date.now()/1000)});
  try {
   const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/destroy`, {
@@ -64,7 +80,7 @@ export async function cleanTemporary(env, publicId, fetcher=fetch) {
  } catch {return false;}
 }
 export async function retryVideoCleanup(env, fetcher=fetch) {
- if(!configured(env))return;
+ if(!configured(env)||!hasSigned(env))return;
  const rows=await env.DB.prepare("SELECT public_id FROM friendbook_video_processing WHERE state='pending' AND cleanup_after<=? ORDER BY cleanup_after LIMIT 20").bind(Date.now()).all();
  for(const row of rows.results || []) {
   const cleaned=await cleanTemporary(env,row.public_id,fetcher);
@@ -87,42 +103,66 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
  const bytes=Number(length);
  if(!Number.isSafeInteger(bytes)||bytes<1||bytes>MAX_VIDEO_BYTES)return json({error:'Video must be under 99 MB per upload'},413);
  const owner=await hash(uid),key=`videos/${owner}/${id}.mp4`;
- let sourceId;
+ const signedMode=hasSigned(env);
+ let sourceId, deleteToken;
  try {
   const previous=await env.VIDEO_BUCKET.head(key);
   if(previous){await request.body.cancel();return existingValid(previous,owner,id)?result(key,previous):json({error:'Video identity conflict'},409);}
-  sourceId=TEMP_PREFIX+owner+'/'+crypto.randomUUID();
-  // Persist cleanup intent BEFORE sending any bytes to Cloudinary. Never queues R2 deletion.
-  await env.DB.prepare("INSERT INTO friendbook_video_processing(public_id,created_at,cleanup_after,state) VALUES(?,?,?,'pending')")
-   .bind(sourceId,Date.now(),Date.now()+3600000).run();
-  const fields=await cloudFields(env,{backup:'false',format:'mp4',overwrite:'false',public_id:sourceId,
-   timestamp:Math.floor(Date.now()/1000),transformation:TRANSFORM});
+  let fields;
+  if(signedMode) {
+   sourceId=TEMP_PREFIX+owner+'/'+crypto.randomUUID();
+   await env.DB.prepare("INSERT INTO friendbook_video_processing(public_id,created_at,cleanup_after,state) VALUES(?,?,?,'pending')")
+    .bind(sourceId,Date.now(),Date.now()+3600000).run();
+   fields=await cloudFields(env,{backup:'false',format:'mp4',overwrite:'false',public_id:sourceId,
+    timestamp:Math.floor(Date.now()/1000),transformation:TRANSFORM});
+  } else {
+   fields={upload_preset:env.CLOUDINARY_UPLOAD_PRESET};
+  }
   const boundary='fb'+crypto.randomUUID().replaceAll('-','');
   const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/upload`, {
    method:'POST',headers:{'Content-Type':`multipart/form-data; boundary=${boundary}`},
    body:multipart(fields,request.body,boundary),duplex:'half',redirect:'error',signal:AbortSignal.timeout(300000)});
   if(!response.ok)throw Error('Processing failed');
   const asset=await smallJson(response);
-  if(asset.public_id!==sourceId||asset.resource_type!=='video'||asset.format!=='mp4'
-   ||!Number.isSafeInteger(asset.width)||asset.width<1||asset.width>854
-   ||!Number.isSafeInteger(asset.height)||asset.height<1||asset.height>480
-   ||!Number.isSafeInteger(asset.bytes)||asset.bytes<1||asset.bytes>MAX_VIDEO_BYTES
-   ||!/^[a-f0-9]{32}$/.test(asset.etag||''))throw Error('Invalid compressed video');
-  const url=new URL(asset.secure_url);
-  if(url.protocol!=='https:'||url.hostname!=='res.cloudinary.com'||url.username||url.password||url.port
-   ||!url.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/video/upload/`)||url.search||url.hash)throw Error('Invalid download origin');
-  const download=await fetcher(url.toString(),{redirect:'error',signal:AbortSignal.timeout(300000)});
-  if(!download.ok||!download.body||Number(download.headers.get('Content-Length'))!==asset.bytes)throw Error('Invalid compressed download');
-  const md5=Uint8Array.from(asset.etag.match(/../g),part=>parseInt(part,16)).buffer;
-  const stored=await env.VIDEO_BUCKET.put(key,download.body,{md5,onlyIf:{etagDoesNotMatch:'*'},
-   httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
-   customMetadata:{owner,video_id:id,retention:'forever',processing_id:sourceId,resolution:'480p'}});
-  const verified=await env.VIDEO_BUCKET.head(key);
-  if(!existingValid(verified,owner,id)||(stored&&verified.size!==asset.bytes))throw Error('R2 verification failed');
-  // Only this origin/key is ever returned; no Cloudinary video URL enters app metadata.
-  return result(key,verified);
+  if(typeof asset.delete_token==='string'&&asset.delete_token.length>0)deleteToken=asset.delete_token;
+  if(signedMode) {
+   if(asset.public_id!==sourceId||asset.resource_type!=='video'||asset.format!=='mp4'
+    ||!Number.isSafeInteger(asset.width)||asset.width<1||asset.width>854
+    ||!Number.isSafeInteger(asset.height)||asset.height<1||asset.height>480
+    ||!Number.isSafeInteger(asset.bytes)||asset.bytes<1||asset.bytes>MAX_VIDEO_BYTES
+    ||!/^[a-f0-9]{32}$/.test(asset.etag||''))throw Error('Invalid compressed video');
+   const url=new URL(asset.secure_url);
+   if(url.protocol!=='https:'||url.hostname!=='res.cloudinary.com'||url.username||url.password||url.port
+    ||!url.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/video/upload/`)||url.search||url.hash)throw Error('Invalid download origin');
+   const download=await fetcher(url.toString(),{redirect:'error',signal:AbortSignal.timeout(300000)});
+   if(!download.ok||!download.body||Number(download.headers.get('Content-Length'))!==asset.bytes)throw Error('Invalid compressed download');
+   const md5=Uint8Array.from(asset.etag.match(/../g),part=>parseInt(part,16)).buffer;
+   const stored=await env.VIDEO_BUCKET.put(key,download.body,{md5,onlyIf:{etagDoesNotMatch:'*'},
+    httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+    customMetadata:{owner,video_id:id,retention:'forever',processing_id:sourceId,resolution:'480p'}});
+   const verified=await env.VIDEO_BUCKET.head(key);
+   if(!existingValid(verified,owner,id)||(stored&&verified.size!==asset.bytes))throw Error('R2 verification failed');
+   return result(key,verified);
+  } else {
+   if(asset.resource_type!=='video'||!/^[A-Za-z0-9_\/-]+$/.test(asset.public_id||''))throw Error('Invalid uploaded video');
+   const ver=Number.isSafeInteger(asset.version)?`v${asset.version}/`:'';
+   const derivedUrl=`https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/video/upload/${TRANSFORM},f_mp4/${ver}${asset.public_id}.mp4`;
+   const download=await fetcher(derivedUrl,{redirect:'error',signal:AbortSignal.timeout(300000)});
+   if(!download.ok||!download.body)throw Error('Invalid 480p download');
+   const compressed=await boundedBytes(download,MAX_VIDEO_BYTES);
+   const stored=await env.VIDEO_BUCKET.put(key,compressed,{onlyIf:{etagDoesNotMatch:'*'},
+    httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+    customMetadata:{owner,video_id:id,retention:'forever',processing_id:String(asset.public_id),resolution:'480p'}});
+   const verified=await env.VIDEO_BUCKET.head(key);
+   if(!existingValid(verified,owner,id)||(stored&&verified.size!==compressed.byteLength))throw Error('R2 verification failed');
+   return result(key,verified);
+  }
  } catch {return json({error:'Video was not confirmed saved. Retry the same upload; no Cloudinary playback fallback.'},502);}
  finally {
+  if(deleteToken) {
+   try {await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/delete_by_token`,{
+    method:'POST',redirect:'error',body:new URLSearchParams({token:deleteToken}),signal:AbortSignal.timeout(20000)});}catch{}
+  }
   if(sourceId) {
    try {await env.DB.prepare("UPDATE friendbook_video_processing SET cleanup_after=? WHERE public_id=? AND state='pending'").bind(Date.now(),sourceId).run();}catch{}
    await cleanTemporary(env,sourceId,fetcher);
