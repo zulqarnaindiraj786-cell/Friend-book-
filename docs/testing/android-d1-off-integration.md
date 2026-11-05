@@ -27,7 +27,8 @@ are unchanged. See [staging evidence and remaining gates](interaction-staging-st
   source privacy/bans/two-way blocks (including blockedUsers), groups and role
   checks are revalidated server-side. Comment list excludes blocked authors.
 - Bulk mentions use persisted D1 source when selected, with no legacy-source
-  fallback; the Supabase bulk-mentions function must be updated before activation.
+  fallback; the Supabase bulk-mentions function is now ACTIVE v3 with D1 source support;
+  authenticated enabled-device notification tests still precede activation.
 
 Frontend API/storage support includes additive optional 0004 details schema,
 server-verified author snapshots, resource-scoped replies, authenticated edits,

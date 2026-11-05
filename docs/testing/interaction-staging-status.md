@@ -55,3 +55,29 @@ staging importer. No private exports or user records were uploaded as CI artifac
 `safe_to_cutover=false`. Do NOT mark resources verified or enable either switch
 just because the staging import passed. Cloudinary media remains remote; Firebase
 Auth and realtime services have not been moved. This is not an all-Firebase export.
+
+## Post-snapshot observation and notification prerequisite
+
+Observation run [41947690174](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/41947690174)
+PASSED. At Firestore read time `2026-11-05T01:19:26.285930Z`, the observed 949
+documents had the same complete snapshot hash as the baseline: no differences
+were observed at that point in time. This is **not** a continuous change journal
+and does not prove that no intermediate or later writes occurred.
+
+Observation `f2201439-2855-4b4b-ad4c-a5c7184aa58b` has a verified append-only seal.
+Resource-counter ledger classifications across 166 metrics: 134 match known
+identities, 29 underreport them, two counters are absent, and one has an unsupported
+counter value. Original values remain preserved. These are classifications, not
+an applied source-counter correction or resolved cutover certificate. Application
+rows modified by observation: zero; Firebase writes/deletions: zero.
+
+`0007_additive_migration_observations.sql` creates administrative tables only.
+Partial observations have no verified manifest; earlier observations are never
+replaced. Full point-in-time reconstruction and every stored row were verified.
+
+Supabase `friendbook-push` function `bulk-mentions` updated ACTIVE v3 to support
+verified D1 comment sources; the existing `send-fcm-notification` function remains
+unchanged. [41948533932](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/41948533932)
+PASSED all 45 mocked backend tests and production anonymous checks: POST returns
+401/AUTH_REQUIRED; GET returns 405/POST_REQUIRED. No recipients or user notifications
+were used. Enabled D1 notification delivery/device behavior remains unverified.

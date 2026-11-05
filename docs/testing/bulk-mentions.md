@@ -22,3 +22,11 @@ Migration `202611020001_bulk_mentions.sql` applied to friendbook-push (`iqtccjgp
 24 backend mock tests (16 existing + 8 new) verify Firebase auth, persisted source permission, private/group/stale/forged source rejection, reciprocal followers, friends query, blocks/opt-out/bans, client spoof resistance, daily-denial no-write and cap20. Python wiring guards and Robolectric bulk identity tests cover UI/persistence/endpoint selection and no fake-profile navigation.
 
 Pending physical acceptance: keyboard/list positioning; select/filter people and both tags; post/send/reopen blue mentions; source owner/public eligibility; receiving devices with tags enabled/disabled; overlapping audiences, retry/offline/app restart/account switch, actual inbox and FCM delivery. ACTIVE deployment, mocks and signed build are NOT proof of delivery to a phone.
+
+## D1 source preparation update
+
+The existing `bulk-mentions` function is ACTIVE v3 with the repository D1 comment
+source/ownership validation branch. `send-fcm-notification` was not modified.
+Backend provider-mocked tests (45) and unauthenticated runtime rejection checks
+passed in GitHub Actions run 41948533932. Both D1 gates remain OFF; this does not
+establish authenticated D1 source access, FCM/device delivery or a live cutover.
