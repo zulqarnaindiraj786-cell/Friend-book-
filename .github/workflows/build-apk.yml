@@ -52,6 +52,14 @@ jobs:
           fi
           exit "$RESULT"
 
+      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
+        run: |
+          mkdir -p "$RUNNER_TEMP/presence-coordinators"
+          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
+
       - name: Ensure Android SDK 36
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
@@ -130,6 +138,15 @@ jobs:
         if: steps.rel.outputs.exit != '0'
         run: exit 1
 
+      - name: Require actual Android presence test results, not source-only checks
+        run: python3 scripts/ci/verify_presence_android_tests.py
+
+      - name: Mark branch artifacts as migration candidates, not a production capacity pass
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
         run: |
           ls -lh app/build/outputs/bundle/release/
@@ -159,7 +176,9 @@ jobs:
           name: FriendBook-release-mapping
           path: friendbook-mapping.txt
 
+      # Migration branch builds must never replace the production/latest release.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
