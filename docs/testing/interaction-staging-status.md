@@ -229,3 +229,18 @@ verified D1 resource marker, and the current API correctly returns 503 for them.
 A secure post-cutover registration path is still required before global routing
 can be enabled. Existing staging markers must never be automatically promoted
 just to make a health check pass. No production fence/control is deployed here.
+
+Upgrade-first release evidence:
+- Worker deployment/read-only health/auth/actual public APK metadata read-back:
+  **41956620916/job127012953553 SUCCESS**. Both OFF guards passed.
+- First update-dialog UI test failed on an undrained asynchronous click callback
+  (`41956620859`). `c274abf` drains the main Looper before asserting the intent.
+- Corrected Android-only run **41956902900/job127013879515 SUCCESS (4m36s)**:
+  full release unit tests (including three update-policy/UI tests), R8, signed
+  APK/AAB, mapping uploads and GitHub publication passed. No website job.
+- Published **v2.8.34 (66)** assets: `friendbook.apk`,
+  `friendbook-playstore.aab`, `friendbook-mapping.txt`. Users should install
+  over the existing app, never uninstall/clear data as a migration step.
+- Runtime switch/fence and all resource markers unchanged. This build adds the
+  upgrade flow but does NOT enable D1 or solve new-resource registration.
+  No physical-device/adoption proof is claimed by these CI results.
