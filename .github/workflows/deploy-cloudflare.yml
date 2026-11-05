@@ -91,11 +91,16 @@ jobs:
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health -o /tmp/friendbook-health.json
+          curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health/r2 -o /tmp/friendbook-health-r2.json
           python3 - <<'PY'
           import json
           with open('/tmp/friendbook-health.json') as f:
               assert json.load(f).get('ok') is True, 'Worker/D1 health check failed'
-          print('Worker health + read-only D1 SELECT 1 passed. No user data was written.')
+          with open('/tmp/friendbook-health-r2.json') as f:
+              r2 = json.load(f)
+              assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
+          print('Worker health + read-only D1 SELECT 1 + R2 bucket head check passed. No user data was written.')
           PY
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)

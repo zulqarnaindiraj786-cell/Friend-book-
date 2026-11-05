@@ -74,15 +74,67 @@ public final class R2VideoClient {
         URL endpoint=new URL(ENDPOINT);
         JSONObject response=send(endpoint,"GET",token,id,null,0,null);
         if(response==null) {
-            try(InputStream in=ctx.getContentResolver().openInputStream(uri)) {
-                if(in==null)throw new IOException("Video unavailable");
-                response=send(endpoint,"POST",token,id,in,length,progress);
+            try {
+                response=stageAndCommit(ctx,uri,endpoint,token,id,length,progress);
+            } catch (Exception stageErr) {
+                try(InputStream in=ctx.getContentResolver().openInputStream(uri)) {
+                    if(in==null)throw new IOException("Video unavailable");
+                    response=send(endpoint,"POST",token,id,in,length,progress);
+                }
             }
         }
         if(!expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed; video not attached");
         String result=verifiedUrl(response,owner,id);
         if(progress!=null)MAIN.post(()->progress.onProgress(100,length,length));
         return result;
+    }
+    private static JSONObject stageAndCommit(Context ctx,Uri uri,URL endpoint,String token,String id,long length,Cloudinary.ProgressListener progress)throws Exception {
+        String boundary="fbstage"+System.currentTimeMillis();
+        HttpURLConnection stage=(HttpURLConnection)new URL("https://api.cloudinary.com/v1_1/x5ed4d0b/video/upload").openConnection();
+        JSONObject staged;
+        try {
+            stage.setConnectTimeout(25000);stage.setReadTimeout(300000);stage.setInstanceFollowRedirects(false);
+            stage.setRequestMethod("POST");stage.setDoOutput(true);stage.setChunkedStreamingMode(65536);
+            stage.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);
+            try(DataOutputStream out=new DataOutputStream(new BufferedOutputStream(stage.getOutputStream(),65536));
+                InputStream in=ctx.getContentResolver().openInputStream(uri)) {
+                if(in==null)throw new IOException("Video unavailable");
+                out.writeBytes("--"+boundary+"\r\nContent-Disposition: form-data; name=\"upload_preset\"\r\n\r\nMyapp_upload\r\n");
+                out.writeBytes("--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"video.mp4\"\r\nContent-Type: video/mp4\r\n\r\n");
+                byte[] buffer=new byte[65536];int n;long sent=0;int lastPercent=-1;
+                while((n=in.read(buffer))!=-1) {
+                    sent+=n;if(sent>length)throw new IOException("Video changed");out.write(buffer,0,n);
+                    int percent=(int)(sent*85/length);
+                    if(progress!=null && percent!=lastPercent){lastPercent=percent;final long done=sent;MAIN.post(()->progress.onProgress(percent,done,length));}
+                }
+                if(sent!=length)throw new IOException("Video changed");
+                out.writeBytes("\r\n--"+boundary+"--\r\n");out.flush();
+            }
+            if(stage.getResponseCode()<200||stage.getResponseCode()>=300)throw new IOException("Stage failed");
+            try(InputStream in=stage.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()) {
+                byte[] buffer=new byte[4096];int n;
+                while((n=in.read(buffer))!=-1){if(out.size()+n>65536)throw new IOException("Stage response too large");out.write(buffer,0,n);}
+                staged=new JSONObject(out.toString("UTF-8"));
+            }
+        }finally{stage.disconnect();}
+        JSONObject payload=new JSONObject().put("publicId",staged.optString("public_id"));
+        if(staged.has("version"))payload.put("version",staged.optLong("version"));
+        if(staged.has("delete_token"))payload.put("deleteToken",staged.optString("delete_token"));
+        byte[] body=payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        HttpURLConnection conn=(HttpURLConnection)endpoint.openConnection();
+        try {
+            conn.setConnectTimeout(20000);conn.setReadTimeout(300000);conn.setInstanceFollowRedirects(false);
+            conn.setRequestMethod("POST");conn.setDoOutput(true);conn.setFixedLengthStreamingMode(body.length);
+            conn.setRequestProperty("Authorization","Bearer "+token);conn.setRequestProperty("X-Video-Id",id);
+            conn.setRequestProperty("Content-Type","application/json");
+            try(OutputStream out=conn.getOutputStream()){out.write(body);}
+            if(conn.getResponseCode()!=200)throw new IOException("R2 commit failed ("+conn.getResponseCode()+")");
+            try(InputStream in=conn.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()) {
+                byte[] buffer=new byte[4096];int n;
+                while((n=in.read(buffer))!=-1){if(out.size()+n>65536)throw new IOException("Video response too large");out.write(buffer,0,n);}
+                return new JSONObject(out.toString("UTF-8"));
+            }
+        }finally{conn.disconnect();}
     }
     // Package-private loopback seam. Public upload endpoint is fixed HTTPS.
     static JSONObject send(URL endpoint,String method,String token,String id,InputStream input,long length,Cloudinary.ProgressListener progress)throws Exception {

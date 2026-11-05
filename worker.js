@@ -43,9 +43,18 @@ export function createWorker(verify = verifyFirebaseToken) {
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
-      if (path !== '/health' && path !== '/v1/me' && !engagement && !video && !presence) return json({ error: 'Not found' }, 404);
-      if (path === '/health' && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !presence) return json({ error: 'Not found' }, 404);
+      if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
+      if (path === '/health/r2') {
+        if (!env.VIDEO_BUCKET || env.VIDEO_R2_ENABLED !== 'true' || env.VIDEO_R2_RETENTION_VERIFIED !== 'true') {
+          return json({ ok: false, r2Bound: Boolean(env.VIDEO_BUCKET), videoR2Enabled: env.VIDEO_R2_ENABLED === 'true' }, 503);
+        }
+        try {
+          await env.VIDEO_BUCKET.head('videos/__healthcheck__');
+          return json({ ok: true, r2Bound: true, videoR2Enabled: true });
+        } catch { return json({ ok: false, r2Bound: true, videoR2Enabled: true }, 503); }
+      }
       if (path === '/health') {
         if (!env.DB) return json({ ok: false }, 503);
         try {

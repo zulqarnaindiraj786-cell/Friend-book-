@@ -34,19 +34,23 @@ async function cloudFields(env, fields) {
  return {...fields, api_key:env.CLOUDINARY_API_KEY, signature:await signedCloudinaryFields(fields,env.CLOUDINARY_API_SECRET)};
 }
 // Streaming multipart avoids loading the video into a Worker's 128 MB heap.
-function multipart(fields, body, boundary) {
+function multipart(fields, body, boundary, fileBytes) {
  const enc = new TextEncoder();
  let prefix = '';
  for(const [key,value] of Object.entries(fields)) prefix += `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
  prefix += `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="video.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+ const suffix = `\r\n--${boundary}--\r\n`;
+ const prefixBytes = enc.encode(prefix), suffixBytes = enc.encode(suffix);
+ const totalLength = prefixBytes.byteLength + fileBytes + suffixBytes.byteLength;
  const reader = body.getReader(); let first=true, finished=false;
- return new ReadableStream({async pull(controller) {
-  if(first){first=false;controller.enqueue(enc.encode(prefix));return;}
+ const stream = new ReadableStream({async pull(controller) {
+  if(first){first=false;controller.enqueue(prefixBytes);return;}
   const chunk = await reader.read();
   if(!chunk.done){controller.enqueue(chunk.value);return;}
-  if(!finished){finished=true;controller.enqueue(enc.encode(`\r\n--${boundary}--\r\n`));}
+  if(!finished){finished=true;controller.enqueue(suffixBytes);}
   controller.close();
  },cancel(reason){return reader.cancel(reason);}});
+ return { stream, totalLength };
 }
 async function smallJson(response) {
  const reader=response.body?.getReader(); if(!reader)throw Error('Invalid provider response');
@@ -99,32 +103,42 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
   }catch{return json({error:'Video lookup unavailable'},503);}
  }
  const length=request.headers.get('Content-Length') || '';
- if(!/^[a-f0-9]{64}$/.test(id)||!/^\d+$/.test(length)||!request.body)return json({error:'Video identity and length required'},400);
- const bytes=Number(length);
- if(!Number.isSafeInteger(bytes)||bytes<1||bytes>MAX_VIDEO_BYTES)return json({error:'Video must be under 99 MB per upload'},413);
+ const isJson=(request.headers.get('Content-Type') || '').toLowerCase().startsWith('application/json');
+ if(!/^[a-f0-9]{64}$/.test(id)||!request.body||(!isJson&&!/^\d+$/.test(length)))return json({error:'Video identity and length required'},400);
+ const bytes=isJson ? 0 : Number(length);
+ if(!isJson&&(!Number.isSafeInteger(bytes)||bytes<1||bytes>MAX_VIDEO_BYTES))return json({error:'Video must be under 99 MB per upload'},413);
  const owner=await hash(uid),key=`videos/${owner}/${id}.mp4`;
- const signedMode=hasSigned(env);
+ const signedMode=hasSigned(env) && !isJson;
  let sourceId, deleteToken;
  try {
   const previous=await env.VIDEO_BUCKET.head(key);
   if(previous){await request.body.cancel();return existingValid(previous,owner,id)?result(key,previous):json({error:'Video identity conflict'},409);}
-  let fields;
-  if(signedMode) {
-   sourceId=TEMP_PREFIX+owner+'/'+crypto.randomUUID();
-   await env.DB.prepare("INSERT INTO friendbook_video_processing(public_id,created_at,cleanup_after,state) VALUES(?,?,?,'pending')")
-    .bind(sourceId,Date.now(),Date.now()+3600000).run();
-   fields=await cloudFields(env,{backup:'false',format:'mp4',overwrite:'false',public_id:sourceId,
-    timestamp:Math.floor(Date.now()/1000),transformation:TRANSFORM});
+  let asset;
+  if(isJson) {
+   const staged=await smallJson(request);
+   if(typeof staged?.deleteToken==='string'&&staged.deleteToken.length>0)deleteToken=staged.deleteToken;
+   if(!/^[A-Za-z0-9_\/-]+$/.test(staged?.publicId||''))return json({error:'Invalid staged video publicId'},400);
+   asset={resource_type:'video',public_id:staged.publicId,version:Number.isSafeInteger(staged.version)?staged.version:undefined};
   } else {
-   fields={upload_preset:env.CLOUDINARY_UPLOAD_PRESET};
+   let fields;
+   if(signedMode) {
+    sourceId=TEMP_PREFIX+owner+'/'+crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO friendbook_video_processing(public_id,created_at,cleanup_after,state) VALUES(?,?,?,'pending')")
+     .bind(sourceId,Date.now(),Date.now()+3600000).run();
+    fields=await cloudFields(env,{backup:'false',format:'mp4',overwrite:'false',public_id:sourceId,
+     timestamp:Math.floor(Date.now()/1000),transformation:TRANSFORM});
+   } else {
+    fields={upload_preset:env.CLOUDINARY_UPLOAD_PRESET};
+   }
+   const boundary='fb'+crypto.randomUUID().replaceAll('-','');
+   const {stream,totalLength}=multipart(fields,request.body,boundary,bytes);
+   const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/upload`, {
+    method:'POST',headers:{'Content-Type':`multipart/form-data; boundary=${boundary}`,'Content-Length':String(totalLength)},
+    body:stream,duplex:'half',redirect:'error',signal:AbortSignal.timeout(300000)});
+   if(!response.ok)throw Error('Processing failed');
+   asset=await smallJson(response);
+   if(typeof asset.delete_token==='string'&&asset.delete_token.length>0)deleteToken=asset.delete_token;
   }
-  const boundary='fb'+crypto.randomUUID().replaceAll('-','');
-  const response=await fetcher(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/video/upload`, {
-   method:'POST',headers:{'Content-Type':`multipart/form-data; boundary=${boundary}`},
-   body:multipart(fields,request.body,boundary),duplex:'half',redirect:'error',signal:AbortSignal.timeout(300000)});
-  if(!response.ok)throw Error('Processing failed');
-  const asset=await smallJson(response);
-  if(typeof asset.delete_token==='string'&&asset.delete_token.length>0)deleteToken=asset.delete_token;
   if(signedMode) {
    if(asset.public_id!==sourceId||asset.resource_type!=='video'||asset.format!=='mp4'
     ||!Number.isSafeInteger(asset.width)||asset.width<1||asset.width>854

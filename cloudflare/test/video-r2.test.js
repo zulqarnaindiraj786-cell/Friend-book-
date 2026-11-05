@@ -94,5 +94,16 @@ test('unsigned preset mode fetches 480p compressed MP4 into R2 and deletes tempo
   const body=await response.json();
   assert.equal(response.status,200);assert.equal(body.provider,'r2');assert.equal(body.retention,'forever');
   assert.ok(seen.some(u=>u.endsWith('/delete_by_token')));
+  const stagedReq=new Request('https://example.invalid/v1/videos',{method:'POST',headers:{'X-Video-Id':'b'.repeat(64),'Content-Type':'application/json'},
+   body:JSON.stringify({publicId:'staged_video_1',version:7,deleteToken:'del_tok_2'})});
+  const stagedRes=await uploadVideo(stagedReq,presetEnv,'actor',async url=>{
+   if(String(url).endsWith('/delete_by_token'))return Response.json({result:'ok'});
+   assert.match(String(url),/c_limit,w_854,h_480,vc_h264,ac_aac,q_auto:eco,f_mp4\/v7\/staged_video_1\.mp4$/);
+   return new Response(bytes);
+  });
+  assert.equal(stagedRes.status,200);assert.equal((await stagedRes.json()).provider,'r2');
+  const app=createWorker(async()=>'actor');
+  const r2Health=await app.fetch(new Request('https://example.invalid/health/r2'),presetEnv);
+  assert.equal(r2Health.status,200);assert.deepEqual(await r2Health.json(),{ok:true,r2Bound:true,videoR2Enabled:true});
  }finally{f.sql.close();}
 });
