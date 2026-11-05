@@ -56,6 +56,7 @@ def plan(docs):
     pins = defaultdict(set)
     rows = defaultdict(list)
     entries = []
+    unmapped_shapes = Counter()
     for name, raw in docs.items():
         if not name.startswith(PREFIX + '/'):
             raise BackupError('Wrong source project')
@@ -128,10 +129,22 @@ def plan(docs):
         for field in ('reactions', 'reactionsMap'):
             value = data.get(field) or {}
             if not isinstance(value, dict): issues['invalid_embedded_reactions'] += 1; continue
-            for actor, kind in value.items():
-                if (not isinstance(kind, str) or kind not in TYPES) or not actor: issues['unsupported_reaction'] += 1; continue
+            for actor, raw in value.items():
+                # Matches Models.normalizeReactionType's recognized string/map forms,
+                # but never guesses its fallback type for an unrecognized value.
+                kind = raw.get('type') if isinstance(raw, dict) else raw
+                if isinstance(kind, str): kind = kind.strip().lower()
+                if not isinstance(kind, str) or kind not in TYPES or not actor:
+                    issues['unsupported_reaction'] += 1; continue
                 if actor in embedded and embedded[actor] != kind: issues['conflicting_embedded_reactions'] += 1
                 embedded[actor] = kind
+                if isinstance(raw, dict):
+                    try:
+                        stamp = timestamp(raw.get('updatedAt', raw.get('createdAt')))
+                        key = resource, actor
+                        if key not in reaction_times or reaction_times[key] < stamp:
+                            reaction_times[key] = stamp
+                    except (ValueError, TypeError): pass
         liked = data.get('likedBy') or []
         if not isinstance(liked, list): issues['invalid_liked_by'] += 1
         else:
@@ -165,6 +178,9 @@ def plan(docs):
             continue
         # Preserve raw data, but do not silently drop any unrecognized interaction path.
         issues['unmapped_snapshot_document'] += 1
+        allowed = {'posts', 'reels', 'comments', 'reactions', 'replies', 'likes', 'views'}
+        shape = '/'.join(('*' if i % 2 else (part if part in allowed else 'other')) for i, part in enumerate(path))
+        unmapped_shapes[shape] += 1
 
     for (resource, cid), row in sorted(comments.items()):
         parent = row['parent_id']
@@ -191,6 +207,7 @@ def plan(docs):
                                   'updated_at': reaction_times.get((resource, actor))})
     counts.update({'comments': len(comments), 'reactions': len(reactions), 'snapshot_documents': len(docs)})
     return dict(rows), {'counts': dict(counts), 'blockers': dict(issues),
+                        'unmapped_path_shapes': dict(unmapped_shapes),
                         'normalized_import_applied': False, 'safe_to_cutover': False,
                         'requires_live_write_reconciliation': True}
 

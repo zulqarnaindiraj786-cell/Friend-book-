@@ -57,9 +57,18 @@ class PlanTests(unittest.TestCase):
         _, report = m.plan(docs)
         self.assertEqual(report['blockers']['resource_reaction_counter_mismatch'], 1)
     def test_unknown_reaction_value_fails_closed(self):
-        docs = fixture(); docs.update([document('posts/p', {'likes': 1, 'comments': 1, 'reactionsMap': {'u': {'type': 'like'}}})])
+        docs = fixture(); docs.update([document('posts/p', {'likes': 1, 'comments': 1, 'reactionsMap': {'u': {'type': 'unknown'}}})])
         _, report = m.plan(docs)
         self.assertIn('unsupported_reaction', report['blockers'])
+    def test_legacy_reaction_map_type_and_timestamp_preserved(self):
+        docs = fixture(); docs.pop(m.PREFIX + '/posts/p/reactions/u')
+        docs.update([document('posts/p', {'likes': 1, 'comments': 1,
+                                        'reactionsMap': {'u': {'type': ' Like ', 'createdAt': 456}}})])
+        rows, report = m.plan(docs)
+        self.assertEqual(report['blockers'], {})
+        self.assertEqual(rows['reactions'][0]['type'], 'like')
+        self.assertEqual(rows['reactions'][0]['updated_at'], 456)
+
     def test_missing_historical_timestamp_not_invented(self):
         docs = fixture(); docs.pop(m.PREFIX + '/posts/p/reactions/u')
         rows, report = m.plan(docs)
