@@ -40,8 +40,8 @@ public final class CloudPresenceSocket implements AutoCloseable {
                 Handle handle = new Handle();
                 Request request = new Request.Builder().url(CloudPresenceSocket.this.endpoint)
                     .header("Authorization", "Bearer " + token).build();
-                handle.socket = CloudPresenceSocket.this.client.newWebSocket(request, new WebSocketListener() {
-                    @Override public void onOpen(WebSocket socket, Response response) { onMain(() -> events.opened(handle)); }
+                WebSocket candidate = CloudPresenceSocket.this.client.newWebSocket(request, new WebSocketListener() {
+                    @Override public void onOpen(WebSocket socket, Response response) { handle.bind(socket); onMain(() -> events.opened(handle)); }
                     @Override public void onFailure(WebSocket socket, Throwable error, Response response) {
                         int code = response == null ? 0 : response.code();
                         boolean retryable = response == null || code == 500 || code == 502 || code == 504;
@@ -53,6 +53,7 @@ public final class CloudPresenceSocket implements AutoCloseable {
                         onMain(() -> events.failed(handle, code == 1000 || code == 1001 || (code == 1008 && "Session expired".equals(reason))));
                     }
                 });
+                handle.bind(candidate);
                 return handle;
             }
         });
@@ -86,10 +87,17 @@ public final class CloudPresenceSocket implements AutoCloseable {
         private volatile WebSocket socket;
         private boolean closing;
         public boolean send(String text) { return socket != null && socket.send(text); }
+        public synchronized void bind(WebSocket candidate) {
+            if (socket != null) return;
+            socket = candidate;
+            if (closing) closeBound(candidate);
+        }
         public synchronized void close() {
-            WebSocket old = socket;
-            if (old == null || closing) return;
+            if (closing) return;
             closing = true;
+            if (socket != null) closeBound(socket);
+        }
+        private void closeBound(WebSocket old) {
             old.close(1000, "Inactive");
             // Cancel this captured old socket only, never a replacement session.
             main.postDelayed(old::cancel, 2000L);

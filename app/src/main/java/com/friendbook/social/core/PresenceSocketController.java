@@ -99,6 +99,7 @@ public final class PresenceSocketController {
     private synchronized void fail(long ticket, Connection failedSocket, boolean retryable) {
         if (ticket != policy.generation()) { if (failedSocket != null && failedSocket != connection) failedSocket.close(); return; }
         long delay = policy.failed(ticket);
+        if (failedSocket != null && failedSocket != connection) failedSocket.close();
         cancelWork(); closeConnection(false);
         if (delay < 0 || !retryable) return;
         if (!runtime.currentActor(actor)) { stop(); return; }

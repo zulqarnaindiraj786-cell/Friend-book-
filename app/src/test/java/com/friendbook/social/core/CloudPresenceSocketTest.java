@@ -66,4 +66,27 @@ public class CloudPresenceSocketTest {
    finally{socket.close();}
   }
  }
+ @Test public void synchronousOpenBindsSocketBeforeFirstSend()throws Exception{
+  OkHttpClient client=mock(OkHttpClient.class);WebSocket nativeSocket=mock(WebSocket.class);
+  when(nativeSocket.send(anyString())).thenReturn(true);
+  when(client.newWebSocket(any(Request.class),any(WebSocketListener.class))).thenAnswer(call->{
+   WebSocketListener listener=call.getArgument(1);Request request=call.getArgument(0);
+   listener.onOpen(nativeSocket,new Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(101).message("Switching Protocols").build());
+   return nativeSocket;
+  });
+  CloudPresenceSocket socket=new CloudPresenceSocket(auth(),immediateHandler(),client,true,"ws://example.invalid/socket");
+  try{socket.foreground(true);verify(nativeSocket).send("{\"type\":\"active\"}");socket.background();verify(nativeSocket).send("{\"type\":\"offline\"}");}
+  finally{socket.close();}
+  verify(nativeSocket,times(1)).close(1000,"Inactive");
+ }
+ @Test public void failureBeforeFactoryReturnsStillClosesLateBoundSocket(){
+  OkHttpClient client=mock(OkHttpClient.class);WebSocket nativeSocket=mock(WebSocket.class);
+  when(client.newWebSocket(any(Request.class),any(WebSocketListener.class))).thenAnswer(call->{
+   ((WebSocketListener)call.getArgument(1)).onFailure(nativeSocket,new java.io.IOException("synthetic"),null);return nativeSocket;
+  });
+  CloudPresenceSocket socket=new CloudPresenceSocket(auth(),immediateHandler(),client,true,"ws://example.invalid/socket");
+  try{socket.foreground(true);verify(nativeSocket,never()).send(anyString());verify(nativeSocket,times(1)).close(1000,"Inactive");}
+  finally{socket.close();}
+ }
+
 }
