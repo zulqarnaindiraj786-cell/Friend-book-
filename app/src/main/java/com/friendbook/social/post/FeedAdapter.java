@@ -211,8 +211,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int footerCount() { return showFooter ? 1 : 0; }
 
     // ---- 📢 Google AdMob Feed Native Ad Slots (`ca-app-pub-3387480177023669/4957447582`) ----
-    private static final int NATIVE_AD_EVERY_N_POSTS = 4;
-    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 4 posts + 1 Native Ad = 5
+    private static final int NATIVE_AD_EVERY_N_POSTS = 3;
+    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 3 posts + 1 Native Ad = 4
 
     private String nativeAdUnitId = com.friendbook.social.core.AdsConfig.feedNativeId();
     private boolean adsEnabled = com.friendbook.social.core.AdsConfig.nativeAdsEnabled();

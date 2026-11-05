@@ -516,7 +516,7 @@ public class ReelsFragment extends Fragment {
     static class ReelAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         private static final int VT_REEL = 0;
         private static final int VT_REEL_AD = 1;
-        private static final int REELS_PER_AD = 4;
+        private static final int REELS_PER_AD = 3;
         private static final int REEL_AD_STEP = REELS_PER_AD + 1;
 
         private final Activity activity;
