@@ -11,6 +11,7 @@ export function fixture() {
   sql.exec('PRAGMA foreign_keys=ON');
   sql.exec(readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0004_additive_comment_details.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");
   const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);
@@ -142,4 +143,28 @@ test('blockedUsers and private group membership are checked against live source 
    url.endsWith('/groups/g1')?{privacy:s('Private'),members:a(member?['user1']:[])}:{}});
   assert.equal(await authorizePost(identity,'posts','p1',fetcher,{}),expected);
  }
+});
+
+
+test('unknown historical reaction time is null, not a fabricated epoch date; fresh action becomes known', async t => {
+  const f = fixture(); t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',0)");
+  f.sql.exec("INSERT INTO friendbook_cf_reaction_history VALUES ('posts/p1','user1',0)");
+  let page = await (await call(f.env, 'reactors')).json();
+  assert.equal(page.reactors[0].createdAt, null);
+  assert.equal(page.reactors[0].timestampKnown, 0);
+  assert.equal((await call(f.env, 'reactions', 'PUT', {type:'love'})).status, 200);
+  page = await (await call(f.env, 'reactors')).json();
+  assert.ok(page.reactors[0].createdAt > 0);
+  assert.equal(page.reactors[0].timestampKnown, 1);
+});
+
+test('known epoch zero is distinct from unknown, and schema upgrade retains existing rows', async t => {
+  const f = fixture(); t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',0)");
+  const page = await (await call(f.env, 'reactors')).json();
+  assert.equal(page.reactors[0].createdAt, 0);
+  assert.equal(page.reactors[0].timestampKnown, 1);
+  f.sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_reactions').get().n, 1);
 });

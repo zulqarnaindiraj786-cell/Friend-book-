@@ -52,9 +52,14 @@ export async function interactions(request, env, identity, match, authorize = au
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
-        await db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
-          VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at`)
-          .bind(resource, identity.uid, data.type, Date.now()).run();
+        await db.batch([
+          db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
+            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at`)
+            .bind(resource, identity.uid, data.type, Date.now()),
+          db.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known)
+            VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1`)
+            .bind(resource, identity.uid)
+        ]);
       }
       const summary = await db.prepare(`SELECT s.type,s.total AS count,CASE WHEN r.type=s.type THEN 1 ELSE 0 END AS mine
         FROM friendbook_cf_reaction_totals s LEFT JOIN friendbook_cf_reactions r ON r.resource=s.resource AND r.uid=?
