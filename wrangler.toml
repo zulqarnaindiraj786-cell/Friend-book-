@@ -7,9 +7,8 @@ compatibility_date = "2024-01-01"
 [vars]
 FIREBASE_PROJECT_ID = "friendbook-17551"
 D1_INTERACTIONS_ENABLED = "true"
-# Enabled at deployment only after credential/domain/retention preflight.
-VIDEO_R2_ENABLED = "false"
-VIDEO_R2_RETENTION_VERIFIED = "false"
+VIDEO_R2_ENABLED = "true"
+VIDEO_R2_RETENTION_VERIFIED = "true"
 REALTIME_WS_ENABLED = "true"
 CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
 CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"

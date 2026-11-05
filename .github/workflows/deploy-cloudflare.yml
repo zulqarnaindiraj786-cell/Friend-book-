@@ -34,6 +34,9 @@ jobs:
           cfg = tomllib.loads(pathlib.Path('wrangler.toml').read_text())
           assert cfg['name'] == 'rough-firefly-dd7b'
           assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
+          assert cfg['vars']['VIDEO_R2_ENABLED'] == 'true'
+          assert cfg['vars']['VIDEO_R2_RETENTION_VERIFIED'] == 'true'
+          assert cfg['vars']['REALTIME_WS_ENABLED'] == 'true'
           assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'
           assert cfg['d1_databases'] == [{
               'binding': 'DB', 'database_name': 'friendbook-db',
