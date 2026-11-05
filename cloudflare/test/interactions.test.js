@@ -12,6 +12,7 @@ export function fixture() {
   sql.exec(readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0004_additive_comment_details.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0006_additive_comment_history.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");
   const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);
@@ -167,4 +168,15 @@ test('known epoch zero is distinct from unknown, and schema upgrade retains exis
   assert.equal(page.reactors[0].timestampKnown, 1);
   f.sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_reactions').get().n, 1);
+});
+
+
+test('unknown comment date is not invented; reply pagination still uses stable stored keys', async t => {
+  const f = fixture(); t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_comments VALUES ('posts/p1','legacy','user1','original',NULL,0)");
+  f.sql.exec("INSERT INTO friendbook_cf_comment_history VALUES ('posts/p1','legacy',0)");
+  const page = await (await call(f.env, 'comments')).json();
+  assert.equal(page.comments[0].createdAt, null);
+  assert.equal(page.comments[0].createdAtKnown, false);
+  assert.equal(f.sql.prepare('SELECT created_at FROM friendbook_cf_comments').get().created_at, 0);
 });

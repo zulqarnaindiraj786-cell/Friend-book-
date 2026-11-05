@@ -112,6 +112,20 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(report['invalid_comment_reasons']['author_identity'], 1)
         self.assertNotIn('bad', m.canonical(report))
 
+    def test_missing_comment_date_is_preserved_as_unknown(self):
+        docs = fixture()
+        for key in (m.PREFIX + '/comments/c', m.PREFIX + '/posts/p/comments/c'):
+            data = json.loads(docs[key]); del data['fields']['createdAt']; docs[key] = m.canonical(data)
+        rows, report = m.plan(docs)
+        self.assertEqual(report['blockers'], {})
+        self.assertEqual(rows['comments'][0]['created_at'], 0)
+        self.assertEqual(rows['comment_history'][0]['created_at_known'], 0)
+        self.assertEqual(report['warnings']['unknown_comment_creation_time_preserved'], 1)
+
+    def test_integral_double_timestamp_matches_android_without_guessing(self):
+        self.assertEqual(m.timestamp(1234.0), 1234)
+        with self.assertRaises(ValueError): m.timestamp(1234.5)
+
     def test_typed_integer_not_coerced_to_float(self):
         self.assertEqual(m.decode({'integerValue': '9007199254740993'}), 9007199254740993)
     def test_timestamp_rejects_missing_timezone(self):

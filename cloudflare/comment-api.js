@@ -1,13 +1,14 @@
 const reply = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
 const types = new Set(['like','love','haha','wow','sad','angry']);
-export const commentSelect = `SELECT c.*,d.media_url,d.mentions,d.name,d.photo,d.edited,d.removed,
+export const commentSelect = `SELECT c.*,COALESCE(h.created_at_known,1) AS created_at_known,d.media_url,d.mentions,d.name,d.photo,d.edited,d.removed,
  (SELECT COUNT(*) FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.type IS NOT NULL) AS likes,
  (SELECT type FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.uid=?) AS mine
- FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id`;
+ FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+ LEFT JOIN friendbook_cf_comment_history h ON h.resource=c.resource AND h.id=c.id`;
 function dto(row, uid) {
   return { ...row, authorId:row.uid,authorName:row.name || 'friendbook User',authorPhoto:row.photo || '',
-    content:row.text,imageUrl:row.media_url || '',parentId:row.parent_id || '',createdAt:row.created_at,
+    content:row.text,imageUrl:row.media_url || '',parentId:row.parent_id || '',createdAt:row.created_at_known===0?null:row.created_at,createdAtKnown:row.created_at_known!==0,
     edited:!!row.edited,mentions:JSON.parse(row.mentions || '[]'), reactions:row.mine?{[uid]:row.mine}:{} };
 }
 export function normalized(row, uid) { return dto(row,uid); }

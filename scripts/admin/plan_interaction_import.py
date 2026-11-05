@@ -4,6 +4,7 @@ A successful audit is NOT a live-write fence or permission to activate D1.
 from collections import Counter, defaultdict
 from datetime import datetime
 import json
+import math
 import os
 import re
 import sys
@@ -34,6 +35,8 @@ def fields(document):
 def timestamp(value):
     if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 9007199254740991:
         return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return timestamp(int(value))
     if isinstance(value, str) and 'T' in value:
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
         if parsed.tzinfo is None: raise ValueError('Missing timezone')
@@ -100,10 +103,11 @@ def plan(docs):
                 if not isinstance(actor, str) or not actor or not isinstance(kind, str) or kind not in TYPES:
                     raise ValueError('reaction_value')
                 rx[actor] = kind
-            try: created_at = timestamp(data.get('createdAt'))
+            created_at_known = data.get('createdAt') is not None
+            try: created_at = timestamp(data['createdAt']) if created_at_known else 0
             except (ValueError, TypeError): raise ValueError('created_at') from None
             row = {'resource': resource, 'id': cid, 'uid': uid, 'text': text,
-                   'parent_id': parent, 'created_at': created_at,
+                   'parent_id': parent, 'created_at': created_at, 'created_at_known': int(created_at_known),
                    'media_url': media, 'mentions': mentions,
                    'name': first(data, 'authorName', 'userName', 'name'),
                    'photo': first(data, 'authorPhotoUrl', 'authorPhoto', 'userPhoto'),
@@ -119,7 +123,13 @@ def plan(docs):
             issues['invalid_comment_fields'] += 1; return
         key = resource, cid
         if key in comments and comments[key] != row:
-            issues['conflicting_comment_representations'] += 1
+            previous = comments[key]
+            ignored = {'created_at', 'created_at_known'}
+            same_content = {k:v for k,v in previous.items() if k not in ignored} == {k:v for k,v in row.items() if k not in ignored}
+            if same_content and previous['created_at_known'] != row['created_at_known']:
+                if row['created_at_known']: comments[key] = row
+                warnings['comment_timestamp_recovered_from_identical_copy'] += 1
+            else: issues['conflicting_comment_representations'] += 1
         else: comments[key] = row
         if data.get('pinned'): pins[resource].add(cid)
 
@@ -230,6 +240,8 @@ def plan(docs):
             if node in seen: issues['reply_cycle'] += 1; break
             seen.add(node); node = comments[resource, node]['parent_id']
         rows['comments'].append(row)
+        rows['comment_history'].append({'resource': resource, 'id': cid, 'created_at_known': row['created_at_known']})
+        if not row['created_at_known']: warnings['unknown_comment_creation_time_preserved'] += 1
     totals = Counter(resource for resource, _ in reactions)
     comment_totals = Counter(resource for resource, _ in comments)
     for resource, data in parents.items():
@@ -254,6 +266,7 @@ def plan(docs):
                         'invalid_comment_reasons': dict(invalid_comment_reasons),
                         'warnings': dict(warnings),
                         'requires_reaction_history_schema_0005': True,
+                        'requires_comment_history_schema_0006': True,
                         'normalized_import_applied': False, 'safe_to_cutover': False,
                         'requires_live_write_reconciliation': True}
 
