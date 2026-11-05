@@ -157,3 +157,46 @@ this must not be represented as an all-checks-green result. Local Python regress
   production Worker/D1 connectivity verification passed. BOTH gates OFF guard
   passed. No migrations or imports ran. This deploys the privacy fix but does
   not activate interaction traffic.
+
+## Android transport and fresh observation (2026-11-05, follow-up)
+
+- `028ba26` extracts the existing bounded one-attempt HTTP implementation into
+  package-private `D1HttpTransport`. D1Client keeps its unchanged fixed HTTPS
+  production URL, compile-time gate, Firebase token retrieval, serialized queue
+  and before/after account guards. There is no public endpoint override, gate
+  override, alternate writer or retry-to-Firebase path.
+- Six actual loopback HTTP Robolectric tests exercise authenticated UTF-8 JSON,
+  failed-write no retry, redirect refusal, pre-network request-size rejection,
+  response-size rejection and malformed-success rejection. Synthetic bearer
+  strings and a local socket fixture are not live Firebase/device evidence.
+- First Android CI `41951871287` failed because Android test compilation does
+  not provide `com.sun.net.httpserver`; `8134fd3` replaces it with standard
+  `ServerSocket`. Corrected run **41952103897**, build job **126998221641**,
+  **SUCCESS (7m4s)**: `testReleaseUnitTest bundleRelease assembleRelease`, R8,
+  signed APK/AAB, uploads and release publication. Separate website Pages job
+  **127000781889 FAILED** with integration permission error, not a green website
+  deployment. Android package and both D1 gates remain unchanged.
+- Fresh observation attempt `41951871270` stopped with ReadTimeout, safely and
+  without application/source writes. `620b5a5` adds at most three attempts only
+  for Firestore snapshot GET/listCollectionIds/runAggregationQuery transport
+  failures, preserving the same request/readTime/page token. No destination
+  INSERTs, arbitrary POSTs, HTTP authorization failures or user writes are retried.
+  Three new retry-policy tests bring the Python suite to **117 PASS**. Worker
+  suite remains **25 PASS**.
+- Actual fresh observation **41952915125**, job **127000824857**, **SUCCESS
+  (7m39s)**. Read time **2026-11-05T02:06:10.472758Z**; sealed observation
+  **c9bafff7-82a1-46b8-a5fc-1b4a1f6b81c7**. All **949** documents unchanged;
+  baseline/observed SHA256 both
+  `164abd086b88825f8ffb83e61c51ed0cf54c66177d7d718e92425e3f2716e595`.
+  No delta replay is needed for this particular observed snapshot. Application
+  rows modified **0**, Firebase writes **0**, deletions **0**. Baseline raw
+  counter/orphan classifications remain present; earlier preservation-policy
+  resolution does not rewrite these source fields or invent the orphan parent.
+- **NOT a completed live cutover:** observation explicitly reports
+  `safe_to_cutover=false`; this is a point-in-time observation, not ongoing CDC.
+  Enabled app/device authorization and UI flows still require QA, followed by
+  coordinated legacy-client upgrade, fresh final synchronization and tested
+  production fence/resource/gate activation. Production remains Firebase for
+  interactions until that coordinated transition; Cloudinary media and Firebase
+  Auth/chat/calls/presence remain unchanged. Never deploy the fence ahead of
+  readiness while released clients still use the OFF/Firebase path.
