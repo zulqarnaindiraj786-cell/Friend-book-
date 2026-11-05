@@ -30,6 +30,7 @@ public class AppUpdatesTest {
   android.app.AlertDialog dialog=(android.app.AlertDialog)ShadowAlertDialog.getLatestAlertDialog();
   assertNotNull(dialog);assertTrue(dialog.isShowing());
   dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
   Intent intent=Shadows.shadowOf(activity).getNextStartedActivity();
   assertEquals(Intent.ACTION_VIEW,intent.getAction());assertEquals(AppUpdates.APK,intent.getDataString());
   assertEquals("retained",activity.getSharedPreferences("user_data_fixture",0).getString("draft",null));
@@ -38,6 +39,7 @@ public class AppUpdatesTest {
   Activity activity=Robolectric.buildActivity(Activity.class).setup().get();AppUpdates.show(activity,policy());
   android.app.AlertDialog dialog=(android.app.AlertDialog)ShadowAlertDialog.getLatestAlertDialog();
   dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick();
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
   assertNull(Shadows.shadowOf(activity).getNextStartedActivity());assertFalse(activity.isFinishing());
  }
 }
