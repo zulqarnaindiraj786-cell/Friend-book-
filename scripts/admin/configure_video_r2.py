@@ -64,7 +64,7 @@ def main():
             raise RuntimeError('Existing Cloudflare deployment secret is unavailable')
         with requests.Session() as session:
             session.headers['Authorization'] = 'Bearer ' + token
-            for migration in ('0001_initial_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql'):
+            for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql'):
                 sql_text = Path('cloudflare/migrations/' + migration).read_text()
                 for stmt in statements(sql_text):
                     upper = stmt.upper()
