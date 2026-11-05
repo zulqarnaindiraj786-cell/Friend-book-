@@ -37,8 +37,12 @@ export async function interactions(request, env, identity, match, authorize = au
   try {
     db = env.DB.withSession('first-primary');
     const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(`${collection}/${id}`).first();
-    if (ready?.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
+    if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
+    if (!ready) {
+      await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
+        .bind(`${collection}/${id}`).run();
+    }
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }
   const resource = `${collection}/${id}`;
   let data;

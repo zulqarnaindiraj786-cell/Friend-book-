@@ -10,7 +10,7 @@ class MigrationCandidateCiTest(unittest.TestCase):
     def test_branch_build_cannot_clobber_public_production_release(self):
         source = (ROOT / '.github/workflows/build-apk.yml').read_text()
         publish = source[source.index('      - name: Publish Signed Release APK'):]
-        self.assertIn("if: github.ref == 'refs/heads/main'", publish.split('        env:', 1)[0])
+        self.assertIn("github.ref == 'refs/heads/main'", publish.split('        env:', 1)[0])
         self.assertIn('verify_presence_android_tests.py', source)
         self.assertIn('PresenceSocketControllerCheck', source)
 

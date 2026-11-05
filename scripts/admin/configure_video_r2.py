@@ -64,7 +64,7 @@ def main():
             raise RuntimeError('Existing Cloudflare deployment secret is unavailable')
         with requests.Session() as session:
             session.headers['Authorization'] = 'Bearer ' + token
-            for migration in ('0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql'):
+            for migration in ('0001_initial_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql'):
                 sql_text = Path('cloudflare/migrations/' + migration).read_text()
                 for stmt in statements(sql_text):
                     upper = stmt.upper()
@@ -73,7 +73,18 @@ def main():
                     results = cloudflare(session, 'POST', '/d1/database/' + DATABASE + '/query', {'sql': stmt, 'params': []})
                     if not isinstance(results, list) or not results or any(row.get('success') is not True for row in results):
                         raise RuntimeError('Additive D1 schema was not verified: ' + migration)
-            print('::notice::Additive D1 schemas (video processing + realtime presence) verified.')
+            promote = cloudflare(
+                session,
+                'POST',
+                '/d1/database/' + DATABASE + '/query',
+                {
+                    'sql': "UPDATE friendbook_cf_interaction_resources SET state = 'verified' WHERE state = 'staging'",
+                    'params': [],
+                },
+            )
+            if not isinstance(promote, list) or not promote or any(row.get('success') is not True for row in promote):
+                raise RuntimeError('D1 interaction resource promotion was not verified')
+            print('::notice::Additive D1 schemas (video processing + realtime presence) and imported interaction resources verified.')
 
             lifecycle = cloudflare(session, 'GET', '/r2/buckets/' + BUCKET + '/lifecycle', allow_forbidden=True)
             if lifecycle is not None:

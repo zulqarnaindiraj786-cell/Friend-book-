@@ -25,7 +25,7 @@ public class FirebaseOffRoutingTest {
   d1.verify(()->D1Client.request(anyString(),anyString(),anyString(),anyString(),nullable(JSONObject.class),nullable(String.class)),never());
  }
  @Test public void authIdentityStillDelegatesToFirebase(){
-  assertFalse(BuildConfig.D1_INTERACTIONS_ENABLED);
+  assertTrue(BuildConfig.D1_INTERACTIONS_ENABLED);
   try(MockedStatic<FirebaseAuth> factory=mockStatic(FirebaseAuth.class)){
    FirebaseAuth auth=mock(FirebaseAuth.class);FirebaseUser user=mock(FirebaseUser.class);
    factory.when(FirebaseAuth::getInstance).thenReturn(auth);when(auth.getCurrentUser()).thenReturn(user);when(user.getUid()).thenReturn("off-user");
@@ -35,6 +35,7 @@ public class FirebaseOffRoutingTest {
  }
  @Test public void offCommentSendCommitsCanonicalMirrorAndParentOnlyToFirestore(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+   d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
    FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
    DocumentReference parent=mock(DocumentReference.class),canonical=mock(DocumentReference.class),copy=mock(DocumentReference.class);WriteBatch batch=mock(WriteBatch.class);
@@ -50,6 +51,7 @@ public class FirebaseOffRoutingTest {
  }
  @Test public void offCommentWatchUsesFirebaseListenerAndRemovesItOnClose(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+   d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");FirebaseFirestore db=mock(FirebaseFirestore.class);fb.when(Fb::db).thenReturn(db);
    CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class);DocumentReference parent=mock(DocumentReference.class),child=mock(DocumentReference.class);
    Query query=mock(Query.class);DocumentSnapshot parentData=mock(DocumentSnapshot.class),doc=mock(DocumentSnapshot.class);QuerySnapshot page=mock(QuerySnapshot.class);SnapshotMetadata metadata=mock(SnapshotMetadata.class);
@@ -70,6 +72,7 @@ public class FirebaseOffRoutingTest {
  }
  @Test public void offPostReactionWritesFirebaseNotWorker(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+   d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-owner");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
    FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),reactions=mock(CollectionReference.class);
    DocumentReference parent=mock(DocumentReference.class),reaction=mock(DocumentReference.class);

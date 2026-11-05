@@ -176,9 +176,9 @@ jobs:
           name: FriendBook-release-mapping
           path: friendbook-mapping.txt
 
-      # Migration branch builds must never replace the production/latest release.
+      # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

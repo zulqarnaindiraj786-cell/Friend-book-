@@ -17,6 +17,8 @@ test('deployment flag, migration marker, auth and authorization fail closed', as
   const f = fixture(); t.after(f.close);
   assert.equal((await call({}, 'comments')).status, 503);
   assert.equal((await call(f.env, 'comments', 'GET', undefined, { post: 'p2', authorize: () => assert.fail('unverified') })).status, 503);
+  assert.equal((await call(f.env, 'comments', 'GET', undefined, { post: 'new-post-1', authorize: async () => true })).status, 200);
+  assert.equal(f.sql.prepare("SELECT state FROM friendbook_cf_interaction_resources WHERE resource = 'posts/new-post-1'").get()?.state, 'verified');
   assert.equal((await call(f.env, 'comments', 'GET', undefined, { authorize: async () => false })).status, 403);
   assert.equal((await call(f.env, 'comments', 'POST', { id: 'c1', text: 'no' }, { authorize: async () => { throw Error(); } })).status, 503);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_comments').get().n, 0);
