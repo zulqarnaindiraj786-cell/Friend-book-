@@ -15,7 +15,7 @@ final class D1HttpTransport {
         try{
             connection.setConnectTimeout(10000);connection.setReadTimeout(15000);
             connection.setInstanceFollowRedirects(false);connection.setRequestMethod(method);
-            connection.setRequestProperty("Authorization","Bearer "+token);
+            if(token!=null)connection.setRequestProperty("Authorization","Bearer "+token);
             connection.setRequestProperty("Accept","application/json");
             if(bytes!=null){
                 connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);

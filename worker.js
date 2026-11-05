@@ -1,3 +1,4 @@
+import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
@@ -35,6 +36,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         try { return await env.ASSETS.fetch(new Request(assetURL, request)); }
         catch { return json({ error: 'Frontend unavailable' }, 503); }
       }
+      if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
       if (path !== '/health' && path !== '/v1/me' && !engagement) return json({ error: 'Not found' }, 404);
       if (!engagement && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);

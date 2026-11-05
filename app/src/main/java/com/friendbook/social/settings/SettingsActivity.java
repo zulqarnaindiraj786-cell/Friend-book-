@@ -466,6 +466,7 @@ public class SettingsActivity extends Activity {
         final String appVerName = Ui.appVersionName(this);
         final int appVerCode = Ui.appVersionCode(this);
         final String appPkg = getPackageName();
+        body.addView(rowI(Icons.INFO, "Check for APK update", "Official signed Android release", () -> com.friendbook.social.core.AppUpdates.check(this,true)));
         body.addView(rowI(Icons.INFO, "About", "Version " + appVerName + " · " + appPkg, () -> Ui.info(this,
                 "About friendbook",
                 "friendbook for Android\nVersion " + appVerName + " (Build " + appVerCode + ")\nPackage: " + appPkg + "\n\n"

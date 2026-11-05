@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;
         // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
