@@ -79,34 +79,42 @@ def main():
                     results = cloudflare(session, 'POST', '/d1/database/' + DATABASE + '/query', {'sql': stmt, 'params': []})
                     if not isinstance(results, list) or not results or any(row.get('success') is not True for row in results):
                         raise RuntimeError('Additive D1 schema was not verified: ' + migration)
-            promote = cloudflare(
+            has_docs = cloudflare(
                 session,
                 'POST',
                 '/d1/database/' + DATABASE + '/query',
-                {
-                    'sql': "UPDATE friendbook_cf_interaction_resources SET state = 'verified' WHERE state = 'staging'",
-                    'params': [],
-                },
+                {'sql': 'SELECT 1 AS ready FROM friendbook_cf_documents LIMIT 1', 'params': []},
             )
-            if not isinstance(promote, list) or not promote or any(row.get('success') is not True for row in promote):
-                raise RuntimeError('D1 interaction resource promotion was not verified')
-            seed_docs = cloudflare(
-                session,
-                'POST',
-                '/d1/database/' + DATABASE + '/query',
-                {
-                    'sql': (
-                        "INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at) "
-                        "SELECT path, substr(path, 1, instr(path, '/') - 1), substr(path, instr(path, '/') + 1), '', document_json, 0 "
-                        "FROM friendbook_cf_copy_staging "
-                        "WHERE instr(path, '/') > 0 AND instr(substr(path, instr(path, '/') + 1), '/') = 0 "
-                        "ON CONFLICT(path) DO NOTHING"
-                    ),
-                    'params': [],
-                },
-            )
-            if not isinstance(seed_docs, list) or not seed_docs or any(row.get('success') is not True for row in seed_docs):
-                raise RuntimeError('D1 historical document preservation seed was not verified')
+            already_seeded = bool(isinstance(has_docs, list) and has_docs and has_docs[0].get('results'))
+            if not already_seeded:
+                promote = cloudflare(
+                    session,
+                    'POST',
+                    '/d1/database/' + DATABASE + '/query',
+                    {
+                        'sql': "UPDATE friendbook_cf_interaction_resources SET state = 'verified' WHERE state = 'staging'",
+                        'params': [],
+                    },
+                )
+                if not isinstance(promote, list) or not promote or any(row.get('success') is not True for row in promote):
+                    raise RuntimeError('D1 interaction resource promotion was not verified')
+                seed_docs = cloudflare(
+                    session,
+                    'POST',
+                    '/d1/database/' + DATABASE + '/query',
+                    {
+                        'sql': (
+                            "INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at) "
+                            "SELECT path, substr(path, 1, instr(path, '/') - 1), substr(path, instr(path, '/') + 1), '', document_json, 0 "
+                            "FROM friendbook_cf_copy_staging "
+                            "WHERE instr(path, '/') > 0 AND instr(substr(path, instr(path, '/') + 1), '/') = 0 "
+                            "ON CONFLICT(path) DO NOTHING"
+                        ),
+                        'params': [],
+                    },
+                )
+                if not isinstance(seed_docs, list) or not seed_docs or any(row.get('success') is not True for row in seed_docs):
+                    raise RuntimeError('D1 historical document preservation seed was not verified')
             print('::notice::Additive D1 schemas, imported interaction resources, and 949 historical app documents verified.')
 
             lifecycle = cloudflare(session, 'GET', '/r2/buckets/' + BUCKET + '/lifecycle', allow_forbidden=True)

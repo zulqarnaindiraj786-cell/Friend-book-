@@ -28,8 +28,11 @@ public final class CloudflareStore {
     private CloudflareStore() {}
 
     private static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/docs";
-    private static final ExecutorService IO = Executors.newCachedThreadPool();
+    private static final long LIST_CACHE_TTL_MS = 5 * 60_000L;
+    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final android.util.LruCache<String, List<Map<String, Object>>> LIST_CACHE = new android.util.LruCache<>(16);
+    private static final android.util.LruCache<String, Long> LIST_CACHE_AT = new android.util.LruCache<>(16);
 
     public static boolean enabled() {
         return BuildConfig.D1_INTERACTIONS_ENABLED;
@@ -87,6 +90,8 @@ public final class CloudflareStore {
                     try {
                         URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
                         D1HttpTransport.send(url, "PUT", token, body);
+                        LIST_CACHE.evictAll();
+                        LIST_CACHE_AT.evictAll();
                         if (onSuccess != null) MAIN.post(onSuccess);
                     } catch (Throwable ignored) { }
                 });
@@ -96,6 +101,15 @@ public final class CloudflareStore {
 
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {
         if (!enabled() || collection == null || callback == null) return;
+        final int safeLimit = Math.max(1, Math.min(50, limit));
+        final String cacheKey = collection + ":" + safeLimit;
+        long now = android.os.SystemClock.elapsedRealtime();
+        List<Map<String, Object>> cached = LIST_CACHE.get(cacheKey);
+        Long cachedAt = LIST_CACHE_AT.get(cacheKey);
+        if (cached != null && cachedAt != null && (now - cachedAt) < LIST_CACHE_TTL_MS) {
+            MAIN.post(() -> callback.accept(cached));
+            return;
+        }
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) return;
@@ -104,10 +118,12 @@ public final class CloudflareStore {
                 if (token == null || token.isEmpty()) return;
                 IO.execute(() -> {
                     try {
-                        URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + Math.max(1, Math.min(50, limit)));
+                        URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + safeLimit);
                         JSONObject data = D1HttpTransport.send(url, "GET", token, null);
                         JSONArray arr = data.optJSONArray("documents");
                         List<Map<String, Object>> docs = arr != null ? D1Client.maps(arr) : new ArrayList<>();
+                        LIST_CACHE.put(cacheKey, docs);
+                        LIST_CACHE_AT.put(cacheKey, android.os.SystemClock.elapsedRealtime());
                         MAIN.post(() -> callback.accept(docs));
                     } catch (Throwable ignored) { }
                 });

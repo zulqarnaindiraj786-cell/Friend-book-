@@ -12,8 +12,8 @@ import java.util.*;
 public final class D1Reactions {
  private D1Reactions(){}
  private static String actor;
- private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(64);
- private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(64);
+ private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
+ private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
  private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
@@ -37,12 +37,11 @@ public final class D1Reactions {
   JSONObject summary=cached("posts",post.id);if(summary!=null){post.likes=total(summary);post.comments=summary.optInt("comments",post.comments);post.reactionsMap.clear();
    String type=mine(summary);if(type!=null){Map<String,Object> row=new HashMap<>();row.put("type",type);post.reactionsMap.put(Fb.uid(),row);}
    if(summary.has("preview")){post.inlineComments.clear();try{for(Map<String,Object> row:D1Client.maps(summary.optJSONArray("preview")))post.inlineComments.add(Models.Comment.fromMap(Format.str(row,"id"),row));}catch(JSONException ignored){}}
-  }else{fetch(null,"posts",post.id,()->hydrate(post));}
+  }
  }
  public static void reel(Context context,Models.Reel reel,Runnable render){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
   if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
-  else fetch(context.getApplicationContext(),collection,reel.id,()->{reel(context,reel,render);render.run();});
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){
   scope();String key=D1Client.key(collection,id);FAILED.remove(key);

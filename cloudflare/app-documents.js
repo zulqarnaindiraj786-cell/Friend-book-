@@ -91,12 +91,32 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
+const DOC_CACHE_TTL_MS = 60_000;
+const LIST_CACHE_TTL_MS = 30_000;
+const docCache = new WeakMap();
+const listCache = new WeakMap();
+
+function getDbMap(store, db) {
+  let map = store.get(db);
+  if (!map) {
+    map = new Map();
+    store.set(db, map);
+  }
+  return map;
+}
+
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
+  const now = Date.now();
+  const cache = getDbMap(docCache, db);
+  const hit = cache.get(path);
+  if (hit && hit.expiresAt > now) return hit.fields;
   try {
     const row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
     if (!row?.document_json) return null;
-    return toFirestoreFields(row.document_json);
+    const fields = toFirestoreFields(row.document_json);
+    cache.set(path, { fields, expiresAt: now + DOC_CACHE_TTL_MS });
+    return fields;
   } catch {
     return null;
   }
@@ -105,22 +125,11 @@ export async function readD1DocumentFields(db, path) {
 export async function hasD1Friendship(db, uidA, uidB) {
   if (!db) return null;
   try {
-    const direct1 = `${uidA}_${uidB}`, direct2 = `${uidB}_${uidA}`;
+    const p1 = `friends/${uidA}_${uidB}`, p2 = `friends/${uidB}_${uidA}`;
     const byKey = await db.prepare(
-      "SELECT path FROM friendbook_cf_documents WHERE collection = 'friends' AND (doc_id = ? OR doc_id = ?) LIMIT 1"
-    ).bind(direct1, direct2).first();
-    if (byKey) return true;
-    const rows = await db.prepare(
-      "SELECT document_json FROM friendbook_cf_documents WHERE collection = 'friends' AND document_json LIKE ? AND document_json LIKE ? LIMIT 5"
-    ).bind(`%${uidA}%`, `%${uidB}%`).all();
-    for (const r of rows?.results || []) {
-      const plain = toPlainDocument(r.document_json);
-      if (Array.isArray(plain?.participants)
-          && plain.participants.includes(uidA) && plain.participants.includes(uidB)) {
-        return true;
-      }
-    }
-    return false;
+      'SELECT path FROM friendbook_cf_documents WHERE path IN (?, ?) LIMIT 1'
+    ).bind(p1, p2).first();
+    return byKey ? true : null;
   } catch {
     return null;
   }
@@ -139,15 +148,32 @@ export async function appDocuments(request, env, identity) {
     if (!ALLOWED_COLLECTIONS.has(collection)) return json({ error: 'Unsupported collection' }, 400);
     const rawLimit = Number(url.searchParams.get('limit') || '20');
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
+    const now = Date.now();
+    const lCache = getDbMap(listCache, env.DB);
+    const cacheKey = `${collection}:${limit}`;
+    const cached = lCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return json({ collection, documents: cached.documents, cached: true });
+    }
     try {
       const rows = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC, path DESC LIMIT ?'
+        `SELECT d.doc_id, d.document_json, d.updated_at,
+           (SELECT COALESCE(SUM(t.total), 0) FROM friendbook_cf_reaction_totals t WHERE t.resource = d.path) AS d1_likes,
+           (SELECT COUNT(*) FROM friendbook_cf_comments c WHERE c.resource = d.path) AS d1_comments
+         FROM friendbook_cf_documents d
+         WHERE d.collection = ?
+         ORDER BY d.updated_at DESC, d.path DESC LIMIT ?`
       ).bind(collection, limit).all();
       const documents = [];
       for (const row of rows?.results || []) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
-        if (doc) documents.push(doc);
+        if (doc) {
+          if (Number(row.d1_likes) > Number(doc.likes || 0)) doc.likes = Number(row.d1_likes);
+          if (Number(row.d1_comments) > Number(doc.comments || 0)) doc.comments = Number(row.d1_comments);
+          documents.push(doc);
+        }
       }
+      lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
       return json({ collection, documents });
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
@@ -207,6 +233,8 @@ export async function appDocuments(request, env, identity) {
            document_json = excluded.document_json,
            updated_at = excluded.updated_at`
       ).bind(docPath, collection, docId, ownerUid, serialized, now).run();
+      getDbMap(docCache, env.DB).delete(docPath);
+      getDbMap(listCache, env.DB).clear();
 
       if (collection === 'posts' || collection === 'reels') {
         await env.DB.prepare(

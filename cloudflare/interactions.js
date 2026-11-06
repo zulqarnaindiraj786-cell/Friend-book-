@@ -65,12 +65,31 @@ export async function interactions(request, env, identity, match, authorize = au
             .bind(resource, identity.uid)
         ]);
       }
-      const summary = await db.prepare(`SELECT s.type,s.total AS count,CASE WHEN r.type=s.type THEN 1 ELSE 0 END AS mine
-        FROM friendbook_cf_reaction_totals s LEFT JOIN friendbook_cf_reactions r ON r.resource=s.resource AND r.uid=?
-        WHERE s.resource=? AND s.total>0 ORDER BY s.type`).bind(identity.uid, resource).all();
-      const count=await db.prepare(`SELECT COUNT(*) AS total FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND COALESCE(d.removed,0)=0`).bind(resource).first();
-      const preview=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 2`).bind(identity.uid,resource,JSON.stringify(context.blocked||[])).all();
-      return json({ owner:context.owner,types: summary.results,comments:count.total,preview:preview.results.map(row=>normalized(row,identity.uid)) });
+      const combined = await db.prepare(`SELECT
+        COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
+          FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
+          LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
+        (SELECT COUNT(*) FROM friendbook_cf_comments c
+          LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
+          WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0) AS total_comments,
+        COALESCE((SELECT json_group_array(json_object(
+          'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
+          'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
+          'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
+          'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
+          'likes', p.likes, 'mine', p.mine
+        )) FROM (${commentSelect} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+          AND c.uid NOT IN (SELECT value FROM json_each(?3))
+          ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
+        .bind(identity.uid, resource, JSON.stringify(context.blocked || [])).first();
+      const typesList = JSON.parse(combined?.types_json || '[]');
+      const previewRows = JSON.parse(combined?.preview_json || '[]');
+      return json({
+        owner: context.owner,
+        types: typesList,
+        comments: Number(combined?.total_comments || 0),
+        preview: previewRows.map(row => normalized(row, identity.uid)),
+      });
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }
 }

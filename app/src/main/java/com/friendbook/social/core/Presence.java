@@ -269,21 +269,23 @@ public class Presence {
                 });
 
         h.ticker = () -> {
-            if (h.closed) return;
-            fetchCloudflarePresence(uid, h, rtdbSeen, rtdbOnline, rtdbLastChanged, rtdbBestSeen, emit);
-            emit.run();
+            if (!h.closed) emit.run();
         };
-        fetchCloudflarePresence(uid, h, rtdbSeen, rtdbOnline, rtdbLastChanged, rtdbBestSeen, emit);
         emit.run();
         return h;
     }
 
     private static final String CF_PRESENCE_BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence";
-    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newCachedThreadPool();
+    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final android.util.LruCache<String, Long> CF_PRESENCE_FETCH_AT = new android.util.LruCache<>(256);
 
     private static void fetchCloudflarePresence(String uid, Handle h, boolean[] rtdbSeen, boolean[] rtdbOnline,
                                                 long[] rtdbLastChanged, long[] rtdbBestSeen, Runnable emit) {
-        if (!com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed) return;
+        if (!com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null) return;
+        long nowMs = android.os.SystemClock.elapsedRealtime();
+        Long lastFetch = CF_PRESENCE_FETCH_AT.get(uid);
+        if (lastFetch != null && (nowMs - lastFetch) < 300_000L) return;
+        CF_PRESENCE_FETCH_AT.put(uid, nowMs);
         try {
             com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) return;
@@ -336,7 +338,6 @@ public class Presence {
     public static void setTyping(String chatId, boolean typing) {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
-        sendCloudflareTyping(chatId, typing);
         Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
 
         if (Fb.rtdb() != null) {
@@ -347,7 +348,6 @@ public class Presence {
                 if (old != null) H.removeCallbacks(old);
                 if (typing) {
                     Runnable clear = () -> {
-                        sendCloudflareTyping(chatId, false);
                         try { ref.setValue(false); } catch (Throwable ignored) { }
                         Fb.db().collection("chats").document(chatId).update("typing." + uid, false);
                     };
@@ -423,42 +423,6 @@ public class Presence {
                 h.ref.addValueEventListener(h.rtdbL);
             } catch (Throwable ignored) { }
         }
-        if (com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED && chatId != null && !chatId.isEmpty()) {
-            h.ticker = new Runnable() {
-                @Override public void run() {
-                    if (h.closed) return;
-                    pollCloudflareTyping(chatId, h, rtdbTyping, emit);
-                    H.postDelayed(this, 3000L);
-                }
-            };
-            h.ticker.run();
-        }
         return h;
-    }
-
-    private static void pollCloudflareTyping(String chatId, Handle h, boolean[] rtdbTyping, Runnable emit) {
-        try {
-            com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null || h.closed) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty() || h.closed) return;
-                CF_IO.execute(() -> {
-                    try {
-                        org.json.JSONObject data = D1HttpTransport.send(
-                                new java.net.URL(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId)),
-                                "GET", token, null);
-                        boolean cfTyping = data.optBoolean("typing", false);
-                        H.post(() -> {
-                            if (h.closed) return;
-                            if (cfTyping) {
-                                rtdbTyping[0] = true;
-                                emit.run();
-                            }
-                        });
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
     }
 }
