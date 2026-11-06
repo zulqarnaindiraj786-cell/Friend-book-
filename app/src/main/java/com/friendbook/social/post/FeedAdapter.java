@@ -1846,7 +1846,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final LinearLayout ctaBar;
         final LinearLayout adShowcaseBanner, adInlineCommentsCol;
         final TextView adBannerBadgeTv, adBannerTitleTv, adBannerSubTv;
-        final TextView adSocialSummaryTv, adSocialCmtsTv, adLikeBtnTv, adCommentBtnTv, adShareBtnTv;
+        final LinearLayout summaryRow, reactSummaryWrap, like, comment, share;
+        final ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
+        final TextView extraReactsTv, tagSummary, commentsSummary, likeEmojiTv, likeTxt, commentTxt, shareTxt;
         com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
         int requestSeq = 0;
         int boundSlotOrdinal = 0;
@@ -1884,7 +1886,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             LinearLayout cardInner = nativeAdView.findViewById(com.friendbook.social.R.id.native_ad_card_inner);
 
-            // Vibrant 16-Creative Visual Banner (ensures every 3 posts has a distinct visual banner!)
+            // Vibrant Unseen-Ad Visual Banner
             adShowcaseBanner = Ui.col(c);
             adShowcaseBanner.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(adShowcaseBanner, 18, 22, 18, 22);
@@ -1900,38 +1902,101 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             adShowcaseBanner.addView(adBannerSubTv);
             adShowcaseBanner.setVisibility(View.GONE);
 
-            // Real Multi-User Social Engagement Bar (Real Likes · Real Full-Post Comments · Real Shares)
-            LinearLayout statsRow = Ui.row(c);
-            statsRow.setGravity(Gravity.CENTER_VERTICAL);
-            Ui.pad(statsRow, 12, 8, 12, 6);
-            adSocialSummaryTv = Ui.tv(c, "", 12.5f, Ui.sub(c));
-            statsRow.addView(adSocialSummaryTv, new LinearLayout.LayoutParams(0, -2, 1f));
-            adSocialCmtsTv = Ui.tv(c, "", 12.5f, Ui.sub(c));
-            statsRow.addView(adSocialCmtsTv, new LinearLayout.LayoutParams(-2, -2));
+            // ---- 100% Identical to PostVH: Clickable Summary Row ([🔵👍 / ❤️😂] "You and X others" | "X comments") ----
+            summaryRow = Ui.row(c);
+            summaryRow.setGravity(Gravity.CENTER_VERTICAL);
+            summaryRow.setMinimumHeight(Ui.dp(c, 32));
+            Ui.pad(summaryRow, 12, 6, 12, 4);
+            summaryRow.setVisibility(View.GONE);
 
-            LinearLayout socialRow = Ui.row(c);
-            socialRow.setGravity(Gravity.CENTER_VERTICAL);
-            Ui.pad(socialRow, 6, 4, 6, 6);
+            reactSummaryWrap = Ui.row(c);
+            reactSummaryWrap.setGravity(Gravity.CENTER_VERTICAL);
+            reactSummaryWrap.setMinimumHeight(Ui.dp(c, 22));
+            reactSummaryWrap.setPadding(0, 0, Ui.dp(c, 12), 0);
 
-            adLikeBtnTv = Ui.tvBold(c, "👍  Like", 13.5f, Ui.sub(c));
-            adLikeBtnTv.setGravity(Gravity.CENTER);
-            Ui.pad(adLikeBtnTv, 8, 9, 8, 9);
+            reactBadgeIv = new ImageView(c);
+            reactBadgeIv.setImageResource(com.friendbook.social.R.drawable.ic_reaction_like_badge);
+            int badgeSz = Ui.dp(c, 18);
+            reactSummaryWrap.addView(reactBadgeIv, new LinearLayout.LayoutParams(badgeSz, badgeSz));
 
-            adCommentBtnTv = Ui.tvBold(c, "💬  Comment", 13.5f, Ui.sub(c));
-            adCommentBtnTv.setGravity(Gravity.CENTER);
-            Ui.pad(adCommentBtnTv, 8, 9, 8, 9);
+            extraReactsTv = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            extraReactsTv.setIncludeFontPadding(false);
+            extraReactsTv.setGravity(Gravity.CENTER_VERTICAL);
+            extraReactsTv.setPadding(Ui.dp(c, 2), 0, 0, 0);
+            extraReactsTv.setVisibility(View.GONE);
+            reactSummaryWrap.addView(extraReactsTv, new LinearLayout.LayoutParams(-2, Ui.dp(c, 20)));
 
-            adShareBtnTv = Ui.tvBold(c, "↗  Share", 13.5f, Ui.sub(c));
-            adShareBtnTv.setGravity(Gravity.CENTER);
-            Ui.pad(adShareBtnTv, 8, 9, 8, 9);
+            tagSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
+            tagSummary.setIncludeFontPadding(false);
+            tagSummary.setGravity(Gravity.CENTER_VERTICAL);
+            tagSummary.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            reactSummaryWrap.addView(tagSummary);
 
-            socialRow.addView(adLikeBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
-            socialRow.addView(adCommentBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
-            socialRow.addView(adShareBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
+            summaryRow.addView(reactSummaryWrap);
+            summaryRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1));
+            commentsSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
+            commentsSummary.setIncludeFontPadding(false);
+            commentsSummary.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            summaryRow.addView(commentsSummary);
 
+            // ---- 100% Identical to PostVH: 3 Rounded Pill Capsule Buttons (Like · Comment · Share) ----
+            LinearLayout actions = Ui.row(c);
+            Ui.pad(actions, 10, 6, 10, 10);
+
+            like = Ui.row(c);
+            like.setGravity(Gravity.CENTER);
+            like.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            like.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            likeIcon = new ImageView(c);
+            likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+            like.addView(likeIcon, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            likeEmojiTv = Ui.tv(c, "", 15.5f, Ui.txt(c));
+            likeEmojiTv.setIncludeFontPadding(false);
+            likeEmojiTv.setGravity(Gravity.CENTER);
+            likeEmojiTv.setVisibility(View.GONE);
+            like.addView(likeEmojiTv, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            likeTxt = Ui.tv(c, "Like", 13.5f, Ui.sub(c));
+            likeTxt.setIncludeFontPadding(false);
+            likeTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            like.addView(likeTxt);
+
+            comment = Ui.row(c);
+            comment.setGravity(Gravity.CENTER);
+            comment.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            comment.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            commentIcon = new ImageView(c);
+            commentIcon.setImageResource(com.friendbook.social.R.drawable.ic_comment_bubble_outline);
+            comment.addView(commentIcon, new LinearLayout.LayoutParams(Ui.dp(c, 19), Ui.dp(c, 19)));
+            commentTxt = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            commentTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            commentTxt.setVisibility(View.GONE);
+            comment.addView(commentTxt);
+
+            share = Ui.row(c);
+            share.setGravity(Gravity.CENTER);
+            share.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            share.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            shareIcon = new ImageView(c);
+            shareIcon.setImageResource(com.friendbook.social.R.drawable.ic_share_curved_outline);
+            share.addView(shareIcon, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            shareTxt = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            shareTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            shareTxt.setVisibility(View.GONE);
+            share.addView(shareTxt);
+
+            int pillH = Ui.dp(c, 38);
+            LinearLayout.LayoutParams a1 = new LinearLayout.LayoutParams(0, pillH, 1);
+            a1.rightMargin = Ui.dp(c, 8);
+            LinearLayout.LayoutParams a2 = new LinearLayout.LayoutParams(0, pillH, 1);
+            a2.rightMargin = Ui.dp(c, 8);
+            LinearLayout.LayoutParams a3 = new LinearLayout.LayoutParams(0, pillH, 1);
+            actions.addView(like, a1);
+            actions.addView(comment, a2);
+            actions.addView(share, a3);
+
+            // ---- 100% Identical to PostVH: Inline Comments + Circular Avatar + "Write a comment…" Bar ----
             adInlineCommentsCol = Ui.col(c);
-            Ui.pad(adInlineCommentsCol, 12, 4, 12, 10);
-            adInlineCommentsCol.setVisibility(View.GONE);
+            adInlineCommentsCol.setBackgroundColor(Ui.card(c));
 
             if (cardInner != null) {
                 int ctaIndex = cardInner.indexOfChild(ctaBar);
@@ -1940,39 +2005,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 } else {
                     cardInner.addView(adShowcaseBanner, new LinearLayout.LayoutParams(-1, Ui.dp(c, 168)));
                 }
-                cardInner.addView(Ui.divider(c));
-                cardInner.addView(statsRow);
-                cardInner.addView(Ui.divider(c));
-                cardInner.addView(socialRow);
+                cardInner.addView(summaryRow);
+                cardInner.addView(actions);
                 cardInner.addView(adInlineCommentsCol);
             }
 
-            adLikeBtnTv.setOnClickListener(v -> {
+            like.setOnClickListener(v -> {
                 Ui.haptic(v);
+                View popTarget = likeIcon.getVisibility() == View.VISIBLE ? likeIcon : likeEmojiTv;
+                popTarget.setScaleX(0.78f);
+                popTarget.setScaleY(0.78f);
+                popTarget.animate().scaleX(1.16f).scaleY(1.16f).setDuration(110L)
+                        .withEndAction(() -> popTarget.animate().scaleX(1f).scaleY(1f).setDuration(90L).start())
+                        .start();
                 com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
                         c, boundSlotOrdinal, null, () -> refreshAdSocialUi(c));
             });
-            adLikeBtnTv.setOnLongClickListener(v -> {
-                Reactions.show(adLikeBtnTv, picked ->
+            like.setOnLongClickListener(v -> {
+                Reactions.show(like, picked ->
                         com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
                                 c, boundSlotOrdinal, picked, () -> refreshAdSocialUi(c)));
                 return true;
             });
             View.OnClickListener openCmts = v ->
-                    com.friendbook.social.core.AdsConfig.openSponsoredCommentsSheet(
-                            c, boundSlotOrdinal, headlineView.getText(), () -> refreshAdSocialUi(c));
-            adCommentBtnTv.setOnClickListener(openCmts);
-            adSocialCmtsTv.setOnClickListener(openCmts);
-            adInlineCommentsCol.setOnClickListener(openCmts);
-            adSocialSummaryTv.setOnClickListener(v -> {
-                int likes = com.friendbook.social.core.AdsConfig.getAdLikeCount(c, boundSlotOrdinal);
-                if (likes > 0) {
-                    com.friendbook.social.core.AdsConfig.showWhoReactedToAd(c, boundSlotOrdinal);
-                } else {
-                    openCmts.onClick(v);
-                }
-            });
-            adShareBtnTv.setOnClickListener(v ->
+                    com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                            c, boundSlotOrdinal, () -> refreshAdSocialUi(c));
+            comment.setOnClickListener(openCmts);
+            commentsSummary.setOnClickListener(openCmts);
+            reactSummaryWrap.setOnClickListener(v ->
+                    com.friendbook.social.core.AdsConfig.showWhoReactedToAd(c, boundSlotOrdinal));
+            share.setOnClickListener(v ->
                     com.friendbook.social.core.AdsConfig.shareSponsoredAd(
                             c, boundSlotOrdinal, headlineView.getText(), bodyView.getText(),
                             () -> refreshAdSocialUi(c)));
@@ -1990,58 +2052,202 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         private void refreshAdSocialUi(Context c) {
+            com.friendbook.social.core.AdsConfig.resolveUniqueAdId(c, boundSlotOrdinal);
             Models.Post adPost = com.friendbook.social.core.AdsConfig.getOrCreateAdPost(boundSlotOrdinal);
-            String myRx = com.friendbook.social.core.AdsConfig.getAdMyReaction(c, boundSlotOrdinal);
-            int likes = com.friendbook.social.core.AdsConfig.getAdLikeCount(c, boundSlotOrdinal);
+            String mine = com.friendbook.social.core.AdsConfig.getAdMyReaction(c, boundSlotOrdinal);
+            if (Fb.uid() == null || Fb.uid().isEmpty()) mine = "";
+            boolean iReacted = mine != null && !mine.isEmpty();
+            int total = com.friendbook.social.core.AdsConfig.getAdLikeCount(c, boundSlotOrdinal);
+            int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
             int cmts = com.friendbook.social.core.AdsConfig.getAdCommentCount(c, boundSlotOrdinal);
             int shares = com.friendbook.social.core.AdsConfig.getAdShareCount(c, boundSlotOrdinal);
 
-            if (likes > 0) {
-                String emoji = (myRx != null && !myRx.isEmpty()) ? Reactions.emojiFor(myRx) : "👍";
-                adSocialSummaryTv.setText(emoji + " " + likes + (likes == 1 ? " like" : " likes"));
-            } else {
-                adSocialSummaryTv.setText("👍 Be the first to like");
-            }
-            StringBuilder right = new StringBuilder();
-            if (cmts > 0) right.append(cmts).append(cmts == 1 ? " comment" : " comments");
-            if (shares > 0) {
-                if (right.length() > 0) right.append("  ·  ");
-                right.append(shares).append(shares == 1 ? " share" : " shares");
-            }
-            adSocialCmtsTv.setText(right.length() > 0 ? right.toString() : "0 comments");
-
-            if (myRx == null || myRx.isEmpty()) {
-                adLikeBtnTv.setText("👍  Like");
-                adLikeBtnTv.setTextColor(Ui.sub(c));
-            } else {
-                adLikeBtnTv.setText(Reactions.emojiFor(myRx) + "  " + Reactions.labelFor(myRx));
-                adLikeBtnTv.setTextColor(Reactions.colorFor(myRx));
-            }
-
-            adInlineCommentsCol.removeAllViews();
-            if (adPost.inlineComments != null && !adPost.inlineComments.isEmpty()) {
-                adInlineCommentsCol.setVisibility(View.VISIBLE);
-                int start = Math.max(0, adPost.inlineComments.size() - 2);
-                for (int i = start; i < adPost.inlineComments.size(); i++) {
-                    Models.Comment mc = adPost.inlineComments.get(i);
-                    if (mc == null || mc.content == null || mc.content.trim().isEmpty()) continue;
-                    LinearLayout bub = Ui.col(c);
-                    bub.setBackground(Ui.round(c, Ui.inputBg(c), 12));
-                    Ui.pad(bub, 10, 6, 10, 6);
-                    LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
-                    blp.topMargin = Ui.dp(c, 4);
-                    bub.addView(Ui.tvBold(c, mc.authorName != null && !mc.authorName.isEmpty() ? mc.authorName : "User", 12f, Ui.txt(c)));
-                    bub.addView(Ui.tv(c, mc.content, 13f, Ui.txt(c)));
-                    adInlineCommentsCol.addView(bub, blp);
+            // 1. Reaction Summary Row (100% identical to PostVH.renderReactionBar!)
+            if (effectiveTotal > 0) {
+                List<String> activeTypes = com.friendbook.social.core.FastCache.getReactionTypes(adPost.id);
+                if (activeTypes.isEmpty() && adPost.reactionsMap != null && !adPost.reactionsMap.isEmpty()) {
+                    activeTypes = Reactions.computeTopTypesFromMap(adPost.reactionsMap);
                 }
+                List<String> displayTypes = new ArrayList<>(activeTypes);
+                if (iReacted && !displayTypes.contains(mine)) displayTypes.add(0, mine);
+                if (displayTypes.isEmpty()) displayTypes.add(iReacted ? mine : "like");
+
+                boolean showThumbBadge = displayTypes.contains("like");
+                StringBuilder extraEmojis = new StringBuilder();
+                int emojiCount = showThumbBadge ? 1 : 0;
+                for (String rType : displayTypes) {
+                    if ("like".equals(rType)) continue;
+                    if (emojiCount >= 3) break;
+                    extraEmojis.append(Reactions.emojiFor(rType));
+                    emojiCount++;
+                }
+                reactBadgeIv.setVisibility(showThumbBadge ? View.VISIBLE : View.GONE);
+                if (extraEmojis.length() > 0) {
+                    extraReactsTv.setText(extraEmojis.toString());
+                    extraReactsTv.setPadding(showThumbBadge ? Ui.dp(c, 2) : 0, 0, 0, 0);
+                    extraReactsTv.setVisibility(View.VISIBLE);
+                } else {
+                    extraReactsTv.setText("");
+                    extraReactsTv.setVisibility(View.GONE);
+                }
+
+                String summaryLabel;
+                if (iReacted) {
+                    if (effectiveTotal == 1) summaryLabel = "You";
+                    else if (effectiveTotal == 2) summaryLabel = "You and 1 other";
+                    else summaryLabel = "You and " + Format.count(effectiveTotal - 1) + " others";
+                } else {
+                    summaryLabel = Format.count(effectiveTotal);
+                }
+                tagSummary.setText(summaryLabel);
+                tagSummary.setVisibility(View.VISIBLE);
+                reactSummaryWrap.setVisibility(View.VISIBLE);
             } else {
-                adInlineCommentsCol.setVisibility(View.GONE);
+                reactSummaryWrap.setVisibility(View.GONE);
             }
+
+            StringBuilder right = new StringBuilder();
+            if (cmts > 0) right.append(Format.count(cmts)).append(cmts == 1 ? " comment" : " comments");
+            if (shares > 0) {
+                if (right.length() > 0) right.append(" · ");
+                right.append(Format.count(shares)).append(shares == 1 ? " share" : " shares");
+            }
+            commentsSummary.setText(right);
+            commentsSummary.setVisibility(right.length() > 0 ? View.VISIBLE : View.GONE);
+            summaryRow.setVisibility((effectiveTotal > 0 || cmts > 0 || shares > 0) ? View.VISIBLE : View.GONE);
+
+            // 2. Three Rounded Pill Capsule Buttons (100% identical to PostVH!)
+            int pillBg = Ui.inputBg(c);
+            int iconTint = Ui.txt(c);
+            int neutralTint = Ui.sub(c);
+
+            if (!iReacted) {
+                like.setBackground(Ui.round(c, pillBg, 20));
+                likeIcon.setVisibility(View.VISIBLE);
+                likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+                likeIcon.setColorFilter(neutralTint);
+                likeEmojiTv.setVisibility(View.GONE);
+                likeTxt.setText("Like");
+                likeTxt.setTextColor(neutralTint);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT);
+                likeTxt.setVisibility(View.VISIBLE);
+            } else if ("like".equals(mine)) {
+                like.setBackground(Ui.roundStroke(c, 0x1A1877F2, 20, 0x551877F2, 1));
+                likeIcon.setVisibility(View.VISIBLE);
+                likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_filled);
+                likeIcon.clearColorFilter();
+                likeEmojiTv.setVisibility(View.GONE);
+                likeTxt.setText("Like");
+                likeTxt.setTextColor(Ui.BLUE);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                likeTxt.setVisibility(View.VISIBLE);
+            } else {
+                int rxColor = Reactions.colorFor(mine);
+                int tintBg = (rxColor & 0x00FFFFFF) | 0x1A000000;
+                int tintStroke = (rxColor & 0x00FFFFFF) | 0x55000000;
+                like.setBackground(Ui.roundStroke(c, tintBg, 20, tintStroke, 1));
+                likeIcon.setVisibility(View.GONE);
+                likeEmojiTv.setText(Reactions.emojiFor(mine));
+                likeEmojiTv.setVisibility(View.VISIBLE);
+                likeTxt.setText(Reactions.labelFor(mine));
+                likeTxt.setTextColor(rxColor);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                likeTxt.setVisibility(View.VISIBLE);
+            }
+
+            comment.setBackground(Ui.round(c, pillBg, 20));
+            commentIcon.setColorFilter(iconTint);
+            if (cmts > 0) {
+                commentTxt.setText(Format.count(cmts));
+                commentTxt.setTextColor(iconTint);
+                commentTxt.setVisibility(View.VISIBLE);
+            } else {
+                commentTxt.setText("");
+                commentTxt.setVisibility(View.GONE);
+            }
+
+            share.setBackground(Ui.round(c, pillBg, 20));
+            shareIcon.setColorFilter(iconTint);
+            if (shares > 0) {
+                shareTxt.setText(Format.count(shares));
+                shareTxt.setTextColor(iconTint);
+                shareTxt.setVisibility(View.VISIBLE);
+            } else {
+                shareTxt.setText("");
+                shareTxt.setVisibility(View.GONE);
+            }
+
+            // 3. Inline Comments + Circular Avatar + "Write a comment…" Bar (100% identical to PostVH!)
+            adInlineCommentsCol.removeAllViews();
+            adInlineCommentsCol.setVisibility(View.VISIBLE);
+            adInlineCommentsCol.addView(Ui.divider(c));
+
+            List<Models.Comment> list = adPost.inlineComments != null ? adPost.inlineComments : new ArrayList<>();
+            if (cmts > 2 || (cmts > 0 && list.isEmpty())) {
+                TextView viewAll = Ui.tvBold(c, "View all " + cmts + (cmts == 1 ? " comment…" : " comments…"), 13, Ui.sub(c));
+                Ui.pad(viewAll, 12, 8, 12, 4);
+                viewAll.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+                adInlineCommentsCol.addView(viewAll);
+            }
+
+            int startIdx = Math.max(0, list.size() - 2);
+            for (int i = startIdx; i < list.size(); i++) {
+                final Models.Comment cm = list.get(i);
+                if (cm == null) continue;
+                LinearLayout row = Ui.row(c);
+                row.setGravity(Gravity.TOP);
+                Ui.pad(row, 12, 5, 12, 4);
+
+                ImageView av = new ImageView(c);
+                int s = Ui.dp(c, 28);
+                row.addView(av, new LinearLayout.LayoutParams(s, s));
+                Models.User cachedU = com.friendbook.social.core.FastCache.getUser(cm.authorId);
+                String uPhoto = (cachedU != null && cachedU.photoUrl != null && !cachedU.photoUrl.isEmpty())
+                        ? cachedU.photoUrl : cm.authorPhoto;
+                String uName = (cachedU != null && cachedU.displayName != null && !cachedU.displayName.isEmpty())
+                        ? cachedU.displayName : (cm.authorName == null || cm.authorName.isEmpty() ? "friendbook User" : cm.authorName);
+                Ui.avatar(c, av, uPhoto);
+
+                LinearLayout bubble = Ui.col(c);
+                bubble.setBackground(Ui.round(c, Ui.inputBg(c), 14));
+                Ui.pad(bubble, 10, 6, 10, 6);
+                LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
+                bp.leftMargin = Ui.dp(c, 8);
+                bubble.addView(Ui.tvBold(c, uName, 12.5f, Ui.txt(c)));
+                String bodyTxt = cm.content != null && !cm.content.isEmpty()
+                        ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
+                TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
+                bodyT.setText(com.friendbook.social.core.Mentions.styled(bodyTxt, cm.mentions));
+                bodyT.setMaxLines(3);
+                bubble.addView(bodyT);
+                bubble.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+                row.addView(bubble, bp);
+                adInlineCommentsCol.addView(row);
+            }
+
+            LinearLayout quickRow = Ui.row(c);
+            quickRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(quickRow, 12, 6, 12, 9);
+            ImageView myAv = new ImageView(c);
+            int ms = Ui.dp(c, 26);
+            quickRow.addView(myAv, new LinearLayout.LayoutParams(ms, ms));
+            Ui.avatar(c, myAv, Fb.myPhoto());
+            TextView hintPill = Ui.tv(c, "Write a comment…", 13, Ui.sub(c));
+            hintPill.setBackground(Ui.round(c, Ui.inputBg(c), 18));
+            Ui.pad(hintPill, 12, 6, 12, 6);
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(0, -2, 1);
+            hlp.leftMargin = Ui.dp(c, 8);
+            quickRow.addView(hintPill, hlp);
+            quickRow.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                    c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+            adInlineCommentsCol.addView(quickRow);
         }
 
         private void populateShowcaseFallback(Context c, int slotOrdinal) {
             com.friendbook.social.core.AdsConfig.SponsoredCreative cr =
-                    com.friendbook.social.core.AdsConfig.getCreativeForSlot(slotOrdinal);
+                    com.friendbook.social.core.AdsConfig.getCreativeForSlot(c, slotOrdinal);
             headlineView.setText(cr.headline);
             advertiserView.setText(cr.advertiser + " · Sponsored");
             advertiserView.setVisibility(View.VISIBLE);

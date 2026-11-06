@@ -873,7 +873,8 @@ public class ReelsFragment extends Fragment {
             final android.widget.Button ctaButton;
             final LinearLayout loadingBox, adHeroBanner;
             final TextView adHeroBadgeTv, adHeroTitleTv, adHeroSubTv;
-            final TextView adLikeIcon, adLikeCount, adCommentCount, adShareCount;
+            final ImageView adLikeOutlineIv;
+            final TextView adLikeIcon, adLikeCount, adCommentCount, adShareCount, adQuickCommentPill;
             final FrameLayout adLikeBox, adCommentBox, adShareBox;
             com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
             int requestSeq = 0;
@@ -900,10 +901,10 @@ public class ReelsFragment extends Fragment {
                 FrameLayout inner = new FrameLayout(a);
                 inner.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
 
-                // Full-screen vibrant visual hero banner for each of the 16 rotating Sponsored creatives!
+                // Full-screen vibrant visual hero banner for each unseen Sponsored creative!
                 adHeroBanner = Ui.col(a);
                 adHeroBanner.setGravity(Gravity.CENTER);
-                Ui.pad(adHeroBanner, 28, 36, 76, 170);
+                Ui.pad(adHeroBanner, 28, 36, 76, 190);
                 adHeroBadgeTv = Ui.roundChip(a, "SPONSORED REEL", 0x33FFFFFF, Color.WHITE, 12f);
                 Ui.pad(adHeroBadgeTv, 14, 6, 14, 6);
                 adHeroBanner.addView(adHeroBadgeTv, new LinearLayout.LayoutParams(-2, -2));
@@ -921,7 +922,7 @@ public class ReelsFragment extends Fragment {
                 mediaView = new com.google.android.gms.ads.nativead.MediaView(a);
                 mediaView.setImageScaleType(ImageView.ScaleType.FIT_CENTER);
                 FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
-                mlp.bottomMargin = Ui.dp(a, 150);
+                mlp.bottomMargin = Ui.dp(a, 160);
                 inner.addView(mediaView, mlp);
 
                 TextView badge = Ui.tvBold(a, "Sponsored", 11.5f, 0xFFFFD54F);
@@ -931,20 +932,26 @@ public class ReelsFragment extends Fragment {
                 blp.setMargins(Ui.dp(a, 14), Ui.dp(a, 8), 0, 0);
                 inner.addView(badge, blp);
 
-                // Facebook/Reels Right-Side Social Action Rail on Sponsored Ad (Real Like · Real Comment · Real Share)
+                // 100% Identical to Reels VH Right-Side Action Rail (ic_like_outline · 💬 · ↗)
                 LinearLayout adRail = Ui.col(a);
                 adRail.setGravity(Gravity.CENTER_HORIZONTAL);
                 adRail.setElevation(Ui.dp(a, 24));
                 FrameLayout.LayoutParams arLp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-                arLp.setMargins(0, 0, Ui.dp(a, 12), Ui.dp(a, 195));
+                arLp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 210));
                 adRail.setLayoutParams(arLp);
 
                 int btnSz = Ui.dp(a, 44);
-                adLikeIcon = Ui.tv(a, "👍", 21, Color.WHITE);
+                adLikeOutlineIv = new ImageView(a);
+                adLikeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+                adLikeOutlineIv.setColorFilter(Color.WHITE);
+                adLikeIcon = Ui.tv(a, "", 22, Color.WHITE);
                 adLikeIcon.setGravity(Gravity.CENTER);
+                adLikeIcon.setVisibility(View.GONE);
                 adLikeBox = new FrameLayout(a);
                 adLikeBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
                 adLikeBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
+                int lkIconSz = Ui.dp(a, 22);
+                adLikeBox.addView(adLikeOutlineIv, new FrameLayout.LayoutParams(lkIconSz, lkIconSz, Gravity.CENTER));
                 adLikeBox.addView(adLikeIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
                 adLikeCount = Ui.tvBold(a, "Like", 11f, Color.WHITE);
                 adLikeCount.setGravity(Gravity.CENTER);
@@ -980,9 +987,9 @@ public class ReelsFragment extends Fragment {
 
                 LinearLayout bottomCard = Ui.col(a);
                 bottomCard.setBackground(Ui.roundStroke(a, 0xDD121418, 16, 0x33FFFFFF, 1));
-                Ui.pad(bottomCard, 14, 12, 14, 14);
+                Ui.pad(bottomCard, 14, 12, 14, 12);
                 FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-                clp.setMargins(Ui.dp(a, 12), 0, Ui.dp(a, 12), Ui.dp(a, 18));
+                clp.setMargins(Ui.dp(a, 12), 0, Ui.dp(a, 12), Ui.dp(a, 14));
 
                 LinearLayout headerRow = Ui.row(a);
                 headerRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -1035,7 +1042,15 @@ public class ReelsFragment extends Fragment {
                 ctaButton.setTextSize(14.5f);
                 ctaButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
                 ctaButton.setBackground(Ui.round(a, Ui.BLUE, 10));
-                bottomCard.addView(ctaButton, new LinearLayout.LayoutParams(-1, Ui.dp(a, 44)));
+                bottomCard.addView(ctaButton, new LinearLayout.LayoutParams(-1, Ui.dp(a, 42)));
+
+                // 100% Identical to Reels VH Quick "💬  Add a comment…" Pill!
+                adQuickCommentPill = Ui.tv(a, "💬  Add a comment…", 13, 0xEEFFFFFF);
+                adQuickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
+                Ui.pad(adQuickCommentPill, 14, 7, 14, 7);
+                LinearLayout.LayoutParams qclp = new LinearLayout.LayoutParams(-1, -2);
+                qclp.topMargin = Ui.dp(a, 8);
+                bottomCard.addView(adQuickCommentPill, qclp);
 
                 inner.addView(bottomCard, clp);
                 nativeAdView.addView(inner);
@@ -1053,20 +1068,21 @@ public class ReelsFragment extends Fragment {
 
                 adLikeBox.setOnClickListener(v -> {
                     Ui.haptic(v);
-                    AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 5, null, () -> refreshReelAdSocial(a));
+                    AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 10000, null, () -> refreshReelAdSocial(a));
                 });
                 adLikeBox.setOnLongClickListener(v -> {
                     Reactions.show(adLikeBox, picked ->
-                            AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 5, picked, () -> refreshReelAdSocial(a)));
+                            AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 10000, picked, () -> refreshReelAdSocial(a)));
                     return true;
                 });
-                adLikeCount.setOnClickListener(v -> AdsConfig.showWhoReactedToAd(a, boundSlotOrdinal + 5));
-                adCommentBox.setOnClickListener(v ->
-                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 5, headlineView.getText(), () -> refreshReelAdSocial(a)));
-                adCommentCount.setOnClickListener(v ->
-                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 5, headlineView.getText(), () -> refreshReelAdSocial(a)));
+                adLikeCount.setOnClickListener(v -> AdsConfig.showWhoReactedToAd(a, boundSlotOrdinal + 10000));
+                View.OnClickListener openReelAdCmts = v ->
+                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 10000, headlineView.getText(), () -> refreshReelAdSocial(a));
+                adCommentBox.setOnClickListener(openReelAdCmts);
+                adCommentCount.setOnClickListener(openReelAdCmts);
+                adQuickCommentPill.setOnClickListener(openReelAdCmts);
                 adShareBox.setOnClickListener(v ->
-                        AdsConfig.shareSponsoredAd(a, boundSlotOrdinal + 5, headlineView.getText(), bodyView.getText(), () -> refreshReelAdSocial(a)));
+                        AdsConfig.shareSponsoredAd(a, boundSlotOrdinal + 10000, headlineView.getText(), bodyView.getText(), () -> refreshReelAdSocial(a)));
             }
 
             private static FrameLayout buildAdRoot(Activity a) {
@@ -1081,7 +1097,8 @@ public class ReelsFragment extends Fragment {
             }
 
             private void refreshReelAdSocial(Context c) {
-                int key = boundSlotOrdinal + 5;
+                int key = boundSlotOrdinal + 10000;
+                AdsConfig.resolveUniqueAdId(c, key);
                 String myRx = AdsConfig.getAdMyReaction(c, key);
                 int likes = AdsConfig.getAdLikeCount(c, key);
                 int cmts = AdsConfig.getAdCommentCount(c, key);
@@ -1090,14 +1107,17 @@ public class ReelsFragment extends Fragment {
                 adCommentCount.setText(cmts > 0 ? String.valueOf(cmts) : "Comment");
                 adShareCount.setText(shares > 0 ? String.valueOf(shares) : "Share");
                 if (myRx == null || myRx.isEmpty()) {
-                    adLikeIcon.setText("👍");
+                    adLikeOutlineIv.setVisibility(View.VISIBLE);
+                    adLikeIcon.setVisibility(View.GONE);
                 } else {
+                    adLikeOutlineIv.setVisibility(View.GONE);
                     adLikeIcon.setText(Reactions.emojiFor(myRx));
+                    adLikeIcon.setVisibility(View.VISIBLE);
                 }
             }
 
             private void populateReelShowcaseFallback(int slotOrdinal) {
-                AdsConfig.SponsoredCreative cr = AdsConfig.getCreativeForSlot(slotOrdinal + 5);
+                AdsConfig.SponsoredCreative cr = AdsConfig.getCreativeForSlot(itemView.getContext(), slotOrdinal + 10000);
                 headlineView.setText(cr.headline);
                 advertiserView.setText(cr.advertiser + " · Sponsored");
                 advertiserView.setVisibility(View.VISIBLE);
@@ -1134,8 +1154,9 @@ public class ReelsFragment extends Fragment {
                 statusView.setText("");
 
                 final Context ctx = itemView.getContext();
+                AdsConfig.resolveUniqueAdId(ctx, slotOrdinal + 10000);
                 refreshReelAdSocial(ctx);
-                AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal + 5, () -> {
+                AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal + 10000, () -> {
                     if (mySeq == requestSeq) refreshReelAdSocial(ctx);
                 });
                 final String unitId = AdsConfig.isRealProductionUnit(rawUnitId)
