@@ -59,6 +59,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
           CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_ACCESS_KEY_ID || secrets.CLOUDFLARE_ACCESS_ID || secrets.ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_SECRET_ID || secrets.SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           python3 -m pip install 'requests==2.32.5'
           python3 scripts/admin/configure_video_r2.py

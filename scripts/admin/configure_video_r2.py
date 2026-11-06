@@ -60,6 +60,12 @@ def main():
         import requests
         token = os.environ.get('CLOUDFLARE_API_TOKEN', '')
         key, secret = os.environ.get('CLOUDINARY_API_KEY', ''), os.environ.get('CLOUDINARY_API_SECRET', '')
+        r2_access = os.environ.get('R2_ACCESS_KEY_ID', '')
+        r2_secret = os.environ.get('R2_SECRET_ACCESS_KEY', '')
+        if r2_access and r2_secret:
+            print('::notice::Cloudflare R2 Access ID and Secret ID detected in GitHub Secrets.')
+        else:
+            print('::notice::Using native Worker R2 binding (VIDEO_BUCKET -> friendbook).')
         if not token:
             raise RuntimeError('Existing Cloudflare deployment secret is unavailable')
         with requests.Session() as session:
