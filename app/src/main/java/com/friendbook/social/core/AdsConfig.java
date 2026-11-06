@@ -656,7 +656,7 @@ public class AdsConfig {
 
     public static String getAdMyReaction(Context c, int slotKey) {
         com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
-        String cached = FastCache.getMyReaction(c, adPost.id);
+        String cached = FastCache.getMyReaction(adPost.id);
         if (cached != null) return "none".equals(cached) ? "" : cached;
         String me = Fb.uid();
         if (me != null && adPost.reactionsMap != null && adPost.reactionsMap.containsKey(me)) {
@@ -669,7 +669,7 @@ public class AdsConfig {
 
     public static int getAdLikeCount(Context c, int slotKey) {
         com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
-        int cached = FastCache.getReactionCount(c, adPost.id, -1);
+        int cached = FastCache.getReactionTotal(adPost.id, -1);
         int mapSize = adPost.reactionsMap != null ? adPost.reactionsMap.size() : 0;
         int raw = cached >= 0 ? Math.max(cached, mapSize) : Math.max(adPost.likes, mapSize);
         return Math.max(0, raw);
@@ -700,9 +700,9 @@ public class AdsConfig {
 
     /** Opens the real `Reactions.showWhoReacted` sheet showing every real app user who liked/reacted to this Ad! */
     public static void showWhoReactedToAd(Context c, int slotKey) {
-        if (c == null) return;
+        if (!(c instanceof android.app.Activity)) return;
         com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
-        com.friendbook.social.post.Reactions.showWhoReacted(c, adPost.id);
+        com.friendbook.social.post.Reactions.showWhoReacted((android.app.Activity) c, adPost.id);
     }
 
     public static void shareSponsoredAd(Context c, int slotKey, CharSequence headline, CharSequence body, Runnable onUpdated) {

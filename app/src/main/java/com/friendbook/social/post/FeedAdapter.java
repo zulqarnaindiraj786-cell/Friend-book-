@@ -2024,14 +2024,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 int start = Math.max(0, adPost.inlineComments.size() - 2);
                 for (int i = start; i < adPost.inlineComments.size(); i++) {
                     Models.Comment mc = adPost.inlineComments.get(i);
-                    if (mc == null || mc.text == null || mc.text.trim().isEmpty()) continue;
+                    if (mc == null || mc.content == null || mc.content.trim().isEmpty()) continue;
                     LinearLayout bub = Ui.col(c);
                     bub.setBackground(Ui.round(c, Ui.inputBg(c), 12));
                     Ui.pad(bub, 10, 6, 10, 6);
                     LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
                     blp.topMargin = Ui.dp(c, 4);
                     bub.addView(Ui.tvBold(c, mc.authorName != null && !mc.authorName.isEmpty() ? mc.authorName : "User", 12f, Ui.txt(c)));
-                    bub.addView(Ui.tv(c, mc.text, 13f, Ui.txt(c)));
+                    bub.addView(Ui.tv(c, mc.content, 13f, Ui.txt(c)));
                     adInlineCommentsCol.addView(bub, blp);
                 }
             } else {
