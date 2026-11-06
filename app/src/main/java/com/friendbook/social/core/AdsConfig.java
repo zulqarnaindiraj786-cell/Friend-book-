@@ -591,7 +591,7 @@ public class AdsConfig {
             p.authorId = "friendbook_sponsored";
             p.authorName = cr.advertiser;
             p.authorPhoto = Ui.TEAM_AVATAR_TOKEN;
-            p.text = cr.headline + " — " + cr.body;
+            p.content = cr.headline + " — " + cr.body;
             p.privacy = "Only me"; // Keeps ad doc out of regular HomeFragment post query while real for likes/comments
             p.createdAt = 1L;
             p.likes = 0;
@@ -635,7 +635,7 @@ public class AdsConfig {
                             seed.put("authorId", "friendbook_sponsored");
                             seed.put("authorName", adPost.authorName);
                             seed.put("authorPhoto", Ui.TEAM_AVATAR_TOKEN);
-                            seed.put("text", adPost.text);
+                            seed.put("content", adPost.content);
                             seed.put("privacy", "Only me");
                             seed.put("createdAt", 1L);
                             seed.put("likes", 0);
