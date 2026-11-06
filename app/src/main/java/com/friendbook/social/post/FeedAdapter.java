@@ -2343,7 +2343,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
 
             // Keep slot collapsed until a 100% REAL AdMob NativeAd arrives (ZERO fake/dummy ads!)
-            collapse(ctx);
+            collapse();
             com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
             android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
                     "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -2427,7 +2427,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                 refreshAdSocialUi(ctx);
                                                 nativeAdView.requestLayout();
                                             } else {
-                                                collapse(ctx);
+                                                collapse();
                                             }
                                         }
                                     }
@@ -2441,7 +2441,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
                         "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                 com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
-                collapse(ctx);
+                collapse();
             }
         }
 
