@@ -758,7 +758,7 @@ public class ReelsFragment extends Fragment {
         }
 
         private boolean adsActive() {
-            return AdsConfig.nativeAdsEnabled();
+            return AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0);
         }
 
         private int adCount() {
@@ -793,6 +793,7 @@ public class ReelsFragment extends Fragment {
             for (int i = 0; i < rv.getChildCount(); i++) {
                 RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
                 if (h instanceof VH) ((VH) h).pause();
+                else if (h instanceof ReelAdVH) ((ReelAdVH) h).pauseAdVideo();
             }
         }
 
@@ -807,6 +808,10 @@ public class ReelsFragment extends Fragment {
                     VH vh = (VH) h;
                     if (!isAdPos(pos) && vh.getAdapterPosition() == pos) vh.play();
                     else vh.pause();
+                } else if (h instanceof ReelAdVH) {
+                    ReelAdVH avh = (ReelAdVH) h;
+                    if (isAdPos(pos) && avh.getAdapterPosition() == pos) avh.playAdVideo();
+                    else avh.pauseAdVideo();
                 }
             }
         }
@@ -1165,6 +1170,7 @@ public class ReelsFragment extends Fragment {
                         : AdsConfig.REELS_NATIVE_ID;
 
                 ConsentManager.ensureInitialized(ctx);
+                adHeroBanner.setVisibility(View.GONE);
                 com.google.android.gms.ads.nativead.NativeAd preloaded =
                         AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
                 if (preloaded != null) {
@@ -1172,13 +1178,13 @@ public class ReelsFragment extends Fragment {
                     loadingBox.setVisibility(View.GONE);
                     nativeAdView.setVisibility(View.VISIBLE);
                     populateReelsNativeAd(preloaded, ctx);
+                    refreshReelAdSocial(ctx);
                     nativeAdView.requestLayout();
                     return;
                 }
 
-                // Always keep Sponsored card visible (never leave a blank black screen!)
-                nativeAdView.setVisibility(View.VISIBLE);
-                populateReelShowcaseFallback(slotOrdinal);
+                // Request a 100% REAL AdMob Video/Native Ad (ZERO fake/dummy fallback banners!)
+                nativeAdView.setVisibility(View.GONE);
                 AdsConfig.recordAdRequest(ctx);
                 android.util.Log.i(AdsConfig.LOG_TAG,
                         "[ReelsNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -1188,13 +1194,15 @@ public class ReelsFragment extends Fragment {
                     com.google.android.gms.ads.VideoOptions videoOptions =
                             new com.google.android.gms.ads.VideoOptions.Builder()
                                     .setStartMuted(startMuted)
+                                    .setCustomControlsRequested(true)
+                                    .setClickToExpandRequested(true)
                                     .build();
                     com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                             new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
                                     .setAdChoicesPlacement(
                                             com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
                                     .setMediaAspectRatio(
-                                            com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_PORTRAIT)
+                                            com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                                     .setVideoOptions(videoOptions)
                                     .build();
 
@@ -1214,6 +1222,7 @@ public class ReelsFragment extends Fragment {
                                         loadingBox.setVisibility(View.GONE);
                                         nativeAdView.setVisibility(View.VISIBLE);
                                         populateReelsNativeAd(nativeAd, ctx);
+                                        refreshReelAdSocial(ctx);
                                         nativeAdView.requestLayout();
                                     })
                                     .withAdListener(new com.google.android.gms.ads.AdListener() {
@@ -1258,10 +1267,8 @@ public class ReelsFragment extends Fragment {
                                                     loadingBox.setVisibility(View.GONE);
                                                     nativeAdView.setVisibility(View.VISIBLE);
                                                     populateReelsNativeAd(fallback, ctx);
+                                                    refreshReelAdSocial(ctx);
                                                     nativeAdView.requestLayout();
-                                                } else {
-                                                    nativeAdView.setVisibility(View.VISIBLE);
-                                                    populateReelShowcaseFallback(slotOrdinal);
                                                 }
                                             }
                                         }
@@ -1269,23 +1276,40 @@ public class ReelsFragment extends Fragment {
                                     .withNativeAdOptions(adOptions)
                                     .build();
 
-                    adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                    adLoader.loadAds(AdsConfig.buildHighValueAdRequest(true), 3);
                 } catch (Throwable t) {
                     android.util.Log.e(AdsConfig.LOG_TAG,
                             "[ReelsNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                     AdsConfig.onNativeAdFailed(ctx, -1);
-                    nativeAdView.setVisibility(View.VISIBLE);
-                    populateReelShowcaseFallback(slotOrdinal);
+                }
+            }
+
+            void playAdVideo() {
+                if (currentNativeAd != null && currentNativeAd.getMediaContent() != null
+                        && currentNativeAd.getMediaContent().hasVideoContent()
+                        && currentNativeAd.getMediaContent().getVideoController() != null) {
+                    try { currentNativeAd.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
+                }
+            }
+
+            void pauseAdVideo() {
+                if (currentNativeAd != null && currentNativeAd.getMediaContent() != null
+                        && currentNativeAd.getMediaContent().hasVideoContent()
+                        && currentNativeAd.getMediaContent().getVideoController() != null) {
+                    try { currentNativeAd.getMediaContent().getVideoController().pause(); } catch (Throwable ignored) { }
                 }
             }
 
             private void populateReelsNativeAd(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+                adHeroBanner.setVisibility(View.GONE);
                 headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
 
                 if (ad.getMediaContent() != null) {
                     mediaView.setMediaContent(ad.getMediaContent());
                     mediaView.setVisibility(View.VISIBLE);
-                    adHeroBanner.setVisibility(View.GONE);
+                    if (ad.getMediaContent().hasVideoContent() && ad.getMediaContent().getVideoController() != null) {
+                        try { ad.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
+                    }
                 } else {
                     mediaView.setVisibility(View.GONE);
                 }
@@ -1344,8 +1368,6 @@ public class ReelsFragment extends Fragment {
                 }
 
                 nativeAdView.setNativeAd(ad);
-                // Guarantee every Reel Ad displays its unique unseen company, logo, headline & hero banner (never a repeated AdMob campaign!)
-                populateReelShowcaseFallback(boundSlotOrdinal);
             }
 
             void onRecycled() {

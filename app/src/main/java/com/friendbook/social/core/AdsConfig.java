@@ -312,152 +312,152 @@ public class AdsConfig {
     }
 
     private static final SponsoredCreative[] CATALOG = new SponsoredCreative[]{
-            new SponsoredCreative(0, "StreamDeck 4K Capture Pro", "Elgato Studio Gear",
-                    "Broadcast in 4K60 HDR with ultra-low latency USB-C capture & customizable tactile keys.",
-                    "Shop Gear", "Official Warranty", "PRO STREAM 🎥", "StreamDeck 4K60 Pro 🎥",
-                    "4K60 HDR Capture • Tactile LCD Keys • Plug & Play", 0xFF1877F2, 0xFF0A3D91, 4.9f),
-            new SponsoredCreative(1, "HyperStrike Mobile Arena", "Apex Interactive Games",
-                    "Squad up in 60FPS battle royale matches with ultra-low ping servers & voice chat.",
-                    "Play Free", "Google Play • 4.8★", "60FPS GAMING", "HyperStrike Season 9 🎮",
-                    "New Maps • Squad Voice • Zero-Lag Servers", 0xFF6A11CB, 0xFF2575FC, 4.8f),
-            new SponsoredCreative(2, "Zinger Feast Mega Box", "CraveBite Express",
-                    "Hot crispy zinger burger, loaded fries & chilled drink delivered to your door in 25 mins.",
-                    "Order Now", "50% OFF Today", "HOT DEAL 🍔", "Mega Zinger Box 50% OFF",
-                    "25-Min Express Delivery • Free Drink Included", 0xFFD32F2F, 0xFFFF6D00, 4.9f),
-            new SponsoredCreative(3, "SoundPulse ANC Buds Pro", "NovaTech Audio",
-                    "45dB Active Noise Cancellation, deep bass & 36-hour battery life with fast Type-C charge.",
-                    "Shop Deal", "Rs. 3,499 • Free Delivery", "FLASH SALE 🎧", "SoundPulse ANC Pro",
-                    "45dB Noise Cancelling • 36Hr Battery Life", 0xFF0F2027, 0xFF2C5364, 4.7f),
-            new SponsoredCreative(4, "Urban Drip Streetwear '26", "VogueLane PK",
-                    "Oversized premium cotton hoodies, cargo joggers & limited-edition sneakers now in stock.",
-                    "Shop Collection", "Cash on Delivery", "NEW ARRIVAL 👕", "Urban Streetwear Drop",
-                    "Buy 2 Get 1 Free • Nationwide Cash on Delivery", 0xFF1F1C2C, 0xFF928DAB, 4.8f),
-            new SponsoredCreative(5, "Cricket Live HD Pass", "SportsMax Stream",
-                    "Watch every T20 & International match live in Full HD with ball-by-ball instant replays.",
-                    "Watch Live", "HD Ad-Free Stream", "LIVE CRICKET 🏏", "Watch Every Match in HD",
-                    "Live Scoreboard • Multi-Cam • Instant Highlights", 0xFF00695C, 0xFF00BFA5, 4.9f),
-            new SponsoredCreative(6, "Northern Peaks 5-Day Tour", "WanderLust Travels",
-                    "All-inclusive Hunza, Skardu & Fairy Meadows luxury group tour with bonfire & photography.",
-                    "Book Seat", "20% Early Bird Off", "TRAVEL PK 🏔️", "Explore Hunza & Skardu",
-                    "Luxury Transport • 4-Star Hotels • Guided Tour", 0xFF134E5E, 0xFF71B280, 4.9f),
-            new SponsoredCreative(7, "AI Photo & Reel Cut Pro", "PixelCraft Studio",
-                    "One-tap AI background remover, viral velocity transitions & auto captions for Reels.",
-                    "Try Free", "Top Video Editor", "AI EDITOR ✨", "Create Viral Reels in 10s",
-                    "Auto Captions • 4K Export • Beat Sync Effects", 0xFF8E2DE2, 0xFF4A00E0, 4.8f),
-            new SponsoredCreative(8, "TurboFiber 100Mbps Unlimited", "NetWave Fiber",
-                    "True fiber-to-the-home internet with zero speed throttling, free dual-band Wi-Fi 6 router.",
-                    "Check Coverage", "Free Installation", "FIBER WIFI 6 ⚡", "100Mbps True Fiber",
-                    "Zero Buffering • Lowest Gaming Ping • 24/7 Support", 0xFF0052D4, 0xFF4364F7, 4.7f),
-            new SponsoredCreative(9, "FitFuel Whey Isolate+", "IronCore Nutrition",
-                    "27g ultra-pure hydrolyzed protein per scoop with BCAAs for lean muscle & rapid recovery.",
-                    "Order Authentic", "100% Lab Verified", "FITNESS PRO 💪", "FitFuel Isolate 27g Protein",
-                    "Zero Added Sugar • Rich Double Chocolate", 0xFF232526, 0xFF414345, 4.8f),
-            new SponsoredCreative(10, "Full-Stack AI & Freelancing", "SkillLaunch Academy",
-                    "Master React, Python AI & Upwork client acquisition in 8 weeks with live mentor projects.",
-                    "Join Free Class", "Certificate Included", "LEARN & EARN 💻", "Master AI & Freelancing",
-                    "Live Weekend Classes • Portfolio Projects", 0xFF1A2980, 0xFF26D0CE, 4.9f),
-            new SponsoredCreative(11, "SmartWatch Ultra AMOLED", "ChronoGear Official",
-                    "Always-on 2.1\" curved AMOLED display, Bluetooth calling, SpO2 & 7-day battery backup.",
-                    "Buy Now", "40% Launch Discount", "SMART TECH ⌚", "Ultra AMOLED SmartWatch",
-                    "Bluetooth Calling • Waterproof IP68 • 100+ Modes", 0xFF3A1C71, 0xFFD76D77, 4.8f),
-            new SponsoredCreative(12, "Glow Derm Vitamin C Serum", "Pure Aura Skincare",
-                    "Dermatologist-tested 15% Vitamin C + Hyaluronic Acid for instant glass-skin radiance.",
-                    "Get Offer", "Buy 1 Get 1 50% Off", "SKINCARE ✨", "24K Glow Vitamin C Serum",
-                    "Dark Spot Corrector • Deep Hydration Formula", 0xFFB24592, 0xFFF15F79, 4.9f),
-            new SponsoredCreative(13, "MegaMart Grocery in 20m", "QuickCart Instant",
-                    "Fresh fruits, dairy, snacks & household essentials at wholesale supermarket prices.",
-                    "Start Shopping", "Rs. 500 Welcome Voucher", "SUPERMARKET 🛒", "Groceries in 20 Minutes",
-                    "Wholesale Prices • Free First 3 Deliveries", 0xFF11998E, 0xFF38EF7D, 4.8f),
-            new SponsoredCreative(14, "AutoCare Ceramic Coat Kit", "TorqueLabs PK",
-                    "9H hydrophobic nano-ceramic shine that protects your car & bike paint for 12 months.",
-                    "Order Kit", "Free Microfiber Kit", "AUTO CARE 🚘", "9H Nano Ceramic Coating",
-                    "Mirror Gloss • UV & Scratch Protection", 0xFF141E30, 0xFF243B55, 4.7f),
-            new SponsoredCreative(15, "PocketPay Zero-Fee Wallet", "FinEdge Digital",
-                    "Instant IBFT transfers, bill split, virtual Visa card & up to 15% cashback on food & fuel.",
-                    "Open Account", "Rs. 250 Signup Bonus", "INSTANT CASHBACK 💳", "PocketPay Virtual Visa",
-                    "Zero Annual Fee • 15% Cashback on Dining", 0xFF004FF9, 0xFF000000, 4.9f)
+            new SponsoredCreative(0, "Mercedes-Benz AMG G63 V8 Biturbo", "Mercedes-Benz Official",
+                    "Handcrafted AMG 4.0L V8 Biturbo 577HP luxury SUV with Nappa leather executive cabin & Burmester 3D sound.",
+                    "Book Test Drive", "$184,000 • Bespoke Edition", "LUXURY SUV 🚘", "Mercedes-AMG G63 2026 🚘",
+                    "577HP V8 Biturbo • Nappa Leather • 4MATIC+ All-Wheel Drive", 0xFF0F2027, 0xFF2C5364, 5.0f),
+            new SponsoredCreative(1, "iPhone 16 Pro Max 1TB Titanium", "Apple Flagship Store",
+                    "Aerospace-grade Desert Titanium, A18 Pro chip, 4K120 Dolby Vision ProRes Cinema & 5x Tetraprism Zoom.",
+                    "Order Flagship", "PKR 569,999 • Official PTA", "APPLE PRO 📱", "iPhone 16 Pro Max 1TB",
+                    "A18 Pro Silicon • 4K 120FPS Dolby Vision • Grade-5 Titanium", 0xFF1F1C2C, 0xFF928DAB, 5.0f),
+            new SponsoredCreative(2, "Rolex Cosmograph Daytona 18ct Gold", "Rolex Geneve Boutique",
+                    "Oyster Perpetual Cosmograph Daytona in 18ct Everose gold with Cerachrom bezel & Calibre 4131 movement.",
+                    "Inquire Boutique", "$42,500 • Swiss Certified", "SWISS HOROLOGY ⌚", "Rolex Daytona 18ct Gold",
+                    "Superlative Chronometer • Oysterflex • 100m Waterproof", 0xFF134E5E, 0xFF71B280, 5.0f),
+            new SponsoredCreative(3, "Emaar Beachfront Sky Penthouse", "Emaar Properties Dubai",
+                    "Panoramic Palm Jumeirah & Marina skyline views, private infinity pool, yacht berth & Golden Visa eligibility.",
+                    "Schedule Viewing", "AED 14.5M • 10% Booking", "DUBAI PENTHOUSE 🏙️", "Emaar Marina Sky Penthouse",
+                    "Private Infinity Pool • Yacht Marina Access • 10-Yr Golden Visa", 0xFF141E30, 0xFF243B55, 5.0f),
+            new SponsoredCreative(4, "Emirates First Class Private Suite", "Emirates Airlines",
+                    "Floor-to-ceiling privacy doors, zero-gravity leather suite, Dom Pérignon dining & A380 Onboard Shower Spa.",
+                    "Book First Class", "London • Dubai • New York", "FIRST CLASS ✈️", "Emirates A380 Private Suite",
+                    "Chauffeur Drive • Shower Spa • Private Fine Dining", 0xFF8E0E00, 0xFF1F1C18, 5.0f),
+            new SponsoredCreative(5, "Porsche 911 Turbo S Coupé", "Porsche Centre Official",
+                    "640HP Twin-Turbo flat-six engine, 0-100 km/h in 2.7 seconds with Porsche Active Aerodynamics & PDK.",
+                    "Configure Yours", "$230,400 • Weissach Spec", "SUPERCAR 🏎️", "Porsche 911 Turbo S 640HP",
+                    "0-100 km/h in 2.7s • Ceramic Composite Brakes • AWD", 0xFF232526, 0xFF414345, 5.0f),
+            new SponsoredCreative(6, "Samsung Galaxy S25 Ultra 1TB 5G", "Samsung Flagship Store",
+                    "Snapdragon 8 Elite for Galaxy, 200MP ProVisual AI Camera, Titanium frame & Gorilla Armor 2 anti-reflective glass.",
+                    "Buy Flagship", "PKR 489,999 • VIP Care+", "GALAXY AI 📱", "Galaxy S25 Ultra 1TB Titanium",
+                    "200MP Quad Telephoto • Built-in S Pen • Titanium Frame", 0xFF0052D4, 0xFF4364F7, 4.9f),
+            new SponsoredCreative(7, "Eighteen Islamabad 4-Kanal Golf Villa", "Eighteen Luxury Living",
+                    "Ultra-luxury designer villas overlooking the 18-hole championship golf course with smart home automation.",
+                    "Book Private Tour", "PKR 18.5 Crore • Possession", "LUXURY VILLA 🏡", "Eighteen Golf View Villas",
+                    "18-Hole Golf Course • 5-Star Clubhouse • Smart Villa", 0xFF00695C, 0xFF00BFA5, 5.0f),
+            new SponsoredCreative(8, "MacBook Pro 16\" M4 Max 128GB", "Apple Enterprise Solutions",
+                    "16-core CPU, 40-core GPU, 128GB unified memory, 4TB SSD & Liquid Retina XDR nano-texture display.",
+                    "Shop Workstation", "PKR 1,195,000 • AppleCare+", "M4 MAX PRO 💻", "MacBook Pro 16\" M4 Max",
+                    "128GB Unified RAM • 40-Core GPU • 22-Hr Battery", 0xFF1A2980, 0xFF26D0CE, 5.0f),
+            new SponsoredCreative(9, "Range Rover SV Autobiography LWB", "Land Rover Bespoke",
+                    "606HP V8 Twin-Turbo Sanctuary cabin with hot-stone massage rear executive seats & deployable club table.",
+                    "Explore SV", "$234,000 • Long Wheelbase", "BESPOKE SUV 🚙", "Range Rover SV LWB 2026",
+                    "Executive Airline Seats • Meridian Signature 1600W", 0xFF1D976C, 0xFF2B5876, 5.0f),
+            new SponsoredCreative(10, "Patek Philippe Nautilus 5711/1R", "Patek Philippe Salon",
+                    "Iconic octagonal rose-gold bezel, chocolate brown sunburst dial & self-winding mechanical movement.",
+                    "Private Inquiry", "$118,000 • Geneva Seal", "HAUTE HORLOGERIE 💎", "Patek Philippe Nautilus 18K",
+                    "Solid 18K Rose Gold • Sapphire Caseback • Swiss Made", 0xFF3A1C71, 0xFFD76D77, 5.0f),
+            new SponsoredCreative(11, "HSBC Premier World Elite Metal Card", "HSBC Private Wealth",
+                    "Dedicated Wealth Relationship Manager, unlimited global airport lounge access & $10M travel coverage.",
+                    "Apply Premier", "Private Banking Tier", "WEALTH BANKING 💳", "HSBC Premier Metal Infinite",
+                    "Global Private Concierge • 1,300+ VIP Lounges • Zero FX Fee", 0xFFEB3349, 0xFFF45C43, 4.9f),
+            new SponsoredCreative(12, "Qatar Airways Qsuite Business Class", "Qatar Airways Official",
+                    "World's Best Business Class with double-bed private cabin suites, Starlink high-speed Wi-Fi & Diptyque amenities.",
+                    "Book Qsuite", "Fly to 170+ Destinations", "QSUITE LUXURY 🛫", "Qatar Airways Qsuite Cabin",
+                    "Private Double Suite • Free Starlink Wi-Fi • Dine on Demand", 0xFF6A11CB, 0xFF2575FC, 5.0f),
+            new SponsoredCreative(13, "BMW i7 M70 xDrive Executive Sedan", "BMW Individual Official",
+                    "650HP all-electric flagship with 31.3\" 8K Theatre Screen, Swarovski crystal headlights & automatic doors.",
+                    "Request Brochure", "$168,500 • M Performance", "ELECTRIC LUXURY ⚡", "BMW i7 M70 + 8K Theatre Screen",
+                    "650HP Dual Motor • Bowers & Wilkins 4D Diamond Audio", 0xFF004FF9, 0xFF000000, 5.0f),
+            new SponsoredCreative(14, "Four Seasons Overwater Pool Villa", "Four Seasons Maldives",
+                    "Private overwater infinity pool, sunset yacht transfers, underwater fine dining & 24/7 private butler.",
+                    "Reserve Villa", "$3,800/Night • VIP Seaplane", "MALDIVES RESORT 🏝️", "Four Seasons Private Island",
+                    "Overwater Infinity Pool • Private Seaplane • 5-Star Spa", 0xFF00B4DB, 0xFF0083B0, 5.0f),
+            new SponsoredCreative(15, "Tiffany & Co. 3-Carat Platinum Diamond", "Tiffany & Co. New York",
+                    "D-Flawless triple-excellent cut solitaire diamond handcrafted in platinum with GIA laser inscription.",
+                    "Book Private Appointment", "$64,000 • GIA Certified", "HIGH JEWELRY 💍", "Tiffany Setting Platinum 3ct",
+                    "D-Flawless Clarity • Handcrafted Platinum • Blue Box", 0xFF02AAB0, 0xFF00CDAC, 5.0f)
     };
 
     private static final Map<Integer, Integer> SESSION_SLOT_TO_UNIQUE_ID = new HashMap<>();
 
     private static final String[][] EXTRA_BRANDS = new String[][]{
-            {"AeroPods Max Pro", "SonicWave PK", "Spatial 3D audio, dual-mic ENC calling & 42-hour titanium case battery.", "Shop Audio", "Rs. 4,299 • Free COD", "3D AUDIO 🎧", "AeroPods Max Spatial", "42Hr Battery • Dual-Mic ENC • Type-C Fast Charge"},
-            {"Biryani & Karahi Feast", "DesiDastarkhwan", "Authentic charcoal Chicken Karahi, 2x Sindhi Biryani, Raita & Naan for 4.", "Order Feast", "Flat 40% OFF", "FAMILY DEAL 🍛", "Royal Karahi & Biryani Box", "Hot 30-Min Delivery • Serves 4 Persons"},
-            {"ProBook Air M3 Laptop", "TechVault Official", "Ultra-light 14\" FHD IPS display, 16GB RAM, 512GB NVMe SSD & 14hr battery.", "View Specs", "0% Easy Installments", "TECH DEAL 💻", "ProBook Air 16GB/512GB", "1-Year Official Warranty • Free Laptop Bag"},
-            {"SolarMax 6kW Hybrid Kit", "GreenVolt Energy", "Cut electricity bills by 90% with Tier-1 A-grade panels & smart Wi-Fi inverter.", "Free Quote", "Net Metering Ready", "SOLAR PK ☀️", "Zero Electricity Bill Solution", "5-Year Inverter Warranty • Fast Installation"},
-            {"Oud Royale Elixir 100ml", "Maison De Parfum", "Long-lasting 48-hour Arabian Oud, Amber & French Vanilla extrait de parfum.", "Order Perfume", "Buy 1 Get Tester Free", "LUXURY SCENT ✨", "Oud Royale 48Hr Extrait", "100% Pure Oil Concentration • Gift Box"},
-            {"Velocity Nitro Running", "StridePro Athletics", "Ultra-responsive nitrogen-infused foam sole for marathon comfort & daily runs.", "Shop Shoes", "35% Season Sale", "PRO RUNNER 👟", "Velocity Nitro Sneakers", "Featherlight Mesh • High-Grip Carbon Outsole"},
-            {"4K Gimbal Action Cam", "VloggerGear PK", "Waterproof 4K 60FPS action camera with 3-axis HorizonSteady stabilization.", "Grab Deal", "Free Tripod + Mic", "VLOG KIT 📹", "4K 60FPS Action Camera", "3-Axis Stabilization • Wireless Dual Mic"},
-            {"Smart Inverter Split AC", "CoolBreeze Appliances", "Up to 75% energy saving T3 tropical compressor with 10-second turbo cooling.", "Check Price", "Free Copper Pipe Kit", "SUMMER SAVER ❄️", "T3 Smart Inverter AC", "75% Electricity Saving • 10-Year Compressor Warranty"},
-            {"Istanbul & Cappadocia 7D", "SkyWings Holidays", "Return flights, 5-star hotel, Bosphorus cruise & hot-air balloon valley tour.", "Book Package", "Visa Assistance Included", "WORLD TOUR ✈️", "7 Days in Turkey", "Flights + 5-Star Hotel + Guided Tours"},
-            {"Mechanical RGB Keyboard", "GearUp Esports", "Hot-swappable red linear switches, aircraft aluminum frame & per-key RGB.", "Buy Gaming Gear", "Rs. 5,999 Special", "ESPORTS PRO ⌨️", " Pro Mechanical RGB Keyboard", "Hot-Swap Switches • Zero Ghosting • Braided Cable"},
-            {"Organic Honey & Dry Fruit", "PureValley Farms", "100% raw Sidr mountain honey with roasted almonds, walnuts & pistachios.", "Order Pure", "Lab Purity Certificate", "100% ORGANIC 🍯", "Raw Sidr Honey & Nuts Jar", "Direct From Northern Valleys • Zero Sugar Syrup"},
-            {"IELTS & Spoken English", "GlobalSpeak Institute", "Band 8.0+ preparation with daily 1-on-1 speaking mocks & British Council trainers.", "Book Free Demo", "100% Score Guarantee", "STUDY ABROAD 🎓", "Score 8.0+ in IELTS", "Daily Live Speaking Mocks • Full Study Material"},
-            {"InstaPrint Mini Printer", "GadgetBox PK", "Inkless thermal pocket printer for phone photos, study notes & sticky labels.", "Shop Gadget", "Free 5 Paper Rolls", "VIRAL GADGET 🖨️", "Pocket Inkless Photo Printer", "Bluetooth iOS & Android • Never Needs Ink"},
-            {"Luxury Lawn 3-Piece '26", "ZariFabrics Official", "Digital printed Swiss lawn shirt, embroidered chiffon dupatta & dyed trouser.", "Shop Unstitched", "Flat 30% OFF", "EID COLLECTION 👗", "Luxury Embroidered Lawn '26", "100% Pure Swiss Lawn • Express Nationwide Shipping"},
-            {"Car DashCam Dual 4K", "AutoGuard Tech", "Front 4K + Rear 1080p night-vision dash camera with 24hr parking GPS monitor.", "Order DashCam", "Free 64GB SD Card", "CAR SAFETY 🚗", "Dual 4K Night-Vision DashCam", "Sony Starvis Sensor • Wi-Fi App Live View"},
-            {"Zero-Sugar Electrolytes", "HydraPeak Wellness", "Instant hydration packets with Magnesium, Potassium & Vitamin B12 for energy.", "Try Pack", "30 Sticks Box", "DAILY ENERGY ⚡", "HydraPeak Electrolyte Mix", "Zero Sugar •Refreshing Lemon & Berry Flavors"}
+            {"Toyota Land Cruiser 300 ZX V6", "Toyota Indus Flagship", "3.5L V6 Twin-Turbo 409HP with E-KDSS suspension, JBL 14-speaker system & fingerprint start.", "Book ZX V6", "PKR 9.5 Crore • Zero Meter", "FLAGSHIP 4X4 🚙", "Land Cruiser 300 ZX Twin-Turbo", "409HP V6 Twin-Turbo • 10-Speed Auto • VIP Pearl White"},
+            {"Burj Binghatti Jacob & Co. Sky Mansion", "Binghatti Developers Dubai", "Ultra-high-rise sky mansions in Business Bay Dubai with private infinity pool & concierge.", "Invest in Dubai", "AED 22M • Tax-Free ROI", "DUBAI SKY MANSION 🏙️", "Burj Binghatti Penthouse", "Private Sky Pool • Panoramic Burj Khalifa View"},
+            {"Audemars Piguet Royal Oak Chronograph", "Audemars Piguet Le Brassus", "18-carat yellow gold case, Grande Tapisserie dial & selfwinding Calibre 4401 flyback chronograph.", "Inquire Salon", "$89,000 • Swiss Masterpiece", "ROYAL OAK ⌚", "AP Royal Oak 41mm 18K Gold", "Grande Tapisserie Dial • Flyback Chronograph"},
+            {"NVIDIA DGX H200 Enterprise AI Cluster", "NVIDIA Enterprise Cloud", "1,128GB HBM3e GPU memory with 4.8TB/s bandwidth for trillion-parameter generative AI training.", "Request Demo", "Enterprise AI Infrastructure", "ENTERPRISE AI 🖥️", "NVIDIA DGX H200 SuperPOD", "32 PetaFLOPS FP8 • InfiniBand Quantum-2 Networking"},
+            {"Gulfstream G700 Private Jet Charter", "VistaJet Executive Aviation", "Fly non-stop Dubai to New York in ultra-wide private staterooms with circadian lighting.", "Charter Flight", "Global Private Aviation", "PRIVATE JET 🛩️", "Gulfstream G700 Ultra-Long-Range", "5 Living Areas • Private Master Suite & Shower"},
+            {"Cartier Panthère & Love 18K Gold Suite", "Maison Cartier Paris", "Solid 18K yellow gold and brilliant-cut diamond bracelet & watch collection from Paris.", "Explore Maison", "$28,500 • Certified Boutique", "MAISON CARTIER ✨", "Cartier Love & Panthère 18K", "Brilliant-Cut Diamonds • 18K Solid Gold • Paris"},
+            {"Audi RS e-tron GT Carbon Performance", "Audi Sport Official", "637HP Quattro electric grand tourer with carbon-fiber roof, matrix laser lights & 800V fast charge.", "Discover RS", "$149,900 • Carbon Package", "AUDI SPORT 🏎️", "Audi RS e-tron GT 637HP", "Quattro AWD • 0-100 in 3.1s • Carbon Ceramic Brakes"},
+            {"Galaxy Z Fold 6 1TB Crafted Black", "Samsung Bespoke Studio", "7.6\" Dynamic AMOLED 2X foldable display, Galaxy AI Live Translate & Armor Aluminum hinge.", "Order Z Fold 6", "PKR 619,999 • VIP Concierge", "FOLDABLE FLAGSHIP 📱", "Samsung Galaxy Z Fold 6 1TB", "Dual-Screen Multitasking • Snapdragon 8 Gen 3"},
+            {"DHA Phase 8 2-Kanal Designer Mansion", "Sotheby's International Realty", "Brand-new architectural smart mansion with heated indoor pool, home cinema & Italian marble.", "Book Private Visit", "PKR 24 Crore • Ready to Move", "SIGNATURE ESTATE 🏛️", "2-Kanal Smart Mansion + Pool", "Private Home Cinema • Heated Pool • Imported Fittings"},
+            {"ASUS ROG Zephyrus Duo 16 RTX 4090", "ASUS Republic of Gamers", "Dual 4K Mini-LED ROG Nebula HDR screens, AMD Ryzen 9 7945HX3D & 175W NVIDIA RTX 4090.", "Shop Flagship", "PKR 1,350,000 • 64GB DDR5", "RTX 4090 PRO 💻", "ROG Zephyrus Duo RTX 4090", "Dual 4K Screens • 175W RTX 4090 • 64GB RAM"},
+            {"Louis Vuitton Horizon 55 Monogram", "Louis Vuitton Maison", "Ultra-lightweight 4-wheel cabin luggage in iconic Monogram canvas with natural cowhide leather trim.", "Explore Travel", "$3,650 • Complimentary Hot Stamp", "HAUTE COUTURE 🧳", "Louis Vuitton Horizon Collection", "Parisian Craftsmanship • TSA Lock • Cabin Size"},
+            {"Swiss Alps St. Moritz Private Chalet", "Badrutt's Palace St. Moritz", "Ski-in/ski-out luxury alpine chalet with private Michelin-star chef, Rolls-Royce chauffeur & spa.", "Reserve Winter", "CHF 12,000/Night • VIP Heli", "SWISS ALPS 🏔️", "St. Moritz Private Luxury Chalet", "Helicopter Transfer • Private Spa & Chauffeur"},
+            {"Sony Alpha 1 + FE 24-70mm GM II", "Sony Pro Imaging", "50.1MP full-frame stacked Exmor RS sensor, 30fps blackout-free shooting & 8K 30p 10-bit video.", "Explore Alpha 1", "$8,800 • Pro Master Kit", "8K CINEMA CAM 🎥", "Sony Alpha 1 + G-Master Lens", "50.1MP Full-Frame • 8K 30p Cinema • Real-Time Eye AF"},
+            {"Standard Chartered Priority Infinite", "Standard Chartered Wealth", "Global USD/EUR multi-currency wealth account, private equity advisory & unlimited lounge pass.", "Join Priority", "Min Balance PKR 15M Tier", "PRIVATE BANKING 🏦", "SCB Priority Global Wealth", "Dedicated Wealth Advisor • Global Multi-Currency"},
+            {"Lexus LX 600 Ultra Luxury 4-Seater", "Lexus Flagship Showroom", "Rear Ottoman captain seats, Mark Levinson 25-speaker reference surround & twin-turbo V6.", "Inquire LX 600", "$136,000 • Ultra Luxury", "EXECUTIVE 4X4 🚘", "Lexus LX 600 VIP 4-Seater", "Ottoman Massage Seats • 25-Speaker Mark Levinson"},
+            {"24K Swiss PAMP Fortuna Gold Bullion", "Emirates Gold & Bullion Vault", "LBMA-accredited 999.9 pure 24-karat investment gold bars with insured vault storage or delivery.", "Invest in Gold", "999.9 Pure Swiss Bullion", "24K GOLD BULLION 🪙", "Swiss 24K Gold Investment Bars", "LBMA Certified 999.9 Purity • Insured Delivery"}
     };
 
     private static final int[][] GRADIENT_PALETTES = new int[][]{
-            {0xFF1877F2, 0xFF0A3D91}, {0xFF6A11CB, 0xFF2575FC}, {0xFFD32F2F, 0xFFFF6D00}, {0xFF0F2027, 0xFF2C5364},
-            {0xFF1F1C2C, 0xFF928DAB}, {0xFF00695C, 0xFF00BFA5}, {0xFF134E5E, 0xFF71B280}, {0xFF8E2DE2, 0xFF4A00E0},
-            {0xFF0052D4, 0xFF4364F7}, {0xFF232526, 0xFF414345}, {0xFF1A2980, 0xFF26D0CE}, {0xFF3A1C71, 0xFFD76D77},
-            {0xFFB24592, 0xFFF15F79}, {0xFF11998E, 0xFF38EF7D}, {0xFF141E30, 0xFF243B55}, {0xFF004FF9, 0xFF000000},
-            {0xFF833AB4, 0xFFFD1D1D}, {0xFF00B4DB, 0xFF0083B0}, {0xFF1D976C, 0xFF2B5876}, {0xFFEB3349, 0xFFF45C43},
-            {0xFF4B6CB7, 0xFF182848}, {0xFFDA22FF, 0xFF9733EE}, {0xFF02AAB0, 0xFF00CDAC}, {0xFFFF512F, 0xFFDD2476}
+            {0xFF0F2027, 0xFF2C5364}, {0xFF141E30, 0xFF243B55}, {0xFF1F1C2C, 0xFF928DAB}, {0xFF1A2980, 0xFF26D0CE},
+            {0xFF232526, 0xFF414345}, {0xFF134E5E, 0xFF71B280}, {0xFF3A1C71, 0xFFD76D77}, {0xFF0052D4, 0xFF4364F7},
+            {0xFF8E0E00, 0xFF1F1C18}, {0xFF004FF9, 0xFF000000}, {0xFF1D976C, 0xFF2B5876}, {0xFF4B6CB7, 0xFF182848},
+            {0xFF6A11CB, 0xFF2575FC}, {0xFF00695C, 0xFF00BFA5}, {0xFFEB3349, 0xFFF45C43}, {0xFF02AAB0, 0xFF00CDAC},
+            {0xFF1877F2, 0xFF0A3D91}, {0xFF833AB4, 0xFFFD1D1D}, {0xFF00B4DB, 0xFF0083B0}, {0xFFB24592, 0xFFF15F79},
+            {0xFF11998E, 0xFF38EF7D}, {0xFFDA22FF, 0xFF9733EE}, {0xFFFF512F, 0xFFDD2476}, {0xFFD32F2F, 0xFFFF6D00}
     };
 
     private static final String[][] DYNAMIC_INDUSTRY_BRANDS = new String[][]{
-            {"NovaMobile PK", "5G AMOLED Smartphone", "120Hz Curved Display • 5000mAh • 67W Turbo Charge", "Shop Phone", "MOBILE 5G 📱"},
-            {"BiteExpress Kitchen", "Double Smash Beef Burger", "2x Flame-Grilled Patties • Cheese Fries • Chilled Cola", "Order Food", "HOT MEAL 🍔"},
-            {"CloudNet Fiber", "200Mbps FTTH Unlimited", "Dual-Band Wi-Fi 6 Router • Zero Throttling • Low Ping", "Get Fiber", "FIBER NET ⚡"},
-            {"LuxeTime Co.", "Titanium Sapphire Chrono", "Automatic Movement • 50M Waterproof • Stainless Strap", "Buy Watch", "LUXURY ⌚"},
-            {"ElectroMart Official", "65\" 4K QLED Smart Google TV", "Dolby Vision HDR10+ • 120Hz Gaming Mode • Voice Remote", "View TV", "SMART TV 📺"},
-            {"AirWings Travel", "Dubai & Baku 6-Day Holiday", "Return Ticket • 4-Star Hotel • Desert Safari & Visa", "Book Trip", "TRAVEL ✈️"},
-            {"UrbanThread Studio", "Premium Winter Hoodie Set", "400GSM Fleece • Oversized Fit • Free Nationwide COD", "Shop Drop", "FASHION 🧥"},
-            {"GlowSkin Labs", "Niacinamide + HA Glass Serum", "Pore Minimizing • 72Hr Deep Hydration • Dermatologist Tested", "Claim Offer", "SKINCARE ✨"},
-            {"PowerVolt Solar", "8kW Hybrid Solar System", "Tier-1 Bifacial Panels • IP65 Smart Inverter • Net Metering", "Get Quote", "SOLAR ☀️"},
-            {"ApexGear Esports", "Wireless Pro Gaming Mouse", "26,000 DPI Optical Sensor • 54g Ultra-Light • 80Hr Battery", "Order Gear", "GAMING 🎮"},
-            {"RoyalScent Arabia", "Black Oud & Saffron Extrait", "48-Hour Projection • Pure French Perfume Oils • Gift Box", "Shop Scent", "PERFUME 💎"},
-            {"FitLab Nutrition", "100% Micronized Creatine + Whey", "30 Servings • Lab Tested Purity • Muscle Strength & Recovery", "Order Now", "FITNESS 💪"},
-            {"SpeedyMart 15m", "Monthly Family Grocery Pack", "Cooking Oil, Basmati Rice, Tea & Dairy at Wholesale Rates", "Order Pack", "GROCERY 🛒"},
-            {"AutoShine Pro", "Graphene 10H Paint Shield", "Hydrophobic Mirror Gloss • 2-Year UV & Scratch Protection", "Get Kit", "CAR CARE 🚘"},
-            {"CodeMaster Academy", "AI Engineering & Cloud Bootcamp", "Live Zoom Mentorship • 6 Real Projects • Job Placement Help", "Join Cohort", "TECH COURSE 💻"},
-            {"BrewHouse Roasters", "100% Arabica Cold Brew Pack", "Single-Origin Espresso Beans • Rich Crema • Freshly Roasted", "Order Coffee", "COFFEE ☕"},
-            {"HomeComfort PK", "Orthopedic Memory Foam Mattress", "Cooling Gel Top • 10-Year Official Warranty • Free Delivery", "Check Size", "HOME 🛏️"},
-            {"PayFast Digital", "Zero-Fee Platinum Debit Card", "Instant Raast Transfers • 20% Dining Discount • No Annual Fee", "Get Card", "FINTECH 💳"},
-            {"KicksVault PK", "Air Cushion Running Sneakers", "Breathable Knit Upper • Shock-Absorbing Sole • 7-Day Exchange", "Shop Kicks", "SNEAKERS 👟"},
-            {"LensCraft Pro", "4K Wireless Vlog Microphone", "AI Noise Cancellation • 200m Range • Plug & Play Type-C/iPhone", "Buy Mic", "CREATOR 🎙️"},
-            {"DesiSpice Grill", "Full Mutton Mandi Platter", "Slow-Cooked Tender Mutton • Arabic Rice • 4 Sauces Included", "Order Platter", "DESI FEAST 🍖"},
-            {"CoolTech Appliances", "No-Frost Double Door Fridge", "Digital Inverter • 55% Energy Saver • Vitamin Fresh Zone", "See Price", "APPLIANCE 🧊"},
-            {"SmartHome Security", "360° PTZ Wi-Fi Night Camera", "2K Color Night Vision • Two-Way Audio • Instant Phone Alerts", "Order Cam", "SECURITY 📹"},
-            {"VelvetLoom PK", "3-Piece Embroidered Chiffon", "Luxury Festive Collection • Pure Raw Silk Trouser • COD Available", "Shop Suit", "FESTIVE 👗"},
-            {"RidePro Motors", "Electric Scooter 85km Range", "1500W Brushless Motor • Digital Dash • Zero Fuel Cost", "Book Ride", "EV RIDE 🛵"},
-            {"BookHaven Store", "Bestselling Business 5-Book Box", "Atomic Habits + Psychology of Money + 3 Top Hardcovers", "Order Books", "BOOKS 📚"},
-            {"DentalBright Clinic", "Ultrasonic Scaling & Whitening", "Painless 30-Min Laser Polish • Certified Dental Specialists", "Book Slot", "HEALTH 🦷"},
-            {"PetCare Express", "Premium Grain-Free Cat & Dog Food", "Rich in Omega-3 & Taurine • Free Home Delivery Today", "Shop Pet", "PET CARE 🐾"},
-            {"SoundBox Audio", "80W Portable Party Soundbar", "Deep Subwoofer Bass • RGB Beat Lights • Karaoke Wireless Mic", "Shop Speaker", "AUDIO 🔊"},
-            {"Backpackers Gear", "Waterproof Anti-Theft Laptop Bag", "Fits 16\" MacBook • Built-in USB Port • Ergonomic Back Support", "Grab Bag", "TRAVEL BAG 🎒"},
-            {"FreshBake Artisans", "Belgian Chocolate Fudge Cake", "2-Pound Freshly Baked • 45-Min Express Gift Delivery", "Send Cake", "BAKERY 🎂"},
-            {"PrimeEstate PK", "LDA Approved 5-Marla Smart Plots", "2.5-Year Easy Monthly Plan • Gated Underground Electricity", "View Plan", "PROPERTY 🏡"}
+            {"Rolex Geneve Official", "Submariner Date 18ct Yellow Gold", "Royal Blue Cerachrom Bezel • Oyster Bracelet • 300m Waterproof Chronometer", "Inquire Boutique", "SWISS LUXURY ⌚"},
+            {"Mercedes-AMG Official", "Mercedes-AMG GT 63 S E-Performance", "831HP Plug-in Hybrid V8 • 1,400Nm Torque • AMG Carbon Ceramic Brakes", "Book Private Preview", "AMG SUPERCAR 🏎️"},
+            {"Apple Flagship Store", "iPhone 16 Pro Max 1TB Desert Titanium", "A18 Pro 3nm Chip • 4K120 Dolby Vision Cinema • 5x Optical Telephoto", "Order Flagship", "FLAGSHIP PRO 📱"},
+            {"Emaar Properties Dubai", "Downtown Dubai Burj Crown Penthouse", "Direct Burj Khalifa & Fountain Views • Private Sky Terrace • Golden Visa", "Book Dubai Tour", "PRIME REAL ESTATE 🏙️"},
+            {"Emirates First Class", "Emirates A380 Private First Class Suite", "Zero-Gravity Leather Suite • Onboard Shower Spa • Chauffeur-Drive Service", "Book First Class", "FIRST CLASS ✈️"},
+            {"Patek Philippe Geneve", "Grand Complications Perpetual Calendar", "18K Rose Gold Case • Moon Phases & Leap Year Indicator • Geneva Seal", "Private Consultation", "HAUTE HORLOGERIE 💎"},
+            {"Porsche Exclusive Manufaktur", "Porsche Taycan Turbo GT Weissach", "1,092HP Overboost Launch Control • 0-100 km/h in 2.2s • Carbon Aero", "Configure Taycan", "ELECTRIC SUPERCAR ⚡"},
+            {"Samsung Flagship Studio", "Samsung 98\" Neo QLED 8K Quantum TV", "NQ8 AI Gen3 Processor • Infinity Air Design • Dolby Atmos Object Tracking", "Experience 8K", "8K LUXURY TV 📺"},
+            {"Eighteen Islamabad Official", "The Core Luxury Corporate & Golf Villas", "Championship 18-Hole Golf Course • Underground Smart Grid • 5-Star Club", "Schedule Visit", "LUXURY ESTATE 🏡"},
+            {"American Express Centurion", "Amex Platinum Metal Concierge Card", "Global Fine Hotels + Resorts Privileges • $200 Airline Credit • Centurion Lounges", "Apply Platinum", "PRIVATE WEALTH 💳"},
+            {"Land Rover Bespoke", "Range Rover Sport SV Edition Two", "626HP Twin-Turbo V8 • 6D Dynamics Air Suspension • Forged Carbon Fiber", "Explore SV", "LUXURY 4X4 🚙"},
+            {"Qatar Airways Privilege", "Qatar Airways Qsuite Business World Pass", "Private Double Bed Cabin • Starlink High-Speed Wi-Fi • Al Mourjan Lounge", "Book Qsuite", "BUSINESS CLASS 🛫"},
+            {"Apple Enterprise Pro", "Mac Studio M3 Ultra + Pro Display XDR", "6K Retina XDR 1600-Nit Display • 192GB Unified Memory • 8TB NVMe SSD", "Configure Studio", "PRO WORKSTATION 🖥️"},
+            {"Tiffany & Co. High Jewelry", "Tiffany Victoria Diamond Vine Necklace", "Marquise & Round Brilliant Diamonds in Handcrafted 950 Platinum", "Private Viewing", "HIGH JEWELRY 💍"},
+            {"BMW M GmbH Official", "BMW XM Label Red 738HP V8 Hybrid", "Most Powerful BMW M Ever Built • Merino Leather Lounge • M Lounge Roof", "Discover BMW XM", "BMW M POWER 🚘"},
+            {"Four Seasons Private Retreats", "Four Seasons Bora Bora Overwater Suite", "Mount Otemanu Views • Private Plunge Pool • Helicopter Island Arrival", "Reserve Suite", "PRIVATE ISLAND 🏝️"},
+            {"Omega Swiss Watches", "Speedmaster Moonwatch 18K Moonshine Gold", "Co-Axial Master Chronometer Calibre 3861 • Green PVD Dial • Swiss Certified", "Explore Omega", "SWISS WATCH ⌚"},
+            {"Damac Luxury Living", "Cavalli Couture Dubai Canal Sky Villa", "Indoor Private Lagoon Pool • Roberto Cavalli Interiors • Marina Terrace", "Invest in Dubai", "DUBAI SKY VILLA 🏛️"},
+            {"Maison Christian Dior", "Dior Sauvage Elixir & Privée Trunk", "Bespoke Leather Fragrance Trunk • Rare Grasse Rose & Calabrian Bergamot", "Explore Maison", "HAUTE PARFUM ✨"},
+            {"VistaJet Private Aviation", "Bombardier Global 7500 Private Jet", "7,700 NM Non-Stop Range • Full Master Bedroom • Private Sky Kitchen", "Request Charter", "PRIVATE AVIATION 🛩️"},
+            {"Audi Flagship Showroom", "Audi Q8 e-tron Edition Dakar Quattro", "Progressive Matrix LED • Bang & Olufsen 3D Sound • Adaptive Air Suspension", "Book Test Drive", "AUDI QUATTRO 🚙"},
+            {"Cartier Haute Joaillerie", "Santos de Cartier Large 18K Yellow Gold", "QuickSwitch Gold & Alligator Straps • Calibre 1847 MC Automatic Movement", "Visit Boutique", "MAISON CARTIER 💎"},
+            {"HSBC Global Private Bank", "HSBC Jade & Premier Wealth Portfolio", "International Offshore Banking • Tax-Free Global ETFs • Metal World Elite", "Speak to Advisor", "GLOBAL BANKING 🏦"},
+            {"Lexus Official Flagship", "Lexus LM 500h Ultra-Luxury Royal Van", "48-Inch Ultrawide Partition Screen • First-Class Reclining Airline Seats", "Inquire LM 500h", "ROYAL CHAUFFEUR 🚘"},
+            {"Louis Vuitton Paris", "Keepall Bandoulière 50 Taurillon Leather", "Full-Grain Embossed Monogram Leather • Matte Black Hardware • Paris Made", "Shop Maison", "LOUIS VUITTON 👜"},
+            {"AWS Enterprise Cloud", "Amazon Bedrock & GPU AI Supercluster", "Dedicated H100/H200 AI Clusters • SOC2/ISO Banking Grade Security • 99.999% SLA", "Contact Enterprise", "CLOUD AI ☁️"},
+            {"Bulgari Roma Boutique", "Octo Finissimo Ultra-Thin Titanium Watch", "World-Record Thin Automatic Watch • Sandblasted Titanium • Swiss Calibre", "Explore Bulgari", "ITALIAN LUXURY ⌚"},
+            {"Etihad Airways Official", "Etihad The Residence A380 3-Room Suite", "Private Living Room, Double Bedroom & En-Suite Shower at 40,000 Feet", "Book Residence", "ROYAL AVIATION ✈️"},
+            {"Leica Camera Wetzlar", "Leica M11 Monochrom + Noctilux 50mm f/0.95", "Handcrafted in Germany • 60MP Triple Resolution Full-Frame Brass Body", "Discover Leica", "GERMAN OPTICS 📷"},
+            {"Ritz-Carlton Yacht Collection", "Ilma Superyacht Mediterranean Voyage", "7-Night Private Terrace Suite • Michelin-Star Dining • Marina Watersports", "Reserve Voyage", "SUPERYACHT 🛥️"},
+            {"Bang & Olufsen Denmark", "Beolab 90 Flagship 8,200W Floor Speakers", "18 Scan-Speak Drivers per Speaker • Active Room Compensation • Aluminum Art", "Book Audition", "HI-FI ACOUSTICS 🔊"},
+            {"Sotheby's International Realty", "Islamabad F-6/F-7 4-Kanal Embassy Mansion", "Diplomatic Enclave Proximity • Bulletproof Glass • 12-Car Underground Garage", "Private Inquiry", "EMBASSY ESTATE 🏰"}
     };
 
     private static final String[] EDITION_SERIES = new String[]{
-            "2026 Pro Edition", "Ultra Series", "Max Titanium", "Prime Collection",
-            "Signature Line", "Elite Pack", "Turbo Series", "Studio Edition",
-            "Platinum Release", "NextGen v2", "Limited Drop", "Supreme Box"
+            "2026 Bespoke Edition", "Flagship Titanium Series", "Private Collector Release", "Executive Lounge Spec",
+            "Geneva Signature Line", "Presidential Suite Tier", "First-Class Edition", " Diamond Reserve",
+            "Platinum VIP Release", "8K Cinema Edition", " Sovereign Collection", "Maybach Spec"
     };
 
     private static final String[] PROMO_OFFERS = new String[]{
-            "Flat 45% OFF Today", "Buy 1 Get 1 Free", "Rs. 1,000 Instant Off",
-            "Free Express COD", "35% Flash Discount", "0% Easy Installments",
-            "50% Launch Offer", "Free Gift Included", "Rs. 750 Voucher Inside",
-            "40% Season Clearance", "VIP Member Price", "25% Cashback Deal"
+            "VIP Concierge Delivery", "Official Global Warranty", "Private Viewing Available",
+            "0% Executive Financing", "Complimentary Chauffeur", "Priority Allocation Open",
+            "Bespoke Customization", "10-Year Golden Visa Eligible", "Certified Swiss Authenticity",
+            "First-Class Lounge Access", "Invited Members Only", "Insured Armored Delivery"
     };
 
     private static volatile Context cachedAppCtx;
-    private static int memorySequenceFloor = 200;
+    private static int memorySequenceFloor = 600;
 
     /**
      * Always allocates a BRAND-NEW, never-before-seen `uniqueId` whenever a Feed or Reels Ad ViewHolder binds!
@@ -472,10 +472,10 @@ public class AdsConfig {
         if (effCtx != null) {
             String uid = Fb.uid() == null ? "guest" : Fb.uid();
             SharedPreferences sp = prefs(effCtx);
-            String userSeqKey = "unseen_ad_seq_v5_" + uid;
-            String devSeqKey = "unseen_ad_seq_v5_device";
+            String userSeqKey = "unseen_ad_seq_v6_" + uid;
+            String devSeqKey = "unseen_ad_seq_v6_device";
             int currentMax = Math.max(memorySequenceFloor,
-                    Math.max(sp.getInt(userSeqKey, 200), sp.getInt(devSeqKey, 200)));
+                    Math.max(sp.getInt(userSeqKey, 600), sp.getInt(devSeqKey, 600)));
             nextId = currentMax + 1;
             memorySequenceFloor = nextId;
             sp.edit()
@@ -600,12 +600,12 @@ public class AdsConfig {
         if (context == null || !nativeAdsEnabled()) return;
         final Context appCtx = context.getApplicationContext();
         ConsentManager.ensureInitialized(appCtx);
-        while (FEED_POOL.size() + feedInFlight < POOL_TARGET_SIZE) {
-            feedInFlight++;
+        if (FEED_POOL.size() < POOL_TARGET_SIZE && feedInFlight <= 0) {
+            feedInFlight = 5;
             preloadOneFeedAd(appCtx);
         }
-        while (REELS_POOL.size() + reelsInFlight < POOL_TARGET_SIZE) {
-            reelsInFlight++;
+        if (REELS_POOL.size() < POOL_TARGET_SIZE && reelsInFlight <= 0) {
+            reelsInFlight = 5;
             preloadOneReelsAd(appCtx);
         }
     }
@@ -613,11 +613,14 @@ public class AdsConfig {
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
         resolveUniqueAdId(context, slotOrdinal);
         com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
-        if (existing != null) return existing;
-        // Strictly poll a fresh unseen AdMob NativeAd from FEED_POOL; NEVER reuse an already-shown NativeAd!
-        com.google.android.gms.ads.nativead.NativeAd polled = FEED_POOL.pollFirst();
+        if (existing != null) {
+            syncRealNativeAdToSlot(slotOrdinal, existing);
+            return existing;
+        }
+        com.google.android.gms.ads.nativead.NativeAd polled = pollDistinctFromPool(FEED_POOL);
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
+            syncRealNativeAdToSlot(slotOrdinal, polled);
         }
         warmUpPools(context);
         return polled;
@@ -627,20 +630,71 @@ public class AdsConfig {
         if (ad != null) {
             rememberFeedAd(ad);
             FEED_SLOT_ADS.put(slotOrdinal, ad);
+            syncRealNativeAdToSlot(slotOrdinal, ad);
         }
     }
 
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollReelsAd(Context context, int slotOrdinal) {
         resolveUniqueAdId(context, slotOrdinal + 10000);
         com.google.android.gms.ads.nativead.NativeAd existing = REELS_SLOT_ADS.get(slotOrdinal);
-        if (existing != null) return existing;
-        // Strictly poll a fresh unseen AdMob NativeAd from REELS_POOL; NEVER reuse an already-shown NativeAd!
-        com.google.android.gms.ads.nativead.NativeAd polled = REELS_POOL.pollFirst();
+        if (existing != null) {
+            syncRealNativeAdToSlot(slotOrdinal + 10000, existing);
+            return existing;
+        }
+        com.google.android.gms.ads.nativead.NativeAd polled = pollDistinctFromPool(REELS_POOL);
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
+            syncRealNativeAdToSlot(slotOrdinal + 10000, polled);
         }
         warmUpPools(context);
         return polled;
+    }
+
+    private static String lastPolledSignature = "";
+
+    private static com.google.android.gms.ads.nativead.NativeAd pollDistinctFromPool(
+            java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> pool) {
+        if (pool.isEmpty()) return null;
+        int n = pool.size();
+        for (int i = 0; i < n; i++) {
+            com.google.android.gms.ads.nativead.NativeAd candidate = pool.pollFirst();
+            if (candidate == null) continue;
+            String sig = adSignature(candidate);
+            if (!sig.equals(lastPolledSignature) || pool.isEmpty()) {
+                lastPolledSignature = sig;
+                return candidate;
+            }
+            pool.offerLast(candidate);
+        }
+        com.google.android.gms.ads.nativead.NativeAd first = pool.pollFirst();
+        if (first != null) lastPolledSignature = adSignature(first);
+        return first;
+    }
+
+    private static String adSignature(com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad == null) return "";
+        String h = ad.getHeadline() != null ? ad.getHeadline() : "";
+        String a = ad.getAdvertiser() != null ? ad.getAdvertiser() : "";
+        String b = ad.getBody() != null ? ad.getBody() : "";
+        return (h + "|" + a + "|" + b).trim();
+    }
+
+    public static synchronized void syncRealNativeAdToSlot(int slotKey, com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad == null) return;
+        com.friendbook.social.models.Models.Post p = getOrCreateAdPost(slotKey);
+        String realAdv = (ad.getAdvertiser() != null && !ad.getAdvertiser().trim().isEmpty())
+                ? ad.getAdvertiser().trim()
+                : (ad.getStore() != null && !ad.getStore().trim().isEmpty())
+                ? ad.getStore().trim()
+                : (ad.getHeadline() != null && !ad.getHeadline().trim().isEmpty())
+                ? ad.getHeadline().trim()
+                : p.authorName;
+        String realHead = ad.getHeadline() != null ? ad.getHeadline().trim() : "";
+        String realBody = ad.getBody() != null ? ad.getBody().trim() : "";
+        p.authorName = realAdv;
+        if (!realHead.isEmpty() || !realBody.isEmpty()) {
+            p.content = realHead + (!realHead.isEmpty() && !realBody.isEmpty() ? " — " : "") + realBody;
+        }
     }
 
     public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
@@ -651,6 +705,7 @@ public class AdsConfig {
         if (ad != null) {
             rememberReelsAd(ad);
             REELS_SLOT_ADS.put(slotOrdinal, ad);
+            syncRealNativeAdToSlot(slotOrdinal + 10000, ad);
         }
     }
 
@@ -666,15 +721,41 @@ public class AdsConfig {
         warmUpPools(context);
     }
 
+    /**
+     * Builds a High-eCPM Production AdRequest targeting Tier-1 Luxury, Automotive, Real Estate,
+     * Private Wealth Banking, First-Class Aviation, Swiss Watches & Flagship 5G Video campaigns.
+     */
+    public static com.google.android.gms.ads.AdRequest buildHighValueAdRequest(boolean isReels) {
+        com.google.android.gms.ads.AdRequest.Builder b = new com.google.android.gms.ads.AdRequest.Builder();
+        try {
+            b.addKeyword("luxury automotive SUV supercar");
+            b.addKeyword("private banking wealth management platinum card");
+            b.addKeyword("luxury real estate penthouse villa dubai");
+            b.addKeyword("first class airlines business class travel");
+            b.addKeyword("swiss luxury watches diamond jewelry");
+            b.addKeyword("flagship 5g titanium smartphone enterprise cloud AI");
+            if (isReels) {
+                b.addKeyword("vertical 4k video commercial reel");
+            }
+            b.setContentUrl("https://www.bloomberg.com/wealth");
+        } catch (Throwable ignored) { }
+        return b.build();
+    }
+
     private static void preloadOneFeedAd(final Context appCtx) {
         final String unitId = feedNativeId();
         try {
             recordAdRequest(appCtx);
             com.google.android.gms.ads.VideoOptions videoOptions =
-                    new com.google.android.gms.ads.VideoOptions.Builder().setStartMuted(true).build();
+                    new com.google.android.gms.ads.VideoOptions.Builder()
+                            .setStartMuted(true)
+                            .setCustomControlsRequested(true)
+                            .setClickToExpandRequested(true)
+                            .build();
             com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                     new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
                             .setAdChoicesPlacement(com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                            .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                             .setVideoOptions(videoOptions)
                             .build();
             com.google.android.gms.ads.AdLoader adLoader =
@@ -685,7 +766,13 @@ public class AdsConfig {
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
                                     rememberFeedAd(nativeAd);
-                                    FEED_POOL.offerLast(nativeAd);
+                                    boolean hasVideo = nativeAd.getMediaContent() != null
+                                            && nativeAd.getMediaContent().hasVideoContent();
+                                    if (hasVideo) {
+                                        FEED_POOL.offerFirst(nativeAd);
+                                    } else {
+                                        FEED_POOL.offerLast(nativeAd);
+                                    }
                                 }
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
@@ -696,17 +783,18 @@ public class AdsConfig {
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
                                     synchronized (AdsConfig.class) {
-                                        feedInFlight = Math.max(0, feedInFlight - 1);
+                                        feedInFlight = 0;
                                     }
                                     onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+            // Request a batch of 5 distinct real ads from AdMob in a single multi-ad auction!
+            adLoader.loadAds(buildHighValueAdRequest(false), 5);
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
-                feedInFlight = Math.max(0, feedInFlight - 1);
+                feedInFlight = 0;
             }
         }
     }
@@ -717,11 +805,15 @@ public class AdsConfig {
             recordAdRequest(appCtx);
             boolean startMuted = !Prefs.reelsStartWithSound(appCtx);
             com.google.android.gms.ads.VideoOptions videoOptions =
-                    new com.google.android.gms.ads.VideoOptions.Builder().setStartMuted(startMuted).build();
+                    new com.google.android.gms.ads.VideoOptions.Builder()
+                            .setStartMuted(startMuted)
+                            .setCustomControlsRequested(true)
+                            .setClickToExpandRequested(true)
+                            .build();
             com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                     new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
                             .setAdChoicesPlacement(com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
-                            .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_PORTRAIT)
+                            .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                             .setVideoOptions(videoOptions)
                             .build();
             com.google.android.gms.ads.AdLoader adLoader =
@@ -732,7 +824,13 @@ public class AdsConfig {
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
                                     rememberReelsAd(nativeAd);
-                                    REELS_POOL.offerLast(nativeAd);
+                                    boolean hasVideo = nativeAd.getMediaContent() != null
+                                            && nativeAd.getMediaContent().hasVideoContent();
+                                    if (hasVideo) {
+                                        REELS_POOL.offerFirst(nativeAd);
+                                    } else {
+                                        REELS_POOL.offerLast(nativeAd);
+                                    }
                                 }
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
@@ -743,17 +841,18 @@ public class AdsConfig {
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
                                     synchronized (AdsConfig.class) {
-                                        reelsInFlight = Math.max(0, reelsInFlight - 1);
+                                        reelsInFlight = 0;
                                     }
                                     onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+            // Request a batch of 5 distinct real video/native ads from AdMob in a single multi-ad auction!
+            adLoader.loadAds(buildHighValueAdRequest(true), 5);
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
-                reelsInFlight = Math.max(0, reelsInFlight - 1);
+                reelsInFlight = 0;
             }
         }
     }

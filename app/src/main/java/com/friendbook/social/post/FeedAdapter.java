@@ -2337,13 +2337,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 currentNativeAd = preloaded;
                 expand(ctx);
                 populateNativeAdView(preloaded, ctx);
+                refreshAdSocialUi(ctx);
                 nativeAdView.requestLayout();
                 return;
             }
 
-            // Always show Sponsored slot immediately (never leave empty gap while AdMob loads!)
-            expand(ctx);
-            populateShowcaseFallback(ctx, slotOrdinal);
+            // Keep slot collapsed until a 100% REAL AdMob NativeAd arrives (ZERO fake/dummy ads!)
+            collapse(ctx);
             com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
             android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
                     "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -2352,11 +2352,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 com.google.android.gms.ads.VideoOptions videoOptions =
                         new com.google.android.gms.ads.VideoOptions.Builder()
                                 .setStartMuted(true)
+                                .setCustomControlsRequested(true)
+                                .setClickToExpandRequested(true)
                                 .build();
                 com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                         new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
                                 .setAdChoicesPlacement(
                                         com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                                .setMediaAspectRatio(
+                                        com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                                 .setVideoOptions(videoOptions)
                                 .build();
 
@@ -2376,6 +2380,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                     // Expand BEFORE setNativeAd so Google Mobile Ads viewability registers impression
                                     expand(ctx);
                                     populateNativeAdView(nativeAd, ctx);
+                                    refreshAdSocialUi(ctx);
                                     nativeAdView.requestLayout();
                                 })
                                 .withAdListener(new com.google.android.gms.ads.AdListener() {
@@ -2419,10 +2424,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                 currentNativeAd = fallback;
                                                 expand(ctx);
                                                 populateNativeAdView(fallback, ctx);
+                                                refreshAdSocialUi(ctx);
                                                 nativeAdView.requestLayout();
                                             } else {
-                                                expand(ctx);
-                                                populateShowcaseFallback(ctx, slotOrdinal);
+                                                collapse(ctx);
                                             }
                                         }
                                     }
@@ -2430,24 +2435,26 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 .withNativeAdOptions(adOptions)
                                 .build();
 
-                // Fresh production AdRequest — zero test IDs, zero cached ad reuse
-                adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                // Request a batch of 3 distinct real production AdMob NativeAds
+                adLoader.loadAds(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false), 3);
             } catch (Throwable t) {
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
                         "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                 com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
-                expand(ctx);
-                populateShowcaseFallback(ctx, slotOrdinal);
+                collapse(ctx);
             }
         }
 
         private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+            adShowcaseBanner.setVisibility(View.GONE);
             headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
 
             if (ad.getMediaContent() != null) {
                 mediaView.setMediaContent(ad.getMediaContent());
                 mediaView.setVisibility(View.VISIBLE);
-                adShowcaseBanner.setVisibility(View.GONE);
+                if (ad.getMediaContent().hasVideoContent() && ad.getMediaContent().getVideoController() != null) {
+                    try { ad.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
+                }
             } else {
                 mediaView.setVisibility(View.GONE);
             }
@@ -2507,8 +2514,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
 
             nativeAdView.setNativeAd(ad);
-            // Guarantee every Feed Ad displays its unique unseen company, logo, headline & banner (never a repeated AdMob campaign!)
-            populateShowcaseFallback(c, boundSlotOrdinal);
         }
 
         void onRecycled() {
