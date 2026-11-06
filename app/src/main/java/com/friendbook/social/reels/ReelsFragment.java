@@ -937,20 +937,6 @@ public class ReelsFragment extends Fragment {
                 adRail.addView(adShareCount);
                 inner.addView(adRail);
 
-                adLikeBox.setOnClickListener(v -> {
-                    Ui.haptic(v);
-                    AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 100, null, () -> refreshReelAdSocial(a));
-                });
-                adLikeBox.setOnLongClickListener(v -> {
-                    Reactions.show(adLikeBox, picked ->
-                            AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 100, picked, () -> refreshReelAdSocial(a)));
-                    return true;
-                });
-                adCommentBox.setOnClickListener(v ->
-                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 100, headlineView.getText(), () -> refreshReelAdSocial(a)));
-                adShareBox.setOnClickListener(v ->
-                        AdsConfig.shareSponsoredAd(a, boundSlotOrdinal + 100, headlineView.getText(), bodyView.getText(), () -> refreshReelAdSocial(a)));
-
                 LinearLayout bottomCard = Ui.col(a);
                 bottomCard.setBackground(Ui.roundStroke(a, 0xDD121418, 16, 0x33FFFFFF, 1));
                 Ui.pad(bottomCard, 14, 12, 14, 14);
@@ -1023,6 +1009,20 @@ public class ReelsFragment extends Fragment {
                 nativeAdView.setStarRatingView(starsView);
                 nativeAdView.setStoreView(storeView);
                 nativeAdView.setPriceView(priceView);
+
+                adLikeBox.setOnClickListener(v -> {
+                    Ui.haptic(v);
+                    AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 100, null, () -> refreshReelAdSocial(a));
+                });
+                adLikeBox.setOnLongClickListener(v -> {
+                    Reactions.show(adLikeBox, picked ->
+                            AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 100, picked, () -> refreshReelAdSocial(a)));
+                    return true;
+                });
+                adCommentBox.setOnClickListener(v ->
+                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 100, headlineView.getText(), () -> refreshReelAdSocial(a)));
+                adShareBox.setOnClickListener(v ->
+                        AdsConfig.shareSponsoredAd(a, boundSlotOrdinal + 100, headlineView.getText(), bodyView.getText(), () -> refreshReelAdSocial(a)));
             }
 
             private static FrameLayout buildAdRoot(Activity a) {
