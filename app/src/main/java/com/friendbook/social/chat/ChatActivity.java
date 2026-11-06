@@ -1007,6 +1007,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "image".equals(type) ? "📷 Photo" : finalText);
+        com.friendbook.social.core.CloudflareStore.put("chats", chatId, chatDoc);
+        com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_" + msgRef.getId(), msg);
 
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);

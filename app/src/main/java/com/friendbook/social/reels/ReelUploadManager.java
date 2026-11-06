@@ -217,6 +217,20 @@ public final class ReelUploadManager {
                     "createdAt", FieldValue.serverTimestamp());
 
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);
+            String cfReelId = "reel_" + System.currentTimeMillis() + "_" + (Fb.uid() != null ? Fb.uid().substring(0, Math.min(6, Fb.uid().length())) : "u");
+            if (com.friendbook.social.core.CloudflareStore.enabled()) {
+                com.friendbook.social.core.CloudflareStore.put("reels", cfReelId, doc, () -> {
+                    optimisticReel = null;
+                    MAIN.postDelayed(() -> {
+                        try { //noinspection ResultOfMethodCallIgnored
+                            stagedFile.delete();
+                        } catch (Throwable ignored) { }
+                    }, 8000L);
+                    emit(false, 100, totalBytes, totalBytes, "✅ Your Reel is Live!", true, null);
+                    Ui.toast(appCtx, "🎬 Your Reel is Live!");
+                });
+                return;
+            }
             Fb.db().collection("reels").add(doc).addOnSuccessListener(ref -> {
                 optimisticReel = null;
                 // Clean up staging file after seeding completes

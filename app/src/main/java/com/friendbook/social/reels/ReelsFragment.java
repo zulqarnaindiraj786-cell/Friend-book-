@@ -458,6 +458,22 @@ public class ReelsFragment extends Fragment {
     private void loadNextVideos() {
         if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
         pagingVideos=true; final int generation=videoGeneration; final String actor=Fb.uid();
+        if (reelsCursor == null && postsCursor == null) {
+            com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
+                if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
+                boolean added = false;
+                for (Map<String, Object> m : docs) {
+                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                    if (id.isEmpty()) continue;
+                    Models.Reel reel = Models.Reel.fromMap(id, m);
+                    if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
+                    if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
+                    if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
+                    if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added = true; }
+                }
+                if (added) rebuildMergedFeed(false);
+            });
+        }
         // Two sources contribute five metadata documents each: at most ten per batch.
         final int[] pending={(moreReels?1:0)+(moreVideoPosts?1:0)};
         Runnable done=() -> { if(generation!=videoGeneration) return; if(--pending[0]==0) { pagingVideos=false; rebuildMergedFeed(false); } };

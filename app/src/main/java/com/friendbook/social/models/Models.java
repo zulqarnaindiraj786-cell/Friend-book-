@@ -188,11 +188,14 @@ public class Models {
         public boolean isQa() { return qaPrompt != null && !qaPrompt.isEmpty(); }
         public boolean isQna() { return "qna".equals(postType) || isQa(); }
 
-        @SuppressWarnings("unchecked")
         public static Post fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        @SuppressWarnings("unchecked")
+        public static Post fromMap(String id, Map<String, Object> m) {
             Post p = new Post();
-            Map<String, Object> m = d.getData();
-            p.id = d.getId();
+            p.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
             p.authorId = Format.str(m, "authorId");
             p.authorName = Format.strOr(m, "authorName", "User");
             p.authorPhoto = Format.str(m, "authorPhotoUrl");
@@ -484,9 +487,12 @@ public class Models {
         }
 
         public static Reel fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        public static Reel fromMap(String id, Map<String, Object> m) {
             Reel r = new Reel();
-            Map<String, Object> m = d.getData();
-            r.id = d.getId();
+            r.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
             r.authorId = Format.str(m, "authorId");
             r.authorName = Format.strOr(m, "authorName", "User");
             r.authorPhoto = Format.str(m, "authorPhotoUrl");

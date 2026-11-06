@@ -556,6 +556,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     // ---------- posts ----------
     private boolean postsFallbackUsed;
+    private final List<Models.Post> cfPosts = new ArrayList<>();
+    private List<DocumentSnapshot> lastPostDocs = new ArrayList<>();
 
     private void restartPostsListener() {
         if(loadingPosts) return;
@@ -568,6 +570,21 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final int generation=++feedGeneration;
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
+        com.friendbook.social.core.CloudflareStore.list("posts", PAGE, docs -> {
+            if (generation != feedGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded()) return;
+            cfPosts.clear();
+            if (docs != null) {
+                for (Map<String, Object> m : docs) {
+                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                    if (!id.isEmpty()) cfPosts.add(Models.Post.fromMap(id, m));
+                }
+            }
+            if (loadedPosts || !cfPosts.isEmpty()) {
+                loadingPosts = false;
+                loadedPosts = true;
+                consumePostsSnapshot(lastPostDocs, ordered, true);
+            }
+        });
         Query query=Fb.db().collection("posts");
         // Same ordering/cursor is retained for subsequent pages, including the fallback.
         query=ordered?query.orderBy("createdAt",Query.Direction.DESCENDING)
@@ -598,9 +615,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean ordered, boolean persistCache) {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
+        if (docs != null) lastPostDocs = docs;
         List<Models.Post> allVisible = new ArrayList<>();
         List<Models.Post> filtered = new ArrayList<>();
-        for (DocumentSnapshot d : docs) {
+        java.util.Set<String> seenIds = new java.util.HashSet<>();
+        for (Models.Post p : cfPosts) {
+            if (p == null || p.id == null || p.id.isEmpty() || !seenIds.add(p.id)) continue;
+            if (!visible(p)) continue;
+            allVisible.add(p);
+            if (matchesFilter(p, filter)) filtered.add(p);
+        }
+        if (docs != null) for (DocumentSnapshot d : docs) {
+            if (d.getId() != null && !seenIds.add(d.getId())) continue;
             if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
                 com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
                         a2, "posts", d.getId(), d.getString("authorId"),

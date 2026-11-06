@@ -171,6 +171,7 @@ public class Fb {
     public static void patchMe(Map<String, Object> fields) {
         String uid = uid();
         if (uid == null) return;
+        CloudflareStore.put("users", uid, fields);
         db().collection("users").document(uid).set(fields, SetOptions.merge());
     }
 
