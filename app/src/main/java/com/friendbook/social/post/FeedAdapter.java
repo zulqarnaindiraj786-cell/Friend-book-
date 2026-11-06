@@ -1955,8 +1955,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 adLikeBtnTv.setText("👍  Like");
                 adLikeBtnTv.setTextColor(Ui.sub(c));
             } else {
-                adLikeBtnTv.setText(Reactions.emoji(myRx) + "  " + Reactions.label(myRx));
-                adLikeBtnTv.setTextColor(Reactions.color(myRx));
+                adLikeBtnTv.setText(Reactions.emojiFor(myRx) + "  " + Reactions.labelFor(myRx));
+                adLikeBtnTv.setTextColor(Reactions.colorFor(myRx));
             }
         }
 

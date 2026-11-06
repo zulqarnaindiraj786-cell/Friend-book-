@@ -1045,7 +1045,7 @@ public class ReelsFragment extends Fragment {
                 if (myRx == null || myRx.isEmpty()) {
                     adLikeIcon.setText("👍");
                 } else {
-                    adLikeIcon.setText(Reactions.emoji(myRx));
+                    adLikeIcon.setText(Reactions.emojiFor(myRx));
                 }
             }
 
