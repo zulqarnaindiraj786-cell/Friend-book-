@@ -398,27 +398,27 @@ public final class LivePkAndGiftsUi {
         head.addView(done);
         sheet.addView(head);
 
-        // Section 1: Beauty Smoothness Levels
-        TextView bLbl = Ui.tvBold(a, "FACE BEAUTY & SKIN SMOOTH", 11, 0x99FFFFFF);
+        // Section 1: Beauty Smoothness & Acne Removal Levels
+        TextView bLbl = Ui.tvBold(a, "FACE SMOOTHING & ACNE / BLEMISH ERASER", 11, 0x99FFFFFF);
         bLbl.setPadding(0, Ui.dp(a, 14), 0, Ui.dp(a, 8));
         sheet.addView(bLbl);
 
-        final String[] beautyLabels = {"🚫 Off", "✨ Soft Glow", "🌸 Smooth", "💖 Rosy"};
-        final int[] selBeauty = {currentBeautyLevel};
-        final TextView[] bChips = new TextView[4];
+        final String[] beautyLabels = {"🚫 Off", "✨ Soft", "🌸 Acne Clear", "💖 Rosy", "🪄 Full Smooth"};
+        final int[] selBeauty = {Math.max(0, Math.min(4, currentBeautyLevel))};
+        final TextView[] bChips = new TextView[5];
         LinearLayout bRow = Ui.row(a);
         Runnable refreshBeauty = () -> {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 5; i++) {
                 boolean on = (i == selBeauty[0]);
                 bChips[i].setBackground(Ui.round(a, on ? 0xFFFE2C55 : 0x22FFFFFF, 16));
                 bChips[i].setTextColor(Color.WHITE);
             }
         };
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             final int lvl = i;
-            TextView tv = Ui.tvBold(a, beautyLabels[i], 11.5f, Color.WHITE);
+            TextView tv = Ui.tvBold(a, beautyLabels[i], 10.5f, Color.WHITE);
             tv.setGravity(Gravity.CENTER);
-            Ui.pad(tv, 8, 9, 8, 9);
+            Ui.pad(tv, 5, 9, 5, 9);
             tv.setOnClickListener(v -> {
                 selBeauty[0] = lvl;
                 refreshBeauty.run();
@@ -426,7 +426,7 @@ public final class LivePkAndGiftsUi {
             });
             bChips[i] = tv;
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-            if (i > 0) lp.leftMargin = Ui.dp(a, 6);
+            if (i > 0) lp.leftMargin = Ui.dp(a, 4);
             bRow.addView(tv, lp);
         }
         refreshBeauty.run();

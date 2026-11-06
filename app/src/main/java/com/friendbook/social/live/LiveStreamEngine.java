@@ -61,13 +61,14 @@ public class LiveStreamEngine {
     public static final int QUALITY_BALANCED   = 1; // 264x468 @ Q52 (~400ms)
     public static final int QUALITY_HD         = 2; // 336x596 @ Q60 (~330ms)
 
-    public static final int BEAUTY_OFF       = 0;
-    public static final int BEAUTY_SOFT_GLOW = 1;
-    public static final int BEAUTY_PORCELAIN = 2;
-    public static final int BEAUTY_ROSY      = 3;
+    public static final int BEAUTY_OFF         = 0;
+    public static final int BEAUTY_SOFT_GLOW   = 1;
+    public static final int BEAUTY_PORCELAIN   = 2;
+    public static final int BEAUTY_ROSY        = 3;
+    public static final int BEAUTY_FULL_SMOOTH = 4;
 
     public static final int AUDIO_SAMPLE_RATE = 8000;
-    private static final int AUDIO_CHUNK_SAMPLES = 4800; // 600ms @ 8kHz (~4.8 KB u-law)
+    private static final int AUDIO_CHUNK_SAMPLES = 1280; // 160ms @ 8kHz (~1.28 KB u-law — ultra-low latency!)
 
     // Precomputed 256-entry ITU-T G.711 u-law -> 16-bit linear PCM lookup table (zero-CPU decode!)
     private static final short[] ULAW_DECODE_TABLE = new short[256];
@@ -96,6 +97,7 @@ public class LiveStreamEngine {
 
     // Camera2 state
     private TextureView previewView;
+    private android.widget.ImageView beautyOverlayView;
     private HandlerThread camThread;
     private Handler camHandler;
     private CameraDevice cameraDevice;
@@ -108,8 +110,8 @@ public class LiveStreamEngine {
     private boolean lensFront = true;
     private boolean mirrorFront = true;
     private boolean torchOn = false;
-    private boolean beautyBoost = false;
-    private int beautyLevel = BEAUTY_OFF;
+    private boolean beautyBoost = true;
+    private int beautyLevel = BEAUTY_FULL_SMOOTH;
     private boolean cameraPaused = false;
     private volatile boolean primaryHostAudioMuted = false;
     private volatile boolean coHostAudioMuted = false;
@@ -128,10 +130,11 @@ public class LiveStreamEngine {
     private final Runnable frameCaptureTick = new Runnable() {
         @Override
         public void run() {
-            if (!streamingActive) return;
+            if (cameraPaused || previewView == null || !previewView.isAvailable()) return;
             captureAndEncodeCurrentFrame();
-            if (streamingActive) {
-                mainHandler.postDelayed(this, getFrameIntervalMs());
+            if (streamingActive || (beautyOverlayView != null && beautyLevel > 0)) {
+                long interval = streamingActive ? getFrameIntervalMs() : 140L;
+                mainHandler.postDelayed(this, interval);
             }
         }
     };
@@ -151,7 +154,7 @@ public class LiveStreamEngine {
     private volatile float speakerGain = 1.0f;
     private Thread audioPlayThread;
     private AudioTrack audioTrack;
-    private final LinkedBlockingQueue<short[]> audioPlayQueue = new LinkedBlockingQueue<>(6);
+    private final LinkedBlockingQueue<short[]> audioPlayQueue = new LinkedBlockingQueue<>(2);
     private long lastPlayedHostAudioSeq = -1;
     private long lastPlayedCoHostAudioSeq = -1;
 
@@ -245,15 +248,37 @@ public class LiveStreamEngine {
         return torchOn;
     }
 
+    public void attachBeautyOverlay(@Nullable android.widget.ImageView overlayView) {
+        this.beautyOverlayView = overlayView;
+        if (overlayView != null) {
+            overlayView.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            overlayView.setVisibility((beautyLevel > 0 && !cameraPaused) ? android.view.View.VISIBLE : android.view.View.GONE);
+            mainHandler.removeCallbacks(frameCaptureTick);
+            mainHandler.postDelayed(frameCaptureTick, 120L);
+        }
+    }
+
     public boolean toggleBeautyBoost() {
-        int next = (beautyLevel + 1) % 4;
+        int next = (beautyLevel + 1) % 5;
         setBeautyLevel(next);
         return beautyLevel > 0;
     }
 
     public void setBeautyLevel(int level) {
-        this.beautyLevel = Math.max(BEAUTY_OFF, Math.min(BEAUTY_ROSY, level));
+        this.beautyLevel = Math.max(BEAUTY_OFF, Math.min(BEAUTY_FULL_SMOOTH, level));
         this.beautyBoost = (this.beautyLevel > 0);
+        if (beautyOverlayView != null) {
+            mainHandler.post(() -> {
+                if (beautyOverlayView != null) {
+                    beautyOverlayView.setVisibility((beautyLevel > 0 && !cameraPaused)
+                            ? android.view.View.VISIBLE : android.view.View.GONE);
+                }
+            });
+            if (beautyLevel > 0 && !cameraPaused) {
+                mainHandler.removeCallbacks(frameCaptureTick);
+                mainHandler.post(frameCaptureTick);
+            }
+        }
         applyCaptureParams();
     }
 
@@ -263,10 +288,11 @@ public class LiveStreamEngine {
 
     public String getBeautyLabel() {
         switch (beautyLevel) {
-            case BEAUTY_SOFT_GLOW: return "✨ Soft Glow";
-            case BEAUTY_PORCELAIN: return "🌸 Smooth Skin";
-            case BEAUTY_ROSY:      return "💖 Rosy Beauty";
-            default:               return "Off";
+            case BEAUTY_SOFT_GLOW:   return "✨ Soft Smooth";
+            case BEAUTY_PORCELAIN:   return "🌸 Acne Clear";
+            case BEAUTY_ROSY:        return "💖 Rosy Smooth";
+            case BEAUTY_FULL_SMOOTH: return "🪄 Full Face Smooth";
+            default:                 return "Off";
         }
     }
 
@@ -293,6 +319,18 @@ public class LiveStreamEngine {
 
     public void setCameraPaused(boolean paused) {
         this.cameraPaused = paused;
+        if (beautyOverlayView != null) {
+            mainHandler.post(() -> {
+                if (beautyOverlayView != null) {
+                    beautyOverlayView.setVisibility((!paused && beautyLevel > 0)
+                            ? android.view.View.VISIBLE : android.view.View.GONE);
+                }
+            });
+        }
+        if (!paused) {
+            mainHandler.removeCallbacks(frameCaptureTick);
+            mainHandler.postDelayed(frameCaptureTick, 120L);
+        }
     }
 
     public void setZoom(float zoomFactor) {
@@ -524,6 +562,16 @@ public class LiveStreamEngine {
                 b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetEv);
             }
         } catch (Throwable ignored) { }
+
+        try {
+            if (beautyBoost) {
+                b.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_HIGH_QUALITY);
+                b.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF);
+            } else {
+                b.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_FAST);
+                b.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_FAST);
+            }
+        } catch (Throwable ignored) { }
     }
 
     public void closeCameraInternal() {
@@ -560,7 +608,8 @@ public class LiveStreamEngine {
     }
 
     private void captureAndEncodeCurrentFrame() {
-        if (!streamingActive || cameraPaused || previewView == null || !previewView.isAvailable()) return;
+        if (cameraPaused || previewView == null || !previewView.isAvailable()) return;
+        if (!streamingActive && (beautyOverlayView == null || beautyLevel <= 0)) return;
         if (encodingFrame.get()) return;
 
         final int targetW;
@@ -591,6 +640,7 @@ public class LiveStreamEngine {
         encodingFrame.set(true);
         final boolean flipUnmirror = lensFront && !mirrorFront;
         final int activeBeauty = beautyLevel;
+        final boolean needOverlay = (beautyOverlayView != null && activeBeauty > 0 && !cameraPaused);
         videoEncodeExec.execute(() -> {
             Bitmap toCompress = raw;
             try {
@@ -610,16 +660,29 @@ public class LiveStreamEngine {
                         toCompress = beautified;
                     }
                 }
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(12288);
-                // WEBP gives ~35% smaller frames than JPEG at sharper portrait quality!
-                toCompress.compress(Bitmap.CompressFormat.WEBP, webpQ, bos);
-                byte[] bytes = bos.toByteArray();
-                int w = toCompress.getWidth();
-                int h = toCompress.getHeight();
-                toCompress.recycle();
-                if (bytes.length > 0 && streamingActive && listener != null) {
-                    String b64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
-                    listener.onEncodedVideoFrame(b64, w, h);
+                if (needOverlay && !activity.isFinishing()) {
+                    final Bitmap previewCopy = toCompress.copy(Bitmap.Config.ARGB_8888, false);
+                    mainHandler.post(() -> {
+                        if (beautyOverlayView != null && !cameraPaused && beautyLevel > 0) {
+                            beautyOverlayView.setVisibility(android.view.View.VISIBLE);
+                            beautyOverlayView.setImageBitmap(previewCopy);
+                        }
+                    });
+                }
+                if (streamingActive) {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream(12288);
+                    // WEBP gives ~35% smaller frames than JPEG at sharper portrait quality!
+                    toCompress.compress(Bitmap.CompressFormat.WEBP, webpQ, bos);
+                    byte[] bytes = bos.toByteArray();
+                    int w = toCompress.getWidth();
+                    int h = toCompress.getHeight();
+                    toCompress.recycle();
+                    if (bytes.length > 0 && streamingActive && listener != null) {
+                        String b64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                        listener.onEncodedVideoFrame(b64, w, h);
+                    }
+                } else {
+                    toCompress.recycle();
                 }
             } catch (Throwable ignored) {
                 try { toCompress.recycle(); } catch (Throwable ignored2) { }
@@ -629,58 +692,111 @@ public class LiveStreamEngine {
         });
     }
 
-    /** Fast hardware-friendly skin smoothing + luminous warm/rosy TikTok beauty filter. */
+    /**
+     * Real-Time Edge-Preserving Skin Smoothing & Acne/Blemish Eraser:
+     * Smooths out pimples, acne ("Dany"), red spots, pores, and uneven skin texture while
+     * keeping eyes, eyebrows, lips, and hair edges sharp.
+     */
     private static Bitmap applyBeautyGrade(@NonNull Bitmap src, int level) {
         try {
             int w = src.getWidth();
             int h = src.getHeight();
-            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(out);
+            if (w <= 16 || h <= 16) return src;
 
-            // Subtle bilinear skin-softening pass for Porcelain / Rosy levels
-            Bitmap base = src;
-            Bitmap small = null;
-            if (level >= BEAUTY_PORCELAIN && w > 64 && h > 64) {
-                small = Bitmap.createScaledBitmap(src, Math.max(48, (int) (w * 0.72f)),
-                        Math.max(48, (int) (h * 0.72f)), true);
-            }
+            // 1. Create a strongly smoothed reference bitmap via downscale + upscale
+            float scale = (level >= BEAUTY_FULL_SMOOTH) ? 0.24f
+                    : (level >= BEAUTY_PORCELAIN ? 0.30f : 0.42f);
+            int sw = Math.max(24, Math.round(w * scale));
+            int sh = Math.max(24, Math.round(h * scale));
+            Bitmap down = Bitmap.createScaledBitmap(src, sw, sh, true);
+            Bitmap smoothRef = Bitmap.createScaledBitmap(down, w, h, true);
+            down.recycle();
 
-            ColorMatrix cm = new ColorMatrix();
+            int total = w * h;
+            int[] origPx = new int[total];
+            int[] blurPx = new int[total];
+            src.getPixels(origPx, 0, w, 0, 0, w, h);
+            smoothRef.getPixels(blurPx, 0, w, 0, 0, w, h);
+            smoothRef.recycle();
+
+            // Strength & edge threshold tuned per level (BEAUTY_FULL_SMOOTH erases acne/dany completely)
+            final int maxStrength; // 0..256
+            final int edgeLimit;
+            final int liftR, liftG, liftB;
             if (level == BEAUTY_SOFT_GLOW) {
-                cm.set(new float[]{
-                        1.06f, 0f,    0f,    0f, 10f,
-                        0f,    1.05f, 0f,    0f, 8f,
-                        0f,    0f,    1.03f, 0f, 6f,
-                        0f,    0f,    0f,    1f, 0f
-                });
+                maxStrength = 148;
+                edgeLimit = 95;
+                liftR = 7; liftG = 6; liftB = 5;
             } else if (level == BEAUTY_PORCELAIN) {
-                cm.set(new float[]{
-                        1.08f, 0.02f, 0f,    0f, 14f,
-                        0f,    1.07f, 0.02f, 0f, 12f,
-                        0f,    0.01f, 1.08f, 0f, 14f,
-                        0f,    0f,    0f,    1f, 0f
-                });
+                maxStrength = 205;
+                edgeLimit = 125;
+                liftR = 11; liftG = 10; liftB = 11;
+            } else if (level == BEAUTY_ROSY) {
+                maxStrength = 212;
+                edgeLimit = 130;
+                liftR = 14; liftG = 8; liftB = 10;
             } else {
-                // BEAUTY_ROSY
-                cm.set(new float[]{
-                        1.11f, 0.02f, 0f,    0f, 15f,
-                        0f,    1.05f, 0f,    0f, 9f,
-                        0.02f, 0f,    1.06f, 0f, 11f,
-                        0f,    0f,    0f,    1f, 0f
-                });
+                // BEAUTY_FULL_SMOOTH (Maximum Acne / Pimples / Dany Eraser + Poreless Glass Skin)
+                maxStrength = 238;
+                edgeLimit = 155;
+                liftR = 13; liftG = 12; liftB = 12;
             }
 
-            Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
-            p.setColorFilter(new ColorMatrixColorFilter(cm));
-            canvas.drawBitmap(base, 0f, 0f, p);
+            for (int i = 0; i < total; i++) {
+                int c = origPx[i];
+                int b = blurPx[i];
 
-            if (small != null) {
-                Paint blend = new Paint(Paint.FILTER_BITMAP_FLAG);
-                blend.setAlpha(level == BEAUTY_PORCELAIN ? 88 : 72);
-                blend.setColorFilter(new ColorMatrixColorFilter(cm));
-                canvas.drawBitmap(small, null, new Rect(0, 0, w, h), blend);
-                small.recycle();
+                int r0 = (c >> 16) & 0xFF;
+                int g0 = (c >> 8) & 0xFF;
+                int b0 = c & 0xFF;
+
+                int rb = (b >> 16) & 0xFF;
+                int gb = (b >> 8) & 0xFF;
+                int bb = b & 0xFF;
+
+                // Skin-tone + acne redness detection
+                boolean isSkin = (r0 > 45 && g0 > 28 && b0 > 18 && r0 >= g0 - 8 && r0 >= b0)
+                        || (rb > 45 && gb > 28 && bb > 18 && rb >= gb - 8 && rb >= bb);
+                int diff = Math.abs(r0 - rb) + Math.abs(g0 - gb) + Math.abs(b0 - bb);
+
+                if (isSkin && diff < edgeLimit) {
+                    // Bilateral weight: full smoothing on blemishes/pimples/pores, preserves sharp eye/lip edges
+                    int alpha = (maxStrength * (edgeLimit - diff)) / edgeLimit;
+
+                    // Extra acne/spot healer: if original pixel is a dark spot or red pimple relative to smooth surround,
+                    // boost blend toward the clean surrounding skin!
+                    int lumOrig = (r0 * 2 + g0 * 3 + b0) / 6;
+                    int lumBlur = (rb * 2 + gb * 3 + bb) / 6;
+                    boolean isBlemishOrAcne = (lumBlur - lumOrig > 6) || ((r0 - g0) - (rb - gb) > 7);
+                    if (isBlemishOrAcne) {
+                        alpha = Math.min(248, alpha + 42);
+                    }
+
+                    int inv = 256 - alpha;
+                    int rn = (r0 * inv + rb * alpha) >> 8;
+                    int gn = (g0 * inv + gb * alpha) >> 8;
+                    int bn = (b0 * inv + bb * alpha) >> 8;
+
+                    // Neutralize excess red acne inflammation while keeping warm natural skin tone
+                    if (isBlemishOrAcne && rn - rb > 4) {
+                        rn = (rn + rb) >> 1;
+                    }
+
+                    rn = Math.min(255, rn + liftR);
+                    gn = Math.min(255, gn + liftG);
+                    bn = Math.min(255, bn + liftB);
+                    origPx[i] = 0xFF000000 | (rn << 16) | (gn << 8) | bn;
+                } else {
+                    // Keep hair/eyes/background crisp with a gentle brightness match
+                    int rn = Math.min(255, r0 + (liftR >> 1));
+                    int gn = Math.min(255, g0 + (liftG >> 1));
+                    int bn = Math.min(255, b0 + (liftB >> 1));
+                    origPx[i] = 0xFF000000 | (rn << 16) | (gn << 8) | bn;
+                }
             }
+
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            out.setPixels(origPx, 0, w, 0, 0, w, h);
             return out;
         } catch (Throwable t) {
             return src;
@@ -734,7 +850,7 @@ public class LiveStreamEngine {
             int minBuf = AudioRecord.getMinBufferSize(
                     AUDIO_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minBuf <= 0) minBuf = AUDIO_SAMPLE_RATE * 2;
-            int bufBytes = Math.max(minBuf * 2, AUDIO_CHUNK_SAMPLES * 2);
+            int bufBytes = Math.max(minBuf, AUDIO_CHUNK_SAMPLES * 2);
 
             AudioRecord rec = null;
             try {
@@ -794,10 +910,10 @@ public class LiveStreamEngine {
                         mainHandler.post(() -> listener.onLocalVoiceLevel(level));
                     }
 
-                    // Transmit voice chunk whenever audible (VAD > 1 -> saves bandwidth on total silence!)
-                    if (level >= 1 && listener != null) {
+                    // Ultra-low-latency voice transmission (sensitive VAD >= 45 RMS so soft syllables never clip)
+                    if (rms >= 45.0 && listener != null) {
                         String b64 = Base64.encodeToString(ulawBuf, 0, totalRead, Base64.NO_WRAP);
-                        listener.onEncodedAudioChunk(b64, level);
+                        listener.onEncodedAudioChunk(b64, Math.max(1, level));
                     }
                 }
             } catch (Throwable ignored) {
@@ -856,23 +972,33 @@ public class LiveStreamEngine {
             int minBuf = AudioTrack.getMinBufferSize(
                     AUDIO_SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minBuf <= 0) minBuf = AUDIO_SAMPLE_RATE * 2;
-            int trackBuf = Math.max(minBuf * 2, AUDIO_CHUNK_SAMPLES * 2);
+            int trackBuf = Math.max(minBuf, AUDIO_CHUNK_SAMPLES * 2);
 
             AudioTrack track = null;
             try {
-                track = new AudioTrack(
-                        new AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                                .build(),
-                        new AudioFormat.Builder()
-                                .setSampleRate(AUDIO_SAMPLE_RATE)
-                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                                .build(),
-                        trackBuf,
-                        AudioTrack.MODE_STREAM,
-                        AudioManager.AUDIO_SESSION_ID_GENERATE);
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build();
+                AudioFormat fmt = new AudioFormat.Builder()
+                        .setSampleRate(AUDIO_SAMPLE_RATE)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build();
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    track = new AudioTrack.Builder()
+                            .setAudioAttributes(attrs)
+                            .setAudioFormat(fmt)
+                            .setBufferSizeInBytes(trackBuf)
+                            .setTransferMode(AudioTrack.MODE_STREAM)
+                            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                            .build();
+                } else {
+                    track = new AudioTrack(
+                            attrs, fmt, trackBuf,
+                            AudioTrack.MODE_STREAM,
+                            AudioManager.AUDIO_SESSION_ID_GENERATE);
+                }
                 track.play();
                 audioTrack = track;
 
