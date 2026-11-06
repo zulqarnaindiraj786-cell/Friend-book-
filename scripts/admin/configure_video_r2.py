@@ -70,7 +70,7 @@ def main():
             raise RuntimeError('Existing Cloudflare deployment secret is unavailable')
         with requests.Session() as session:
             session.headers['Authorization'] = 'Bearer ' + token
-            for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql'):
+            for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql', '0011_additive_app_documents.sql'):
                 sql_text = Path('cloudflare/migrations/' + migration).read_text()
                 for stmt in statements(sql_text):
                     upper = stmt.upper()
@@ -90,7 +90,24 @@ def main():
             )
             if not isinstance(promote, list) or not promote or any(row.get('success') is not True for row in promote):
                 raise RuntimeError('D1 interaction resource promotion was not verified')
-            print('::notice::Additive D1 schemas (video processing + realtime presence) and imported interaction resources verified.')
+            seed_docs = cloudflare(
+                session,
+                'POST',
+                '/d1/database/' + DATABASE + '/query',
+                {
+                    'sql': (
+                        "INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at) "
+                        "SELECT path, substr(path, 1, instr(path, '/') - 1), substr(path, instr(path, '/') + 1), '', document_json, 0 "
+                        "FROM friendbook_cf_copy_staging "
+                        "WHERE instr(path, '/') > 0 AND instr(substr(path, instr(path, '/') + 1), '/') = 0 "
+                        "ON CONFLICT(path) DO NOTHING"
+                    ),
+                    'params': [],
+                },
+            )
+            if not isinstance(seed_docs, list) or not seed_docs or any(row.get('success') is not True for row in seed_docs):
+                raise RuntimeError('D1 historical document preservation seed was not verified')
+            print('::notice::Additive D1 schemas, imported interaction resources, and 949 historical app documents verified.')
 
             lifecycle = cloudflare(session, 'GET', '/r2/buckets/' + BUCKET + '/lifecycle', allow_forbidden=True)
             if lifecycle is not None:
