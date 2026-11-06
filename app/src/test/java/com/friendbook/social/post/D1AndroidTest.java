@@ -13,7 +13,7 @@ import static org.junit.Assert.*;
 @Config(sdk=28,application=android.app.Application.class)
 public class D1AndroidTest {
  @Test public void releaseGateIsOffAndDisabledTransportDoesNotInitializeFirebase(){
-  assertTrue(BuildConfig.D1_INTERACTIONS_ENABLED);assertTrue(D1Client.enabled("posts"));assertTrue(D1Client.enabled("reels"));assertFalse(D1Client.enabled("unknown"));
+  assertFalse(BuildConfig.D1_INTERACTIONS_ENABLED);assertFalse(D1Client.enabled("posts"));assertFalse(D1Client.enabled("reels"));assertFalse(D1Client.enabled("unknown"));
   com.google.android.gms.tasks.Task<JSONObject> task=D1Client.request("unknown","p1","comments","POST",D1Client.object("id","one"),null);
   assertTrue(task.isComplete());assertFalse(task.isSuccessful());assertNotNull(task.getException());
  }

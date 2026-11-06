@@ -15,8 +15,7 @@ public class Format {
         if (o == null) return 0L;
         if (o instanceof Timestamp) return ((Timestamp) o).toDate().getTime();
         if (o instanceof Date) return ((Date) o).getTime();
-        if (o instanceof Long) return (Long) o;
-        if (o instanceof Double) return ((Double) o).longValue();
+        if (o instanceof Number) return ((Number) o).longValue();
         return 0L;
     }
 

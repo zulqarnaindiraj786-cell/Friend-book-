@@ -10,13 +10,13 @@ android {
 
     defaultConfig {
         applicationId 'com.friendbook.social'
-        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'true'
+        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
         buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 68
-        versionName '2.8.36'
+        versionCode 69
+        versionName '2.8.37'
         ndk {
             debugSymbolLevel 'FULL'
         }

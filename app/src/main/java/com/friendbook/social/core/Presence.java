@@ -81,10 +81,6 @@ public class Presence {
         if (boundUid != null && !uid.equals(boundUid)) goOffline();
         foregroundActive = true;
         try { ensureCloudSocket().foreground(true); } catch (Throwable ignored) { }
-        if (com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
-            boundUid = uid;
-            return;
-        }
         writeFirestore(uid, true);
         H.removeCallbacks(HEARTBEAT); H.postDelayed(HEARTBEAT, HEARTBEAT_INTERVAL_MS);
         if (uid.equals(boundUid) && connListener != null) return;
@@ -152,7 +148,6 @@ public class Presence {
         // Keep the armed onDisconnect operation: it is a safety net if this offline write cannot reach the server.
     }
     private static void writeOfflineInternal(String uid) {
-        if (com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) return;
         writeFirestore(uid, false);
         if (Fb.rtdb() != null) Fb.rtdb().getReference("status").child(uid).updateChildren(status(false));
     }
@@ -342,16 +337,6 @@ public class Presence {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
         sendCloudflareTyping(chatId, typing);
-        if (com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
-            Runnable old = typingClear.remove(chatId);
-            if (old != null) H.removeCallbacks(old);
-            if (typing) {
-                Runnable clear = () -> sendCloudflareTyping(chatId, false);
-                typingClear.put(chatId, clear);
-                H.postDelayed(clear, 4000);
-            }
-            return;
-        }
         Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
 
         if (Fb.rtdb() != null) {

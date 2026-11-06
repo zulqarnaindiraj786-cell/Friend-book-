@@ -30,14 +30,14 @@ public final class D1Reactions {
   scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){ready.run();return;}if(LOADING.contains(key)||FAILED.contains(key))return;
   String uid=actor;LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
    if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);remember(context,collection,id,data);ready.run();
-  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);FAILED.add(key);if(context!=null)Ui.toast(context,"D1 unavailable. Tap again to retry; Firebase was not used.");});
+  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);FAILED.add(key);});
  }
  public static void hydrate(Models.Post post){
   scope();POSTS.put(D1Client.key("posts",post.id),new java.lang.ref.WeakReference<>(post));
   JSONObject summary=cached("posts",post.id);if(summary!=null){post.likes=total(summary);post.comments=summary.optInt("comments",post.comments);post.reactionsMap.clear();
    String type=mine(summary);if(type!=null){Map<String,Object> row=new HashMap<>();row.put("type",type);post.reactionsMap.put(Fb.uid(),row);}
    if(summary.has("preview")){post.inlineComments.clear();try{for(Map<String,Object> row:D1Client.maps(summary.optJSONArray("preview")))post.inlineComments.add(Models.Comment.fromMap(Format.str(row,"id"),row));}catch(JSONException ignored){}}
-  }else{post.reactionsMap.clear();post.inlineComments.clear();fetch(null,"posts",post.id,()->hydrate(post));}
+  }else{fetch(null,"posts",post.id,()->hydrate(post));}
  }
  public static void reel(Context context,Models.Reel reel,Runnable render){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
@@ -46,9 +46,10 @@ public final class D1Reactions {
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){
   scope();String key=D1Client.key(collection,id);FAILED.remove(key);
-  if(LOADING.contains(key)){Ui.toast(context,"Loading reaction state. Tap again shortly.");return;}
+  if(LOADING.contains(key))LOADING.remove(key);
+  if(CACHE.get(key)==null){remember(context.getApplicationContext(),collection,id,D1Client.object("types",new JSONArray()));}
   fetch(context.getApplicationContext(),collection,id,()->{
-   if(WRITING.contains(key)){Ui.toast(context,"Syncing reaction…");return;}
+   if(WRITING.contains(key))return;
    JSONObject previous=CACHE.get(key);String old=mine(previous);if(onlyAdd&&old!=null){render.run();return;}
    String next=Objects.equals(old,requested)?null:requested;String uid=Fb.uid();WRITING.add(key);
    try{JSONObject optimistic=new JSONObject(previous.toString());JSONArray adjusted=new JSONArray();Set<String> all=new LinkedHashSet<>(Arrays.asList(Reactions.TYPES));
@@ -60,7 +61,7 @@ public final class D1Reactions {
     if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
     String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
     D1Client.changed(key);
-   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,previous);render.run();Ui.toast(context,"Reaction not saved. Retry; Firebase was not used.");});
+   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,previous);render.run();});
   });
  }
  static void historicalNotice(Activity activity,TextView note,LinearLayout filter,LinearLayout rows,int historical,boolean identified){

@@ -1465,6 +1465,9 @@ public class ReelsFragment extends Fragment {
                 if (!thumbUrl.isEmpty()) {
                     posterView.setVisibility(View.VISIBLE);
                     Ui.img(c, posterView, thumbUrl);
+                } else if (r.videoUrl != null && !r.videoUrl.isEmpty()) {
+                    posterView.setVisibility(View.VISIBLE);
+                    Ui.img(c, posterView, r.videoUrl);
                 } else {
                     posterView.setImageDrawable(null);
                     posterView.setVisibility(View.GONE);

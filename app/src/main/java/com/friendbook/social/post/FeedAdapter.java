@@ -894,6 +894,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String vThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(p.mediaUrl, "");
             if (!vThumb.isEmpty()) {
                 Ui.imgFeed(c, vh.image, vThumb);
+            } else if (p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+                Ui.imgFeed(c, vh.image, p.mediaUrl);
             } else {
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
