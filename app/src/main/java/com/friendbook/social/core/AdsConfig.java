@@ -378,9 +378,101 @@ public class AdsConfig {
                     "Zero Annual Fee • 15% Cashback on Dining", 0xFF004FF9, 0xFF000000, 4.9f)
     };
 
+    private static final Map<Integer, Integer> SESSION_SLOT_TO_UNIQUE_ID = new HashMap<>();
+
+    private static final String[][] EXTRA_BRANDS = new String[][]{
+            {"AeroPods Max Pro", "SonicWave PK", "Spatial 3D audio, dual-mic ENC calling & 42-hour titanium case battery.", "Shop Audio", "Rs. 4,299 • Free COD", "3D AUDIO 🎧", "AeroPods Max Spatial", "42Hr Battery • Dual-Mic ENC • Type-C Fast Charge"},
+            {"Biryani & Karahi Feast", "DesiDastarkhwan", "Authentic charcoal Chicken Karahi, 2x Sindhi Biryani, Raita & Naan for 4.", "Order Feast", "Flat 40% OFF", "FAMILY DEAL 🍛", "Royal Karahi & Biryani Box", "Hot 30-Min Delivery • Serves 4 Persons"},
+            {"ProBook Air M3 Laptop", "TechVault Official", "Ultra-light 14\" FHD IPS display, 16GB RAM, 512GB NVMe SSD & 14hr battery.", "View Specs", "0% Easy Installments", "TECH DEAL 💻", "ProBook Air 16GB/512GB", "1-Year Official Warranty • Free Laptop Bag"},
+            {"SolarMax 6kW Hybrid Kit", "GreenVolt Energy", "Cut electricity bills by 90% with Tier-1 A-grade panels & smart Wi-Fi inverter.", "Free Quote", "Net Metering Ready", "SOLAR PK ☀️", "Zero Electricity Bill Solution", "5-Year Inverter Warranty • Fast Installation"},
+            {"Oud Royale Elixir 100ml", "Maison De Parfum", "Long-lasting 48-hour Arabian Oud, Amber & French Vanilla extrait de parfum.", "Order Perfume", "Buy 1 Get Tester Free", "LUXURY SCENT ✨", "Oud Royale 48Hr Extrait", "100% Pure Oil Concentration • Gift Box"},
+            {"Velocity Nitro Running", "StridePro Athletics", "Ultra-responsive nitrogen-infused foam sole for marathon comfort & daily runs.", "Shop Shoes", "35% Season Sale", "PRO RUNNER 👟", "Velocity Nitro Sneakers", "Featherlight Mesh • High-Grip Carbon Outsole"},
+            {"4K Gimbal Action Cam", "VloggerGear PK", "Waterproof 4K 60FPS action camera with 3-axis HorizonSteady stabilization.", "Grab Deal", "Free Tripod + Mic", "VLOG KIT 📹", "4K 60FPS Action Camera", "3-Axis Stabilization • Wireless Dual Mic"},
+            {"Smart Inverter Split AC", "CoolBreeze Appliances", "Up to 75% energy saving T3 tropical compressor with 10-second turbo cooling.", "Check Price", "Free Copper Pipe Kit", "SUMMER SAVER ❄️", "T3 Smart Inverter AC", "75% Electricity Saving • 10-Year Compressor Warranty"},
+            {"Istanbul & Cappadocia 7D", "SkyWings Holidays", "Return flights, 5-star hotel, Bosphorus cruise & hot-air balloon valley tour.", "Book Package", "Visa Assistance Included", "WORLD TOUR ✈️", "7 Days in Turkey", "Flights + 5-Star Hotel + Guided Tours"},
+            {"Mechanical RGB Keyboard", "GearUp Esports", "Hot-swappable red linear switches, aircraft aluminum frame & per-key RGB.", "Buy Gaming Gear", "Rs. 5,999 Special", "ESPORTS PRO ⌨️", " Pro Mechanical RGB Keyboard", "Hot-Swap Switches • Zero Ghosting • Braided Cable"},
+            {"Organic Honey & Dry Fruit", "PureValley Farms", "100% raw Sidr mountain honey with roasted almonds, walnuts & pistachios.", "Order Pure", "Lab Purity Certificate", "100% ORGANIC 🍯", "Raw Sidr Honey & Nuts Jar", "Direct From Northern Valleys • Zero Sugar Syrup"},
+            {"IELTS & Spoken English", "GlobalSpeak Institute", "Band 8.0+ preparation with daily 1-on-1 speaking mocks & British Council trainers.", "Book Free Demo", "100% Score Guarantee", "STUDY ABROAD 🎓", "Score 8.0+ in IELTS", "Daily Live Speaking Mocks • Full Study Material"},
+            {"InstaPrint Mini Printer", "GadgetBox PK", "Inkless thermal pocket printer for phone photos, study notes & sticky labels.", "Shop Gadget", "Free 5 Paper Rolls", "VIRAL GADGET 🖨️", "Pocket Inkless Photo Printer", "Bluetooth iOS & Android • Never Needs Ink"},
+            {"Luxury Lawn 3-Piece '26", "ZariFabrics Official", "Digital printed Swiss lawn shirt, embroidered chiffon dupatta & dyed trouser.", "Shop Unstitched", "Flat 30% OFF", "EID COLLECTION 👗", "Luxury Embroidered Lawn '26", "100% Pure Swiss Lawn • Express Nationwide Shipping"},
+            {"Car DashCam Dual 4K", "AutoGuard Tech", "Front 4K + Rear 1080p night-vision dash camera with 24hr parking GPS monitor.", "Order DashCam", "Free 64GB SD Card", "CAR SAFETY 🚗", "Dual 4K Night-Vision DashCam", "Sony Starvis Sensor • Wi-Fi App Live View"},
+            {"Zero-Sugar Electrolytes", "HydraPeak Wellness", "Instant hydration packets with Magnesium, Potassium & Vitamin B12 for energy.", "Try Pack", "30 Sticks Box", "DAILY ENERGY ⚡", "HydraPeak Electrolyte Mix", "Zero Sugar •Refreshing Lemon & Berry Flavors"}
+    };
+
+    private static final int[][] GRADIENT_PALETTES = new int[][]{
+            {0xFF1877F2, 0xFF0A3D91}, {0xFF6A11CB, 0xFF2575FC}, {0xFFD32F2F, 0xFFFF6D00}, {0xFF0F2027, 0xFF2C5364},
+            {0xFF1F1C2C, 0xFF928DAB}, {0xFF00695C, 0xFF00BFA5}, {0xFF134E5E, 0xFF71B280}, {0xFF8E2DE2, 0xFF4A00E0},
+            {0xFF0052D4, 0xFF4364F7}, {0xFF232526, 0xFF414345}, {0xFF1A2980, 0xFF26D0CE}, {0xFF3A1C71, 0xFFD76D77},
+            {0xFFB24592, 0xFFF15F79}, {0xFF11998E, 0xFF38EF7D}, {0xFF141E30, 0xFF243B55}, {0xFF004FF9, 0xFF000000}
+    };
+
+    /**
+     * Persistent Per-User Unseen Ad Resolver:
+     * Once a user sees an ad slot, `"unseen_ad_seq_" + uid` advances in SharedPreferences and NEVER repeats!
+     */
+    public static synchronized int resolveUniqueAdId(Context c, int slotKey) {
+        Integer existing = SESSION_SLOT_TO_UNIQUE_ID.get(slotKey);
+        if (existing != null) return existing;
+        int nextId;
+        if (c != null) {
+            String uid = Fb.uid() == null ? "guest" : Fb.uid();
+            SharedPreferences sp = prefs(c);
+            String seqKey = "unseen_ad_seq_" + uid;
+            nextId = sp.getInt(seqKey, 0) + 1;
+            sp.edit().putInt(seqKey, nextId).apply();
+        } else {
+            nextId = ++adRotationOffset;
+        }
+        SESSION_SLOT_TO_UNIQUE_ID.put(slotKey, nextId);
+        return nextId;
+    }
+
+    public static synchronized SponsoredCreative getCreativeForSlot(Context c, int slotKey) {
+        int uniqueId = resolveUniqueAdId(c, slotKey);
+        return buildCreativeForUniqueId(uniqueId);
+    }
+
     public static synchronized SponsoredCreative getCreativeForSlot(int slotKey) {
-        int idx = Math.abs(slotKey + adRotationOffset) % CATALOG.length;
-        return CATALOG[idx];
+        Integer existing = SESSION_SLOT_TO_UNIQUE_ID.get(slotKey);
+        int uniqueId = existing != null ? existing : Math.abs(slotKey + adRotationOffset);
+        return buildCreativeForUniqueId(uniqueId);
+    }
+
+    private static SponsoredCreative buildCreativeForUniqueId(int uniqueId) {
+        int totalBase = CATALOG.length + EXTRA_BRANDS.length; // 32 base templates
+        int baseIdx = Math.abs(uniqueId * 7 + (uniqueId / totalBase) * 13) % totalBase;
+        int cycle = Math.abs(uniqueId) / totalBase;
+        int[] pal = GRADIENT_PALETTES[Math.abs(uniqueId * 5 + cycle * 3) % GRADIENT_PALETTES.length];
+        String editionSuffix = cycle == 0 ? "" : (" • Deal #" + (cycle + 1));
+
+        if (baseIdx < CATALOG.length) {
+            SponsoredCreative base = CATALOG[baseIdx];
+            if (cycle == 0) return base;
+            return new SponsoredCreative(
+                    uniqueId,
+                    base.headline + editionSuffix,
+                    base.advertiser,
+                    base.body,
+                    base.cta,
+                    base.storeOrPrice,
+                    base.bannerBadge,
+                    base.bannerBigTitle,
+                    base.bannerSubTitle,
+                    pal[0], pal[1], base.stars);
+        } else {
+            String[] eb = EXTRA_BRANDS[baseIdx - CATALOG.length];
+            return new SponsoredCreative(
+                    uniqueId,
+                    eb[0] + editionSuffix,
+                    eb[1],
+                    eb[2],
+                    eb[3],
+                    eb[4],
+                    eb[5],
+                    eb[6],
+                    eb[7],
+                    pal[0], pal[1], 4.8f);
+        }
     }
 
     private static synchronized void rememberFeedAd(com.google.android.gms.ads.nativead.NativeAd ad) {
@@ -415,12 +507,11 @@ public class AdsConfig {
     }
 
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
+        resolveUniqueAdId(context, slotOrdinal);
         com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
+        // Strictly poll a fresh unseen AdMob NativeAd from FEED_POOL; NEVER reuse an already-shown NativeAd!
         com.google.android.gms.ads.nativead.NativeAd polled = FEED_POOL.pollFirst();
-        if (polled == null && slotOrdinal < LOADED_FEED_ADS.size()) {
-            polled = LOADED_FEED_ADS.get(slotOrdinal);
-        }
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
         }
@@ -436,12 +527,11 @@ public class AdsConfig {
     }
 
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollReelsAd(Context context, int slotOrdinal) {
+        resolveUniqueAdId(context, slotOrdinal + 10000);
         com.google.android.gms.ads.nativead.NativeAd existing = REELS_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
+        // Strictly poll a fresh unseen AdMob NativeAd from REELS_POOL; NEVER reuse an already-shown NativeAd!
         com.google.android.gms.ads.nativead.NativeAd polled = REELS_POOL.pollFirst();
-        if (polled == null && slotOrdinal < LOADED_REELS_ADS.size()) {
-            polled = LOADED_REELS_ADS.get(slotOrdinal);
-        }
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
         }
@@ -450,9 +540,7 @@ public class AdsConfig {
     }
 
     public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
-        return REELS_SLOT_ADS.containsKey(slotOrdinal)
-                || !REELS_POOL.isEmpty()
-                || slotOrdinal < LOADED_REELS_ADS.size();
+        return REELS_SLOT_ADS.containsKey(slotOrdinal) || !REELS_POOL.isEmpty();
     }
 
     public static synchronized void putReelsSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
@@ -464,13 +552,13 @@ public class AdsConfig {
 
     public static synchronized void clearFeedSlotAds(Context context) {
         FEED_SLOT_ADS.clear();
-        adRotationOffset = (adRotationOffset + 3) % CATALOG.length;
+        SESSION_SLOT_TO_UNIQUE_ID.entrySet().removeIf(e -> e.getKey() < 10000);
         warmUpPools(context);
     }
 
     public static synchronized void clearReelsSlotAds(Context context) {
         REELS_SLOT_ADS.clear();
-        adRotationOffset = (adRotationOffset + 5) % CATALOG.length;
+        SESSION_SLOT_TO_UNIQUE_ID.entrySet().removeIf(e -> e.getKey() >= 10000);
         warmUpPools(context);
     }
 
@@ -723,9 +811,28 @@ public class AdsConfig {
         c.startActivity(android.content.Intent.createChooser(send, "Share Sponsored Post"));
     }
 
+    public static com.friendbook.social.models.Models.Post findCachedAdPostById(String postId) {
+        if (postId == null || postId.isEmpty()) return null;
+        return AD_POST_CACHE.get(postId);
+    }
+
+    /**
+     * Opens `PostDetailActivity` for Feed Sponsored Ads — 100% identical to tapping Comment on a Feed Post!
+     */
+    public static void openFeedAdPostDetail(final Context c, final int slotKey, final Runnable onUpdated) {
+        if (c == null) return;
+        final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        AD_POST_FETCHED.remove(adPost.id);
+        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        android.content.Intent i = new android.content.Intent(c, com.friendbook.social.post.PostDetailActivity.class);
+        i.putExtra("post_id", adPost.id);
+        i.putExtra("focus_comment", true);
+        c.startActivity(i);
+    }
+
     /**
      * Opens the FULL real-time multi-user `ReelCommentsActivity` thread backed by `CommentsEngine`
-     * on `posts/{adDocId}` — supporting real comments, @mentions, replies, comment likes & sorting!
+     * on `posts/{adDocId}` for Video/Reels Sponsored Ads — 100% identical to Video/Reels comments!
      */
     public static void openSponsoredCommentsSheet(final Context c, final int slotKey, CharSequence headline, final Runnable onUpdated) {
         if (c == null) return;

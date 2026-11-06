@@ -119,7 +119,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postRv.setAdapter(postAdapter);
         headerBox.addView(postRv, new LinearLayout.LayoutParams(-1, -2));
 
-        // 0ms instant preload from FastCache if post is already in RAM!
+        // 0ms instant preload from FastCache or AdsConfig if post is already in RAM!
         for (Models.Post cached : FastCache.getFeed()) {
             if (cached != null && postId.equals(cached.id)) {
                 post = cached;
@@ -128,6 +128,16 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                     rawComments.addAll(post.inlineComments);
                 }
                 break;
+            }
+        }
+        if (post == null) {
+            Models.Post adCached = com.friendbook.social.core.AdsConfig.findCachedAdPostById(postId);
+            if (adCached != null) {
+                post = adCached;
+                postAdapter.setPosts(Collections.singletonList(post));
+                if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
+                    rawComments.addAll(post.inlineComments);
+                }
             }
         }
 
@@ -324,7 +334,11 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
-            if (d == null || !d.exists()) { finish(); return; }
+            if (d == null || !d.exists()) {
+                if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
+                finish();
+                return;
+            }
             post = Models.Post.fromDoc(d);
             commentsAdapter.postAuthorId = post.authorId;
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
