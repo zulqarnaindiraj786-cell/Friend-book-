@@ -565,7 +565,7 @@ public class Models {
                     float sp = ((Number) m.get("playbackSpeed")).floatValue();
                     if (sp >= 0.25f && sp <= 3.0f) r.playbackSpeed = sp;
                 }
-                r.muteOriginalAudio = Format.bool(m, "muteOriginalAudio");
+                r.muteOriginalAudio = Boolean.TRUE.equals(m.get("muteOriginalAudio"));
                 r.audioTitle = Format.str(m, "audioTitle");
                 r.trimStartMs = Format.intOf(m, "trimStartMs");
                 r.trimEndMs = Format.intOf(m, "trimEndMs");
