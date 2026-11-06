@@ -582,12 +582,13 @@ public class Ui {
     }
 
     public static void setBadge(TextView badge, int count) {
+        if (badge == null) return;
         Context c = badge.getContext();
         if (count <= 0 || Prefs.quiet(c)) {
             badge.setVisibility(View.GONE);
         } else {
             badge.setVisibility(View.VISIBLE);
-            badge.setText(count > 99 ? "99+" : String.valueOf(count));
+            badge.setText(count >= 15 ? "15+" : String.valueOf(count));
         }
     }
 

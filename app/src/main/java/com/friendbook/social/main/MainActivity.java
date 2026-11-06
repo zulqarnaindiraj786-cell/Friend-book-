@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
     private final ImageView[] slotIcons = new ImageView[6];
     private final View[] slotIndicators = new View[6];
     private final Fragment[] tabFragments = new Fragment[5];
-    private TextView homeBadge, msgBadge, notifBadge, friendsBadge;
+    private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
@@ -163,6 +163,11 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
                 fp.topMargin = Ui.dp(this, 3);
                 iconWrap.addView(msgBadge, fp);
+            } else if (s == 3) {
+                reelsBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(reelsBadge, fp);
             } else if (s == 4) {
                 notifBadge = Ui.badge(this);
                 FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
@@ -268,6 +273,7 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(this, ConversationsActivity.class));
                 break;
             case 3:
+                clearReelsBadgeNow();
                 select(TAB_REELS);
                 break;
             case 4:
@@ -401,8 +407,10 @@ public class MainActivity extends Activity {
         else if (tab == TAB_FRIENDS) {
             activeSlot = 1;
             clearFriendsBadgeNow();
-        } else if (tab == TAB_REELS) activeSlot = 3;
-        else if (tab == TAB_NOTIFS) {
+        } else if (tab == TAB_REELS) {
+            activeSlot = 3;
+            clearReelsBadgeNow();
+        } else if (tab == TAB_NOTIFS) {
             activeSlot = 4;
             clearNotificationsBadgeNow();
         }
@@ -453,6 +461,16 @@ public class MainActivity extends Activity {
         if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.notifBadge, 0));
         if (me == null || ctx == null) return;
         Prefs.setNotifBadgeClearedAt(ctx, me, System.currentTimeMillis());
+    }
+
+    /** Dismiss ONLY the top Video/Reels badge. */
+    public static void clearReelsBadgeNow() {
+        String me = Fb.uid();
+        MainActivity inst = activeInstance;
+        android.content.Context ctx = inst != null ? inst : App.instance;
+        if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.reelsBadge, 0));
+        if (me == null || ctx == null) return;
+        Prefs.setReelsBadgeClearedAt(ctx, me, System.currentTimeMillis());
     }
 
     private void watchReferralsForFreeTick() {
@@ -583,6 +601,29 @@ public class MainActivity extends Activity {
                         }
                     }
                     Ui.setBadge(friendsBadge, count);
+                });
+
+        // Video / Reels badge (capped at 15+ via Ui.setBadge)
+        Fb.db().collection("reels")
+                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .limit(16)
+                .get()
+                .addOnSuccessListener(snap -> {
+                    if (Prefs.quiet(this) || active == TAB_REELS) {
+                        Ui.setBadge(reelsBadge, 0);
+                        return;
+                    }
+                    long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
+                    int unseen = 0;
+                    if (snap != null) {
+                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
+                            if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
+                                unseen++;
+                            }
+                        }
+                    }
+                    Ui.setBadge(reelsBadge, unseen);
                 });
     }
 

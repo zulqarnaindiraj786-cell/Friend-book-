@@ -286,16 +286,7 @@ public class ReelsFragment extends Fragment {
             @Override
             public void onPageSelected(int position) {
                 if (adapter.isAdPos(position)) {
-                    int slotOrd = position / ReelAdapter.REEL_AD_STEP;
-                    if (!AdsConfig.hasReadyReelsSlotOrPoolAd(slotOrd) && position + 1 < adapter.getItemCount()) {
-                        AdsConfig.warmUpPools(getActivity());
-                        pager.post(() -> {
-                            if (pager != null && position + 1 < adapter.getItemCount()) {
-                                pager.setCurrentItem(position + 1, false);
-                            }
-                        });
-                        return;
-                    }
+                    AdsConfig.warmUpPools(getActivity());
                 }
                 adapter.playOnly(pager, position);
                 Models.Reel cur = adapter.reelAtPosition(position);
@@ -303,7 +294,13 @@ public class ReelsFragment extends Fragment {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
                 }
                 int rIdx = adapter.reelIndexForPos(position);
-                if(rIdx>=adapter.rawReels().size()-3) loadNextVideos();
+                if(rIdx>=adapter.rawReels().size()-3) {
+                    if (!moreReels && !moreVideoPosts) {
+                        appendEndlessCycleIfNeeded();
+                    } else {
+                        loadNextVideos();
+                    }
+                }
             }
         });
         return root;
@@ -433,13 +430,32 @@ public class ReelsFragment extends Fragment {
     public void onStart() {
         super.onStart();
         ReelUploadManager.addListener(bgUploadListener);
-        resetVideoPages();
+        if (fromReels.isEmpty() && fromPosts.isEmpty()) {
+            resetVideoPages();
+        }
 
         if (!isHidden() && pager != null && adapter != null && adapter.getItemCount() > 0) {
             pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
             });
         }
+    }
+
+    private void appendEndlessCycleIfNeeded() {
+        if (adapter == null || pager == null) return;
+        List<Models.Reel> current = adapter.rawReels();
+        if (current.isEmpty() || current.size() >= 1200) return;
+        List<Models.Reel> base = new ArrayList<>();
+        for (Models.Reel r : fromReels) {
+            if (r != null && r.videoUrl != null && !r.videoUrl.isEmpty()) base.add(r);
+        }
+        for (Models.Reel r : fromPosts) {
+            if (r != null && r.videoUrl != null && !r.videoUrl.isEmpty()) base.add(r);
+        }
+        if (base.isEmpty()) return;
+        List<Models.Reel> expanded = new ArrayList<>(current);
+        expanded.addAll(base);
+        adapter.setData(pager, expanded, false);
     }
 
     private void resetVideoPages() {
@@ -962,9 +978,19 @@ public class ReelsFragment extends Fragment {
                                                             + ", responseInfo=" + adError.getResponseInfo());
                                             AdsConfig.onNativeAdFailed(ctx, adError.getCode());
                                             if (mySeq == requestSeq) {
-                                                destroyCurrentAd();
-                                                nativeAdView.setVisibility(View.GONE);
-                                                loadingBox.setVisibility(View.GONE);
+                                                com.google.android.gms.ads.nativead.NativeAd fallback =
+                                                        AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
+                                                if (fallback != null) {
+                                                    currentNativeAd = fallback;
+                                                    loadingBox.setVisibility(View.GONE);
+                                                    nativeAdView.setVisibility(View.VISIBLE);
+                                                    populateReelsNativeAd(fallback, ctx);
+                                                    nativeAdView.requestLayout();
+                                                } else {
+                                                    destroyCurrentAd();
+                                                    nativeAdView.setVisibility(View.GONE);
+                                                    loadingBox.setVisibility(View.GONE);
+                                                }
                                             }
                                         }
                                     })
@@ -1475,16 +1501,22 @@ public class ReelsFragment extends Fragment {
                 triedRawFallback = false;
                 scrubBar.setProgress(0);
 
-                // 0.0ms Instant Poster Frame so swiping NEVER shows a black screen!
+                // 0.0ms Instant Poster Frame without downloading remote .mp4 via Glide in parallel with MediaPlayer!
                 Context c = itemView.getContext();
                 String thumbUrl = ReelVideoCache.deriveThumbUrl(r.videoUrl, r.thumbUrl);
+                File localCached = thumbUrl.isEmpty() ? ReelVideoCache.getCachedFile(c, r.videoUrl) : null;
                 if (!thumbUrl.isEmpty()) {
                     posterView.setVisibility(View.VISIBLE);
                     Ui.img(c, posterView, thumbUrl);
-                } else if (r.videoUrl != null && !r.videoUrl.isEmpty()) {
+                } else if (localCached != null) {
                     posterView.setVisibility(View.VISIBLE);
-                    Ui.img(c, posterView, r.videoUrl);
+                    com.bumptech.glide.Glide.with(c.getApplicationContext())
+                            .load(localCached)
+                            .centerCrop()
+                            .dontAnimate()
+                            .into(posterView);
                 } else {
+                    try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(posterView); } catch (Throwable ignored) {}
                     posterView.setImageDrawable(null);
                     posterView.setVisibility(View.GONE);
                 }

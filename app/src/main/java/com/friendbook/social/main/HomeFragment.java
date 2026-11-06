@@ -817,7 +817,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void loadMore() {
         if(loadingPosts)return;
         if(lastDoc==null){if(pageError)restartPostsListener();return;}
-        if(!moreAvailable || feedQuery==null)return;
+        if(!moreAvailable || feedQuery==null){
+            if(feedQuery!=null && adapter!=null && !adapter.getPosts().isEmpty() && adapter.getPosts().size()<1200){
+                List<Models.Post> cur=adapter.getPosts();
+                int n=Math.min(PAGE*2,cur.size());
+                adapter.addPosts(new ArrayList<>(cur.subList(0,n)));
+                updatePagingUi();
+            }
+            return;
+        }
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=feedGeneration; final String actor=feedAccount;
         feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
@@ -837,7 +845,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             adapter.addPosts(page);
             updatePagingUi();
             // Also refresh footer on empty/filtered final pages. No automatic drain loop.
-            adapter.notifyDataSetChanged();
+            if (page.isEmpty()) adapter.notifyDataSetChanged();
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration) return;
             loadingPosts=false;pageError=true;updatePagingUi();

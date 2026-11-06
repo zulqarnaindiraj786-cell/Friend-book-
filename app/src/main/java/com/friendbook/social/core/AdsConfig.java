@@ -261,17 +261,38 @@ public class AdsConfig {
     // ------------------------------------------------------------------------
     // ⚡ Zero-Wait Preloaded NativeAd Pool for Direct Feed & Reels Display
     // ------------------------------------------------------------------------
-    private static final int POOL_TARGET_SIZE = 3;
+    private static final int POOL_TARGET_SIZE = 4;
+    private static final int MAX_ROTATING_ADS = 12;
     private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> FEED_POOL =
             new java.util.ArrayDeque<>();
     private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> REELS_POOL =
             new java.util.ArrayDeque<>();
+    private static final java.util.List<com.google.android.gms.ads.nativead.NativeAd> LOADED_FEED_ADS =
+            new java.util.ArrayList<>();
+    private static final java.util.List<com.google.android.gms.ads.nativead.NativeAd> LOADED_REELS_ADS =
+            new java.util.ArrayList<>();
     private static final Map<Integer, com.google.android.gms.ads.nativead.NativeAd> FEED_SLOT_ADS =
             new HashMap<>();
     private static final Map<Integer, com.google.android.gms.ads.nativead.NativeAd> REELS_SLOT_ADS =
             new HashMap<>();
     private static int feedInFlight = 0;
     private static int reelsInFlight = 0;
+
+    private static synchronized void rememberFeedAd(com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad == null) return;
+        if (!LOADED_FEED_ADS.contains(ad)) {
+            if (LOADED_FEED_ADS.size() >= MAX_ROTATING_ADS) LOADED_FEED_ADS.remove(0);
+            LOADED_FEED_ADS.add(ad);
+        }
+    }
+
+    private static synchronized void rememberReelsAd(com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad == null) return;
+        if (!LOADED_REELS_ADS.contains(ad)) {
+            if (LOADED_REELS_ADS.size() >= MAX_ROTATING_ADS) LOADED_REELS_ADS.remove(0);
+            LOADED_REELS_ADS.add(ad);
+        }
+    }
 
     /** Preloads both Feed and Reels NativeAds in the background so slots render in 0ms without loading screens. */
     public static synchronized void warmUpPools(final Context context) {
@@ -292,6 +313,12 @@ public class AdsConfig {
         com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
         com.google.android.gms.ads.nativead.NativeAd polled = FEED_POOL.pollFirst();
+        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
+            polled = LOADED_FEED_ADS.get(Math.abs(slotOrdinal) % LOADED_FEED_ADS.size());
+        }
+        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
+            polled = LOADED_REELS_ADS.get(Math.abs(slotOrdinal) % LOADED_REELS_ADS.size());
+        }
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
         }
@@ -300,13 +327,22 @@ public class AdsConfig {
     }
 
     public static synchronized void putFeedSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
-        if (ad != null) FEED_SLOT_ADS.put(slotOrdinal, ad);
+        if (ad != null) {
+            rememberFeedAd(ad);
+            FEED_SLOT_ADS.put(slotOrdinal, ad);
+        }
     }
 
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollReelsAd(Context context, int slotOrdinal) {
         com.google.android.gms.ads.nativead.NativeAd existing = REELS_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
         com.google.android.gms.ads.nativead.NativeAd polled = REELS_POOL.pollFirst();
+        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
+            polled = LOADED_REELS_ADS.get(Math.abs(slotOrdinal) % LOADED_REELS_ADS.size());
+        }
+        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
+            polled = LOADED_FEED_ADS.get(Math.abs(slotOrdinal) % LOADED_FEED_ADS.size());
+        }
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
         }
@@ -315,11 +351,17 @@ public class AdsConfig {
     }
 
     public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
-        return REELS_SLOT_ADS.containsKey(slotOrdinal) || !REELS_POOL.isEmpty();
+        return REELS_SLOT_ADS.containsKey(slotOrdinal)
+                || !REELS_POOL.isEmpty()
+                || !LOADED_REELS_ADS.isEmpty()
+                || !LOADED_FEED_ADS.isEmpty();
     }
 
     public static synchronized void putReelsSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
-        if (ad != null) REELS_SLOT_ADS.put(slotOrdinal, ad);
+        if (ad != null) {
+            rememberReelsAd(ad);
+            REELS_SLOT_ADS.put(slotOrdinal, ad);
+        }
     }
 
     public static synchronized void clearFeedSlotAds(Context context) {
@@ -350,6 +392,7 @@ public class AdsConfig {
                                     feedInFlight = Math.max(0, feedInFlight - 1);
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                    rememberFeedAd(nativeAd);
                                     FEED_POOL.offerLast(nativeAd);
                                 }
                             })
@@ -396,6 +439,7 @@ public class AdsConfig {
                                     reelsInFlight = Math.max(0, reelsInFlight - 1);
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                    rememberReelsAd(nativeAd);
                                     REELS_POOL.offerLast(nativeAd);
                                 }
                             })

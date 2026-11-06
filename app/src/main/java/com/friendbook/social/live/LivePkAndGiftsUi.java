@@ -79,7 +79,7 @@ public final class LivePkAndGiftsUi {
             new GiftItem("donut",    "🍩", "Doughnut",     30),
             new GiftItem("crown",    "👑", "Gold Crown",   99),
             new GiftItem("confetti", "🎉", "Party Pop",    199),
-            new GiftItem("car",      "🏎️", "Supercar",     299),
+            new GiftItem("airplane", "✈️", "Private Jet",  299),
             new GiftItem("lion",     "🦁", "Golden Lion",  500),
             new GiftItem("universe", "🚀", "Universe",     1000)
     };
@@ -281,6 +281,9 @@ public final class LivePkAndGiftsUi {
                                                int coins) {
         if (a.isFinishing()) return;
 
+        // Play TikTok-style Lion Roar ("darhay") or Jet/Airplane Flyby ("jahaz ki voice sound") SFX!
+        playGiftSoundEffect(a, giftEmoji, giftName, coins);
+
         // 1. Left-Edge TikTok Sliding Gift Combo Pill
         final LinearLayout pill = Ui.row(a);
         pill.setGravity(Gravity.CENTER_VERTICAL);
@@ -360,6 +363,18 @@ public final class LivePkAndGiftsUi {
 
             AnimatorSet bSet = new AnimatorSet();
             bSet.play(sx).with(sy);
+            if (isJetGift(giftEmoji, giftName)) {
+                ObjectAnimator flyX = ObjectAnimator.ofFloat(burst, "translationX", -Ui.dp(a, 150), Ui.dp(a, 150));
+                ObjectAnimator flyY = ObjectAnimator.ofFloat(burst, "translationY", Ui.dp(a, 110), -Ui.dp(a, 130));
+                flyX.setDuration(1550L);
+                flyY.setDuration(1550L);
+                bSet.play(flyX).with(flyY);
+            } else if (isLionGift(giftEmoji, giftName)) {
+                ObjectAnimator roarShake = ObjectAnimator.ofFloat(
+                        burst, "rotation", 0f, -10f, 10f, -8f, 8f, -5f, 5f, 0f);
+                roarShake.setDuration(1100L);
+                bSet.play(roarShake).with(sx);
+            }
             bSet.play(bFade).after(sx);
             bSet.addListener(new AnimatorListenerAdapter() {
                 @Override
@@ -369,6 +384,200 @@ public final class LivePkAndGiftsUi {
             });
             bSet.start();
         }
+    }
+
+    private static boolean isLionGift(String emoji, String name) {
+        String n = name == null ? "" : name.toLowerCase(Locale.US);
+        return "🦁".equals(emoji) || n.contains("lion");
+    }
+
+    private static boolean isJetGift(String emoji, String name) {
+        String n = name == null ? "" : name.toLowerCase(Locale.US);
+        return "✈️".equals(emoji) || "🚀".equals(emoji) || "🏎️".equals(emoji)
+                || n.contains("jet") || n.contains("airplane") || n.contains("universe") || n.contains("car");
+    }
+
+    /**
+     * Synthesizes and plays TikTok-style Live Gift sound effects on a background audio thread:
+     * - Golden Lion (🦁): Deep, chesty two-stage Lion Roar ("darhay") with laryngeal growl & formants.
+     * - Private Jet / Universe (✈️ / 🚀): Doppler Jet Turbine whine + Afterburner flyby ("jahaz ki voice sound").
+     */
+    private static void playGiftSoundEffect(final Activity a,
+                                            final String giftEmoji,
+                                            final String giftName,
+                                            final int coins) {
+        final boolean lion = isLionGift(giftEmoji, giftName);
+        final boolean jet = !lion && isJetGift(giftEmoji, giftName);
+        if (!lion && !jet && coins < 99) return;
+        if (com.friendbook.social.core.Prefs.quiet(a)) return;
+
+        Thread sfxThread = new Thread(() -> {
+            android.media.AudioTrack track = null;
+            try {
+                final int sampleRate = 22050;
+                final short[] pcm = lion
+                        ? synthesizeLionRoarPcm(sampleRate)
+                        : (jet ? synthesizeJetFlybyPcm(sampleRate) : synthesizeCelebrationChimePcm(sampleRate));
+                int byteLen = pcm.length * 2;
+                int minBuf = android.media.AudioTrack.getMinBufferSize(
+                        sampleRate,
+                        android.media.AudioFormat.CHANNEL_OUT_MONO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT);
+                int bufSize = Math.max(byteLen, Math.max(minBuf, 4096));
+                track = new android.media.AudioTrack(
+                        android.media.AudioManager.STREAM_MUSIC,
+                        sampleRate,
+                        android.media.AudioFormat.CHANNEL_OUT_MONO,
+                        android.media.AudioFormat.ENCODING_PCM_16BIT,
+                        bufSize,
+                        android.media.AudioTrack.MODE_STATIC);
+                track.write(pcm, 0, pcm.length);
+                track.play();
+                long durMs = (pcm.length * 1000L) / sampleRate + 120L;
+                Thread.sleep(durMs);
+            } catch (Throwable ignored) {
+            } finally {
+                if (track != null) {
+                    try { track.stop(); } catch (Throwable ignored) {}
+                    try { track.release(); } catch (Throwable ignored) {}
+                }
+            }
+        }, "live-gift-sfx");
+        sfxThread.setDaemon(true);
+        sfxThread.start();
+    }
+
+    /** 1.55s TikTok-style Mighty Lion Roar ("Darhay"): main roar + secondary throat grunt. */
+    private static short[] synthesizeLionRoarPcm(int sr) {
+        int totalSamples = (int) (sr * 1.55);
+        short[] out = new short[totalSamples];
+        double phase = 0.0;
+        double subPhase = 0.0;
+        double lpNoise1 = 0.0;
+        double lpNoise2 = 0.0;
+        long seed = 0x5DEECE66DL;
+
+        for (int i = 0; i < totalSamples; i++) {
+            double t = (double) i / sr;
+            double env;
+            double f0;
+            if (t < 0.98) {
+                // Stage 1: Fierce main roar ("ROAAAR / DARHAY")
+                double p = t / 0.98;
+                if (p < 0.09) env = p / 0.09;
+                else if (p < 0.72) env = 1.0 - 0.12 * ((p - 0.09) / 0.63);
+                else env = 0.88 * (1.0 - (p - 0.72) / 0.28);
+
+                double baseF = (p < 0.18)
+                        ? (92.0 + 54.0 * (p / 0.18))
+                        : (146.0 - 70.0 * ((p - 0.18) / 0.82));
+                double growlVib = 11.5 * Math.sin(2.0 * Math.PI * 28.5 * t)
+                        + 5.5 * Math.sin(2.0 * Math.PI * 15.0 * t);
+                f0 = Math.max(58.0, baseF + growlVib);
+            } else {
+                // Stage 2: Deep chesty follow-up grunt ("GRRR-AAH")
+                double p = (t - 0.98) / 0.57;
+                if (p < 0.08) env = 0.25 + 0.70 * (p / 0.08);
+                else env = 0.95 * Math.pow(1.0 - (p - 0.08) / 0.92, 1.35);
+                f0 = 88.0 - 28.0 * p + 8.5 * Math.sin(2.0 * Math.PI * 25.0 * t);
+            }
+
+            phase += f0 / sr;
+            subPhase += (f0 * 0.5) / sr;
+
+            // Rich glottal waveform + vocal tract formant harmonics (F1 ~260Hz, F2 ~580Hz)
+            double glottal = 0.50 * Math.sin(2.0 * Math.PI * phase)
+                    + 0.34 * Math.sin(2.0 * Math.PI * subPhase)
+                    + 0.42 * Math.sin(4.0 * Math.PI * phase)
+                    + 0.32 * Math.sin(6.0 * Math.PI * phase)
+                    + 0.22 * Math.sin(8.0 * Math.PI * phase)
+                    + 0.14 * Math.sin(10.0 * Math.PI * phase);
+
+            // Laryngeal amplitude flutter (the signature lion "darhay" rattle)
+            double flutter = 0.72 + 0.28 * Math.sin(2.0 * Math.PI * 31.0 * t);
+
+            // Turbulent breathy roar resonance
+            seed = (seed * 25214903917L + 11L) & ((1L << 48) - 1);
+            double white = ((double) ((int) (seed >>> 16)) / Integer.MAX_VALUE);
+            lpNoise1 += 0.14 * (white - lpNoise1);
+            lpNoise2 += 0.05 * (lpNoise1 - lpNoise2);
+            double roarNoise = (lpNoise1 - lpNoise2) * 1.45;
+
+            double sample = Math.tanh((glottal * flutter + roarNoise * 0.65) * 1.45) * env;
+            int pcmVal = (int) Math.max(-31000, Math.min(31000, sample * 29500));
+            out[i] = (short) pcmVal;
+        }
+        return out;
+    }
+
+    /** 1.60s TikTok-style Jet / Airplane Flyby ("Jahaz ki voice sound"): Doppler turbine + jet roar. */
+    private static short[] synthesizeJetFlybyPcm(int sr) {
+        int totalSamples = (int) (sr * 1.60);
+        short[] out = new short[totalSamples];
+        double p1 = 0.0, p2 = 0.0, pSub = 0.0;
+        double lpFast = 0.0, lpSlow = 0.0;
+        long seed = 0x9E3779B97F4A7C15L;
+
+        for (int i = 0; i < totalSamples; i++) {
+            double t = (double) i / sr;
+            double norm = t / 1.60;
+
+            // Smooth approach -> loud overhead pass -> Doppler tail fade
+            double env;
+            if (norm < 0.42) {
+                env = Math.pow(norm / 0.42, 1.25);
+            } else if (norm < 0.56) {
+                env = 1.0;
+            } else {
+                env = Math.pow(1.0 - (norm - 0.56) / 0.44, 1.35);
+            }
+
+            // Doppler shift: turbine pitch rises on approach (680Hz -> 1820Hz), drops on pass-by (1820Hz -> 490Hz)
+            double turbineFreq;
+            if (norm < 0.46) {
+                turbineFreq = 680.0 + 1140.0 * Math.pow(norm / 0.46, 1.2);
+            } else {
+                turbineFreq = 1820.0 - 1330.0 * Math.pow((norm - 0.46) / 0.54, 0.78);
+            }
+
+            p1 += turbineFreq / sr;
+            p2 += (turbineFreq * 1.98) / sr;
+            pSub += (turbineFreq * 0.25) / sr;
+
+            double turbineWhine = 0.28 * Math.sin(2.0 * Math.PI * p1)
+                    + 0.14 * Math.sin(2.0 * Math.PI * p2)
+                    + 0.24 * Math.sin(2.0 * Math.PI * pSub);
+
+            // Sweeping aerodynamic jet afterburner whoosh
+            seed = (seed * 25214903917L + 11L) & ((1L << 48) - 1);
+            double white = ((double) ((int) (seed >>> 16)) / Integer.MAX_VALUE);
+            double alphaFast = Math.min(0.48, Math.max(0.06, turbineFreq / 4200.0));
+            lpFast += alphaFast * (white - lpFast);
+            lpSlow += (alphaFast * 0.22) * (lpFast - lpSlow);
+            double jetWhoosh = (lpFast - lpSlow) * 1.95;
+
+            double sample = Math.tanh((jetWhoosh + turbineWhine) * 1.35) * env;
+            int pcmVal = (int) Math.max(-31000, Math.min(31000, sample * 28500));
+            out[i] = (short) pcmVal;
+        }
+        return out;
+    }
+
+    /** Crisp celebratory chime for other 99+ coin gifts (Crown / Confetti). */
+    private static short[] synthesizeCelebrationChimePcm(int sr) {
+        int totalSamples = (int) (sr * 0.55);
+        short[] out = new short[totalSamples];
+        double p1 = 0.0, p2 = 0.0;
+        for (int i = 0; i < totalSamples; i++) {
+            double t = (double) i / sr;
+            double f = t < 0.18 ? 587.33 : (t < 0.34 ? 783.99 : 1046.50);
+            p1 += f / sr;
+            p2 += (f * 2.0) / sr;
+            double env = Math.exp(-3.8 * t);
+            double s = (0.65 * Math.sin(2.0 * Math.PI * p1) + 0.25 * Math.sin(2.0 * Math.PI * p2)) * env;
+            out[i] = (short) Math.max(-26000, Math.min(26000, (int) (s * 24000)));
+        }
+        return out;
     }
 
     // ==================== 3. TIKTOK BEAUTY & COLOR FILTER DRAWER ====================

@@ -180,10 +180,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    public List<Models.Post> getPosts() {
+        return posts;
+    }
+
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
+        int oldItemCount = getItemCount();
         posts.addAll(list);
-        notifyDataSetChanged();
+        int newItemCount = getItemCount();
+        if (newItemCount > oldItemCount) {
+            int insertStart = Math.max(0, oldItemCount - footerCount());
+            notifyItemRangeInserted(insertStart, newItemCount - oldItemCount);
+            if (showFooter) notifyItemChanged(newItemCount - 1, "paging");
+        } else {
+            notifyDataSetChanged();
+        }
     }
 
     public void setStories(List<StoriesAdapter.Group> groups) {
@@ -891,14 +903,24 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     });
             vh.image.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
         } else if (isVideo) {
-            // Video posts: instant poster frame + background SSD prefetch -> 0.0ms Reels player on tap!
+            // Video posts: instant poster frame without downloading remote .mp4 files in Glide during scroll!
             vh.image.setVisibility(View.VISIBLE);
             String vThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(p.mediaUrl, "");
+            java.io.File localCachedVideo = vThumb.isEmpty()
+                    ? com.friendbook.social.reels.ReelVideoCache.getCachedFile(c, p.mediaUrl)
+                    : null;
             if (!vThumb.isEmpty()) {
                 Ui.imgFeed(c, vh.image, vThumb);
-            } else if (p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
-                Ui.imgFeed(c, vh.image, p.mediaUrl);
+            } else if (localCachedVideo != null) {
+                com.bumptech.glide.Glide.with(c.getApplicationContext())
+                        .load(localCachedVideo)
+                        .centerCrop()
+                        .dontAnimate()
+                        .into(vh.image);
+            } else if (p.authorPhoto != null && !p.authorPhoto.isEmpty()) {
+                Ui.imgFeed(c, vh.image, p.authorPhoto);
             } else {
+                try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.image); } catch (Throwable ignored) {}
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
             // Poster only. Full media is requested by the user's tap, never by feed binding.
@@ -1995,8 +2017,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                         + ", responseInfo=" + adError.getResponseInfo());
                                         com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, adError.getCode());
                                         if (mySeq == requestSeq) {
-                                            destroyCurrentAd();
-                                            collapse();
+                                            com.google.android.gms.ads.nativead.NativeAd fallback =
+                                                    com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
+                                            if (fallback != null) {
+                                                currentNativeAd = fallback;
+                                                expand(ctx);
+                                                populateNativeAdView(fallback, ctx);
+                                                nativeAdView.requestLayout();
+                                            } else {
+                                                destroyCurrentAd();
+                                                collapse();
+                                            }
                                         }
                                     }
                                 })

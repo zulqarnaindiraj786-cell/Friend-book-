@@ -603,4 +603,14 @@ public class Prefs {
         if (uid == null || uid.isEmpty()) return;
         p(c).edit().putLong("notifBadgeClearedAt_" + uid, tsMs).apply();
     }
+
+    public static long reelsBadgeClearedAt(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return 0L;
+        return p(c).getLong("reelsBadgeClearedAt_" + uid, 0L);
+    }
+
+    public static void setReelsBadgeClearedAt(Context c, String uid, long tsMs) {
+        if (uid == null || uid.isEmpty()) return;
+        p(c).edit().putLong("reelsBadgeClearedAt_" + uid, tsMs).apply();
+    }
 }
