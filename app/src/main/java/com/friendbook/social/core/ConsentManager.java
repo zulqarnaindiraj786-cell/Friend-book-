@@ -111,6 +111,7 @@ public final class ConsentManager {
                     Log.i(AdsConfig.LOG_TAG, "MobileAds SDK initialized (App ID: "
                             + AdsConfig.APP_ID + ", Feed: " + AdsConfig.FEED_NATIVE_ID
                             + ", Reels: " + AdsConfig.REELS_NATIVE_ID + ")");
+                    AdsConfig.warmUpPools(appCtx);
                     AdsConfig.notifyChange();
                     if (onAdsReady != null) onAdsReady.run();
                 });

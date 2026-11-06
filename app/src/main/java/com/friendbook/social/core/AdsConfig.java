@@ -257,4 +257,168 @@ public class AdsConfig {
     public static void reset(Context ctx) {
         save(FEED_NATIVE_ID, REELS_NATIVE_ID, true, ctx);
     }
+
+    // ------------------------------------------------------------------------
+    // ⚡ Zero-Wait Preloaded NativeAd Pool for Direct Feed & Reels Display
+    // ------------------------------------------------------------------------
+    private static final int POOL_TARGET_SIZE = 3;
+    private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> FEED_POOL =
+            new java.util.ArrayDeque<>();
+    private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> REELS_POOL =
+            new java.util.ArrayDeque<>();
+    private static final Map<Integer, com.google.android.gms.ads.nativead.NativeAd> FEED_SLOT_ADS =
+            new HashMap<>();
+    private static final Map<Integer, com.google.android.gms.ads.nativead.NativeAd> REELS_SLOT_ADS =
+            new HashMap<>();
+    private static int feedInFlight = 0;
+    private static int reelsInFlight = 0;
+
+    /** Preloads both Feed and Reels NativeAds in the background so slots render in 0ms without loading screens. */
+    public static synchronized void warmUpPools(final Context context) {
+        if (context == null || !nativeAdsEnabled()) return;
+        final Context appCtx = context.getApplicationContext();
+        ConsentManager.ensureInitialized(appCtx);
+        while (FEED_POOL.size() + feedInFlight < POOL_TARGET_SIZE) {
+            feedInFlight++;
+            preloadOneFeedAd(appCtx);
+        }
+        while (REELS_POOL.size() + reelsInFlight < POOL_TARGET_SIZE) {
+            reelsInFlight++;
+            preloadOneReelsAd(appCtx);
+        }
+    }
+
+    public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
+        com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
+        if (existing != null) return existing;
+        com.google.android.gms.ads.nativead.NativeAd polled = FEED_POOL.pollFirst();
+        if (polled != null) {
+            FEED_SLOT_ADS.put(slotOrdinal, polled);
+        }
+        warmUpPools(context);
+        return polled;
+    }
+
+    public static synchronized void putFeedSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad != null) FEED_SLOT_ADS.put(slotOrdinal, ad);
+    }
+
+    public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollReelsAd(Context context, int slotOrdinal) {
+        com.google.android.gms.ads.nativead.NativeAd existing = REELS_SLOT_ADS.get(slotOrdinal);
+        if (existing != null) return existing;
+        com.google.android.gms.ads.nativead.NativeAd polled = REELS_POOL.pollFirst();
+        if (polled != null) {
+            REELS_SLOT_ADS.put(slotOrdinal, polled);
+        }
+        warmUpPools(context);
+        return polled;
+    }
+
+    public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
+        return REELS_SLOT_ADS.containsKey(slotOrdinal) || !REELS_POOL.isEmpty();
+    }
+
+    public static synchronized void putReelsSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad != null) REELS_SLOT_ADS.put(slotOrdinal, ad);
+    }
+
+    public static synchronized void clearFeedSlotAds(Context context) {
+        FEED_SLOT_ADS.clear();
+        warmUpPools(context);
+    }
+
+    public static synchronized void clearReelsSlotAds(Context context) {
+        REELS_SLOT_ADS.clear();
+        warmUpPools(context);
+    }
+
+    private static void preloadOneFeedAd(final Context appCtx) {
+        final String unitId = feedNativeId();
+        try {
+            recordAdRequest(appCtx);
+            com.google.android.gms.ads.VideoOptions videoOptions =
+                    new com.google.android.gms.ads.VideoOptions.Builder().setStartMuted(true).build();
+            com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
+                    new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
+                            .setAdChoicesPlacement(com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                            .setVideoOptions(videoOptions)
+                            .build();
+            com.google.android.gms.ads.AdLoader adLoader =
+                    new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
+                            .forNativeAd(nativeAd -> {
+                                synchronized (AdsConfig.class) {
+                                    feedInFlight = Math.max(0, feedInFlight - 1);
+                                    onNativeAdLoaded(appCtx);
+                                    nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                    FEED_POOL.offerLast(nativeAd);
+                                }
+                            })
+                            .withAdListener(new com.google.android.gms.ads.AdListener() {
+                                @Override
+                                public void onAdImpression() { recordAdImpression(appCtx); }
+                                @Override
+                                public void onAdClicked() { recordAdClick(appCtx); }
+                                @Override
+                                public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
+                                    synchronized (AdsConfig.class) {
+                                        feedInFlight = Math.max(0, feedInFlight - 1);
+                                    }
+                                    onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
+                                }
+                            })
+                            .withNativeAdOptions(adOptions)
+                            .build();
+            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+        } catch (Throwable t) {
+            synchronized (AdsConfig.class) {
+                feedInFlight = Math.max(0, feedInFlight - 1);
+            }
+        }
+    }
+
+    private static void preloadOneReelsAd(final Context appCtx) {
+        final String unitId = reelsNativeId();
+        try {
+            recordAdRequest(appCtx);
+            boolean startMuted = !Prefs.reelsStartWithSound(appCtx);
+            com.google.android.gms.ads.VideoOptions videoOptions =
+                    new com.google.android.gms.ads.VideoOptions.Builder().setStartMuted(startMuted).build();
+            com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
+                    new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
+                            .setAdChoicesPlacement(com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                            .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_PORTRAIT)
+                            .setVideoOptions(videoOptions)
+                            .build();
+            com.google.android.gms.ads.AdLoader adLoader =
+                    new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
+                            .forNativeAd(nativeAd -> {
+                                synchronized (AdsConfig.class) {
+                                    reelsInFlight = Math.max(0, reelsInFlight - 1);
+                                    onNativeAdLoaded(appCtx);
+                                    nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                    REELS_POOL.offerLast(nativeAd);
+                                }
+                            })
+                            .withAdListener(new com.google.android.gms.ads.AdListener() {
+                                @Override
+                                public void onAdImpression() { recordAdImpression(appCtx); }
+                                @Override
+                                public void onAdClicked() { recordAdClick(appCtx); }
+                                @Override
+                                public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
+                                    synchronized (AdsConfig.class) {
+                                        reelsInFlight = Math.max(0, reelsInFlight - 1);
+                                    }
+                                    onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
+                                }
+                            })
+                            .withNativeAdOptions(adOptions)
+                            .build();
+            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+        } catch (Throwable t) {
+            synchronized (AdsConfig.class) {
+                reelsInFlight = Math.max(0, reelsInFlight - 1);
+            }
+        }
+    }
 }

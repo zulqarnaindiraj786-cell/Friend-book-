@@ -162,8 +162,9 @@ public class ReelsFragment extends Fragment {
 
         pager = new ViewPager2(a);
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
-        // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes!
-        pager.setOffscreenPageLimit(1);
+        // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes & prebound Ads!
+        pager.setOffscreenPageLimit(2);
+        AdsConfig.warmUpPools(a);
         if (pager.getChildAt(0) instanceof RecyclerView) {
             ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
         }
@@ -284,6 +285,18 @@ public class ReelsFragment extends Fragment {
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override
             public void onPageSelected(int position) {
+                if (adapter.isAdPos(position)) {
+                    int slotOrd = position / ReelAdapter.REEL_AD_STEP;
+                    if (!AdsConfig.hasReadyReelsSlotOrPoolAd(slotOrd) && position + 1 < adapter.getItemCount()) {
+                        AdsConfig.warmUpPools(getActivity());
+                        pager.post(() -> {
+                            if (pager != null && position + 1 < adapter.getItemCount()) {
+                                pager.setCurrentItem(position + 1, false);
+                            }
+                        });
+                        return;
+                    }
+                }
                 adapter.playOnly(pager, position);
                 Models.Reel cur = adapter.reelAtPosition(position);
                 if (cur != null && cur.id != null) {
@@ -740,13 +753,10 @@ public class ReelsFragment extends Fragment {
 
                 loadingBox = Ui.col(a);
                 loadingBox.setGravity(Gravity.CENTER);
+                loadingBox.setVisibility(View.GONE);
                 Ui.pad(loadingBox, 24, 24, 24, 24);
-                TextView spChip = Ui.roundChip(a, "Sponsored", 0x33FFFFFF, Color.WHITE, 12);
-                Ui.pad(spChip, 12, 5, 12, 5);
-                loadingBox.addView(spChip);
-                statusView = Ui.tv(a, "Loading Sponsored Reel…", 13.5f, 0xFFBBBBBB);
+                statusView = Ui.tv(a, "", 13.5f, 0xFFBBBBBB);
                 statusView.setGravity(Gravity.CENTER);
-                statusView.setPadding(0, Ui.dp(a, 12), 0, 0);
                 loadingBox.addView(statusView);
                 root.addView(loadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
@@ -853,18 +863,14 @@ public class ReelsFragment extends Fragment {
             }
 
             private void destroyCurrentAd() {
-                if (currentNativeAd != null) {
-                    try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
-                    currentNativeAd = null;
-                }
+                currentNativeAd = null;
             }
 
             void loadFreshReelsNativeAd(final String rawUnitId, final int slotOrdinal) {
                 final int mySeq = ++requestSeq;
                 destroyCurrentAd();
-                nativeAdView.setVisibility(View.GONE);
-                loadingBox.setVisibility(View.VISIBLE);
-                statusView.setText("Loading Sponsored Reel…");
+                loadingBox.setVisibility(View.GONE);
+                statusView.setText("");
 
                 final Context ctx = itemView.getContext();
                 final String unitId = AdsConfig.isRealProductionUnit(rawUnitId)
@@ -872,6 +878,18 @@ public class ReelsFragment extends Fragment {
                         : AdsConfig.REELS_NATIVE_ID;
 
                 ConsentManager.ensureInitialized(ctx);
+                com.google.android.gms.ads.nativead.NativeAd preloaded =
+                        AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
+                if (preloaded != null) {
+                    currentNativeAd = preloaded;
+                    loadingBox.setVisibility(View.GONE);
+                    nativeAdView.setVisibility(View.VISIBLE);
+                    populateReelsNativeAd(preloaded, ctx);
+                    nativeAdView.requestLayout();
+                    return;
+                }
+
+                nativeAdView.setVisibility(View.GONE);
                 AdsConfig.recordAdRequest(ctx);
                 android.util.Log.i(AdsConfig.LOG_TAG,
                         "[ReelsNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -895,11 +913,11 @@ public class ReelsFragment extends Fragment {
                             new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
                                     .forNativeAd(nativeAd -> {
                                         if (mySeq != requestSeq) {
-                                            try { nativeAd.destroy(); } catch (Throwable ignored) {}
+                                            AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
                                             return;
                                         }
-                                        destroyCurrentAd();
                                         currentNativeAd = nativeAd;
+                                        AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
                                         AdsConfig.onNativeAdLoaded(ctx);
                                         nativeAd.setOnPaidEventListener(adValue ->
                                                 AdsConfig.recordPaidEvent(ctx, adValue));
@@ -946,8 +964,7 @@ public class ReelsFragment extends Fragment {
                                             if (mySeq == requestSeq) {
                                                 destroyCurrentAd();
                                                 nativeAdView.setVisibility(View.GONE);
-                                                loadingBox.setVisibility(View.VISIBLE);
-                                                statusView.setText("Swipe up to continue watching Reels ↑");
+                                                loadingBox.setVisibility(View.GONE);
                                             }
                                         }
                                     })
@@ -961,8 +978,7 @@ public class ReelsFragment extends Fragment {
                     AdsConfig.onNativeAdFailed(ctx, -1);
                     destroyCurrentAd();
                     nativeAdView.setVisibility(View.GONE);
-                    loadingBox.setVisibility(View.VISIBLE);
-                    statusView.setText("Swipe up to continue watching Reels ↑");
+                    loadingBox.setVisibility(View.GONE);
                 }
             }
 

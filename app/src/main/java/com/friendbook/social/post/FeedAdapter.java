@@ -75,6 +75,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public FeedAdapter(Activity a, Host h) {
         this.activity = a;
         this.host = h;
+        com.friendbook.social.core.AdsConfig.warmUpPools(a);
     }
 
     public void setPosts(List<Models.Post> list) {
@@ -230,8 +231,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         notifyDataSetChanged();
     }
 
-    /** Triggers fresh Native Ad requests on Feed refresh — never reuses old or failed ads. */
+    /** Triggers fresh Native Ad requests on Feed refresh — rotates in preloaded ads from pool. */
     public void refreshSponsoredAds() {
+        com.friendbook.social.core.AdsConfig.clearFeedSlotAds(null);
         notifyDataSetChanged();
     }
 
@@ -1867,10 +1869,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         private void destroyCurrentAd() {
-            if (currentNativeAd != null) {
-                try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
-                currentNativeAd = null;
-            }
+            currentNativeAd = null;
         }
 
         private void collapse() {
@@ -1917,6 +1916,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
 
             com.friendbook.social.core.ConsentManager.ensureInitialized(ctx);
+            com.google.android.gms.ads.nativead.NativeAd preloaded =
+                    com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
+            if (preloaded != null) {
+                currentNativeAd = preloaded;
+                expand(ctx);
+                populateNativeAdView(preloaded, ctx);
+                nativeAdView.requestLayout();
+                return;
+            }
+
             com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
             android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
                     "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -1937,11 +1946,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
                                 .forNativeAd(nativeAd -> {
                                     if (mySeq != requestSeq) {
-                                        try { nativeAd.destroy(); } catch (Throwable ignored) {}
+                                        com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
                                         return;
                                     }
-                                    destroyCurrentAd();
                                     currentNativeAd = nativeAd;
+                                    com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
                                     com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
                                     nativeAd.setOnPaidEventListener(adValue ->
                                             com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
