@@ -117,6 +117,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private FrameLayout rootStage;
     private View pkStageBackdrop;
     private TextureView cameraTexture;
+    private ImageView hostBeautyOverlay;
     private ImageView remoteVideoView;
     private LinearLayout fallbackStage;
     private ImageView stageAvatar;
@@ -138,6 +139,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private ImageView pkLeftRemoteImg;
     private ImageView pkRightRemoteImg;
     private TextureView pkRightGuestTexture;
+    private ImageView pkGuestBeautyOverlay;
     private LinearLayout pkLeftFallbackBox;
     private LinearLayout pkRightFallbackBox;
     private ImageView pkLeftAvatar;
@@ -156,8 +158,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // Co-Host PIP Card (Top-Right under header)
     private FrameLayout coHostCard;
     private TextureView coHostLocalTexture;
+    private ImageView coHostBeautyOverlay;
     private ImageView coHostRemoteImage;
     private TextView coHostLabelTv;
+    private TextView coHostCamToggleBtn;
     private TextView coHostCloseBtn;
 
     // Pre-Live Studio Views
@@ -297,6 +301,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private String subscribedPkBattleId = "";
     private DatabaseReference rtdbStreamRef;
     private ValueEventListener rtdbStreamListener;
+    private DatabaseReference pkRtdbARef;
+    private DatabaseReference pkRtdbBRef;
+    private ValueEventListener pkRtdbAListener;
+    private ValueEventListener pkRtdbBListener;
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final Random rng = new Random();
@@ -384,10 +392,18 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkStageBackdrop.setVisibility(View.GONE);
         rootStage.addView(pkStageBackdrop, new FrameLayout.LayoutParams(-1, -1));
 
-        // 1. Local Camera2 TextureView (Host)
+        // 1. Local Camera2 TextureView (Host) + Real-Time Face Smoothing Overlay
         cameraTexture = new TextureView(this);
         cameraTexture.setVisibility(isHost ? View.VISIBLE : View.GONE);
         rootStage.addView(cameraTexture, new FrameLayout.LayoutParams(-1, -1));
+
+        hostBeautyOverlay = new ImageView(this);
+        hostBeautyOverlay.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        hostBeautyOverlay.setVisibility(View.GONE);
+        rootStage.addView(hostBeautyOverlay, new FrameLayout.LayoutParams(-1, -1));
+        if (isHost) {
+            engine.attachBeautyOverlay(hostBeautyOverlay);
+        }
 
         // 2. Remote Live Video ImageView (Viewer watches Host's real-time camera frames!)
         remoteVideoView = new ImageView(this);
@@ -608,6 +624,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkRightGuestTexture.setVisibility(View.GONE);
         pkRightPane.addView(pkRightGuestTexture, new FrameLayout.LayoutParams(-1, -1));
 
+        pkGuestBeautyOverlay = new ImageView(this);
+        pkGuestBeautyOverlay.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        pkGuestBeautyOverlay.setVisibility(View.GONE);
+        pkRightPane.addView(pkGuestBeautyOverlay, new FrameLayout.LayoutParams(-1, -1));
+
         pkRightNameBadge = Ui.tvBold(this, "🔵 Host B", 11f, 0xFFFFFFFF);
         pkRightNameBadge.setSingleLine(true);
         pkRightNameBadge.setEllipsize(TextUtils.TruncateAt.END);
@@ -705,6 +726,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         coHostLocalTexture.setVisibility(View.GONE);
         coHostCard.addView(coHostLocalTexture, new FrameLayout.LayoutParams(-1, -1));
 
+        coHostBeautyOverlay = new ImageView(this);
+        coHostBeautyOverlay.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        coHostBeautyOverlay.setVisibility(View.GONE);
+        coHostCard.addView(coHostBeautyOverlay, new FrameLayout.LayoutParams(-1, -1));
+
         coHostLabelTv = Ui.tvBold(this, "🤝 Co-Host", 10, 0xFFFFFFFF);
         coHostLabelTv.setSingleLine(true);
         coHostLabelTv.setEllipsize(TextUtils.TruncateAt.END);
@@ -713,6 +739,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         FrameLayout.LayoutParams lblLp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
         lblLp.setMargins(Ui.dp(this, 5), 0, Ui.dp(this, 5), Ui.dp(this, 5));
         coHostCard.addView(coHostLabelTv, lblLp);
+
+        coHostCamToggleBtn = Ui.roundChip(this, "📹", 0xAA000000, 0xFFFFFFFF, 10);
+        Ui.pad(coHostCamToggleBtn, 6, 2, 6, 2);
+        coHostCamToggleBtn.setVisibility(View.GONE);
+        coHostCamToggleBtn.setOnClickListener(v -> toggleActiveUserCameraPause());
+        FrameLayout.LayoutParams camLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        camLp.setMargins(Ui.dp(this, 4), Ui.dp(this, 4), 0, 0);
+        coHostCard.addView(coHostCamToggleBtn, camLp);
 
         coHostCloseBtn = Ui.roundChip(this, "✕", 0xCCE41E3F, 0xFFFFFFFF, 10);
         Ui.pad(coHostCloseBtn, 6, 2, 6, 2);
@@ -1060,12 +1094,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (isHost) {
             btnPkRail = circleBtnSpaced("⚔️", v -> openPkChallengeSheet());
             rail.addView(btnPkRail);
-            rail.addView(circleBtnSpaced("🔄", v -> engine.flipCamera()));
+            rail.addView(circleBtnSpaced("🔄", v -> flipActiveUserCamera()));
             btnFilter = circleBtnSpaced("✨", v -> openBeautyAndFilterStudioDrawer());
             rail.addView(btnFilter);
-            btnMic = circleBtnSpaced("🎙️", v -> toggleHostMic());
+            btnMic = circleBtnSpaced("🎙️", v -> toggleActiveUserMic());
             rail.addView(btnMic);
-            btnVideoPause = circleBtnSpaced("📹", v -> toggleHostCameraPause());
+            btnVideoPause = circleBtnSpaced("📹", v -> toggleActiveUserCameraPause());
             rail.addView(btnVideoPause);
             btnRingLight = circleBtnSpaced("💡", v -> toggleRingLightOrTorch());
             rail.addView(btnRingLight);
@@ -1081,6 +1115,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         } else {
             rail.addView(circleBtnSpaced("❤️", v -> sendHeartLike()));
             rail.addView(circleBtnSpaced("🎁", v -> showSendGiftSheet()));
+            btnVideoPause = circleBtnSpaced("📹", v -> toggleActiveUserCameraPause());
+            rail.addView(btnVideoPause);
+            btnMic = circleBtnSpaced("🎙️", v -> toggleActiveUserMic());
+            rail.addView(btnMic);
+            rail.addView(circleBtnSpaced("🔄", v -> flipActiveUserCamera()));
+            btnFilter = circleBtnSpaced("✨", v -> openBeautyAndFilterStudioDrawer());
+            rail.addView(btnFilter);
             rail.addView(circleBtnSpaced("👥", v -> openInviteFriendsSheet()));
             btnSpeaker = circleBtnSpaced("🔊", v -> toggleViewerSpeaker());
             rail.addView(btnSpeaker);
@@ -1394,15 +1435,22 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             FirebaseDatabase rtdb = Fb.rtdb();
             if (rtdb == null) return;
             rtdbStreamRef = rtdb.getReference("live_streams").child(liveId);
-            if (!isHost) {
-                rtdbStreamListener = new ValueEventListener() {
-                    @Override
-                    public void onDataChange(@NonNull DataSnapshot snapshot) {
-                        if (isFinishing() || isEnded || pkBattleActive || !snapshot.exists()) return;
-                        String vB64 = snapshot.child("v").getValue(String.class);
-                        Long vSeq = snapshot.child("vs").getValue(Long.class);
-                        if (vB64 != null && !vB64.isEmpty()) {
-                            engine.decodeRemoteFrame(vB64, vSeq == null ? 0L : vSeq, false);
+            rtdbStreamListener = new ValueEventListener() {
+                @Override
+                public void onDataChange(@NonNull DataSnapshot snapshot) {
+                    if (isFinishing() || isEnded || !snapshot.exists()) return;
+                    if (!isHost && !pkBattleActive) {
+                        Boolean hCamOff = snapshot.child("camOff").getValue(Boolean.class);
+                        if (Boolean.TRUE.equals(hCamOff)) {
+                            remoteVideoView.setVisibility(View.GONE);
+                            fallbackStage.setVisibility(View.VISIBLE);
+                            stageStatusTv.setText("⏸ " + hostNameStr + " paused camera · Live voice active 🔊");
+                        } else {
+                            String vB64 = snapshot.child("v").getValue(String.class);
+                            Long vSeq = snapshot.child("vs").getValue(Long.class);
+                            if (vB64 != null && !vB64.isEmpty()) {
+                                engine.decodeRemoteFrame(vB64, vSeq == null ? 0L : vSeq, false);
+                            }
                         }
                         String aB64 = snapshot.child("a").getValue(String.class);
                         Long aSeq = snapshot.child("as").getValue(Long.class);
@@ -1410,11 +1458,29 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                             engine.enqueueRemoteAudio(aB64, aSeq == null ? 0L : aSeq, false);
                         }
                     }
-                    @Override
-                    public void onCancelled(@NonNull DatabaseError error) { }
-                };
-                rtdbStreamRef.addValueEventListener(rtdbStreamListener);
-            }
+                    // Co-Host ultra-low-latency fast lane (received by Host and Viewers!)
+                    if (!isMeActiveCoHost && !activeCoHostUid.isEmpty()) {
+                        Boolean cCamOff = snapshot.child("cCamOff").getValue(Boolean.class);
+                        if (Boolean.TRUE.equals(cCamOff)) {
+                            coHostRemoteImage.setVisibility(View.GONE);
+                        } else {
+                            String cvB64 = snapshot.child("cv").getValue(String.class);
+                            Long cvSeq = snapshot.child("cvs").getValue(Long.class);
+                            if (cvB64 != null && !cvB64.isEmpty()) {
+                                engine.decodeRemoteFrame(cvB64, cvSeq == null ? 0L : cvSeq, true);
+                            }
+                        }
+                        String caB64 = snapshot.child("ca").getValue(String.class);
+                        Long caSeq = snapshot.child("cas").getValue(Long.class);
+                        if (caB64 != null && !caB64.isEmpty()) {
+                            engine.enqueueRemoteAudio(caB64, caSeq == null ? 0L : caSeq, true);
+                        }
+                    }
+                }
+                @Override
+                public void onCancelled(@NonNull DatabaseError error) { }
+            };
+            rtdbStreamRef.addValueEventListener(rtdbStreamListener);
         } catch (Throwable ignored) { }
     }
 
@@ -1428,6 +1494,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 Map<String, Object> fast = new HashMap<>();
                 fast.put("v", base64Webp);
                 fast.put("vs", seq);
+                fast.put("camOff", false);
                 rtdbStreamRef.updateChildren(fast);
             }
             // Guaranteed Firestore real-time stream (100% allowed for hostId == request.auth.uid!)
@@ -1441,11 +1508,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
             // Also publish to shared 2-User PK Battle Media Channel when PK is active!
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
-                String mediaDocId = "pkmedia_" + pkBattleId + "_" + ("B".equals(pkRole) ? "b" : "a");
+                String sideKey = "B".equals(pkRole) ? "b" : "a";
+                String mediaDocId = "pkmedia_" + pkBattleId + "_" + sideKey;
                 Map<String, Object> pkV = new HashMap<>();
                 pkV.put("v", base64Webp);
                 pkV.put("vs", seq);
+                pkV.put("camOff", false);
                 pkV.put("ts", now);
+                DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
+                if (pkRef != null) {
+                    try { pkRef.updateChildren(pkV); } catch (Throwable ignored) { }
+                }
                 Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge());
             }
         }
@@ -1469,10 +1542,15 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             Fb.db().collection("lives").document(liveId).update(upd);
 
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
-                String mediaDocId = "pkmedia_" + pkBattleId + "_" + ("B".equals(pkRole) ? "b" : "a");
+                String sideKey = "B".equals(pkRole) ? "b" : "a";
+                String mediaDocId = "pkmedia_" + pkBattleId + "_" + sideKey;
                 Map<String, Object> pkA = new HashMap<>();
                 pkA.put("a", base64Ulaw);
                 pkA.put("as", seq);
+                DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
+                if (pkRef != null) {
+                    try { pkRef.updateChildren(pkA); } catch (Throwable ignored) { }
+                }
                 Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge());
             }
         }
@@ -1880,6 +1958,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         coHostCard.setVisibility(View.VISIBLE);
         coHostLabelTv.setText("🤝 " + (activeCoHostName.isEmpty() ? "Co-Host" : activeCoHostName));
         coHostCloseBtn.setVisibility((isHost || activeCoHostUid.equals(me)) ? View.VISIBLE : View.GONE);
+        if (coHostCamToggleBtn != null) {
+            coHostCamToggleBtn.setVisibility(activeCoHostUid.equals(me) ? View.VISIBLE : View.GONE);
+        }
 
         if (activeCoHostUid.equals(me)) {
             if (!isMeActiveCoHost) {
@@ -1890,6 +1971,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         } else {
             if (isMeActiveCoHost) stopLocalCoHostStreaming();
             coHostLocalTexture.setVisibility(View.GONE);
+            if (coHostBeautyOverlay != null) coHostBeautyOverlay.setVisibility(View.GONE);
             coHostRemoteImage.setVisibility(View.VISIBLE);
             if (!isHost) {
                 if (!coFrameB64.isEmpty()) engine.decodeRemoteFrame(coFrameB64, coFrameSeq, true);
@@ -1919,23 +2001,39 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 @Override
                 public void onCameraError(String message) { }
             });
-            coHostLocalEngine.setStreamQuality(LiveStreamEngine.QUALITY_DATA_SAVER);
+            coHostLocalEngine.setStreamQuality(LiveStreamEngine.QUALITY_BALANCED);
+            coHostLocalEngine.setBeautyLevel(engine.getBeautyLevel());
         }
         coHostLocalEngine.attachCameraPreview(coHostLocalTexture, true);
+        coHostLocalEngine.attachBeautyOverlay(coHostBeautyOverlay);
         coHostLocalEngine.startBroadcasting(true);
     }
 
     private void pushCoHostMediaPacket(@Nullable String vB64, @Nullable String aB64) {
         if (!isMeActiveCoHost || liveId == null || isEnded) return;
         long now = System.currentTimeMillis();
-        if (vB64 != null && now - lastCoHostMediaPushMs < 650L) return;
+        long seq = ++coHostSeqOut;
+        if (rtdbStreamRef != null) {
+            Map<String, Object> fast = new HashMap<>();
+            if (vB64 != null) {
+                fast.put("cv", vB64);
+                fast.put("cvs", seq);
+                fast.put("cCamOff", false);
+            }
+            if (aB64 != null) {
+                fast.put("ca", aB64);
+                fast.put("cas", seq);
+            }
+            try { rtdbStreamRef.updateChildren(fast); } catch (Throwable ignored) { }
+        }
+        if (vB64 != null && now - lastCoHostMediaPushMs < 420L) return;
         if (vB64 != null) lastCoHostMediaPushMs = now;
 
         Map<String, Object> pkt = new HashMap<>();
         pkt.put("type", "cohost_media");
         pkt.put("uid", Fb.uid());
         pkt.put("name", Fb.myName());
-        pkt.put("seq", ++coHostSeqOut);
+        pkt.put("seq", seq);
         if (vB64 != null) pkt.put("v", vB64);
         if (aB64 != null) pkt.put("a", aB64);
         pkt.put("createdAtMs", now);
@@ -2500,23 +2598,116 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     // ==================== COMPLETE STUDIO CONTROLS & SETTINGS SHEETS ====================
 
-    private void toggleHostMic() {
-        boolean nextMuted = !engine.isMicMuted();
-        engine.setMicMuted(nextMuted);
+    private LiveStreamEngine getMyActiveStageEngine() {
+        if (isMePkGuest && pkGuestEngine != null) return pkGuestEngine;
+        if (isMeActiveCoHost && coHostLocalEngine != null) return coHostLocalEngine;
+        return engine;
+    }
+
+    private void flipActiveUserCamera() {
+        if (!isHost && !isMeActiveCoHost && !isMePkGuest) {
+            Ui.toast(this, "Join on stage (🙋 Co-Host or ⚔️ PK) to use your camera!");
+            return;
+        }
+        LiveStreamEngine activeEng = getMyActiveStageEngine();
+        if (activeEng != null) {
+            activeEng.flipCamera();
+            Ui.toast(this, activeEng.isLensFront() ? "Front camera" : "Back camera");
+        }
+    }
+
+    private void toggleActiveUserMic() {
+        if (!isHost && !isMeActiveCoHost && !isMePkGuest) {
+            requestOrLeaveCoHostStage();
+            return;
+        }
+        LiveStreamEngine activeEng = getMyActiveStageEngine();
+        if (activeEng == null) return;
+        boolean nextMuted = !activeEng.isMicMuted();
+        activeEng.setMicMuted(nextMuted);
         if (btnMic != null) btnMic.setText(nextMuted ? "🔇" : "🎙️");
         Ui.toast(this, nextMuted ? "🔇 Microphone muted" : "🎙️ Microphone live");
+    }
+
+    private void toggleActiveUserCameraPause() {
+        if (isHost) {
+            toggleHostCameraPause();
+            return;
+        }
+        if (isMeActiveCoHost && coHostLocalEngine != null) {
+            boolean nextPaused = !coHostLocalEngine.isCameraPaused();
+            coHostLocalEngine.setCameraPaused(nextPaused);
+            coHostLocalTexture.setVisibility(nextPaused ? View.GONE : View.VISIBLE);
+            if (coHostBeautyOverlay != null) {
+                coHostBeautyOverlay.setVisibility((!nextPaused && coHostLocalEngine.getBeautyLevel() > 0)
+                        ? View.VISIBLE : View.GONE);
+            }
+            if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "🚫" : "📹");
+            if (coHostCamToggleBtn != null) coHostCamToggleBtn.setText(nextPaused ? "🚫" : "📹");
+            if (rtdbStreamRef != null) {
+                try { rtdbStreamRef.child("cCamOff").setValue(nextPaused); } catch (Throwable ignored) { }
+            }
+            Ui.toast(this, nextPaused ? "⏸ Co-Host camera OFF (Voice still live)" : "▶️ Co-Host camera ON");
+            return;
+        }
+        if (isMePkGuest && pkGuestEngine != null) {
+            boolean nextPaused = !pkGuestEngine.isCameraPaused();
+            pkGuestEngine.setCameraPaused(nextPaused);
+            pkRightGuestTexture.setVisibility(nextPaused ? View.GONE : View.VISIBLE);
+            if (pkGuestBeautyOverlay != null) {
+                pkGuestBeautyOverlay.setVisibility((!nextPaused && pkGuestEngine.getBeautyLevel() > 0)
+                        ? View.VISIBLE : View.GONE);
+            }
+            pkRightFallbackBox.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+            if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "🚫" : "📹");
+            if (pkRtdbBRef != null) {
+                try { pkRtdbBRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
+            }
+            if (!pkBattleId.isEmpty()) {
+                Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b")
+                        .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+            }
+            Ui.toast(this, nextPaused ? "⏸ PK camera OFF (Voice still live)" : "▶️ PK camera ON");
+            return;
+        }
+        requestOrLeaveCoHostStage();
+    }
+
+    private void toggleHostMic() {
+        toggleActiveUserMic();
     }
 
     private void toggleHostCameraPause() {
         boolean nextPaused = !engine.isCameraPaused();
         engine.setCameraPaused(nextPaused);
         cameraTexture.setVisibility(nextPaused ? View.GONE : View.VISIBLE);
-        fallbackStage.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+        if (hostBeautyOverlay != null) {
+            hostBeautyOverlay.setVisibility((!nextPaused && engine.getBeautyLevel() > 0)
+                    ? View.VISIBLE : View.GONE);
+        }
+        if (pkBattleActive) {
+            if ("A".equals(pkRole)) pkLeftFallbackBox.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+            else if ("B".equals(pkRole)) pkRightFallbackBox.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+        } else {
+            fallbackStage.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
+        }
         if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "🚫" : "📹");
+        if (rtdbStreamRef != null) {
+            try { rtdbStreamRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
+        }
         if (liveId != null && isLiveStarted) {
             Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused);
         }
-        Ui.toast(this, nextPaused ? "⏸ Camera paused (Audio still live)" : "▶️ Camera video resumed");
+        if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
+            String sideKey = "B".equals(pkRole) ? "b" : "a";
+            DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
+            if (pkRef != null) {
+                try { pkRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
+            }
+            Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_" + sideKey)
+                    .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+        }
+        Ui.toast(this, nextPaused ? "⏸ Camera OFF (Voice still live)" : "▶️ Camera ON");
     }
 
     private void toggleViewerSpeaker() {
@@ -2564,18 +2755,21 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void openBeautyAndFilterStudioDrawer() {
+        LiveStreamEngine activeEng = getMyActiveStageEngine();
         LivePkAndGiftsUi.showBeautyAndFilterDrawer(
                 this,
-                engine.getBeautyLevel(),
+                activeEng.getBeautyLevel(),
                 currentFilterIdx,
                 FILTER_NAMES,
                 ringLightOn,
-                engine.isMirrorFront(),
+                activeEng.isMirrorFront(),
                 new LivePkAndGiftsUi.BeautyFilterCallback() {
                     @Override
                     public void onBeautyChanged(int beautyLevel) {
                         engine.setBeautyLevel(beautyLevel);
-                        Ui.toast(LiveActivity.this, "Beauty: " + engine.getBeautyLabel());
+                        if (coHostLocalEngine != null) coHostLocalEngine.setBeautyLevel(beautyLevel);
+                        if (pkGuestEngine != null) pkGuestEngine.setBeautyLevel(beautyLevel);
+                        Ui.toast(LiveActivity.this, "Face Smooth: " + engine.getBeautyLabel());
                     }
                     @Override
                     public void onColorFilterChanged(int filterIndex) {
@@ -2591,7 +2785,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     }
                     @Override
                     public void onToggleMirror() {
-                        engine.setMirrorFront(!engine.isMirrorFront());
+                        LiveStreamEngine cur = getMyActiveStageEngine();
+                        cur.setMirrorFront(!cur.isMirrorFront());
                     }
                 });
     }
@@ -3056,6 +3251,60 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkBattleId = targetPkId;
         engine.resetCoHostSequences();
 
+        try {
+            FirebaseDatabase rtdb = Fb.rtdb();
+            if (rtdb != null) {
+                pkRtdbARef = rtdb.getReference("pk_streams").child(targetPkId).child("a");
+                pkRtdbBRef = rtdb.getReference("pk_streams").child(targetPkId).child("b");
+
+                pkRtdbAListener = new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snap) {
+                        if (isFinishing() || isEnded || !pkBattleActive || !snap.exists()) return;
+                        if ("A".equals(pkRole)) return;
+                        Boolean camOff = snap.child("camOff").getValue(Boolean.class);
+                        if (Boolean.TRUE.equals(camOff)) {
+                            pkLeftRemoteImg.setVisibility(View.GONE);
+                            pkLeftFallbackBox.setVisibility(View.VISIBLE);
+                        } else {
+                            String v = snap.child("v").getValue(String.class);
+                            Long vs = snap.child("vs").getValue(Long.class);
+                            if (v != null && !v.isEmpty()) engine.decodeRemoteFrame(v, vs == null ? 0L : vs, false);
+                        }
+                        String a = snap.child("a").getValue(String.class);
+                        Long as = snap.child("as").getValue(Long.class);
+                        if (a != null && !a.isEmpty()) engine.enqueueRemoteAudio(a, as == null ? 0L : as, false);
+                    }
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) { }
+                };
+                pkRtdbARef.addValueEventListener(pkRtdbAListener);
+
+                pkRtdbBListener = new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot snap) {
+                        if (isFinishing() || isEnded || !pkBattleActive || !snap.exists()) return;
+                        if ("B".equals(pkRole)) return;
+                        Boolean camOff = snap.child("camOff").getValue(Boolean.class);
+                        if (Boolean.TRUE.equals(camOff)) {
+                            pkRightRemoteImg.setVisibility(View.GONE);
+                            pkRightFallbackBox.setVisibility(View.VISIBLE);
+                        } else {
+                            String v = snap.child("v").getValue(String.class);
+                            Long vs = snap.child("vs").getValue(Long.class);
+                            if (v != null && !v.isEmpty()) engine.decodeRemoteFrame(v, vs == null ? 0L : vs, true);
+                        }
+                        String a = snap.child("a").getValue(String.class);
+                        Long as = snap.child("as").getValue(Long.class);
+                        if (a != null && !a.isEmpty()) engine.enqueueRemoteAudio(a, as == null ? 0L : as, true);
+                    }
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError error) { }
+                };
+                pkRtdbBRef.addValueEventListener(pkRtdbBListener);
+            }
+        } catch (Throwable ignored) { }
+
         pkBattleReg = Fb.db().collection("chats").document("pkbattle_" + targetPkId)
                 .addSnapshotListener((snap, err) -> {
                     if (isFinishing() || isEnded || snap == null || !snap.exists()) return;
@@ -3068,9 +3317,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     if ("A".equals(pkRole)) return; // Don't decode our own Side A stream!
                     Map<String, Object> m = snap.getData();
                     if (m == null) return;
-                    String v = Format.str(m, "v");
-                    long vs = Format.longOf(m, "vs");
-                    if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, false);
+                    if (Boolean.TRUE.equals(m.get("camOff"))) {
+                        pkLeftRemoteImg.setVisibility(View.GONE);
+                        pkLeftFallbackBox.setVisibility(View.VISIBLE);
+                    } else {
+                        String v = Format.str(m, "v");
+                        long vs = Format.longOf(m, "vs");
+                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, false);
+                    }
                     String a = Format.str(m, "a");
                     long as = Format.longOf(m, "as");
                     if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, false);
@@ -3082,9 +3336,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     if ("B".equals(pkRole)) return; // Don't decode our own Side B stream!
                     Map<String, Object> m = snap.getData();
                     if (m == null) return;
-                    String v = Format.str(m, "v");
-                    long vs = Format.longOf(m, "vs");
-                    if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, true);
+                    if (Boolean.TRUE.equals(m.get("camOff"))) {
+                        pkRightRemoteImg.setVisibility(View.GONE);
+                        pkRightFallbackBox.setVisibility(View.VISIBLE);
+                    } else {
+                        String v = Format.str(m, "v");
+                        long vs = Format.longOf(m, "vs");
+                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, true);
+                    }
                     String a = Format.str(m, "a");
                     long as = Format.longOf(m, "as");
                     if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, true);
@@ -3198,6 +3457,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     lp.topMargin = topPx;
                     lp.leftMargin = "B".equals(pkRole) ? halfW : 0;
                     cameraTexture.setLayoutParams(lp);
+                    if (hostBeautyOverlay != null) {
+                        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(halfW, vidH, Gravity.TOP | Gravity.START);
+                        blp.topMargin = topPx;
+                        blp.leftMargin = "B".equals(pkRole) ? halfW : 0;
+                        hostBeautyOverlay.setLayoutParams(blp);
+                    }
                 });
             }
         } else {
@@ -3215,6 +3480,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (isHost) {
                 cameraTexture.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
                 cameraTexture.setVisibility(engine.isCameraPaused() ? View.GONE : View.VISIBLE);
+                if (hostBeautyOverlay != null) {
+                    hostBeautyOverlay.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
+                }
             } else {
                 remoteVideoView.setVisibility(View.VISIBLE);
             }
@@ -3355,21 +3623,37 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 public void onCameraError(String message) { }
             });
             pkGuestEngine.setStreamQuality(LiveStreamEngine.QUALITY_BALANCED);
+            pkGuestEngine.setBeautyLevel(engine.getBeautyLevel());
         }
         pkGuestEngine.attachCameraPreview(pkRightGuestTexture, true);
+        pkGuestEngine.attachBeautyOverlay(pkGuestBeautyOverlay);
         pkGuestEngine.startBroadcasting(true);
     }
 
     private void pushPkGuestMediaPacket(@Nullable String vB64, @Nullable String aB64) {
         if (!isMePkGuest || !pkBattleActive || pkBattleId.isEmpty() || isEnded) return;
         long now = System.currentTimeMillis();
-        if (vB64 != null && now - lastPkMediaPushMs < 420L) return;
-        if (vB64 != null) lastPkMediaPushMs = now;
         long seq = ++pkSeqOut;
+        if (pkRtdbBRef != null) {
+            Map<String, Object> fast = new HashMap<>();
+            if (vB64 != null) {
+                fast.put("v", vB64);
+                fast.put("vs", seq);
+                fast.put("camOff", false);
+            }
+            if (aB64 != null) {
+                fast.put("a", aB64);
+                fast.put("as", seq);
+            }
+            try { pkRtdbBRef.updateChildren(fast); } catch (Throwable ignored) { }
+        }
+        if (vB64 != null && now - lastPkMediaPushMs < 380L) return;
+        if (vB64 != null) lastPkMediaPushMs = now;
         Map<String, Object> pkt = new HashMap<>();
         if (vB64 != null) {
             pkt.put("v", vB64);
             pkt.put("vs", seq);
+            pkt.put("camOff", false);
         }
         if (aB64 != null) {
             pkt.put("a", aB64);
@@ -3385,10 +3669,19 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             pkGuestEngine = null;
         }
         if (pkRightGuestTexture != null) pkRightGuestTexture.setVisibility(View.GONE);
+        if (pkGuestBeautyOverlay != null) pkGuestBeautyOverlay.setVisibility(View.GONE);
     }
 
     private void cleanupPkListeners() {
         subscribedPkBattleId = "";
+        if (pkRtdbARef != null && pkRtdbAListener != null) {
+            try { pkRtdbARef.removeEventListener(pkRtdbAListener); } catch (Throwable ignored) { }
+            pkRtdbAListener = null;
+        }
+        if (pkRtdbBRef != null && pkRtdbBListener != null) {
+            try { pkRtdbBRef.removeEventListener(pkRtdbBListener); } catch (Throwable ignored) { }
+            pkRtdbBListener = null;
+        }
         if (pkBattleReg != null) { pkBattleReg.remove(); pkBattleReg = null; }
         if (pkMediaAReg != null) { pkMediaAReg.remove(); pkMediaAReg = null; }
         if (pkMediaBReg != null) { pkMediaBReg.remove(); pkMediaBReg = null; }
