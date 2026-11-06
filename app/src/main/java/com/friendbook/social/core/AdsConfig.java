@@ -259,10 +259,10 @@ public class AdsConfig {
     }
 
     // ------------------------------------------------------------------------
-    // ⚡ Zero-Wait Preloaded NativeAd Pool for Direct Feed & Reels Display
+    // ⚡ Zero-Wait Preloaded NativeAd Pool + 16-Creative Rotating Catalog
     // ------------------------------------------------------------------------
-    private static final int POOL_TARGET_SIZE = 4;
-    private static final int MAX_ROTATING_ADS = 12;
+    private static final int POOL_TARGET_SIZE = 6;
+    private static final int MAX_ROTATING_ADS = 16;
     private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> FEED_POOL =
             new java.util.ArrayDeque<>();
     private static final java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> REELS_POOL =
@@ -277,6 +277,111 @@ public class AdsConfig {
             new HashMap<>();
     private static int feedInFlight = 0;
     private static int reelsInFlight = 0;
+    private static int adRotationOffset = (int) ((System.currentTimeMillis() / 1000L) % 16);
+
+    public static final class SponsoredCreative {
+        public final int id;
+        public final String headline;
+        public final String advertiser;
+        public final String body;
+        public final String cta;
+        public final String storeOrPrice;
+        public final String bannerBadge;
+        public final String bannerBigTitle;
+        public final String bannerSubTitle;
+        public final int bannerColorStart;
+        public final int bannerColorEnd;
+        public final float stars;
+
+        public SponsoredCreative(int id, String headline, String advertiser, String body, String cta,
+                                 String storeOrPrice, String bannerBadge, String bannerBigTitle,
+                                 String bannerSubTitle, int bannerColorStart, int bannerColorEnd, float stars) {
+            this.id = id;
+            this.headline = headline;
+            this.advertiser = advertiser;
+            this.body = body;
+            this.cta = cta;
+            this.storeOrPrice = storeOrPrice;
+            this.bannerBadge = bannerBadge;
+            this.bannerBigTitle = bannerBigTitle;
+            this.bannerSubTitle = bannerSubTitle;
+            this.bannerColorStart = bannerColorStart;
+            this.bannerColorEnd = bannerColorEnd;
+            this.stars = stars;
+        }
+    }
+
+    private static final SponsoredCreative[] CATALOG = new SponsoredCreative[]{
+            new SponsoredCreative(0, "Creator Studio 4K Pro", "FriendBook Creators",
+                    "Go Live in HD, earn instant gifts & grow your audience faster with Pro Creator tools.",
+                    "Explore Now", "Free Upgrade", "LIVE STUDIO", "Go Live & Earn Gems 💎",
+                    "HD Stream • Instant Gifts • Creator Analytics", 0xFF1877F2, 0xFF0A3D91, 4.9f),
+            new SponsoredCreative(1, "HyperStrike Mobile Arena", "Apex Interactive Games",
+                    "Squad up in 60FPS battle royale matches with ultra-low ping servers & voice chat.",
+                    "Play Free", "Google Play • 4.8★", "60FPS GAMING", "HyperStrike Season 9 🎮",
+                    "New Maps • Squad Voice • Zero-Lag Servers", 0xFF6A11CB, 0xFF2575FC, 4.8f),
+            new SponsoredCreative(2, "Zinger Feast Mega Box", "CraveBite Express",
+                    "Hot crispy zinger burger, loaded fries & chilled drink delivered to your door in 25 mins.",
+                    "Order Now", "50% OFF Today", "HOT DEAL 🍔", "Mega Zinger Box 50% OFF",
+                    "25-Min Express Delivery • Free Drink Included", 0xFFD32F2F, 0xFFFF6D00, 4.9f),
+            new SponsoredCreative(3, "SoundPulse ANC Buds Pro", "NovaTech Audio",
+                    "45dB Active Noise Cancellation, deep bass & 36-hour battery life with fast Type-C charge.",
+                    "Shop Deal", "Rs. 3,499 • Free Delivery", "FLASH SALE 🎧", "SoundPulse ANC Pro",
+                    "45dB Noise Cancelling • 36Hr Battery Life", 0xFF0F2027, 0xFF2C5364, 4.7f),
+            new SponsoredCreative(4, "Urban Drip Streetwear '26", "VogueLane PK",
+                    "Oversized premium cotton hoodies, cargo joggers & limited-edition sneakers now in stock.",
+                    "Shop Collection", "Cash on Delivery", "NEW ARRIVAL 👕", "Urban Streetwear Drop",
+                    "Buy 2 Get 1 Free • Nationwide Cash on Delivery", 0xFF1F1C2C, 0xFF928DAB, 4.8f),
+            new SponsoredCreative(5, "Cricket Live HD Pass", "SportsMax Stream",
+                    "Watch every T20 & International match live in Full HD with ball-by-ball instant replays.",
+                    "Watch Live", "HD Ad-Free Stream", "LIVE CRICKET 🏏", "Watch Every Match in HD",
+                    "Live Scoreboard • Multi-Cam • Instant Highlights", 0xFF00695C, 0xFF00BFA5, 4.9f),
+            new SponsoredCreative(6, "Northern Peaks 5-Day Tour", "WanderLust Travels",
+                    "All-inclusive Hunza, Skardu & Fairy Meadows luxury group tour with bonfire & photography.",
+                    "Book Seat", "20% Early Bird Off", "TRAVEL PK 🏔️", "Explore Hunza & Skardu",
+                    "Luxury Transport • 4-Star Hotels • Guided Tour", 0xFF134E5E, 0xFF71B280, 4.9f),
+            new SponsoredCreative(7, "AI Photo & Reel Cut Pro", "PixelCraft Studio",
+                    "One-tap AI background remover, viral velocity transitions & auto captions for Reels.",
+                    "Try Free", "Top Video Editor", "AI EDITOR ✨", "Create Viral Reels in 10s",
+                    "Auto Captions • 4K Export • Beat Sync Effects", 0xFF8E2DE2, 0xFF4A00E0, 4.8f),
+            new SponsoredCreative(8, "TurboFiber 100Mbps Unlimited", "NetWave Fiber",
+                    "True fiber-to-the-home internet with zero speed throttling, free dual-band Wi-Fi 6 router.",
+                    "Check Coverage", "Free Installation", "FIBER WIFI 6 ⚡", "100Mbps True Fiber",
+                    "Zero Buffering • Lowest Gaming Ping • 24/7 Support", 0xFF0052D4, 0xFF4364F7, 4.7f),
+            new SponsoredCreative(9, "FitFuel Whey Isolate+", "IronCore Nutrition",
+                    "27g ultra-pure hydrolyzed protein per scoop with BCAAs for lean muscle & rapid recovery.",
+                    "Order Authentic", "100% Lab Verified", "FITNESS PRO 💪", "FitFuel Isolate 27g Protein",
+                    "Zero Added Sugar • Rich Double Chocolate", 0xFF232526, 0xFF414345, 4.8f),
+            new SponsoredCreative(10, "Full-Stack AI & Freelancing", "SkillLaunch Academy",
+                    "Master React, Python AI & Upwork client acquisition in 8 weeks with live mentor projects.",
+                    "Join Free Class", "Certificate Included", "LEARN & EARN 💻", "Master AI & Freelancing",
+                    "Live Weekend Classes • Portfolio Projects", 0xFF1A2980, 0xFF26D0CE, 4.9f),
+            new SponsoredCreative(11, "SmartWatch Ultra AMOLED", "ChronoGear Official",
+                    "Always-on 2.1\" curved AMOLED display, Bluetooth calling, SpO2 & 7-day battery backup.",
+                    "Buy Now", "40% Launch Discount", "SMART TECH ⌚", "Ultra AMOLED SmartWatch",
+                    "Bluetooth Calling • Waterproof IP68 • 100+ Modes", 0xFF3A1C71, 0xFFD76D77, 4.8f),
+            new SponsoredCreative(12, "Glow Derm Vitamin C Serum", "Pure Aura Skincare",
+                    "Dermatologist-tested 15% Vitamin C + Hyaluronic Acid for instant glass-skin radiance.",
+                    "Get Offer", "Buy 1 Get 1 50% Off", "SKINCARE ✨", "24K Glow Vitamin C Serum",
+                    "Dark Spot Corrector • Deep Hydration Formula", 0xFFB24592, 0xFFF15F79, 4.9f),
+            new SponsoredCreative(13, "MegaMart Grocery in 20m", "QuickCart Instant",
+                    "Fresh fruits, dairy, snacks & household essentials at wholesale supermarket prices.",
+                    "Start Shopping", "Rs. 500 Welcome Voucher", "SUPERMARKET 🛒", "Groceries in 20 Minutes",
+                    "Wholesale Prices • Free First 3 Deliveries", 0xFF11998E, 0xFF38EF7D, 4.8f),
+            new SponsoredCreative(14, "AutoCare Ceramic Coat Kit", "TorqueLabs PK",
+                    "9H hydrophobic nano-ceramic shine that protects your car & bike paint for 12 months.",
+                    "Order Kit", "Free Microfiber Kit", "AUTO CARE 🚘", "9H Nano Ceramic Coating",
+                    "Mirror Gloss • UV & Scratch Protection", 0xFF141E30, 0xFF243B55, 4.7f),
+            new SponsoredCreative(15, "PocketPay Zero-Fee Wallet", "FinEdge Digital",
+                    "Instant IBFT transfers, bill split, virtual Visa card & up to 15% cashback on food & fuel.",
+                    "Open Account", "Rs. 250 Signup Bonus", "INSTANT CASHBACK 💳", "PocketPay Virtual Visa",
+                    "Zero Annual Fee • 15% Cashback on Dining", 0xFF004FF9, 0xFF000000, 4.9f)
+    };
+
+    public static synchronized SponsoredCreative getCreativeForSlot(int slotKey) {
+        int idx = Math.abs(slotKey + adRotationOffset) % CATALOG.length;
+        return CATALOG[idx];
+    }
 
     private static synchronized void rememberFeedAd(com.google.android.gms.ads.nativead.NativeAd ad) {
         if (ad == null) return;
@@ -313,11 +418,8 @@ public class AdsConfig {
         com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
         com.google.android.gms.ads.nativead.NativeAd polled = FEED_POOL.pollFirst();
-        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
-            polled = LOADED_FEED_ADS.get(Math.abs(slotOrdinal) % LOADED_FEED_ADS.size());
-        }
-        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
-            polled = LOADED_REELS_ADS.get(Math.abs(slotOrdinal) % LOADED_REELS_ADS.size());
+        if (polled == null && slotOrdinal < LOADED_FEED_ADS.size()) {
+            polled = LOADED_FEED_ADS.get(slotOrdinal);
         }
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
@@ -337,11 +439,8 @@ public class AdsConfig {
         com.google.android.gms.ads.nativead.NativeAd existing = REELS_SLOT_ADS.get(slotOrdinal);
         if (existing != null) return existing;
         com.google.android.gms.ads.nativead.NativeAd polled = REELS_POOL.pollFirst();
-        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
-            polled = LOADED_REELS_ADS.get(Math.abs(slotOrdinal) % LOADED_REELS_ADS.size());
-        }
-        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
-            polled = LOADED_FEED_ADS.get(Math.abs(slotOrdinal) % LOADED_FEED_ADS.size());
+        if (polled == null && slotOrdinal < LOADED_REELS_ADS.size()) {
+            polled = LOADED_REELS_ADS.get(slotOrdinal);
         }
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
@@ -353,8 +452,7 @@ public class AdsConfig {
     public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
         return REELS_SLOT_ADS.containsKey(slotOrdinal)
                 || !REELS_POOL.isEmpty()
-                || !LOADED_REELS_ADS.isEmpty()
-                || !LOADED_FEED_ADS.isEmpty();
+                || slotOrdinal < LOADED_REELS_ADS.size();
     }
 
     public static synchronized void putReelsSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
@@ -366,11 +464,13 @@ public class AdsConfig {
 
     public static synchronized void clearFeedSlotAds(Context context) {
         FEED_SLOT_ADS.clear();
+        adRotationOffset = (adRotationOffset + 3) % CATALOG.length;
         warmUpPools(context);
     }
 
     public static synchronized void clearReelsSlotAds(Context context) {
         REELS_SLOT_ADS.clear();
+        adRotationOffset = (adRotationOffset + 5) % CATALOG.length;
         warmUpPools(context);
     }
 
@@ -467,74 +567,155 @@ public class AdsConfig {
     }
 
     // ------------------------------------------------------------------------
-    // 💬 Facebook-Style Sponsored Ad Social Engagement (Like / Comment / Share)
+    // 💬 100% REAL Multi-User Likes, Reactions & Full-Post Comments on Ads
+    //    Backed by real Firestore `posts/{adDocId}`, `Reactions.java`, and
+    //    `ReelCommentsActivity` / `CommentsEngine` (zero fake base counts!)
     // ------------------------------------------------------------------------
-    private static String adDocId(int slotKey) {
-        return "sponsored_ad_slot_" + (Math.abs(slotKey) % 12);
+    private static final Map<String, com.friendbook.social.models.Models.Post> AD_POST_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Set<String> AD_POST_FETCHED =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+    public static String adDocId(int slotKey) {
+        SponsoredCreative cr = getCreativeForSlot(slotKey);
+        return "sponsored_ad_creative_" + cr.id;
+    }
+
+    public static com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
+        SponsoredCreative cr = getCreativeForSlot(slotKey);
+        String docId = "sponsored_ad_creative_" + cr.id;
+        com.friendbook.social.models.Models.Post p = AD_POST_CACHE.get(docId);
+        if (p == null) {
+            p = new com.friendbook.social.models.Models.Post();
+            p.id = docId;
+            p.authorId = "friendbook_sponsored";
+            p.authorName = cr.advertiser;
+            p.authorPhoto = Ui.TEAM_AVATAR_TOKEN;
+            p.text = cr.headline + " — " + cr.body;
+            p.privacy = "Only me"; // Keeps ad doc out of regular HomeFragment post query while real for likes/comments
+            p.createdAt = 1L;
+            p.likes = 0;
+            p.comments = 0;
+            p.shares = 0;
+            AD_POST_CACHE.put(docId, p);
+        }
+        return p;
+    }
+
+    /** Hydrates real user likes, reactions & comment counts from Firestore `posts/{adDocId}` once per ad creative. */
+    public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
+        final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        final String docId = adPost.id;
+        if (!AD_POST_FETCHED.add(docId)) {
+            if (onHydrated != null) onHydrated.run();
+            return;
+        }
+        try {
+            Fb.db().collection("posts").document(docId).get()
+                    .addOnSuccessListener(snap -> {
+                        if (snap != null && snap.exists()) {
+                            com.friendbook.social.models.Models.Post remote =
+                                    com.friendbook.social.models.Models.Post.fromDoc(snap);
+                            adPost.likes = Math.max(0, remote.likes);
+                            adPost.comments = Math.max(0, remote.comments);
+                            adPost.shares = Math.max(0, remote.shares);
+                            if (remote.reactionsMap != null) {
+                                adPost.reactionsMap.clear();
+                                adPost.reactionsMap.putAll(remote.reactionsMap);
+                            }
+                            if (remote.inlineComments != null) {
+                                adPost.inlineComments.clear();
+                                adPost.inlineComments.addAll(remote.inlineComments);
+                            }
+                            com.friendbook.social.post.Reactions.hydrateFromPostInstant(adPost);
+                        } else {
+                            // Seed minimal parent doc with 0 likes & 0 comments so real user reactions/comments attach cleanly
+                            Map<String, Object> seed = new HashMap<>();
+                            seed.put("id", docId);
+                            seed.put("authorId", "friendbook_sponsored");
+                            seed.put("authorName", adPost.authorName);
+                            seed.put("authorPhoto", Ui.TEAM_AVATAR_TOKEN);
+                            seed.put("text", adPost.text);
+                            seed.put("privacy", "Only me");
+                            seed.put("createdAt", 1L);
+                            seed.put("likes", 0);
+                            seed.put("comments", 0);
+                            seed.put("shares", 0);
+                            Fb.db().collection("posts").document(docId).set(seed, SetOptions.merge());
+                        }
+                        if (onHydrated != null) onHydrated.run();
+                    })
+                    .addOnFailureListener(e -> {
+                        AD_POST_FETCHED.remove(docId);
+                        if (onHydrated != null) onHydrated.run();
+                    });
+        } catch (Throwable ignored) {
+            AD_POST_FETCHED.remove(docId);
+        }
     }
 
     public static String getAdMyReaction(Context c, int slotKey) {
-        if (c == null) return "";
-        String uid = Fb.uid() == null ? "guest" : Fb.uid();
-        return prefs(c).getString("ad_rx_" + uid + "_" + (Math.abs(slotKey) % 12), "");
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        String cached = FastCache.getMyReaction(c, adPost.id);
+        if (cached != null) return "none".equals(cached) ? "" : cached;
+        String me = Fb.uid();
+        if (me != null && adPost.reactionsMap != null && adPost.reactionsMap.containsKey(me)) {
+            Map<String, Object> m = adPost.reactionsMap.get(me);
+            Object t = m != null ? m.get("type") : null;
+            if (t instanceof String && !"none".equals(t)) return (String) t;
+        }
+        return "";
     }
 
     public static int getAdLikeCount(Context c, int slotKey) {
-        int base = 18 + ((Math.abs(slotKey) * 7) % 45);
-        if (c == null) return base;
-        int delta = prefs(c).getInt("ad_likes_delta_" + (Math.abs(slotKey) % 12), 0);
-        String myRx = getAdMyReaction(c, slotKey);
-        return Math.max(1, base + delta + (myRx.isEmpty() ? 0 : 1));
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        int cached = FastCache.getReactionCount(c, adPost.id, -1);
+        int mapSize = adPost.reactionsMap != null ? adPost.reactionsMap.size() : 0;
+        int raw = cached >= 0 ? Math.max(cached, mapSize) : Math.max(adPost.likes, mapSize);
+        return Math.max(0, raw);
     }
 
     public static int getAdCommentCount(Context c, int slotKey) {
-        int base = 4 + ((Math.abs(slotKey) * 3) % 14);
-        if (c == null) return base;
-        int extra = prefs(c).getInt("ad_cmts_count_" + (Math.abs(slotKey) % 12), 0);
-        return base + extra;
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        int inlineCount = adPost.inlineComments != null ? adPost.inlineComments.size() : 0;
+        return Math.max(0, Math.max(adPost.comments, inlineCount));
     }
 
     public static int getAdShareCount(Context c, int slotKey) {
-        int base = 2 + ((Math.abs(slotKey) * 2) % 9);
-        if (c == null) return base;
-        int extra = prefs(c).getInt("ad_shares_count_" + (Math.abs(slotKey) % 12), 0);
-        return base + extra;
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        return Math.max(0, adPost.shares);
     }
 
+    /** Applies a 100% REAL user reaction (`Reactions.tapLike` / `Reactions.apply`) on `posts/{adDocId}` in Firestore! */
     public static void setOrToggleAdReaction(Context c, int slotKey, String picked, Runnable onUpdated) {
         if (c == null) return;
-        String uid = Fb.uid() == null ? "guest" : Fb.uid();
-        String key = "ad_rx_" + uid + "_" + (Math.abs(slotKey) % 12);
-        String cur = prefs(c).getString(key, "");
-        String next;
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         if (picked == null) {
-            next = cur.isEmpty() ? "like" : "";
+            com.friendbook.social.post.Reactions.tapLike(c, adPost);
         } else {
-            next = picked;
+            com.friendbook.social.post.Reactions.apply(c, adPost, picked);
         }
-        prefs(c).edit().putString(key, next).apply();
         if (onUpdated != null) onUpdated.run();
-        try {
-            if (Fb.uid() != null) {
-                Map<String, Object> m = new HashMap<>();
-                m.put("userId", Fb.uid());
-                m.put("userName", Fb.myName());
-                m.put("type", next.isEmpty() ? "none" : next);
-                m.put("updatedAt", FieldValue.serverTimestamp());
-                Fb.db().collection("sponsored_ads").document(adDocId(slotKey))
-                        .collection("reactions").document(Fb.uid())
-                        .set(m, SetOptions.merge());
-            }
-        } catch (Throwable ignored) { }
+    }
+
+    /** Opens the real `Reactions.showWhoReacted` sheet showing every real app user who liked/reacted to this Ad! */
+    public static void showWhoReactedToAd(Context c, int slotKey) {
+        if (c == null) return;
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        com.friendbook.social.post.Reactions.showWhoReacted(c, adPost.id);
     }
 
     public static void shareSponsoredAd(Context c, int slotKey, CharSequence headline, CharSequence body, Runnable onUpdated) {
         if (c == null) return;
-        int bucket = Math.abs(slotKey) % 12;
-        SharedPreferences sp = prefs(c);
-        sp.edit().putInt("ad_shares_count_" + bucket, sp.getInt("ad_shares_count_" + bucket, 0) + 1).apply();
+        com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        adPost.shares = Math.max(0, adPost.shares) + 1;
         if (onUpdated != null) onUpdated.run();
-        String h = headline != null && headline.length() > 0 ? headline.toString() : "Sponsored on friendbook";
+        try {
+            Map<String, Object> up = new HashMap<>();
+            up.put("shares", FieldValue.increment(1));
+            Fb.db().collection("posts").document(adPost.id).set(up, SetOptions.merge());
+        } catch (Throwable ignored) { }
+        String h = headline != null && headline.length() > 0 ? headline.toString() : adPost.authorName;
         String b = body != null && body.length() > 0 ? ("\n" + body) : "";
         android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
         send.setType("text/plain");
@@ -542,117 +723,20 @@ public class AdsConfig {
         c.startActivity(android.content.Intent.createChooser(send, "Share Sponsored Post"));
     }
 
+    /**
+     * Opens the FULL real-time multi-user `ReelCommentsActivity` thread backed by `CommentsEngine`
+     * on `posts/{adDocId}` — supporting real comments, @mentions, replies, comment likes & sorting!
+     */
     public static void openSponsoredCommentsSheet(final Context c, final int slotKey, CharSequence headline, final Runnable onUpdated) {
         if (c == null) return;
-        final int bucket = Math.abs(slotKey) % 12;
-        final String docId = adDocId(slotKey);
-        android.widget.LinearLayout root = Ui.col(c);
-        Ui.pad(root, 16, 12, 16, 8);
-
-        String titleStr = (headline != null && headline.length() > 0) ? headline.toString() : "Sponsored Post";
-        android.widget.TextView sub = Ui.tv(c, "📢 " + titleStr, 12.5f, Ui.sub(c));
-        sub.setPadding(0, 0, 0, Ui.dp(c, 8));
-        root.addView(sub);
-
-        android.widget.ScrollView sv = new android.widget.ScrollView(c);
-        final android.widget.LinearLayout listCol = Ui.col(c);
-        sv.addView(listCol);
-        android.widget.LinearLayout.LayoutParams svLp =
-                new android.widget.LinearLayout.LayoutParams(-1, Ui.dp(c, 210));
-        root.addView(sv, svLp);
-
-        // Seed default + locally saved comments immediately
-        final Runnable renderLocal = () -> {
-            listCol.removeAllViews();
-            String[][] defaults = {
-                    {"Ali Raza", "Bohat zabardast offer hai 👍🔥"},
-                    {"Sana Khan", "Nice sponsored post ❤️"}
-            };
-            for (String[] d : defaults) {
-                android.widget.LinearLayout item = Ui.col(c);
-                item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
-                Ui.pad(item, 10, 6, 10, 6);
-                android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
-                ilp.bottomMargin = Ui.dp(c, 6);
-                item.addView(Ui.tvBold(c, d[0], 12.5f, Ui.txt(c)));
-                item.addView(Ui.tv(c, d[1], 13f, Ui.txt(c)));
-                listCol.addView(item, ilp);
-            }
-            String savedRaw = prefs(c).getString("ad_cmts_list_" + bucket, "");
-            if (savedRaw != null && !savedRaw.isEmpty()) {
-                for (String line : savedRaw.split("\n")) {
-                    if (line.trim().isEmpty()) continue;
-                    int sep = line.indexOf("::");
-                    String author = sep > 0 ? line.substring(0, sep) : "User";
-                    String text = sep > 0 ? line.substring(sep + 2) : line;
-                    android.widget.LinearLayout item = Ui.col(c);
-                    item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
-                    Ui.pad(item, 10, 6, 10, 6);
-                    android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
-                    ilp.bottomMargin = Ui.dp(c, 6);
-                    item.addView(Ui.tvBold(c, author, 12.5f, Ui.txt(c)));
-                    item.addView(Ui.tv(c, text, 13f, Ui.txt(c)));
-                    listCol.addView(item, ilp);
-                }
-            }
-        };
-        renderLocal.run();
-
-        // Also fetch shared comments once from Firestore on sheet open
-        try {
-            Fb.db().collection("sponsored_ads").document(docId).collection("comments")
-                    .limit(20).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap == null || snap.isEmpty()) return;
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap.getDocuments()) {
-                            String aName = d.getString("authorName");
-                            String txt = d.getString("text");
-                            if (txt == null || txt.trim().isEmpty()) continue;
-                            android.widget.LinearLayout item = Ui.col(c);
-                            item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
-                            Ui.pad(item, 10, 6, 10, 6);
-                            android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
-                            ilp.bottomMargin = Ui.dp(c, 6);
-                            item.addView(Ui.tvBold(c, aName == null || aName.isEmpty() ? "User" : aName, 12.5f, Ui.txt(c)));
-                            item.addView(Ui.tv(c, txt, 13f, Ui.txt(c)));
-                            listCol.addView(item, ilp);
-                        }
-                    });
-        } catch (Throwable ignored) { }
-
-        final android.widget.EditText input = Ui.input(c, "Write a comment…");
-        android.widget.LinearLayout.LayoutParams inLp = new android.widget.LinearLayout.LayoutParams(-1, -2);
-        inLp.topMargin = Ui.dp(c, 8);
-        root.addView(input, inLp);
-
-        new android.app.AlertDialog.Builder(c)
-                .setTitle("💬 Sponsored Post Comments")
-                .setView(root)
-                .setPositiveButton("Post Comment", (d, w) -> {
-                    String txt = input.getText().toString().trim();
-                    if (txt.isEmpty()) return;
-                    String meName = Fb.myName();
-                    if (meName == null || meName.trim().isEmpty()) meName = "You";
-                    SharedPreferences sp = prefs(c);
-                    String prev = sp.getString("ad_cmts_list_" + bucket, "");
-                    String updated = (prev == null || prev.isEmpty() ? "" : (prev + "\n"))
-                            + meName + "::" + txt.replace("\n", " ");
-                    sp.edit()
-                            .putString("ad_cmts_list_" + bucket, updated)
-                            .putInt("ad_cmts_count_" + bucket, sp.getInt("ad_cmts_count_" + bucket, 0) + 1)
-                            .apply();
-                    if (onUpdated != null) onUpdated.run();
-                    Ui.toast(c, "💬 Comment posted!");
-                    try {
-                        Map<String, Object> cm = new HashMap<>();
-                        cm.put("authorId", Fb.uid());
-                        cm.put("authorName", meName);
-                        cm.put("text", txt);
-                        cm.put("createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("sponsored_ads").document(docId).collection("comments").add(cm);
-                    } catch (Throwable ignored) { }
-                })
-                .setNegativeButton("Close", null)
-                .show();
+        final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
+        // Ensure parent doc exists in Firestore before opening full comments screen
+        AD_POST_FETCHED.remove(adPost.id);
+        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        android.content.Intent i = new android.content.Intent(c, com.friendbook.social.reels.ReelCommentsActivity.class);
+        i.putExtra("reel_id", adPost.id);
+        i.putExtra("collection", "posts");
+        i.putExtra("reel_author_id", "friendbook_sponsored");
+        c.startActivity(i);
     }
 }
