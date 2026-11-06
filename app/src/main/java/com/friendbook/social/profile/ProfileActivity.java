@@ -97,7 +97,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private View coverCamBtn, avatarCamBtn;
     private LinearLayout ownActionsCol, visitorActionsRow, moneyRow;
     private TextView creatorDashBtn, addStoryBtn;
-    private TextView primaryBtn, messageVisitorBtn, secondaryBtn;
+    private TextView primaryBtn, messageVisitorBtn, secondaryBtn, modSuspendBtn;
     private TextView subscribeBtn, tickBtn;
     private ListenerRegistration subReg;
     private boolean subscribedActive;
@@ -356,6 +356,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         visitorActionsRow.addView(secondaryBtn, vb3);
         visitorActionsRow.addView(visitorMore, vb4);
         infoCard.addView(visitorActionsRow);
+
+        // Direct 1-tap Suspend / Unsuspend ID button for Admin & Moderator on user profile
+        modSuspendBtn = Ui.tvBold(this, "⏳ Suspend ID", 13.5f, Color.WHITE);
+        modSuspendBtn.setGravity(Gravity.CENTER);
+        modSuspendBtn.setBackground(Ui.round(this, 0xFFD97706, 8));
+        Ui.pad(modSuspendBtn, 12, 9, 12, 9);
+        modSuspendBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams msLp = new LinearLayout.LayoutParams(-1, -2);
+        msLp.topMargin = Ui.dp(this, 8);
+        modSuspendBtn.setOnClickListener(v -> {
+            if (user != null) Admin.showSuspendUserDialog(this, user, this::bindUser);
+        });
+        infoCard.addView(modSuspendBtn, msLp);
 
         // Creator Monetization / Tick / Subscribe Quick Strip
         moneyRow = Ui.row(this);
@@ -1036,6 +1049,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (mine && !viewAsPublic) {
             ownActionsCol.setVisibility(View.VISIBLE);
             visitorActionsRow.setVisibility(View.GONE);
+            if (modSuspendBtn != null) modSuspendBtn.setVisibility(View.GONE);
             boolean showTick = user.tickRank() < 3;
             moneyRow.setVisibility(showTick ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(View.GONE);
@@ -1043,6 +1057,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         } else {
             ownActionsCol.setVisibility(View.GONE);
             visitorActionsRow.setVisibility(View.VISIBLE);
+            if (modSuspendBtn != null) {
+                boolean canSuspendTarget = !mine && Admin.canModerate()
+                        && !Admin.isOwnerEmail(user.email)
+                        && (Admin.isAdmin() || !Admin.isProtectedStaff(user));
+                modSuspendBtn.setVisibility(canSuspendTarget ? View.VISIBLE : View.GONE);
+                if (canSuspendTarget) {
+                    boolean susp = user.isSuspendedNow();
+                    modSuspendBtn.setText(susp
+                            ? ("✅ Unsuspend ID (Suspended: " + user.suspensionStatusLabel() + ")")
+                            : "⏳ Suspend ID (1d · 1w · 30d · 60d · Lifetime)");
+                    modSuspendBtn.setBackground(Ui.round(this, susp ? 0xFF059669 : 0xFFD97706, 8));
+                }
+            }
             tickBtn.setVisibility(View.GONE);
             moneyRow.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
@@ -1406,6 +1433,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("📱 Show QR code");
             if (Admin.isAdmin()) {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
+                pm.getMenu().add(user != null && user.isSuspendedNow()
+                        ? ("🛡 ✅ Unsuspend / Change Suspension (" + user.suspensionStatusLabel() + ")…")
+                        : "🛡 ⏳ Suspend ID (1d / 1w / 30d / 60d / Lifetime)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
                 pm.getMenu().add(user != null && user.isModerator
@@ -1414,7 +1444,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 pm.getMenu().add("🛡 📢 Send official message (admin)…");
                 pm.getMenu().add("🛡 📊 User stats (admin)…");
             } else if (Admin.isModerator() && !Admin.isProtectedStaff(user)) {
-                // Global Moderator ONLY gets Ban/Unban — NEVER full Admin controls!
+                pm.getMenu().add(user != null && user.isSuspendedNow()
+                        ? ("🛡 ✅ Unsuspend / Change Suspension (" + user.suspensionStatusLabel() + ")…")
+                        : "🛡 ⏳ Suspend ID (1d / 1w / 30d / 60d / Lifetime)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user (Moderator)" : "🛡 🚫 Ban user (Moderator)");
             }
@@ -1458,6 +1490,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 boolean make = user == null || !user.isModerator;
                 Admin.setGlobalModerator(this, uid, user != null ? user.displayName : "user", make);
                 if (user != null) user.isModerator = make;
+            } else if (t.contains("Suspend ID") || t.contains("Unsuspend / Change Suspension")) {
+                if (user != null) Admin.showSuspendUserDialog(this, user, this::bindUser);
             } else if (t.contains("Ban user") || t.contains("Unban user")) {
                 if (!Admin.isAdmin() && Admin.isProtectedStaff(user)) {
                     Ui.toast(this, "Admin accounts cannot be modified");

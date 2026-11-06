@@ -205,6 +205,10 @@ public class CommentsEngine {
                                              final String parentId,
                                              final List<Map<String,Object>> mentions,
                                              final PostCallback cb) {
+        if (com.friendbook.social.core.Admin.isCurrentUserSuspended()) {
+            if (cb != null) cb.onComplete(false, com.friendbook.social.core.Admin.getSuspensionMessage());
+            return null;
+        }
         String me = Fb.uid();
         if (me == null || docId == null || docId.isEmpty()) {
             if (cb != null) cb.onComplete(false, "Not signed in");

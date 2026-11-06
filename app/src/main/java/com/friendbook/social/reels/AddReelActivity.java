@@ -134,6 +134,10 @@ public class AddReelActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         Ui.statusBarLight(this);
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) {
+            finish();
+            return;
+        }
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
@@ -967,6 +971,7 @@ public class AddReelActivity extends Activity {
     }
 
     private void startReelUpload() {
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         if (videoUri == null) {
             Ui.toast(this, "Pick or record a video first 🎬");
             openGalleryPicker();

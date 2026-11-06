@@ -15,6 +15,25 @@ public class Models {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
         public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
         public boolean isOnline, isAdmin, isModerator, banned, isVerified;
+        public long suspendedUntil;
+        public boolean suspendedLifetime;
+
+        public boolean isSuspendedNow() {
+            if (com.friendbook.social.core.Admin.isOwnerEmail(email) || isAdmin) return false;
+            if (suspendedLifetime || suspendedUntil > 4_000_000_000_000L) return true;
+            return suspendedUntil > System.currentTimeMillis();
+        }
+
+        public String suspensionStatusLabel() {
+            if (!isSuspendedNow()) return "";
+            if (suspendedLifetime || suspendedUntil > 4_000_000_000_000L) return "Lifetime";
+            long remMs = Math.max(0L, suspendedUntil - System.currentTimeMillis());
+            long days = remMs / (24L * 3600_000L);
+            long hours = (remMs % (24L * 3600_000L)) / 3600_000L;
+            if (days >= 1) return days + (days == 1 ? " day" : " days") + (hours > 0 ? " " + hours + "h" : "");
+            if (hours >= 1) return hours + (hours == 1 ? " hour" : " hours");
+            return Math.max(1L, remMs / 60_000L) + " min";
+        }
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
         public boolean showActiveStatus = true;
@@ -87,6 +106,12 @@ public class Models {
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.isModerator = Format.boolOf(m, "isModerator");
             u.banned = Format.boolOf(m, "banned");
+            u.suspendedLifetime = Format.boolOf(m, "suspendedLifetime");
+            if (m != null && m.get("suspendedUntil") instanceof Number) {
+                u.suspendedUntil = ((Number) m.get("suspendedUntil")).longValue();
+            } else {
+                u.suspendedUntil = Format.ts(m == null ? null : m.get("suspendedUntil"));
+            }
             u.isVerified = Format.boolOf(m, "isVerified");
             u.deactivated = Format.boolOf(m, "deactivated");
             u.loginAlerts = Format.boolOf(m, "loginAlerts");

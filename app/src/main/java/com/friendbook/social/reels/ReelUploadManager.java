@@ -113,6 +113,7 @@ public final class ReelUploadManager {
                                    final boolean alreadySafetyVerified,
                                    final EditOptions editOpts) {
         if (context == null || sourceUri == null) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(context)) return;
         if (uploading) {
             Ui.toast(context, "⏳ A Reel upload is already in progress (" + currentPercent + "%)");
             return;

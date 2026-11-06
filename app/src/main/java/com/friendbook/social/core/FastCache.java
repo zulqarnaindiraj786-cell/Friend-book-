@@ -719,6 +719,8 @@ public final class FastCache {
         o.put("isAdmin", u.isAdmin);
         o.put("isModerator", u.isModerator);
         o.put("isVerified", u.isVerified);
+        o.put("suspendedUntil", u.suspendedUntil);
+        o.put("suspendedLifetime", u.suspendedLifetime);
         o.put("stars", u.stars);
         o.put("friendsCount", u.friendsCount);
         o.put("statusNote", u.statusNote == null ? "" : u.statusNote);
@@ -743,6 +745,8 @@ public final class FastCache {
         u.isAdmin = o.optBoolean("isAdmin", false);
         u.isModerator = o.optBoolean("isModerator", false);
         u.isVerified = o.optBoolean("isVerified", false);
+        u.suspendedUntil = o.optLong("suspendedUntil", 0L);
+        u.suspendedLifetime = o.optBoolean("suspendedLifetime", false);
         u.stars = o.optInt("stars", 0);
         u.friendsCount = o.optInt("friendsCount", 0);
         u.statusNote = o.optString("statusNote", "");

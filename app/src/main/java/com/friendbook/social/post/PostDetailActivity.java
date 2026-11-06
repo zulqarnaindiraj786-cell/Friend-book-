@@ -384,6 +384,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
     private void send() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
         if (text.isEmpty() && pendingPhotoUri == null && retryD1Media.isEmpty()) return;
         String me = Fb.uid();

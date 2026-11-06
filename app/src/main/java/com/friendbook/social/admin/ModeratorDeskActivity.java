@@ -267,9 +267,27 @@ public class ModeratorDeskActivity extends Activity {
             blp.leftMargin = Ui.dp(this, 6);
             nr.addView(b, blp);
         }
+        if (u.isSuspendedNow()) {
+            TextView sp = Ui.roundChip(this, "⏳ SUSPENDED", 0xFFD97706, 0xFFFFFFFF, 9);
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
+            slp.leftMargin = Ui.dp(this, 6);
+            nr.addView(sp, slp);
+        }
         mid.addView(nr);
-        mid.addView(Ui.tv(this, u.banned ? "Suspended account" : "Active user", 11, Ui.sub(this)));
+        String subStatus = u.banned ? "Banned account"
+                : u.isSuspendedNow() ? ("Suspended (" + u.suspensionStatusLabel() + ")")
+                : "Active user";
+        mid.addView(Ui.tv(this, subStatus, 11, Ui.sub(this)));
         row.addView(mid, mp);
+
+        TextView suspendBtn = u.isSuspendedNow()
+                ? Ui.btnOutline(this, "✅ Unsuspend", Ui.GREEN)
+                : Ui.btnOutline(this, "⏳ Suspend", 0xFFD97706);
+        Ui.pad(suspendBtn, 10, 6, 10, 6);
+        LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
+        sblp.rightMargin = Ui.dp(this, 6);
+        suspendBtn.setOnClickListener(v -> Admin.showSuspendUserDialog(this, u, this::renderUsers));
+        row.addView(suspendBtn, sblp);
 
         TextView banBtn = u.banned
                 ? Ui.btnOutline(this, "✓ Unban", Ui.GREEN)

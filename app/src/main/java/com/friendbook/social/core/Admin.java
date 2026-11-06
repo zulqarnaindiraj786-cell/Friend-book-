@@ -71,6 +71,105 @@ public class Admin {
         return isOwnerEmail(u.email) || u.isAdmin;
     }
 
+    /** True when the currently signed-in user has an active posting/commenting/video suspension. */
+    public static boolean isCurrentUserSuspended() {
+        Models.User me = Fb.me;
+        return me != null && me.isSuspendedNow();
+    }
+
+    /** Human-readable message explaining why posting, commenting & video upload are blocked. */
+    public static String getSuspensionMessage() {
+        Models.User me = Fb.me;
+        if (me == null || !me.isSuspendedNow()) return "";
+        String rem = me.suspensionStatusLabel();
+        if ("Lifetime".equalsIgnoreCase(rem)) {
+            return "⚠️ Your account is suspended (Lifetime). You can view posts & videos, but cannot post, comment, or upload videos.";
+        }
+        return "⚠️ Your account is suspended for " + rem + ". You can view posts & videos, but cannot post, comment, or upload videos.";
+    }
+
+    /** Returns true if allowed to post/comment/upload; shows toast and returns false if suspended. */
+    public static boolean checkNotSuspended(Context c) {
+        if (isCurrentUserSuspended()) {
+            if (c != null) Ui.toast(c, getSuspensionMessage());
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Dialog for Admin or Moderator to suspend a user's ID (1 Day, 1 Week, 30 Days, 60 Days, Lifetime)
+     * or unsuspend them. Suspended users can view posts & videos, but cannot post, comment, or upload videos.
+     */
+    public static void showSuspendUserDialog(final Context c, final Models.User target, final Runnable onDone) {
+        if (c == null || target == null || target.uid == null || target.uid.isEmpty()) return;
+        if (!canModerate()) {
+            Ui.toast(c, "Admins and Moderators only");
+            return;
+        }
+        if (isOwnerEmail(target.email) || (!isAdmin() && isProtectedStaff(target))) {
+            Ui.toast(c, "Admin accounts cannot be suspended");
+            return;
+        }
+        final String name = (target.displayName != null && !target.displayName.isEmpty())
+                ? target.displayName : "User";
+        String statusHdr = target.isSuspendedNow()
+                ? ("Currently Suspended (" + target.suspensionStatusLabel() + ")")
+                : "Active Account";
+        final String[] options = new String[]{
+                "⏳ Suspend for 1 Day (24 Hours)",
+                "⏳ Suspend for 1 Week (7 Days)",
+                "⏳ Suspend for 30 Days",
+                "⏳ Suspend for 60 Days",
+                "⛔ Suspend for Lifetime",
+                "✅ Unsuspend Account (Restore All Access)"
+        };
+        Ui.choose(c, "🛡 Suspend / Unsuspend " + name + "\n" + statusHdr, options, which -> {
+            long dayMs = 24L * 3600_000L;
+            if (which == 0) {
+                applyUserSuspension(c, target, dayMs, false, "1 Day", onDone);
+            } else if (which == 1) {
+                applyUserSuspension(c, target, 7L * dayMs, false, "1 Week (7 Days)", onDone);
+            } else if (which == 2) {
+                applyUserSuspension(c, target, 30L * dayMs, false, "30 Days", onDone);
+            } else if (which == 3) {
+                applyUserSuspension(c, target, 60L * dayMs, false, "60 Days", onDone);
+            } else if (which == 4) {
+                applyUserSuspension(c, target, 0L, true, "Lifetime", onDone);
+            } else if (which == 5) {
+                applyUserSuspension(c, target, 0L, false, "Unsuspended", onDone);
+            }
+        });
+    }
+
+    public static void applyUserSuspension(final Context c, final Models.User target,
+                                           final long durationMs, final boolean lifetime,
+                                           final String label, final Runnable onDone) {
+        if (target == null || target.uid == null || target.uid.isEmpty()) return;
+        final boolean suspending = lifetime || durationMs > 0L;
+        final long until = lifetime ? 9_999_999_999_999L : (suspending ? (System.currentTimeMillis() + durationMs) : 0L);
+        final String name = (target.displayName != null && !target.displayName.isEmpty()) ? target.displayName : "User";
+        Fb.db().collection("users").document(target.uid)
+                .set(Fb.map("suspendedUntil", until, "suspendedLifetime", lifetime),
+                        com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener(x -> {
+                    target.suspendedUntil = until;
+                    target.suspendedLifetime = lifetime;
+                    if (onDone != null) onDone.run();
+                    if (suspending) {
+                        Notify.sendOfficialTeamMessage(target.uid, "team",
+                                "⏳ Your account posting, commenting & video upload access has been suspended for "
+                                        + label + ". You can still browse posts and watch videos.", false);
+                        Ui.toast(c, "⏳ Suspended " + name + " (" + label + ")");
+                    } else {
+                        Notify.sendOfficialTeamMessage(target.uid, "team",
+                                "✅ Your account suspension has been lifted! You can now post, comment, and upload videos again.", true);
+                        Ui.toast(c, "✅ Unsuspended " + name);
+                    }
+                })
+                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+    }
+
     /** Appoint or remove a Global App Moderator (Full Admin only). */
     public static void setGlobalModerator(Context c, String uid, String displayName, boolean makeMod) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }

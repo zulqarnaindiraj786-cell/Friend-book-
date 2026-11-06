@@ -87,6 +87,10 @@ public class CreatePostActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         Ui.statusBarBlue(this);
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) {
+            finish();
+            return;
+        }
         editId = getIntent().getStringExtra("edit_id");
         groupId = getIntent().getStringExtra("group_id");
         groupNeedsApproval = getIntent().getBooleanExtra("group_needs_approval", false);
@@ -762,6 +766,7 @@ public class CreatePostActivity extends Activity {
     // ---------- submit ----------
     private void submit() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String content = text.getText().toString().trim();
         submittingMentions = com.friendbook.social.core.Mentions.capture(text);
         boolean hasPoll = !pollOptions.isEmpty();

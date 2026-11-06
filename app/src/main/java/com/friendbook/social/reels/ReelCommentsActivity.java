@@ -250,6 +250,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
 
     private void send() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
         if (text.isEmpty()) return;
         String me = Fb.uid();
