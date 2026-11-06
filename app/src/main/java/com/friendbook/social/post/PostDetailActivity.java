@@ -51,8 +51,10 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private FeedAdapter postAdapter;
     private CommentsAdapter commentsAdapter;
     private RecyclerView mainRv;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout commentSwipe;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
+    private boolean initialLoaded;
     private String retryD1Media="";
     private TextView olderCommentsButton;
     private EditText input;
@@ -182,7 +184,14 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }
         mainRv.setAdapter(commentsAdapter);
         com.friendbook.social.core.NearEndPaging.attachComments(mainRv,()->commentsAdapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
-        root.addView(mainRv, new LinearLayout.LayoutParams(-1, 0, 1));
+        commentSwipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        commentSwipe.setColorSchemeColors(Ui.BLUE);
+        commentSwipe.addView(mainRv);
+        commentSwipe.setOnRefreshListener(() -> {
+            initialLoaded = false;
+            loadPostAndComments(true);
+        });
+        root.addView(commentSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Bottom Comment Composer Bar
         LinearLayout composerWrap = Ui.col(this);
@@ -304,12 +313,25 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
+        if (!initialLoaded) {
+            loadPostAndComments(false);
+        }
+    }
+
+    private void loadPostAndComments(final boolean forceHeader) {
+        initialLoaded = true;
+        if (postReg != null) { postReg.remove(); postReg = null; }
+        if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
+        final boolean[] headerRendered = {!forceHeader && post != null};
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
             if (d == null || !d.exists()) { finish(); return; }
             post = Models.Post.fromDoc(d);
             commentsAdapter.postAuthorId = post.authorId;
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
-            postAdapter.setPosts(Collections.singletonList(post));
+            if (!headerRendered[0]) {
+                headerRendered[0] = true;
+                postAdapter.setPosts(Collections.singletonList(post));
+            }
             int likes = FastCache.getReactionTotal(postId, post.likes);
             whoReactedChip.setText(likes > 0
                     ? (likes + (likes == 1 ? " reaction · See all" : " reactions · See all"))
@@ -320,12 +342,12 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
             updateCommentPager();
             if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentSwipe!=null)commentSwipe.setRefreshing(false);
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-
         });
     }
 
@@ -340,8 +362,10 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     protected void onStop() {
         super.onStop();
         FastCache.removeReactionObserver(reactionObserver);
-        if (postReg != null) postReg.remove();
-        if (commentsHandle != null) commentsHandle.remove();
+        if (isFinishing()) {
+            if (postReg != null) postReg.remove();
+            if (commentsHandle != null) commentsHandle.remove();
+        }
     }
 
     private void send() {

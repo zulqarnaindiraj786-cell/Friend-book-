@@ -20,7 +20,7 @@ public final class D1Reactions {
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
  public static String mine(String collection,String id){JSONObject data=cached(collection,id);return data==null?null:mine(data);}
- public static void invalidate(String collection,String id){scope();CACHE.remove(D1Client.key(collection,id));FAILED.remove(D1Client.key(collection,id));java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(D1Client.key(collection,id));Models.Post post=reference==null?null:reference.get();if(post!=null)fetch(null,collection,id,()->hydrate(post));}
+ public static void invalidate(String collection,String id){scope();FAILED.remove(D1Client.key(collection,id));java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(D1Client.key(collection,id));Models.Post post=reference==null?null:reference.get();if(post!=null)hydrate(post);}
  private static void remember(Context context,String collection,String id,JSONObject data){
   CACHE.put(D1Client.key(collection,id),data);List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
@@ -44,24 +44,21 @@ public final class D1Reactions {
   if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){
-  scope();String key=D1Client.key(collection,id);FAILED.remove(key);
-  if(LOADING.contains(key))LOADING.remove(key);
+  scope();String key=D1Client.key(collection,id);FAILED.remove(key);LOADING.remove(key);
+  if(WRITING.contains(key))return;
   if(CACHE.get(key)==null){remember(context.getApplicationContext(),collection,id,D1Client.object("types",new JSONArray()));}
-  fetch(context.getApplicationContext(),collection,id,()->{
-   if(WRITING.contains(key))return;
-   JSONObject previous=CACHE.get(key);String old=mine(previous);if(onlyAdd&&old!=null){render.run();return;}
-   String next=Objects.equals(old,requested)?null:requested;String uid=Fb.uid();WRITING.add(key);
-   try{JSONObject optimistic=new JSONObject(previous.toString());JSONArray adjusted=new JSONArray();Set<String> all=new LinkedHashSet<>(Arrays.asList(Reactions.TYPES));
-    for(String type:all){int count=0;JSONArray rows=previous.optJSONArray("types");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null&&type.equals(row.optString("type")))count=row.optInt("count");}
-     if(type.equals(old))count--;if(type.equals(next))count++;if(count>0)adjusted.put(D1Client.object("type",type,"count",count,"mine",type.equals(next)?1:0));}
-    optimistic.put("types",adjusted);remember(context.getApplicationContext(),collection,id,optimistic);render.run();
-   }catch(JSONException ignored){}
-   D1Client.request(collection,id,"reactions","PUT",D1Client.object("type",next),null).addOnSuccessListener(data->{
-    if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
-    String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
-    D1Client.changed(key);
-   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,previous);render.run();});
-  });
+  JSONObject previous=CACHE.get(key);String old=mine(previous);if(onlyAdd&&old!=null){render.run();return;}
+  String next=Objects.equals(old,requested)?null:requested;String uid=Fb.uid();WRITING.add(key);
+  try{JSONObject optimistic=new JSONObject(previous.toString());JSONArray adjusted=new JSONArray();Set<String> all=new LinkedHashSet<>(Arrays.asList(Reactions.TYPES));
+   for(String type:all){int count=0;JSONArray rows=previous.optJSONArray("types");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null&&type.equals(row.optString("type")))count=row.optInt("count");}
+    if(type.equals(old))count--;if(type.equals(next))count++;if(count>0)adjusted.put(D1Client.object("type",type,"count",count,"mine",type.equals(next)?1:0));}
+   optimistic.put("types",adjusted);remember(context.getApplicationContext(),collection,id,optimistic);render.run();
+  }catch(JSONException ignored){}
+  D1Client.request(collection,id,"reactions","PUT",D1Client.object("type",next),null).addOnSuccessListener(data->{
+   if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
+   String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
+   D1Client.changed(key);
+  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);});
  }
  static void historicalNotice(Activity activity,TextView note,LinearLayout filter,LinearLayout rows,int historical,boolean identified){
   note.setVisibility(historical>0?android.view.View.VISIBLE:android.view.View.GONE);

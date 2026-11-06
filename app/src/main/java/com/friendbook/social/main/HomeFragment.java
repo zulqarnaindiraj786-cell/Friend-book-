@@ -200,13 +200,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
         int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
         if (firstPos <= 1) {
-            // User is already near top -> seamlessly apply fresh ranked feed & ads immediately!
             applyFilterOnCachedFeed();
             adapter.refreshSponsoredAds();
-            if(android.os.SystemClock.elapsedRealtime()-lastFeedFetch>120_000L) restartPostsListener();
-            loadPymk();
         } else if (freshPill != null) {
-            // Preserve the reading position; no floating refresh banner.
             freshPill.setVisibility(View.GONE);
         }
     }
@@ -465,8 +461,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
         startFriendsListener();
-        if(!loadedPosts || !java.util.Objects.equals(feedAccount,Fb.uid())
-                || android.os.SystemClock.elapsedRealtime()-lastFeedFetch>120_000L) restartPostsListener();
+        if(!loadedPosts || !java.util.Objects.equals(feedAccount,Fb.uid())) restartPostsListener();
         startStoriesListener();
         startLivesListener();
         loadNotesUsers();

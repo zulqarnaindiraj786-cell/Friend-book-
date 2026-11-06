@@ -41,10 +41,13 @@ public class NotificationsFragment extends Fragment {
     private NotifAdapter adapter;
     private ListenerRegistration reg;
     private com.friendbook.social.core.CursorPager pager;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private TextView moreButton;
     private TextView empty;
     private TextView chipAll, chipUnread;
     private boolean unreadOnly;
+    private boolean initialLoaded;
+    private String loadedActor;
     private final List<Models.Notif> data = new ArrayList<>();
 
     @Nullable
@@ -95,7 +98,14 @@ public class NotificationsFragment extends Fragment {
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
         com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(a);
+        swipe.setColorSchemeColors(Ui.BLUE);
+        swipe.addView(rv);
+        swipe.setOnRefreshListener(() -> {
+            initialLoaded = false;
+            startPages();
+        });
+        root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(moreButton);
 
         // ⚡ 0.0ms Instant Cached Notifications Hydration!
@@ -146,8 +156,10 @@ public class NotificationsFragment extends Fragment {
         super.onHiddenChanged(hidden);
         if (!hidden) {
             MainActivity.clearNotificationsBadgeNow();
-            if(adapter!=null)startPages();
-        } else if(pager!=null){pager.close();pager=null;}
+            if (adapter != null && (!initialLoaded || !java.util.Objects.equals(loadedActor, Fb.uid()))) {
+                startPages();
+            }
+        }
     }
 
     @Override
@@ -158,15 +170,20 @@ public class NotificationsFragment extends Fragment {
         }
         String me = Fb.uid();
         if (me == null || isHidden()) return;
-        startPages();
+        if (!initialLoaded || !java.util.Objects.equals(loadedActor, me)) {
+            startPages();
+        }
     }
     private void startPages() {
         if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
+        loadedActor = me;
+        initialLoaded = true;
         com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
+            if(swipe!=null)swipe.setRefreshing(false);
             data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
             Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
             if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
@@ -176,7 +193,9 @@ public class NotificationsFragment extends Fragment {
     }
 
     private void setUnreadOnly(boolean on) {
+        if (unreadOnly == on && initialLoaded) return;
         unreadOnly = on;
+        initialLoaded = false;
         android.app.Activity a = getActivity();
         if (a == null) return;
         chipAll.setBackground(Ui.round(a, on ? Ui.inputBg(a) : Ui.BLUE, 10));
