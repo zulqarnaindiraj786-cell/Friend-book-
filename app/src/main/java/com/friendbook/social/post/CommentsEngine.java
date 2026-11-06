@@ -246,7 +246,7 @@ public class CommentsEngine {
         Map<String,Object> patch=new HashMap<>();
         patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));
         patch.put("commentsStorageVersion",2);
-        batch.set(parentRef,patch,SetOptions.merge());
+        batch.update(parentRef,patch);
         batch.commit().addOnSuccessListener(v -> {
             if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
             if(cb!=null) cb.onComplete(true,null);
