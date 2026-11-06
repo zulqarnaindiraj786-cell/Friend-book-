@@ -2320,6 +2320,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             destroyCurrentAd();
 
             final Context ctx = itemView.getContext();
+            // Always allocate a brand-new unseen ad creative for every bind — NEVER repeat an old ad!
+            com.friendbook.social.core.AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal);
             refreshAdSocialUi(ctx);
             com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
                 if (mySeq == requestSeq) refreshAdSocialUi(ctx);
@@ -2505,10 +2507,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
 
             nativeAdView.setNativeAd(ad);
+            // Guarantee every Feed Ad displays its unique unseen company, logo, headline & banner (never a repeated AdMob campaign!)
+            populateShowcaseFallback(c, boundSlotOrdinal);
         }
 
         void onRecycled() {
             requestSeq++;
+            com.friendbook.social.core.AdsConfig.evictSlotAd(boundSlotOrdinal);
             destroyCurrentAd();
         }
     }

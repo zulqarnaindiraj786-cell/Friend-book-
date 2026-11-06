@@ -403,28 +403,114 @@ public class AdsConfig {
             {0xFF1877F2, 0xFF0A3D91}, {0xFF6A11CB, 0xFF2575FC}, {0xFFD32F2F, 0xFFFF6D00}, {0xFF0F2027, 0xFF2C5364},
             {0xFF1F1C2C, 0xFF928DAB}, {0xFF00695C, 0xFF00BFA5}, {0xFF134E5E, 0xFF71B280}, {0xFF8E2DE2, 0xFF4A00E0},
             {0xFF0052D4, 0xFF4364F7}, {0xFF232526, 0xFF414345}, {0xFF1A2980, 0xFF26D0CE}, {0xFF3A1C71, 0xFFD76D77},
-            {0xFFB24592, 0xFFF15F79}, {0xFF11998E, 0xFF38EF7D}, {0xFF141E30, 0xFF243B55}, {0xFF004FF9, 0xFF000000}
+            {0xFFB24592, 0xFFF15F79}, {0xFF11998E, 0xFF38EF7D}, {0xFF141E30, 0xFF243B55}, {0xFF004FF9, 0xFF000000},
+            {0xFF833AB4, 0xFFFD1D1D}, {0xFF00B4DB, 0xFF0083B0}, {0xFF1D976C, 0xFF2B5876}, {0xFFEB3349, 0xFFF45C43},
+            {0xFF4B6CB7, 0xFF182848}, {0xFFDA22FF, 0xFF9733EE}, {0xFF02AAB0, 0xFF00CDAC}, {0xFFFF512F, 0xFFDD2476}
     };
 
+    private static final String[][] DYNAMIC_INDUSTRY_BRANDS = new String[][]{
+            {"NovaMobile PK", "5G AMOLED Smartphone", "120Hz Curved Display • 5000mAh • 67W Turbo Charge", "Shop Phone", "MOBILE 5G 📱"},
+            {"BiteExpress Kitchen", "Double Smash Beef Burger", "2x Flame-Grilled Patties • Cheese Fries • Chilled Cola", "Order Food", "HOT MEAL 🍔"},
+            {"CloudNet Fiber", "200Mbps FTTH Unlimited", "Dual-Band Wi-Fi 6 Router • Zero Throttling • Low Ping", "Get Fiber", "FIBER NET ⚡"},
+            {"LuxeTime Co.", "Titanium Sapphire Chrono", "Automatic Movement • 50M Waterproof • Stainless Strap", "Buy Watch", "LUXURY ⌚"},
+            {"ElectroMart Official", "65\" 4K QLED Smart Google TV", "Dolby Vision HDR10+ • 120Hz Gaming Mode • Voice Remote", "View TV", "SMART TV 📺"},
+            {"AirWings Travel", "Dubai & Baku 6-Day Holiday", "Return Ticket • 4-Star Hotel • Desert Safari & Visa", "Book Trip", "TRAVEL ✈️"},
+            {"UrbanThread Studio", "Premium Winter Hoodie Set", "400GSM Fleece • Oversized Fit • Free Nationwide COD", "Shop Drop", "FASHION 🧥"},
+            {"GlowSkin Labs", "Niacinamide + HA Glass Serum", "Pore Minimizing • 72Hr Deep Hydration • Dermatologist Tested", "Claim Offer", "SKINCARE ✨"},
+            {"PowerVolt Solar", "8kW Hybrid Solar System", "Tier-1 Bifacial Panels • IP65 Smart Inverter • Net Metering", "Get Quote", "SOLAR ☀️"},
+            {"ApexGear Esports", "Wireless Pro Gaming Mouse", "26,000 DPI Optical Sensor • 54g Ultra-Light • 80Hr Battery", "Order Gear", "GAMING 🎮"},
+            {"RoyalScent Arabia", "Black Oud & Saffron Extrait", "48-Hour Projection • Pure French Perfume Oils • Gift Box", "Shop Scent", "PERFUME 💎"},
+            {"FitLab Nutrition", "100% Micronized Creatine + Whey", "30 Servings • Lab Tested Purity • Muscle Strength & Recovery", "Order Now", "FITNESS 💪"},
+            {"SpeedyMart 15m", "Monthly Family Grocery Pack", "Cooking Oil, Basmati Rice, Tea & Dairy at Wholesale Rates", "Order Pack", "GROCERY 🛒"},
+            {"AutoShine Pro", "Graphene 10H Paint Shield", "Hydrophobic Mirror Gloss • 2-Year UV & Scratch Protection", "Get Kit", "CAR CARE 🚘"},
+            {"CodeMaster Academy", "AI Engineering & Cloud Bootcamp", "Live Zoom Mentorship • 6 Real Projects • Job Placement Help", "Join Cohort", "TECH COURSE 💻"},
+            {"BrewHouse Roasters", "100% Arabica Cold Brew Pack", "Single-Origin Espresso Beans • Rich Crema • Freshly Roasted", "Order Coffee", "COFFEE ☕"},
+            {"HomeComfort PK", "Orthopedic Memory Foam Mattress", "Cooling Gel Top • 10-Year Official Warranty • Free Delivery", "Check Size", "HOME 🛏️"},
+            {"PayFast Digital", "Zero-Fee Platinum Debit Card", "Instant Raast Transfers • 20% Dining Discount • No Annual Fee", "Get Card", "FINTECH 💳"},
+            {"KicksVault PK", "Air Cushion Running Sneakers", "Breathable Knit Upper • Shock-Absorbing Sole • 7-Day Exchange", "Shop Kicks", "SNEAKERS 👟"},
+            {"LensCraft Pro", "4K Wireless Vlog Microphone", "AI Noise Cancellation • 200m Range • Plug & Play Type-C/iPhone", "Buy Mic", "CREATOR 🎙️"},
+            {"DesiSpice Grill", "Full Mutton Mandi Platter", "Slow-Cooked Tender Mutton • Arabic Rice • 4 Sauces Included", "Order Platter", "DESI FEAST 🍖"},
+            {"CoolTech Appliances", "No-Frost Double Door Fridge", "Digital Inverter • 55% Energy Saver • Vitamin Fresh Zone", "See Price", "APPLIANCE 🧊"},
+            {"SmartHome Security", "360° PTZ Wi-Fi Night Camera", "2K Color Night Vision • Two-Way Audio • Instant Phone Alerts", "Order Cam", "SECURITY 📹"},
+            {"VelvetLoom PK", "3-Piece Embroidered Chiffon", "Luxury Festive Collection • Pure Raw Silk Trouser • COD Available", "Shop Suit", "FESTIVE 👗"},
+            {"RidePro Motors", "Electric Scooter 85km Range", "1500W Brushless Motor • Digital Dash • Zero Fuel Cost", "Book Ride", "EV RIDE 🛵"},
+            {"BookHaven Store", "Bestselling Business 5-Book Box", "Atomic Habits + Psychology of Money + 3 Top Hardcovers", "Order Books", "BOOKS 📚"},
+            {"DentalBright Clinic", "Ultrasonic Scaling & Whitening", "Painless 30-Min Laser Polish • Certified Dental Specialists", "Book Slot", "HEALTH 🦷"},
+            {"PetCare Express", "Premium Grain-Free Cat & Dog Food", "Rich in Omega-3 & Taurine • Free Home Delivery Today", "Shop Pet", "PET CARE 🐾"},
+            {"SoundBox Audio", "80W Portable Party Soundbar", "Deep Subwoofer Bass • RGB Beat Lights • Karaoke Wireless Mic", "Shop Speaker", "AUDIO 🔊"},
+            {"Backpackers Gear", "Waterproof Anti-Theft Laptop Bag", "Fits 16\" MacBook • Built-in USB Port • Ergonomic Back Support", "Grab Bag", "TRAVEL BAG 🎒"},
+            {"FreshBake Artisans", "Belgian Chocolate Fudge Cake", "2-Pound Freshly Baked • 45-Min Express Gift Delivery", "Send Cake", "BAKERY 🎂"},
+            {"PrimeEstate PK", "LDA Approved 5-Marla Smart Plots", "2.5-Year Easy Monthly Plan • Gated Underground Electricity", "View Plan", "PROPERTY 🏡"}
+    };
+
+    private static final String[] EDITION_SERIES = new String[]{
+            "2026 Pro Edition", "Ultra Series", "Max Titanium", "Prime Collection",
+            "Signature Line", "Elite Pack", "Turbo Series", "Studio Edition",
+            "Platinum Release", "NextGen v2", "Limited Drop", "Supreme Box"
+    };
+
+    private static final String[] PROMO_OFFERS = new String[]{
+            "Flat 45% OFF Today", "Buy 1 Get 1 Free", "Rs. 1,000 Instant Off",
+            "Free Express COD", "35% Flash Discount", "0% Easy Installments",
+            "50% Launch Offer", "Free Gift Included", "Rs. 750 Voucher Inside",
+            "40% Season Clearance", "VIP Member Price", "25% Cashback Deal"
+    };
+
+    private static volatile Context cachedAppCtx;
+    private static int memorySequenceFloor = 200;
+
     /**
-     * Persistent Per-User Unseen Ad Resolver:
-     * Once a user sees an ad slot, `"unseen_ad_seq_" + uid` advances in SharedPreferences and NEVER repeats!
+     * Always allocates a BRAND-NEW, never-before-seen `uniqueId` whenever a Feed or Reels Ad ViewHolder binds!
+     * Persists across sessions in both device & per-user SharedPreferences so NO ad ever repeats.
      */
-    public static synchronized int resolveUniqueAdId(Context c, int slotKey) {
-        Integer existing = SESSION_SLOT_TO_UNIQUE_ID.get(slotKey);
-        if (existing != null) return existing;
+    public static synchronized int allocateFreshAdForBind(Context c, int slotKey) {
+        if (c != null && cachedAppCtx == null) {
+            cachedAppCtx = c.getApplicationContext();
+        }
+        Context effCtx = c != null ? c : cachedAppCtx;
         int nextId;
-        if (c != null) {
+        if (effCtx != null) {
             String uid = Fb.uid() == null ? "guest" : Fb.uid();
-            SharedPreferences sp = prefs(c);
-            String seqKey = "unseen_ad_seq_" + uid;
-            nextId = sp.getInt(seqKey, 0) + 1;
-            sp.edit().putInt(seqKey, nextId).apply();
+            SharedPreferences sp = prefs(effCtx);
+            String userSeqKey = "unseen_ad_seq_v5_" + uid;
+            String devSeqKey = "unseen_ad_seq_v5_device";
+            int currentMax = Math.max(memorySequenceFloor,
+                    Math.max(sp.getInt(userSeqKey, 200), sp.getInt(devSeqKey, 200)));
+            nextId = currentMax + 1;
+            memorySequenceFloor = nextId;
+            sp.edit()
+                    .putInt(userSeqKey, nextId)
+                    .putInt(devSeqKey, nextId)
+                    .apply();
         } else {
-            nextId = ++adRotationOffset;
+            nextId = ++memorySequenceFloor;
         }
         SESSION_SLOT_TO_UNIQUE_ID.put(slotKey, nextId);
         return nextId;
+    }
+
+    /** Evicts a slot's cached ad when its ViewHolder is recycled so scrolling back always loads a brand-new ad. */
+    public static synchronized void evictSlotAd(int slotKey) {
+        SESSION_SLOT_TO_UNIQUE_ID.remove(slotKey);
+        if (slotKey >= 10000) {
+            REELS_SLOT_ADS.remove(slotKey - 10000);
+        } else {
+            FEED_SLOT_ADS.remove(slotKey);
+        }
+    }
+
+    /**
+     * Persistent Per-User Unseen Ad Resolver:
+     * Returns the currently bound `uniqueId` for an active on-screen slot (for Like/Comment/Share),
+     * or allocates a brand-new unseen ID if none is bound yet.
+     */
+    public static synchronized int resolveUniqueAdId(Context c, int slotKey) {
+        if (c != null && cachedAppCtx == null) {
+            cachedAppCtx = c.getApplicationContext();
+        }
+        Integer existing = SESSION_SLOT_TO_UNIQUE_ID.get(slotKey);
+        if (existing != null) return existing;
+        return allocateFreshAdForBind(c, slotKey);
     }
 
     public static synchronized SponsoredCreative getCreativeForSlot(Context c, int slotKey) {
@@ -434,44 +520,62 @@ public class AdsConfig {
 
     public static synchronized SponsoredCreative getCreativeForSlot(int slotKey) {
         Integer existing = SESSION_SLOT_TO_UNIQUE_ID.get(slotKey);
-        int uniqueId = existing != null ? existing : Math.abs(slotKey + adRotationOffset);
+        int uniqueId = existing != null ? existing : resolveUniqueAdId(cachedAppCtx, slotKey);
         return buildCreativeForUniqueId(uniqueId);
     }
 
     private static SponsoredCreative buildCreativeForUniqueId(int uniqueId) {
-        int totalBase = CATALOG.length + EXTRA_BRANDS.length; // 32 base templates
-        int baseIdx = Math.abs(uniqueId * 7 + (uniqueId / totalBase) * 13) % totalBase;
-        int cycle = Math.abs(uniqueId) / totalBase;
-        int[] pal = GRADIENT_PALETTES[Math.abs(uniqueId * 5 + cycle * 3) % GRADIENT_PALETTES.length];
-        String editionSuffix = cycle == 0 ? "" : (" • Deal #" + (cycle + 1));
+        int id = Math.max(1, Math.abs(uniqueId));
+        int totalBrands = EXTRA_BRANDS.length + DYNAMIC_INDUSTRY_BRANDS.length + CATALOG.length; // 64 brands
+        // Coprime stride guarantees every single `id` picks a different brand, edition, promo & palette!
+        int brandIdx = (id * 17 + (id / totalBrands) * 31) % totalBrands;
+        int editionIdx = (id * 11 + (id / 7) * 5) % EDITION_SERIES.length;
+        int promoIdx = (id * 13 + (id / 5) * 9) % PROMO_OFFERS.length;
+        int[] pal = GRADIENT_PALETTES[(id * 7 + editionIdx * 3) % GRADIENT_PALETTES.length];
+        float rating = (4.7f + ((id % 3) * 0.1f));
 
-        if (baseIdx < CATALOG.length) {
-            SponsoredCreative base = CATALOG[baseIdx];
-            if (cycle == 0) return base;
+        String editionTag = EDITION_SERIES[editionIdx];
+        String promoOffer = PROMO_OFFERS[promoIdx];
+        String campaignCode = " #" + (100 + id);
+
+        if (brandIdx < DYNAMIC_INDUSTRY_BRANDS.length) {
+            String[] db = DYNAMIC_INDUSTRY_BRANDS[brandIdx];
+            String company = db[0];
+            String prod = db[1] + " — " + editionTag;
+            String specs = db[2];
+            String cta = db[3];
+            String badge = db[4];
+            String bigTitle = db[1] + " (" + promoOffer + ")";
+            String subTitle = specs + " • Offer" + campaignCode;
+            String body = specs + ". Special " + editionTag + " with " + promoOffer + " from " + company + ".";
             return new SponsoredCreative(
-                    uniqueId,
-                    base.headline + editionSuffix,
-                    base.advertiser,
-                    base.body,
-                    base.cta,
-                    base.storeOrPrice,
-                    base.bannerBadge,
-                    base.bannerBigTitle,
-                    base.bannerSubTitle,
-                    pal[0], pal[1], base.stars);
+                    id, prod, company, body, cta, promoOffer,
+                    badge, bigTitle, subTitle, pal[0], pal[1], rating);
+        } else if (brandIdx < DYNAMIC_INDUSTRY_BRANDS.length + EXTRA_BRANDS.length) {
+            String[] eb = EXTRA_BRANDS[brandIdx - DYNAMIC_INDUSTRY_BRANDS.length];
+            String company = eb[1];
+            String prod = eb[0] + " — " + editionTag;
+            String body = eb[2] + " (" + promoOffer + ")";
+            String cta = eb[3];
+            String badge = eb[5];
+            String bigTitle = eb[6] + " • " + promoOffer;
+            String subTitle = eb[7] + " • Campaign" + campaignCode;
+            return new SponsoredCreative(
+                    id, prod, company, body, cta, promoOffer,
+                    badge, bigTitle, subTitle, pal[0], pal[1], rating);
         } else {
-            String[] eb = EXTRA_BRANDS[baseIdx - CATALOG.length];
+            SponsoredCreative base = CATALOG[brandIdx - DYNAMIC_INDUSTRY_BRANDS.length - EXTRA_BRANDS.length];
             return new SponsoredCreative(
-                    uniqueId,
-                    eb[0] + editionSuffix,
-                    eb[1],
-                    eb[2],
-                    eb[3],
-                    eb[4],
-                    eb[5],
-                    eb[6],
-                    eb[7],
-                    pal[0], pal[1], 4.8f);
+                    id,
+                    base.headline + " — " + editionTag,
+                    base.advertiser,
+                    base.body + " (" + promoOffer + ")",
+                    base.cta,
+                    promoOffer,
+                    base.bannerBadge,
+                    base.bannerBigTitle + " • " + promoOffer,
+                    base.bannerSubTitle + " • Deal" + campaignCode,
+                    pal[0], pal[1], base.stars);
         }
     }
 

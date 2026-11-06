@@ -229,8 +229,17 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 // Tapping Home while already at top triggers a fresh algorithm refresh!
                 refreshWithFriendbookAlgorithm(true);
             } else {
+                if (adapter != null) adapter.refreshSponsoredAds();
                 rv.scrollToPosition(0);
             }
+        }
+    }
+
+    @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (!hidden && adapter != null) {
+            adapter.refreshSponsoredAds();
         }
     }
 

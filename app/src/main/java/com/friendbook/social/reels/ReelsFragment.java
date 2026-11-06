@@ -1154,7 +1154,8 @@ public class ReelsFragment extends Fragment {
                 statusView.setText("");
 
                 final Context ctx = itemView.getContext();
-                AdsConfig.resolveUniqueAdId(ctx, slotOrdinal + 10000);
+                // Always allocate a brand-new unseen ad creative for every Reel Ad bind — NEVER repeat an old ad!
+                AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal + 10000);
                 refreshReelAdSocial(ctx);
                 AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal + 10000, () -> {
                     if (mySeq == requestSeq) refreshReelAdSocial(ctx);
@@ -1343,10 +1344,13 @@ public class ReelsFragment extends Fragment {
                 }
 
                 nativeAdView.setNativeAd(ad);
+                // Guarantee every Reel Ad displays its unique unseen company, logo, headline & hero banner (never a repeated AdMob campaign!)
+                populateReelShowcaseFallback(boundSlotOrdinal);
             }
 
             void onRecycled() {
                 requestSeq++;
+                AdsConfig.evictSlotAd(boundSlotOrdinal + 10000);
                 destroyCurrentAd();
             }
         }
