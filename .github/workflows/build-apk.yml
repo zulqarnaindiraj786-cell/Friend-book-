@@ -160,21 +160,27 @@ jobs:
 
       - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-playstore-aab
           path: friendbook-playstore.aab
+          retention-days: 1
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-release-apk
           path: friendbook.apk
+          retention-days: 1
 
       - name: Upload R8 Deobfuscation Mapping
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-release-mapping
           path: friendbook-mapping.txt
+          retention-days: 1
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
