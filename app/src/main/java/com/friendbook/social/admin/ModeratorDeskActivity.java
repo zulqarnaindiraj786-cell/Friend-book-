@@ -286,7 +286,7 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(suspendBtn, 10, 6, 10, 6);
         LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
         sblp.rightMargin = Ui.dp(this, 6);
-        suspendBtn.setOnClickListener(v -> Admin.showSuspendUserDialog(this, u, this::renderUsers));
+        suspendBtn.setOnClickListener(v -> Admin.showSuspendUserDialog(this, u, this::render));
         row.addView(suspendBtn, sblp);
 
         TextView banBtn = u.banned
