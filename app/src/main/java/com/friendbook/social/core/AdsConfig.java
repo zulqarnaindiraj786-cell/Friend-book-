@@ -599,16 +599,22 @@ public class AdsConfig {
     public static synchronized void warmUpPools(final Context context) {
         if (context == null || !nativeAdsEnabled()) return;
         final Context appCtx = context.getApplicationContext();
-        ConsentManager.ensureInitialized(appCtx);
-        if (FEED_POOL.size() < POOL_TARGET_SIZE && feedInFlight <= 0) {
-            feedInFlight = 5;
-            preloadOneFeedAd(appCtx);
-        }
-        if (REELS_POOL.size() < POOL_TARGET_SIZE && reelsInFlight <= 0) {
-            reelsInFlight = 5;
-            preloadOneReelsAd(appCtx);
-        }
+        ConsentManager.runWhenInitialized(appCtx, () -> {
+            synchronized (AdsConfig.class) {
+                while (FEED_POOL.size() + feedInFlight < 3) {
+                    feedInFlight++;
+                    preloadOneFeedAd(appCtx);
+                }
+                while (REELS_POOL.size() + reelsInFlight < 3) {
+                    reelsInFlight++;
+                    preloadOneReelsAd(appCtx);
+                }
+            }
+        });
     }
+
+    private static int feedFallbackRotationIdx = 0;
+    private static int reelsFallbackRotationIdx = 0;
 
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
         resolveUniqueAdId(context, slotOrdinal);
@@ -618,6 +624,15 @@ public class AdsConfig {
             return existing;
         }
         com.google.android.gms.ads.nativead.NativeAd polled = pollDistinctFromPool(FEED_POOL);
+        if (polled == null) {
+            polled = pollDistinctFromPool(REELS_POOL);
+        }
+        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
+            polled = LOADED_FEED_ADS.get((feedFallbackRotationIdx++) % LOADED_FEED_ADS.size());
+        }
+        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
+            polled = LOADED_REELS_ADS.get((feedFallbackRotationIdx++) % LOADED_REELS_ADS.size());
+        }
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
             syncRealNativeAdToSlot(slotOrdinal, polled);
@@ -642,6 +657,15 @@ public class AdsConfig {
             return existing;
         }
         com.google.android.gms.ads.nativead.NativeAd polled = pollDistinctFromPool(REELS_POOL);
+        if (polled == null) {
+            polled = pollDistinctFromPool(FEED_POOL);
+        }
+        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
+            polled = LOADED_REELS_ADS.get((reelsFallbackRotationIdx++) % LOADED_REELS_ADS.size());
+        }
+        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
+            polled = LOADED_FEED_ADS.get((reelsFallbackRotationIdx++) % LOADED_FEED_ADS.size());
+        }
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
             syncRealNativeAdToSlot(slotOrdinal + 10000, polled);
@@ -722,24 +746,11 @@ public class AdsConfig {
     }
 
     /**
-     * Builds a High-eCPM Production AdRequest targeting Tier-1 Luxury, Automotive, Real Estate,
-     * Private Wealth Banking, First-Class Aviation, Swiss Watches & Flagship 5G Video campaigns.
+     * Builds a clean, unrestricted Production AdRequest so 100% of Google AdMob's open-auction
+     * video & native demand can fill every Feed and Reels slot without keyword/URL No-Fill filtering.
      */
     public static com.google.android.gms.ads.AdRequest buildHighValueAdRequest(boolean isReels) {
-        com.google.android.gms.ads.AdRequest.Builder b = new com.google.android.gms.ads.AdRequest.Builder();
-        try {
-            b.addKeyword("luxury automotive SUV supercar");
-            b.addKeyword("private banking wealth management platinum card");
-            b.addKeyword("luxury real estate penthouse villa dubai");
-            b.addKeyword("first class airlines business class travel");
-            b.addKeyword("swiss luxury watches diamond jewelry");
-            b.addKeyword("flagship 5g titanium smartphone enterprise cloud AI");
-            if (isReels) {
-                b.addKeyword("vertical 4k video commercial reel");
-            }
-            b.setContentUrl("https://www.bloomberg.com/wealth");
-        } catch (Throwable ignored) { }
-        return b.build();
+        return new com.google.android.gms.ads.AdRequest.Builder().build();
     }
 
     private static void preloadOneFeedAd(final Context appCtx) {
@@ -749,8 +760,6 @@ public class AdsConfig {
             com.google.android.gms.ads.VideoOptions videoOptions =
                     new com.google.android.gms.ads.VideoOptions.Builder()
                             .setStartMuted(true)
-                            .setCustomControlsRequested(true)
-                            .setClickToExpandRequested(true)
                             .build();
             com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                     new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
@@ -774,6 +783,7 @@ public class AdsConfig {
                                         FEED_POOL.offerLast(nativeAd);
                                     }
                                 }
+                                notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
                                 @Override
@@ -783,18 +793,17 @@ public class AdsConfig {
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
                                     synchronized (AdsConfig.class) {
-                                        feedInFlight = 0;
+                                        feedInFlight = Math.max(0, feedInFlight - 1);
                                     }
                                     onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            // Request a batch of 5 distinct real ads from AdMob in a single multi-ad auction!
-            adLoader.loadAds(buildHighValueAdRequest(false), 5);
+            adLoader.loadAd(buildHighValueAdRequest(false));
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
-                feedInFlight = 0;
+                feedInFlight = Math.max(0, feedInFlight - 1);
             }
         }
     }
@@ -807,8 +816,6 @@ public class AdsConfig {
             com.google.android.gms.ads.VideoOptions videoOptions =
                     new com.google.android.gms.ads.VideoOptions.Builder()
                             .setStartMuted(startMuted)
-                            .setCustomControlsRequested(true)
-                            .setClickToExpandRequested(true)
                             .build();
             com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                     new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
@@ -832,6 +839,7 @@ public class AdsConfig {
                                         REELS_POOL.offerLast(nativeAd);
                                     }
                                 }
+                                notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
                                 @Override
@@ -841,18 +849,17 @@ public class AdsConfig {
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
                                     synchronized (AdsConfig.class) {
-                                        reelsInFlight = 0;
+                                        reelsInFlight = Math.max(0, reelsInFlight - 1);
                                     }
                                     onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            // Request a batch of 5 distinct real video/native ads from AdMob in a single multi-ad auction!
-            adLoader.loadAds(buildHighValueAdRequest(true), 5);
+            adLoader.loadAd(buildHighValueAdRequest(true));
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
-                reelsInFlight = 0;
+                reelsInFlight = Math.max(0, reelsInFlight - 1);
             }
         }
     }

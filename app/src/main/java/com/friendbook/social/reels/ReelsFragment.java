@@ -758,7 +758,7 @@ public class ReelsFragment extends Fragment {
         }
 
         private boolean adsActive() {
-            return AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0);
+            return AdsConfig.nativeAdsEnabled();
         }
 
         private int adCount() {
@@ -1185,6 +1185,31 @@ public class ReelsFragment extends Fragment {
 
                 // Request a 100% REAL AdMob Video/Native Ad (ZERO fake/dummy fallback banners!)
                 nativeAdView.setVisibility(View.GONE);
+                statusView.setText("Loading Sponsored Video…");
+                loadingBox.setVisibility(View.VISIBLE);
+                ConsentManager.runWhenInitialized(ctx, () -> {
+                    if (mySeq != requestSeq) return;
+                    com.google.android.gms.ads.nativead.NativeAd readyAfterInit =
+                            AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
+                    if (readyAfterInit != null) {
+                        currentNativeAd = readyAfterInit;
+                        loadingBox.setVisibility(View.GONE);
+                        nativeAdView.setVisibility(View.VISIBLE);
+                        populateReelsNativeAd(readyAfterInit, ctx);
+                        refreshReelAdSocial(ctx);
+                        nativeAdView.requestLayout();
+                        return;
+                    }
+                    requestRealReelsAdFromUnit(ctx, unitId, slotOrdinal, mySeq, true);
+                });
+            }
+
+            private void requestRealReelsAdFromUnit(
+                    final Context ctx,
+                    final String unitId,
+                    final int slotOrdinal,
+                    final int mySeq,
+                    final boolean allowBackupUnitRetry) {
                 AdsConfig.recordAdRequest(ctx);
                 android.util.Log.i(AdsConfig.LOG_TAG,
                         "[ReelsNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -1194,8 +1219,6 @@ public class ReelsFragment extends Fragment {
                     com.google.android.gms.ads.VideoOptions videoOptions =
                             new com.google.android.gms.ads.VideoOptions.Builder()
                                     .setStartMuted(startMuted)
-                                    .setCustomControlsRequested(true)
-                                    .setClickToExpandRequested(true)
                                     .build();
                     com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
                             new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
@@ -1269,6 +1292,14 @@ public class ReelsFragment extends Fragment {
                                                     populateReelsNativeAd(fallback, ctx);
                                                     refreshReelAdSocial(ctx);
                                                     nativeAdView.requestLayout();
+                                                } else if (allowBackupUnitRetry) {
+                                                    String altUnit = AdsConfig.REELS_NATIVE_ID.equals(unitId)
+                                                            ? AdsConfig.FEED_NATIVE_ID
+                                                            : AdsConfig.REELS_NATIVE_ID;
+                                                    requestRealReelsAdFromUnit(ctx, altUnit, slotOrdinal, mySeq, false);
+                                                } else {
+                                                    statusView.setText("Ad unavailable right now (Code "
+                                                            + adError.getCode() + "). Swipe for next video.");
                                                 }
                                             }
                                         }
@@ -1276,7 +1307,7 @@ public class ReelsFragment extends Fragment {
                                     .withNativeAdOptions(adOptions)
                                     .build();
 
-                    adLoader.loadAds(AdsConfig.buildHighValueAdRequest(true), 3);
+                    adLoader.loadAd(AdsConfig.buildHighValueAdRequest(true));
                 } catch (Throwable t) {
                     android.util.Log.e(AdsConfig.LOG_TAG,
                             "[ReelsNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);

@@ -20,6 +20,10 @@ public final class ConsentManager {
 
     private static final AtomicBoolean mobileAdsInitStarted = new AtomicBoolean(false);
     private static volatile boolean mobileAdsReady = false;
+    private static final android.os.Handler MAIN_HANDLER =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private static final java.util.List<Runnable> PENDING_READY_CALLBACKS =
+            new java.util.ArrayList<>();
 
     private ConsentManager() {}
 
@@ -27,6 +31,27 @@ public final class ConsentManager {
     public static void ensureInitialized(final Context context) {
         if (context == null) return;
         initializeMobileAdsOnce(context.getApplicationContext(), null);
+    }
+
+    /**
+     * Runs `action` on the main thread only AFTER `MobileAds.initialize(...)` has completed,
+     * preventing premature `AdLoader` requests from failing during cold start.
+     */
+    public static void runWhenInitialized(final Context context, final Runnable action) {
+        if (action == null) return;
+        if (mobileAdsReady) {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                action.run();
+            } else {
+                MAIN_HANDLER.post(action);
+            }
+            return;
+        }
+        if (context == null) {
+            MAIN_HANDLER.post(action);
+            return;
+        }
+        initializeMobileAdsOnce(context.getApplicationContext(), action);
     }
 
     /** Gathers UMP GDPR consent (where required) and ensures MobileAds SDK is initialized. */
@@ -104,22 +129,47 @@ public final class ConsentManager {
     }
 
     private static void initializeMobileAdsOnce(final Context appCtx, final Runnable onAdsReady) {
+        if (onAdsReady != null) {
+            synchronized (PENDING_READY_CALLBACKS) {
+                if (!mobileAdsReady) {
+                    PENDING_READY_CALLBACKS.add(onAdsReady);
+                } else {
+                    MAIN_HANDLER.post(onAdsReady);
+                }
+            }
+        }
         if (mobileAdsInitStarted.compareAndSet(false, true)) {
+            // Safety fallback: if Play Services takes > 2200ms to fire callback, unblock pending ad requests
+            MAIN_HANDLER.postDelayed(() -> markReadyAndFlush(appCtx), 2200L);
             try {
                 MobileAds.initialize(appCtx, initializationStatus -> {
-                    mobileAdsReady = true;
                     Log.i(AdsConfig.LOG_TAG, "MobileAds SDK initialized (App ID: "
                             + AdsConfig.APP_ID + ", Feed: " + AdsConfig.FEED_NATIVE_ID
                             + ", Reels: " + AdsConfig.REELS_NATIVE_ID + ")");
-                    AdsConfig.warmUpPools(appCtx);
-                    AdsConfig.notifyChange();
-                    if (onAdsReady != null) onAdsReady.run();
+                    markReadyAndFlush(appCtx);
                 });
             } catch (Throwable t) {
                 Log.e(AdsConfig.LOG_TAG, "MobileAds.initialize failed: " + t.getMessage(), t);
+                markReadyAndFlush(appCtx);
             }
-        } else if (mobileAdsReady && onAdsReady != null) {
-            onAdsReady.run();
         }
+    }
+
+    private static void markReadyAndFlush(final Context appCtx) {
+        mobileAdsReady = true;
+        java.util.List<Runnable> toRun;
+        synchronized (PENDING_READY_CALLBACKS) {
+            toRun = new java.util.ArrayList<>(PENDING_READY_CALLBACKS);
+            PENDING_READY_CALLBACKS.clear();
+        }
+        MAIN_HANDLER.post(() -> {
+            if (appCtx != null) {
+                AdsConfig.warmUpPools(appCtx);
+            }
+            for (Runnable r : toRun) {
+                try { r.run(); } catch (Throwable ignored) { }
+            }
+            AdsConfig.notifyChange();
+        });
     }
 }
