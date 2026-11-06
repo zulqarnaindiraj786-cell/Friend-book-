@@ -1863,7 +1863,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final TextView extraReactsTv, tagSummary, commentsSummary, likeEmojiTv, likeTxt, commentTxt, shareTxt;
         com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
         int requestSeq = 0;
-        int boundSlotOrdinal = 0;
+        int boundSlotOrdinal = -1;
+        boolean adRequestInFlight = false;
 
         AdVH(ViewGroup parent) {
             super(android.view.LayoutInflater.from(parent.getContext())
@@ -2327,11 +2328,33 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal) {
+            final Context ctx = itemView.getContext();
+            if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
+                expand(ctx);
+                populateNativeAdView(currentNativeAd, ctx);
+                refreshAdSocialUi(ctx);
+                return;
+            }
+            if (this.boundSlotOrdinal == slotOrdinal && adRequestInFlight) {
+                com.google.android.gms.ads.nativead.NativeAd nowReady =
+                        com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
+                if (nowReady != null) {
+                    ++requestSeq;
+                    adRequestInFlight = false;
+                    currentNativeAd = nowReady;
+                    expand(ctx);
+                    populateNativeAdView(nowReady, ctx);
+                    refreshAdSocialUi(ctx);
+                    nativeAdView.requestLayout();
+                }
+                return;
+            }
+
             final int mySeq = ++requestSeq;
             this.boundSlotOrdinal = slotOrdinal;
+            this.adRequestInFlight = false;
             destroyCurrentAd();
 
-            final Context ctx = itemView.getContext();
             // Always allocate a brand-new unseen ad creative for every bind — NEVER repeat an old ad!
             com.friendbook.social.core.AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal);
             refreshAdSocialUi(ctx);
@@ -2354,13 +2377,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
 
-            // Keep slot collapsed until a 100% REAL AdMob NativeAd arrives (ZERO fake/dummy ads!)
-            collapse();
+            // Keep card expanded while AdMob loads so RecyclerView never recycles a 0px view & cancels requestSeq!
+            adRequestInFlight = true;
+            expand(ctx);
+            adShowcaseBanner.setVisibility(View.GONE);
+            mediaView.setVisibility(View.GONE);
+            headlineView.setText("Sponsored • Loading Ad…");
+            advertiserView.setText("Google AdMob");
+            advertiserView.setVisibility(View.VISIBLE);
+            bodyView.setVisibility(View.GONE);
+            ctaButton.setVisibility(View.GONE);
+
             com.friendbook.social.core.ConsentManager.runWhenInitialized(ctx, () -> {
                 if (mySeq != requestSeq) return;
                 com.google.android.gms.ads.nativead.NativeAd readyAfterInit =
                         com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
                 if (readyAfterInit != null) {
+                    adRequestInFlight = false;
                     currentNativeAd = readyAfterInit;
                     expand(ctx);
                     populateNativeAdView(readyAfterInit, ctx);
@@ -2403,6 +2436,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                         com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
                                         return;
                                     }
+                                    adRequestInFlight = false;
                                     currentNativeAd = nativeAd;
                                     com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
                                     com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
@@ -2453,6 +2487,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                             com.google.android.gms.ads.nativead.NativeAd fallback =
                                                     com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
                                             if (fallback != null) {
+                                                adRequestInFlight = false;
                                                 currentNativeAd = fallback;
                                                 expand(ctx);
                                                 populateNativeAdView(fallback, ctx);
@@ -2464,6 +2499,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                         : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
                                                 requestRealFeedAdFromUnit(ctx, altUnit, slotOrdinal, mySeq, false);
                                             } else {
+                                                adRequestInFlight = false;
                                                 collapse();
                                             }
                                         }
@@ -2474,6 +2510,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
                 adLoader.loadAd(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false));
             } catch (Throwable t) {
+                adRequestInFlight = false;
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
                         "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                 com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
@@ -2554,6 +2591,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         void onRecycled() {
             requestSeq++;
+            adRequestInFlight = false;
             com.friendbook.social.core.AdsConfig.evictSlotAd(boundSlotOrdinal);
             destroyCurrentAd();
         }
