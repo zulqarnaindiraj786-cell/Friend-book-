@@ -1364,6 +1364,8 @@ public class ReelsFragment extends Fragment {
             final TextView likeIcon, likeCount, commentIcon, commentCount, shareIcon, shareCount;
             final TextView saveIcon, soundIcon, heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
             final ImageView avatar, tick;
+            final View filterTintView;
+            final TextView overlayTextPill, overlayStickerTv;
 
             MediaPlayer activeMp;
             Surface videoSurface;
@@ -1385,6 +1387,10 @@ public class ReelsFragment extends Fragment {
                         try {
                             int dur = activeMp.getDuration();
                             int pos = activeMp.getCurrentPosition();
+                            if (reel != null && reel.trimEndMs > reel.trimStartMs && pos >= reel.trimEndMs) {
+                                activeMp.seekTo(Math.max(0, reel.trimStartMs));
+                                pos = reel.trimStartMs;
+                            }
                             if (dur > 0) {
                                 scrubBar.setProgress((int) ((pos * 1000L) / dur));
                             }
@@ -1408,6 +1414,26 @@ public class ReelsFragment extends Fragment {
                 posterView = new ImageView(a);
                 posterView.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 root.addView(posterView, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+
+                // 2b. Creator Color Filter Tint + Sticker + Text Overlay Layers
+                filterTintView = new View(a);
+                filterTintView.setVisibility(View.GONE);
+                filterTintView.setClickable(false);
+                filterTintView.setFocusable(false);
+                root.addView(filterTintView, new FrameLayout.LayoutParams(-1, -1));
+
+                overlayStickerTv = Ui.tv(a, "", 48, Color.WHITE);
+                overlayStickerTv.setVisibility(View.GONE);
+                overlayStickerTv.setElevation(Ui.dp(a, 18));
+                root.addView(overlayStickerTv, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+
+                overlayTextPill = Ui.tvBold(a, "", 16.5f, Color.WHITE);
+                overlayTextPill.setGravity(Gravity.CENTER);
+                overlayTextPill.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+                overlayTextPill.setVisibility(View.GONE);
+                overlayTextPill.setElevation(Ui.dp(a, 19));
+                Ui.pad(overlayTextPill, 14, 7, 14, 7);
+                root.addView(overlayTextPill, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
 
                 // 3. Subtle center buffering indicator & pause indicator
                 bufferingSpinner = new ProgressBar(a);
@@ -1740,7 +1766,71 @@ public class ReelsFragment extends Fragment {
                 com.friendbook.social.core.LinkUtils.makeLinksClickable(captionT);
                 captionT.setVisibility(hasCap ? View.VISIBLE : View.GONE);
 
-                audioT.setText("♫ Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));
+                String customAudio = (reel.audioTitle != null && !reel.audioTitle.trim().isEmpty())
+                        ? reel.audioTitle.trim()
+                        : ("Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));
+                audioT.setText("♫ " + customAudio);
+
+                // Render creator Filter Tint, Text Overlay, and Sticker Overlay
+                if (reel.filterOverlayColor != 0) {
+                    filterTintView.setBackgroundColor(reel.filterOverlayColor);
+                    filterTintView.setVisibility(View.VISIBLE);
+                } else {
+                    filterTintView.setVisibility(View.GONE);
+                }
+
+                if (reel.overlayText != null && !reel.overlayText.trim().isEmpty()) {
+                    overlayTextPill.setText(reel.overlayText.trim());
+                    overlayTextPill.setTextColor(reel.overlayColor != 0 ? reel.overlayColor : Color.WHITE);
+                    if ((reel.overlayBgColor >>> 24) > 0) {
+                        overlayTextPill.setBackground(Ui.round(c, reel.overlayBgColor, 14));
+                    } else {
+                        overlayTextPill.setBackground(null);
+                    }
+                    overlayTextPill.setVisibility(View.VISIBLE);
+                    itemView.post(() -> {
+                        int rw = itemView.getWidth(), rh = itemView.getHeight();
+                        int pw = overlayTextPill.getWidth(), ph = overlayTextPill.getHeight();
+                        if (rw > 0 && rh > 0) {
+                            float tx = Math.max(Ui.dp(c, 12), Math.min(rw - pw - Ui.dp(c, 64), reel.overlayX * rw - pw / 2f));
+                            float ty = Math.max(Ui.dp(c, 70), Math.min(rh - ph - Ui.dp(c, 150), reel.overlayY * rh - ph / 2f));
+                            overlayTextPill.setTranslationX(tx);
+                            overlayTextPill.setTranslationY(ty);
+                        }
+                    });
+                } else {
+                    overlayTextPill.setVisibility(View.GONE);
+                }
+
+                if (reel.stickerText != null && !reel.stickerText.trim().isEmpty()) {
+                    overlayStickerTv.setText(reel.stickerText.trim());
+                    float sc = Math.max(0.6f, Math.min(2.2f, reel.stickerScale > 0f ? reel.stickerScale : 1.0f));
+                    overlayStickerTv.setScaleX(sc);
+                    overlayStickerTv.setScaleY(sc);
+                    overlayStickerTv.setVisibility(View.VISIBLE);
+                    itemView.post(() -> {
+                        int rw = itemView.getWidth(), rh = itemView.getHeight();
+                        int sw = overlayStickerTv.getWidth(), sh = overlayStickerTv.getHeight();
+                        if (rw > 0 && rh > 0) {
+                            float sx = Math.max(Ui.dp(c, 12), Math.min(rw - sw - Ui.dp(c, 64), reel.stickerX * rw - sw / 2f));
+                            float sy = Math.max(Ui.dp(c, 70), Math.min(rh - sh - Ui.dp(c, 150), reel.stickerY * rh - sh / 2f));
+                            overlayStickerTv.setTranslationX(sx);
+                            overlayStickerTv.setTranslationY(sy);
+                        }
+                    });
+                } else {
+                    overlayStickerTv.setVisibility(View.GONE);
+                }
+
+                if (reel.playbackSpeed >= 0.25f && reel.playbackSpeed <= 3.0f) {
+                    this.speed = reel.playbackSpeed;
+                } else {
+                    this.speed = 1.0f;
+                }
+                if (reel.muteOriginalAudio) {
+                    this.muted = true;
+                    soundIcon.setText("🔇");
+                }
 
                 String me = Fb.uid();
                 boolean isMe = me != null && me.equals(reel.authorId);

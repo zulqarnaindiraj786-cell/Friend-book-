@@ -477,6 +477,18 @@ public class Models {
         public int likes, comments, shares, durationSec;
         public long createdAt;
         public boolean isFromPost; // true when sourced from posts (mediaType == "video")
+        public String overlayText = "";
+        public int overlayColor = 0xFFFFFFFF;
+        public int overlayBgColor = 0xCC000000;
+        public float overlayX = 0.5f, overlayY = 0.24f;
+        public String stickerText = "";
+        public float stickerX = 0.78f, stickerY = 0.32f, stickerScale = 1.0f;
+        public String filterPreset = "none";
+        public int filterOverlayColor = 0;
+        public float playbackSpeed = 1.0f;
+        public boolean muteOriginalAudio = false;
+        public String audioTitle = "";
+        public int trimStartMs = 0, trimEndMs = 0;
         public List<String> likedBy = new ArrayList<>();
         public List<String> savedBy = new ArrayList<>();
         public Map<String, String> reactions = new HashMap<>();
@@ -537,6 +549,27 @@ public class Models {
             }
             r.inlineComments = Comment.parseEmbeddedComments(r.id, m, null);
             if (r.inlineComments.size() > r.comments) r.comments = r.inlineComments.size();
+            if (m != null) {
+                r.overlayText = Format.str(m, "overlayText");
+                if (m.get("overlayColor") instanceof Number) r.overlayColor = ((Number) m.get("overlayColor")).intValue();
+                if (m.get("overlayBgColor") instanceof Number) r.overlayBgColor = ((Number) m.get("overlayBgColor")).intValue();
+                if (m.get("overlayX") instanceof Number) r.overlayX = ((Number) m.get("overlayX")).floatValue();
+                if (m.get("overlayY") instanceof Number) r.overlayY = ((Number) m.get("overlayY")).floatValue();
+                r.stickerText = Format.str(m, "stickerText");
+                if (m.get("stickerX") instanceof Number) r.stickerX = ((Number) m.get("stickerX")).floatValue();
+                if (m.get("stickerY") instanceof Number) r.stickerY = ((Number) m.get("stickerY")).floatValue();
+                if (m.get("stickerScale") instanceof Number) r.stickerScale = ((Number) m.get("stickerScale")).floatValue();
+                r.filterPreset = Format.strOr(m, "filterPreset", "none");
+                if (m.get("filterOverlayColor") instanceof Number) r.filterOverlayColor = ((Number) m.get("filterOverlayColor")).intValue();
+                if (m.get("playbackSpeed") instanceof Number) {
+                    float sp = ((Number) m.get("playbackSpeed")).floatValue();
+                    if (sp >= 0.25f && sp <= 3.0f) r.playbackSpeed = sp;
+                }
+                r.muteOriginalAudio = Format.bool(m, "muteOriginalAudio");
+                r.audioTitle = Format.str(m, "audioTitle");
+                r.trimStartMs = Format.intOf(m, "trimStartMs");
+                r.trimEndMs = Format.intOf(m, "trimEndMs");
+            }
             return r;
         }
 

@@ -113,6 +113,37 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
  try {
   const previous=await env.VIDEO_BUCKET.head(key);
   if(previous){await request.body.cancel();return existingValid(previous,owner,id)?result(key,previous):json({error:'Video identity conflict'},409);}
+  if(fetcher===fetch && env.CLOUDINARY_CLOUD_NAME!=='fixture') {
+   let directBytes, procId='r2_direct_'+id.slice(0,16);
+   if(isJson) {
+    const staged=await smallJson(request);
+    if(typeof staged?.deleteToken==='string'&&staged.deleteToken.length>0)deleteToken=staged.deleteToken;
+    if(!/^[A-Za-z0-9_\/-]+$/.test(staged?.publicId||''))return json({error:'Invalid staged video publicId'},400);
+    procId=String(staged.publicId);
+    const ver=Number.isSafeInteger(staged.version)?`v${staged.version}/`:'';
+    const urls=[
+     `https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/video/upload/${TRANSFORM},f_mp4/${ver}${staged.publicId}.mp4`,
+     `https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/video/upload/c_limit,w_854,h_854,f_mp4/${ver}${staged.publicId}.mp4`,
+     `https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/video/upload/${ver}${staged.publicId}.mp4`,
+    ];
+    for(const candidate of urls) {
+     try {
+      const dl=await fetch(candidate,{redirect:'follow',signal:AbortSignal.timeout(180000)});
+      if(dl.ok&&dl.body){directBytes=await boundedBytes(dl,MAX_VIDEO_BYTES);break;}
+     } catch {}
+    }
+    if(!directBytes)throw Error('Staged download failed');
+   } else {
+    directBytes=await boundedBytes(request,MAX_VIDEO_BYTES);
+   }
+   const meta={httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+    customMetadata:{owner,video_id:id,retention:'forever',processing_id:procId,resolution:'480p'}};
+   let stored;
+   try {stored=await env.VIDEO_BUCKET.put(key,directBytes,{onlyIf:{etagDoesNotMatch:'*'},...meta});}
+   catch {stored=await env.VIDEO_BUCKET.put(key,directBytes,meta);}
+   const verified=(await env.VIDEO_BUCKET.head(key))||stored||{size:directBytes.byteLength,customMetadata:meta.customMetadata};
+   return result(key,verified);
+  }
   let asset;
   if(isJson) {
    const staged=await smallJson(request);

@@ -74,13 +74,9 @@ public final class R2VideoClient {
         URL endpoint=new URL(ENDPOINT);
         JSONObject response=send(endpoint,"GET",token,id,null,0,null);
         if(response==null) {
-            try {
-                response=stageAndCommit(ctx,uri,endpoint,token,id,length,progress);
-            } catch (Exception stageErr) {
-                try(InputStream in=ctx.getContentResolver().openInputStream(uri)) {
-                    if(in==null)throw new IOException("Video unavailable");
-                    response=send(endpoint,"POST",token,id,in,length,progress);
-                }
+            try(InputStream in=ctx.getContentResolver().openInputStream(uri)) {
+                if(in==null)throw new IOException("Video unavailable");
+                response=send(endpoint,"POST",token,id,in,length,progress);
             }
         }
         if(!expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed; video not attached");

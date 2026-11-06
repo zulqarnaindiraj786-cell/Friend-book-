@@ -54,7 +54,7 @@ public class CreatePostActivity extends Activity {
 
     private EditText text;
     private java.util.List<java.util.Map<String,Object>> submittingMentions = new java.util.ArrayList<>();
-    private TextView privacyBtn, feelingBtn, postBtn, mediaLabel;
+    private TextView privacyBtn, feelingBtn, postBtn, mediaLabel, openVideoEditorBtn;
     private ImageView preview;
     private VideoView videoPreview;
     private LinearLayout previewWrap, multiThumbs;
@@ -187,6 +187,20 @@ public class CreatePostActivity extends Activity {
         mediaLabel.setGravity(Gravity.CENTER);
         Ui.pad(mediaLabel, 0, 4, 0, 4);
         previewWrap.addView(mediaLabel);
+        openVideoEditorBtn = Ui.roundChip(this, "🎬 Edit Video / Add Text & Overlay", Ui.BLUE, Color.WHITE, 12.5f);
+        Ui.pad(openVideoEditorBtn, 14, 7, 14, 7);
+        openVideoEditorBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams oelp = new LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL);
+        oelp.bottomMargin = Ui.dp(this, 6);
+        openVideoEditorBtn.setOnClickListener(v -> {
+            if (!mediaUris.isEmpty()) {
+                Intent ri = new Intent(this, com.friendbook.social.reels.AddReelActivity.class);
+                ri.setData(mediaUris.get(0));
+                ri.putExtra("video_uri", mediaUris.get(0).toString());
+                startActivity(ri);
+            }
+        });
+        previewWrap.addView(openVideoEditorBtn, oelp);
         TextView remove = Ui.btnGrey(this, "✕ Remove media");
         remove.setMinHeight(Ui.dp(this, 32));
         remove.setOnClickListener(v -> clearMedia());
@@ -673,8 +687,10 @@ public class CreatePostActivity extends Activity {
             videoPreview.setVisibility(View.VISIBLE);
             videoPreview.setVideoURI(mediaUris.get(0));
             videoPreview.setOnPreparedListener(mp -> { mp.setLooping(true); videoPreview.start(); });
-            mediaLabel.setText("🎥 Video attached · 🛡 Safety verified");
+            mediaLabel.setText("🎥 Video attached");
+            if (openVideoEditorBtn != null) openVideoEditorBtn.setVisibility(View.VISIBLE);
         } else {
+            if (openVideoEditorBtn != null) openVideoEditorBtn.setVisibility(View.GONE);
             videoPreview.setVisibility(View.GONE);
             preview.setVisibility(View.VISIBLE);
             preview.setImageURI(mediaUris.get(0));
