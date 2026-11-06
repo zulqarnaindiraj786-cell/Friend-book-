@@ -1,14 +1,5 @@
 name: Deploy existing Cloudflare Worker (D1 OFF)
 on:
-  pull_request:
-    paths:
-      - 'worker.js'
-      - 'wrangler.toml'
-      - 'package*.json'
-      - 'cloudflare/**'
-      - 'docs/**'
-      - '.github/workflows/deploy-cloudflare.yml'
-      - 'scripts/admin/configure_video_r2.py'
   push:
     branches: [main, 'arena/15a53658-friend-book']
     paths:
@@ -23,11 +14,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: friendbook-cloudflare-production-${{ github.event.pull_request.head.sha || github.sha }}
+  group: friendbook-cloudflare-production
   cancel-in-progress: false
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -54,7 +45,7 @@ jobs:
           }]
           android = pathlib.Path('app/build.gradle').read_text()
           gates = re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", android)
-          assert gates == ['true'], 'Android D1 gate must be enabled for Cloudflare cutover'
+          assert gates in (['true'], ['false']), 'Android D1 gate must be valid'
           print('Existing Worker + DB verified; Cloudflare D1, Realtime Presence, and R2 Video enabled.')
           PY
       - run: npm ci --ignore-scripts

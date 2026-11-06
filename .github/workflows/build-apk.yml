@@ -2,16 +2,14 @@ name: Build FriendBook Signed APK and AAB
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
   push:
     branches: [ main, 'arena/**' ]
     # Worker-only changes must not rebuild/re-upload the existing Android release.
     paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
 
 concurrency:
-  group: friendbook-apk-release-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: false
+  group: friendbook-apk-release
+  cancel-in-progress: true
 
 permissions:
   contents: write
