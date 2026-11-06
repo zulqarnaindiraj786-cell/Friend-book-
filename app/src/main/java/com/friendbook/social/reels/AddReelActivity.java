@@ -2,15 +2,22 @@ package com.friendbook.social.reels;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.media.MediaMetadataRetriever;
+import android.media.PlaybackParams;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -19,6 +26,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.VideoView;
 
@@ -29,11 +37,11 @@ import com.friendbook.social.core.Ui;
 import java.util.Locale;
 
 /**
- * 🎬 friendbook Pro Reels Upload Studio:
+ * 🎬 friendbook Reels Upload & Video Editor:
  * - Pick from Gallery OR Record Camera Video directly.
- * - Pre-verifies ContentSafetyEngine ONCE on video selection (zero double-scan wait on Upload!).
- * - Extracts instant cover thumbnail + duration/resolution/size metadata in ~25ms.
- * - Live % + MB progress bar + 1-tap "Continue in Background & Watch Reels" instant publishing.
+ * - Live interactive video editing & overlays before upload:
+ *   Aa Draggable Text Overlay, 😀 Draggable Sticker/Emoji, 🎨 Color Filters,
+ *   ✂️ Start/End MP4 Trim, ⚡ Playback Speed, ♫ Audio Track/Mute, 🖼️ Cover Frame Scrubber.
  */
 public class AddReelActivity extends Activity {
 
@@ -41,16 +49,34 @@ public class AddReelActivity extends Activity {
     private static final int RC_RECORD_VIDEO = 82;
     private static final int RC_CAM_PERM = 83;
 
+    private static final String[] FILTER_KEYS = {"none", "vivid", "warm", "cool", "vintage", "bw", "neon", "rose"};
+    private static final String[] FILTER_LABELS = {"Original", "✨ Vivid", "🌅 Warm", "❄️ Cool", "🎞️ Vintage", "🖤 B&W", "💜 Neon", "🌸 Rose"};
+    private static final int[] FILTER_TINTS = {0x00000000, 0x22FF4081, 0x2CFF8F00, 0x2800B0FF, 0x30D4A359, 0x44212121, 0x2E7C4DFF, 0x28F06292};
+    private static final float[] SPEED_STEPS = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f};
+
     private Uri videoUri;
     private Cloudinary.VideoMeta videoMeta;
     private boolean safetyVerified = false;
     private boolean safetyScanning = false;
     private boolean previewMuted = false;
 
+    private final ReelUploadManager.EditOptions editOpts = new ReelUploadManager.EditOptions();
+    private int totalDurationMs = 0;
+
+    private FrameLayout stage;
     private VideoView previewVideo;
     private ImageView previewPoster;
+    private View stageFilterTint;
+    private TextView stageTextPill, stageStickerTv;
     private LinearLayout emptyPlaceholder;
     private TextView metaBadge, safetyBadge, soundBadge;
+
+    private LinearLayout editToolsCard, trimPanel, coverPanel;
+    private TextView textToolChip, stickerToolChip, filterToolChip, trimToolChip, speedToolChip, audioToolChip, coverToolChip;
+    private HorizontalScrollView filterStripScroll;
+    private TextView trimRangeLabel, coverTimeLabel;
+    private SeekBar trimStartSeek, trimEndSeek, coverSeek;
+
     private EditText captionInput;
     private LinearLayout progressCard;
     private ProgressBar progressBar;
@@ -58,6 +84,22 @@ public class AddReelActivity extends Activity {
     private TextView shareBtn;
     private TextView headerShareChip;
     private android.media.MediaPlayer previewMp;
+
+    private final Handler trimLoopHandler = new Handler(Looper.getMainLooper());
+    private final Runnable trimLoopRunnable = new Runnable() {
+        @Override public void run() {
+            if (previewVideo != null && videoUri != null) {
+                try {
+                    if (previewVideo.isPlaying()) {
+                        int pos = previewVideo.getCurrentPosition();
+                        int end = editOpts.trimEndMs > editOpts.trimStartMs ? editOpts.trimEndMs : totalDurationMs;
+                        if (end > 0 && pos >= end) previewVideo.seekTo(Math.max(0, editOpts.trimStartMs));
+                    }
+                } catch (Throwable ignored) { }
+                trimLoopHandler.postDelayed(this, 120L);
+            }
+        }
+    };
 
     private final ReelUploadManager.Listener uploadListener =
             (active, percent, sentBytes, totalBytes, message, succeeded, error) -> {
@@ -132,7 +174,7 @@ public class AddReelActivity extends Activity {
         body.addView(pickRow);
 
         // 3. Vertical 9:16 Theater Preview Stage
-        FrameLayout stage = new FrameLayout(this);
+        stage = new FrameLayout(this);
         stage.setBackground(Ui.roundStroke(this, 0xFF0E1015, 16, Ui.div(this), 1));
         stage.setClipToOutline(true);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 300));
@@ -147,6 +189,26 @@ public class AddReelActivity extends Activity {
         previewPoster.setVisibility(View.GONE);
         stage.addView(previewPoster, new FrameLayout.LayoutParams(-1, -1));
 
+        stageFilterTint = new View(this);
+        stageFilterTint.setVisibility(View.GONE);
+        stageFilterTint.setClickable(false);
+        stage.addView(stageFilterTint, new FrameLayout.LayoutParams(-1, -1));
+
+        stageStickerTv = Ui.tv(this, "", 44, Color.WHITE);
+        stageStickerTv.setVisibility(View.GONE);
+        stageStickerTv.setElevation(Ui.dp(this, 12));
+        stage.addView(stageStickerTv, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        attachStageDrag(stageStickerTv, true);
+
+        stageTextPill = Ui.tvBold(this, "", 15.5f, Color.WHITE);
+        stageTextPill.setGravity(Gravity.CENTER);
+        stageTextPill.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+        stageTextPill.setVisibility(View.GONE);
+        stageTextPill.setElevation(Ui.dp(this, 14));
+        Ui.pad(stageTextPill, 14, 7, 14, 7);
+        stage.addView(stageTextPill, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        attachStageDrag(stageTextPill, false);
+
         emptyPlaceholder = Ui.col(this);
         emptyPlaceholder.setGravity(Gravity.CENTER);
         Ui.pad(emptyPlaceholder, 24, 24, 24, 24);
@@ -158,7 +220,7 @@ public class AddReelActivity extends Activity {
         emptyTitle.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 4));
         emptyPlaceholder.addView(emptyTitle);
         TextView emptySub = Ui.tv(this,
-                "Vertical 9:16 videos get the best full-screen reach · Turbo upload enabled ⚡",
+                "Add text overlays, stickers, filters, trim & custom speed before sharing",
                 12.5f, 0xFFB0B3B8);
         emptySub.setGravity(Gravity.CENTER);
         emptyPlaceholder.addView(emptySub);
@@ -179,16 +241,7 @@ public class AddReelActivity extends Activity {
         soundBadge.setBackground(Ui.round(this, 0xAA000000, 10));
         Ui.pad(soundBadge, 10, 5, 10, 5);
         soundBadge.setVisibility(View.GONE);
-        soundBadge.setOnClickListener(v -> {
-            previewMuted = !previewMuted;
-            soundBadge.setText(previewMuted ? "🔇 Muted" : "🔊 Sound On");
-            if (previewMp != null) {
-                try {
-                    float vol = previewMuted ? 0f : 1f;
-                    previewMp.setVolume(vol, vol);
-                } catch (Throwable ignored) { }
-            }
-        });
+        soundBadge.setOnClickListener(v -> toggleSoundMute());
         FrameLayout.LayoutParams sblp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         sblp.setMargins(0, Ui.dp(this, 10), Ui.dp(this, 10), 0);
         stage.addView(soundBadge, sblp);
@@ -201,6 +254,9 @@ public class AddReelActivity extends Activity {
         FrameLayout.LayoutParams sfblp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
         sfblp.setMargins(Ui.dp(this, 10), 0, 0, Ui.dp(this, 10));
         stage.addView(safetyBadge, sfblp);
+
+        // 3b. Video Editing & Overlay Tools Bar
+        buildEditToolsCard(body);
 
         // 4. Live Upload Progress Card (with 1-tap Background Upload handoff!)
         progressCard = Ui.col(this);
@@ -283,18 +339,505 @@ public class AddReelActivity extends Activity {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(root);
+
+        Intent launch = getIntent();
+        if (launch != null) {
+            Uri initial = launch.getData();
+            if (initial == null && launch.getStringExtra("video_uri") != null) {
+                try { initial = Uri.parse(launch.getStringExtra("video_uri")); } catch (Throwable ignored) {}
+            }
+            if (initial != null) onVideoPicked(initial);
+        }
+    }
+
+    private void buildEditToolsCard(LinearLayout body) {
+        editToolsCard = Ui.col(this);
+        editToolsCard.setBackground(Ui.roundStroke(this, Ui.card(this), 14, Ui.div(this), 1));
+        Ui.pad(editToolsCard, 12, 10, 12, 10);
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(-1, -2);
+        etLp.topMargin = Ui.dp(this, 10);
+
+        HorizontalScrollView toolsScroll = new HorizontalScrollView(this);
+        toolsScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout toolsRow = Ui.row(this);
+        toolsRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolsRow.addView(textToolChip = makeToolChip("Aa Text Overlay", v -> openTextOverlayDialog()));
+        toolsRow.addView(stickerToolChip = makeToolChip("😀 Sticker", v -> openStickerPickerDialog()));
+        toolsRow.addView(filterToolChip = makeToolChip("🎨 Filter", v -> toggleFilterStrip()));
+        toolsRow.addView(trimToolChip = makeToolChip("✂️ Trim", v -> toggleTrimPanel()));
+        toolsRow.addView(speedToolChip = makeToolChip("⚡ Speed 1x", v -> cyclePlaybackSpeed()));
+        toolsRow.addView(audioToolChip = makeToolChip("♫ Audio", v -> openAudioDialog()));
+        toolsRow.addView(coverToolChip = makeToolChip("🖼️ Cover", v -> toggleCoverPanel()));
+        toolsRow.addView(makeToolChip("↺ Reset", v -> resetAllEdits()));
+        toolsScroll.addView(toolsRow);
+        editToolsCard.addView(toolsScroll);
+
+        filterStripScroll = new HorizontalScrollView(this);
+        filterStripScroll.setHorizontalScrollBarEnabled(false);
+        filterStripScroll.setVisibility(View.GONE);
+        LinearLayout filterRow = Ui.row(this);
+        filterRow.setPadding(0, Ui.dp(this, 8), 0, 0);
+        for (int i = 0; i < FILTER_KEYS.length; i++) {
+            final int idx = i;
+            TextView fc = Ui.roundChip(this, FILTER_LABELS[i], Ui.inputBg(this), Ui.txt(this), 12);
+            Ui.pad(fc, 12, 6, 12, 6);
+            LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(-2, -2);
+            flp.rightMargin = Ui.dp(this, 6);
+            fc.setOnClickListener(v -> applyFilterPreset(idx));
+            filterRow.addView(fc, flp);
+        }
+        filterStripScroll.addView(filterRow);
+        editToolsCard.addView(filterStripScroll);
+
+        trimPanel = Ui.col(this);
+        trimPanel.setVisibility(View.GONE);
+        trimPanel.setPadding(0, Ui.dp(this, 10), 0, 0);
+        trimRangeLabel = Ui.tvBold(this, "✂️ Trim Range: Full Video", 12.5f, Ui.txt(this));
+        trimPanel.addView(trimRangeLabel);
+        LinearLayout startRow = Ui.row(this);
+        startRow.setGravity(Gravity.CENTER_VERTICAL);
+        startRow.setPadding(0, Ui.dp(this, 4), 0, 0);
+        startRow.addView(Ui.tvBold(this, "Start", 11.5f, Ui.sub(this)), new LinearLayout.LayoutParams(Ui.dp(this, 42), -2));
+        trimStartSeek = new SeekBar(this); trimStartSeek.setMax(1000); trimStartSeek.setProgress(0);
+        startRow.addView(trimStartSeek, new LinearLayout.LayoutParams(0, -2, 1f));
+        trimPanel.addView(startRow);
+        LinearLayout endRow = Ui.row(this);
+        endRow.setGravity(Gravity.CENTER_VERTICAL);
+        endRow.setPadding(0, Ui.dp(this, 4), 0, 0);
+        endRow.addView(Ui.tvBold(this, "End", 11.5f, Ui.sub(this)), new LinearLayout.LayoutParams(Ui.dp(this, 42), -2));
+        trimEndSeek = new SeekBar(this); trimEndSeek.setMax(1000); trimEndSeek.setProgress(1000);
+        endRow.addView(trimEndSeek, new LinearLayout.LayoutParams(0, -2, 1f));
+        trimPanel.addView(endRow);
+
+        SeekBar.OnSeekBarChangeListener trimListener = new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+                if (!fromUser || totalDurationMs <= 0) return;
+                int s = trimStartSeek.getProgress(), e = trimEndSeek.getProgress();
+                if (sb == trimStartSeek && s >= e - 50) { s = Math.max(0, e - 50); trimStartSeek.setProgress(s); }
+                else if (sb == trimEndSeek && e <= s + 50) { e = Math.min(1000, s + 50); trimEndSeek.setProgress(e); }
+                editOpts.trimStartMs = (int) ((s / 1000f) * totalDurationMs);
+                editOpts.trimEndMs = (int) ((e / 1000f) * totalDurationMs);
+                updateTrimLabelAndBadge();
+                try { previewVideo.seekTo(sb == trimStartSeek ? editOpts.trimStartMs : Math.max(0, editOpts.trimEndMs - 300)); } catch (Throwable ignored) {}
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) {}
+            @Override public void onStopTrackingTouch(SeekBar sb) {
+                try { previewVideo.seekTo(Math.max(0, editOpts.trimStartMs)); if (!previewVideo.isPlaying()) previewVideo.start(); } catch (Throwable ignored) {}
+            }
+        };
+        trimStartSeek.setOnSeekBarChangeListener(trimListener);
+        trimEndSeek.setOnSeekBarChangeListener(trimListener);
+        editToolsCard.addView(trimPanel);
+
+        coverPanel = Ui.col(this);
+        coverPanel.setVisibility(View.GONE);
+        coverPanel.setPadding(0, Ui.dp(this, 10), 0, 0);
+        coverTimeLabel = Ui.tvBold(this, "🖼️ Drag to pick cover thumbnail frame", 12.5f, Ui.txt(this));
+        coverPanel.addView(coverTimeLabel);
+        coverSeek = new SeekBar(this); coverSeek.setMax(1000); coverSeek.setProgress(0);
+        coverSeek.setPadding(0, Ui.dp(this, 6), 0, 0);
+        coverSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+                if (!fromUser || totalDurationMs <= 0) return;
+                long ms = (long) ((progress / 1000f) * totalDurationMs);
+                editOpts.coverTimeMs = ms;
+                coverTimeLabel.setText(String.format(Locale.US, "🖼️ Cover frame at %d:%02d", (ms / 1000) / 60, (ms / 1000) % 60));
+                try { previewVideo.seekTo((int) ms); } catch (Throwable ignored) {}
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) {}
+            @Override public void onStopTrackingTouch(SeekBar sb) {
+                if (videoUri != null && editOpts.coverTimeMs >= 0L) extractCoverFrameAsync(videoUri, editOpts.coverTimeMs);
+            }
+        });
+        coverPanel.addView(coverSeek);
+        editToolsCard.addView(coverPanel);
+        body.addView(editToolsCard, etLp);
+    }
+
+    private TextView makeToolChip(String label, View.OnClickListener click) {
+        TextView chip = Ui.tvBold(this, label, 12.5f, Ui.txt(this));
+        chip.setBackground(Ui.roundStroke(this, Ui.inputBg(this), 12, Ui.div(this), 1));
+        Ui.pad(chip, 12, 8, 12, 8);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.rightMargin = Ui.dp(this, 7);
+        chip.setLayoutParams(lp);
+        chip.setOnClickListener(click);
+        return chip;
+    }
+
+    private void attachStageDrag(final View target, final boolean isSticker) {
+        final float[] dxy = new float[4];
+        target.setOnTouchListener((v, ev) -> {
+            if (stage == null || stage.getWidth() <= 0 || stage.getHeight() <= 0) return false;
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    dxy[0] = v.getTranslationX() - ev.getRawX();
+                    dxy[1] = v.getTranslationY() - ev.getRawY();
+                    dxy[2] = ev.getRawX(); dxy[3] = ev.getRawY();
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    float nx = Math.max(Ui.dp(this, 6), Math.min(stage.getWidth() - v.getWidth() - Ui.dp(this, 6), ev.getRawX() + dxy[0]));
+                    float ny = Math.max(Ui.dp(this, 36), Math.min(stage.getHeight() - v.getHeight() - Ui.dp(this, 10), ev.getRawY() + dxy[1]));
+                    v.setTranslationX(nx); v.setTranslationY(ny);
+                    float normX = Math.max(0.08f, Math.min(0.92f, (nx + v.getWidth() / 2f) / (float) stage.getWidth()));
+                    float normY = Math.max(0.08f, Math.min(0.92f, (ny + v.getHeight() / 2f) / (float) stage.getHeight()));
+                    if (isSticker) { editOpts.stickerX = normX; editOpts.stickerY = normY; }
+                    else { editOpts.overlayX = normX; editOpts.overlayY = normY; }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                    if (Math.hypot(ev.getRawX() - dxy[2], ev.getRawY() - dxy[3]) < Ui.dp(this, 8)) {
+                        if (isSticker) {
+                            editOpts.stickerScale = editOpts.stickerScale < 1.2f ? 1.35f : (editOpts.stickerScale < 1.6f ? 1.7f : (editOpts.stickerScale > 1.5f ? 0.85f : 1.0f));
+                            stageStickerTv.setScaleX(editOpts.stickerScale);
+                            stageStickerTv.setScaleY(editOpts.stickerScale);
+                        } else openTextOverlayDialog();
+                    }
+                    return true;
+            }
+            return false;
+        });
+    }
+
+    private boolean ensureVideoSelected() {
+        if (videoUri == null) { Ui.toast(this, "Pick or record a video first 🎬"); openGalleryPicker(); return false; }
+        return true;
+    }
+
+    private void openTextOverlayDialog() {
+        if (!ensureVideoSelected()) return;
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 14, 18, 8);
+        final EditText input = Ui.input(this, "Type text to display on video…");
+        input.setText(editOpts.overlayText != null ? editOpts.overlayText : "");
+        box.addView(input, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView colorLbl = Ui.tvBold(this, "Text Color", 12.5f, Ui.sub(this));
+        colorLbl.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 6));
+        box.addView(colorLbl);
+        final int[] textColors = {0xFFFFFFFF, 0xFFFFEB3B, 0xFF00E5FF, 0xFFFF4081, 0xFF69F0AE, 0xFFFF9100, 0xFFFF5252};
+        LinearLayout colorRow = Ui.row(this);
+        for (final int c : textColors) {
+            View dot = new View(this);
+            dot.setBackground(Ui.roundStroke(this, c, 16, 0xFF888888, 1));
+            int sz = Ui.dp(this, 30);
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(sz, sz);
+            dlp.rightMargin = Ui.dp(this, 8);
+            dot.setOnClickListener(v -> { editOpts.overlayColor = c; input.setTextColor(c == 0xFFFFFFFF ? Ui.txt(this) : c); });
+            colorRow.addView(dot, dlp);
+        }
+        box.addView(colorRow);
+
+        TextView bgLbl = Ui.tvBold(this, "Background Style", 12.5f, Ui.sub(this));
+        bgLbl.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 6));
+        box.addView(bgLbl);
+        final String[] bgNames = {"Dark Pill", "Blue Pill", "Rose Pill", "Frosted", "No Pill"};
+        final int[] bgColors = {0xCC000000, 0xDD1877F2, 0xDDE91E63, 0x66000000, 0x00000000};
+        HorizontalScrollView bgScroll = new HorizontalScrollView(this);
+        bgScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout bgRow = Ui.row(this);
+        for (int i = 0; i < bgNames.length; i++) {
+            final int bg = bgColors[i];
+            TextView bc = Ui.roundChip(this, bgNames[i], Ui.inputBg(this), Ui.txt(this), 11.5f);
+            Ui.pad(bc, 10, 5, 10, 5);
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-2, -2);
+            blp.rightMargin = Ui.dp(this, 6);
+            bc.setOnClickListener(v -> editOpts.overlayBgColor = bg);
+            bgRow.addView(bc, blp);
+        }
+        bgScroll.addView(bgRow);
+        box.addView(bgScroll);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Aa Text Overlay")
+                .setView(box)
+                .setPositiveButton("Apply", (d, w) -> {
+                    editOpts.overlayText = input.getText() == null ? "" : input.getText().toString().trim();
+                    refreshStageOverlays();
+                })
+                .setNeutralButton("Remove", (d, w) -> { editOpts.overlayText = ""; refreshStageOverlays(); })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void openStickerPickerDialog() {
+        if (!ensureVideoSelected()) return;
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 12, 18, 8);
+        TextView sub = Ui.tv(this, "Tap a sticker to place on video (drag to move, tap sticker to resize):", 12.5f, Ui.sub(this));
+        sub.setPadding(0, 0, 0, Ui.dp(this, 10));
+        box.addView(sub);
+        final String[] emojis = {"🔥", "😂", "❤️", "👑", "✨", "💯", "🎉", "🚀", "😍", "🎵", "⚡", "👏", "🤩", "😎", "🙌", "💥", "💎", "🌟"};
+        final AlertDialog[] dlgRef = new AlertDialog[1];
+        for (int row = 0; row < 3; row++) {
+            LinearLayout r = Ui.row(this); r.setGravity(Gravity.CENTER); r.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4));
+            for (int col = 0; col < 6; col++) {
+                final String em = emojis[row * 6 + col];
+                TextView tv = Ui.tv(this, em, 26, Ui.txt(this));
+                tv.setGravity(Gravity.CENTER);
+                tv.setBackground(Ui.round(this, Ui.inputBg(this), 10));
+                int sz = Ui.dp(this, 44);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sz, sz);
+                lp.setMargins(Ui.dp(this, 3), 0, Ui.dp(this, 3), 0);
+                tv.setOnClickListener(v -> {
+                    editOpts.stickerText = em;
+                    refreshStageOverlays();
+                    if (dlgRef[0] != null) dlgRef[0].dismiss();
+                });
+                r.addView(tv, lp);
+            }
+            box.addView(r);
+        }
+        dlgRef[0] = new AlertDialog.Builder(this)
+                .setTitle("😀 Add Sticker Overlay")
+                .setView(box)
+                .setNeutralButton("Remove Sticker", (d, w) -> { editOpts.stickerText = ""; refreshStageOverlays(); })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void toggleFilterStrip() {
+        if (!ensureVideoSelected()) return;
+        boolean show = filterStripScroll.getVisibility() != View.VISIBLE;
+        filterStripScroll.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) { trimPanel.setVisibility(View.GONE); coverPanel.setVisibility(View.GONE); }
+    }
+
+    private void applyFilterPreset(int index) {
+        if (index < 0 || index >= FILTER_KEYS.length) return;
+        editOpts.filterPreset = FILTER_KEYS[index];
+        editOpts.filterOverlayColor = FILTER_TINTS[index];
+        if (editOpts.filterOverlayColor != 0) {
+            stageFilterTint.setBackgroundColor(editOpts.filterOverlayColor);
+            stageFilterTint.setVisibility(View.VISIBLE);
+            filterToolChip.setText("🎨 " + FILTER_LABELS[index]);
+            filterToolChip.setTextColor(Ui.BLUE);
+        } else {
+            stageFilterTint.setVisibility(View.GONE);
+            filterToolChip.setText("🎨 Filter");
+            filterToolChip.setTextColor(Ui.txt(this));
+        }
+    }
+
+    private void toggleTrimPanel() {
+        if (!ensureVideoSelected()) return;
+        boolean show = trimPanel.getVisibility() != View.VISIBLE;
+        trimPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) { filterStripScroll.setVisibility(View.GONE); coverPanel.setVisibility(View.GONE); }
+    }
+
+    private void updateTrimLabelAndBadge() {
+        int sSec = Math.max(0, Math.round(editOpts.trimStartMs / 1000f));
+        int eSec = Math.max(sSec + 1, Math.round((editOpts.trimEndMs > 0 ? editOpts.trimEndMs : totalDurationMs) / 1000f));
+        int durSec = Math.max(1, eSec - sSec);
+        trimRangeLabel.setText(String.format(Locale.US, "✂️ Trim: %d:%02d – %d:%02d (%ds)", sSec / 60, sSec % 60, eSec / 60, eSec % 60, durSec));
+        trimToolChip.setText(String.format(Locale.US, "✂️ %ds", durSec));
+        trimToolChip.setTextColor(Ui.BLUE);
+        refreshMetaBadgeText();
+    }
+
+    private void cyclePlaybackSpeed() {
+        if (!ensureVideoSelected()) return;
+        int nextIdx = 0;
+        for (int i = 0; i < SPEED_STEPS.length; i++) {
+            if (Math.abs(editOpts.playbackSpeed - SPEED_STEPS[i]) < 0.05f) { nextIdx = (i + 1) % SPEED_STEPS.length; break; }
+        }
+        editOpts.playbackSpeed = SPEED_STEPS[nextIdx];
+        speedToolChip.setText(editOpts.playbackSpeed == (int) editOpts.playbackSpeed
+                ? String.format(Locale.US, "⚡ Speed %dx", (int) editOpts.playbackSpeed)
+                : String.format(Locale.US, "⚡ Speed %sx", editOpts.playbackSpeed));
+        speedToolChip.setTextColor(Math.abs(editOpts.playbackSpeed - 1.0f) > 0.02f ? Ui.BLUE : Ui.txt(this));
+        if (previewMp != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try { PlaybackParams p = previewMp.getPlaybackParams(); p.setSpeed(editOpts.playbackSpeed); previewMp.setPlaybackParams(p); }
+            catch (Throwable ignored) {}
+        }
+    }
+
+    private void toggleSoundMute() {
+        previewMuted = !previewMuted;
+        editOpts.muteOriginalAudio = previewMuted;
+        soundBadge.setText(previewMuted ? "🔇 Muted" : "🔊 Sound On");
+        audioToolChip.setText(previewMuted ? "🔇 Muted" : (editOpts.audioTitle != null && !editOpts.audioTitle.isEmpty() ? "♫ " + editOpts.audioTitle : "♫ Audio"));
+        if (previewMp != null) {
+            try { float vol = previewMuted ? 0f : 1f; previewMp.setVolume(vol, vol); } catch (Throwable ignored) {}
+        }
+    }
+
+    private void openAudioDialog() {
+        if (!ensureVideoSelected()) return;
+        LinearLayout box = Ui.col(this);
+        Ui.pad(box, 18, 12, 18, 8);
+        final TextView muteSwitchBtn = Ui.tvBold(this,
+                previewMuted ? "🔇 Original Audio: Muted (Tap to Unmute)" : "🔊 Original Audio: On (Tap to Mute)",
+                13f, previewMuted ? 0xFFE53935 : Ui.BLUE);
+        muteSwitchBtn.setBackground(Ui.roundStroke(this, Ui.inputBg(this), 10, Ui.div(this), 1));
+        Ui.pad(muteSwitchBtn, 12, 10, 12, 10);
+        muteSwitchBtn.setOnClickListener(v -> {
+            toggleSoundMute();
+            muteSwitchBtn.setText(previewMuted ? "🔇 Original Audio: Muted (Tap to Unmute)" : "🔊 Original Audio: On (Tap to Mute)");
+            muteSwitchBtn.setTextColor(previewMuted ? 0xFFE53935 : Ui.BLUE);
+        });
+        box.addView(muteSwitchBtn, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView titleLbl = Ui.tvBold(this, "Custom Audio / Music Label (♫)", 12.5f, Ui.sub(this));
+        titleLbl.setPadding(0, Ui.dp(this, 12), 0, Ui.dp(this, 6));
+        box.addView(titleLbl);
+        final EditText audioInput = Ui.input(this, "e.g. Aesthetic Beats · Original Sound");
+        audioInput.setText(editOpts.audioTitle != null ? editOpts.audioTitle : "");
+        box.addView(audioInput, new LinearLayout.LayoutParams(-1, -2));
+
+        new AlertDialog.Builder(this)
+                .setTitle("♫ Audio & Sound")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    editOpts.audioTitle = audioInput.getText() == null ? "" : audioInput.getText().toString().trim();
+                    audioToolChip.setText(!editOpts.audioTitle.isEmpty() ? ("♫ " + editOpts.audioTitle) : (previewMuted ? "🔇 Muted" : "♫ Audio"));
+                    audioToolChip.setTextColor((!editOpts.audioTitle.isEmpty() || previewMuted) ? Ui.BLUE : Ui.txt(this));
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void toggleCoverPanel() {
+        if (!ensureVideoSelected()) return;
+        boolean show = coverPanel.getVisibility() != View.VISIBLE;
+        coverPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) { filterStripScroll.setVisibility(View.GONE); trimPanel.setVisibility(View.GONE); }
+    }
+
+    private void extractCoverFrameAsync(final Uri src, final long timeMs) {
+        new Thread(() -> {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(getApplicationContext(), src);
+                Bitmap frame = mmr.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                if (frame != null) {
+                    int maxDim = 540, bw = frame.getWidth(), bh = frame.getHeight();
+                    if (bw > maxDim || bh > maxDim) {
+                        float r = Math.min((float) maxDim / bw, (float) maxDim / bh);
+                        Bitmap scaled = Bitmap.createScaledBitmap(frame, Math.max(1, Math.round(bw * r)), Math.max(1, Math.round(bh * r)), true);
+                        if (scaled != frame) frame.recycle();
+                        frame = scaled;
+                    }
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(24 * 1024);
+                    frame.compress(Bitmap.CompressFormat.JPEG, 76, bos);
+                    final byte[] bytes = bos.toByteArray();
+                    final Bitmap previewBmp = frame;
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (videoMeta != null) videoMeta.posterJpeg = bytes;
+                        previewPoster.setImageBitmap(previewBmp);
+                        coverToolChip.setText("🖼️ Cover ✓");
+                        coverToolChip.setTextColor(Ui.BLUE);
+                    });
+                }
+            } catch (Throwable ignored) {
+            } finally { try { mmr.release(); } catch (Throwable ignored) {} }
+        }, "reel-cover-pick").start();
+    }
+
+    private void resetAllEdits() {
+        editOpts.overlayText = ""; editOpts.overlayColor = 0xFFFFFFFF; editOpts.overlayBgColor = 0xCC000000;
+        editOpts.overlayX = 0.5f; editOpts.overlayY = 0.24f;
+        editOpts.stickerText = ""; editOpts.stickerX = 0.78f; editOpts.stickerY = 0.32f; editOpts.stickerScale = 1.0f;
+        editOpts.filterPreset = "none"; editOpts.filterOverlayColor = 0;
+        editOpts.playbackSpeed = 1.0f; editOpts.muteOriginalAudio = false; editOpts.audioTitle = "";
+        editOpts.trimStartMs = 0; editOpts.trimEndMs = totalDurationMs; editOpts.coverTimeMs = -1L;
+        previewMuted = false;
+        trimStartSeek.setProgress(0); trimEndSeek.setProgress(1000); coverSeek.setProgress(0);
+        filterStripScroll.setVisibility(View.GONE); trimPanel.setVisibility(View.GONE); coverPanel.setVisibility(View.GONE);
+        soundBadge.setText("🔊 Sound On");
+        textToolChip.setText("Aa Text Overlay"); textToolChip.setTextColor(Ui.txt(this));
+        stickerToolChip.setText("😀 Sticker"); stickerToolChip.setTextColor(Ui.txt(this));
+        filterToolChip.setText("🎨 Filter"); filterToolChip.setTextColor(Ui.txt(this));
+        trimToolChip.setText("✂️ Trim"); trimToolChip.setTextColor(Ui.txt(this));
+        speedToolChip.setText("⚡ Speed 1x"); speedToolChip.setTextColor(Ui.txt(this));
+        audioToolChip.setText("♫ Audio"); audioToolChip.setTextColor(Ui.txt(this));
+        coverToolChip.setText("🖼️ Cover"); coverToolChip.setTextColor(Ui.txt(this));
+        if (previewMp != null) {
+            try {
+                previewMp.setVolume(1f, 1f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) previewMp.setPlaybackParams(previewMp.getPlaybackParams().setSpeed(1.0f));
+            } catch (Throwable ignored) {}
+        }
+        refreshStageOverlays();
+        refreshMetaBadgeText();
+    }
+
+    private void refreshStageOverlays() {
+        if (editOpts.filterOverlayColor != 0) {
+            stageFilterTint.setBackgroundColor(editOpts.filterOverlayColor);
+            stageFilterTint.setVisibility(View.VISIBLE);
+        } else stageFilterTint.setVisibility(View.GONE);
+
+        if (editOpts.overlayText != null && !editOpts.overlayText.trim().isEmpty()) {
+            stageTextPill.setText(editOpts.overlayText.trim());
+            stageTextPill.setTextColor(editOpts.overlayColor != 0 ? editOpts.overlayColor : Color.WHITE);
+            stageTextPill.setBackground((editOpts.overlayBgColor >>> 24) > 0 ? Ui.round(this, editOpts.overlayBgColor, 14) : null);
+            stageTextPill.setVisibility(View.VISIBLE);
+            textToolChip.setText("Aa Text ✓"); textToolChip.setTextColor(Ui.BLUE);
+            stage.post(() -> {
+                int sw = stage.getWidth(), sh = stage.getHeight(), pw = stageTextPill.getWidth(), ph = stageTextPill.getHeight();
+                if (sw > 0 && sh > 0) {
+                    stageTextPill.setTranslationX(Math.max(Ui.dp(this, 8), Math.min(sw - pw - Ui.dp(this, 8), editOpts.overlayX * sw - pw / 2f)));
+                    stageTextPill.setTranslationY(Math.max(Ui.dp(this, 38), Math.min(sh - ph - Ui.dp(this, 10), editOpts.overlayY * sh - ph / 2f)));
+                }
+            });
+        } else {
+            stageTextPill.setVisibility(View.GONE);
+            textToolChip.setText("Aa Text Overlay"); textToolChip.setTextColor(Ui.txt(this));
+        }
+
+        if (editOpts.stickerText != null && !editOpts.stickerText.trim().isEmpty()) {
+            stageStickerTv.setText(editOpts.stickerText.trim());
+            stageStickerTv.setScaleX(editOpts.stickerScale); stageStickerTv.setScaleY(editOpts.stickerScale);
+            stageStickerTv.setVisibility(View.VISIBLE);
+            stickerToolChip.setText("😀 " + editOpts.stickerText.trim()); stickerToolChip.setTextColor(Ui.BLUE);
+            stage.post(() -> {
+                int sw = stage.getWidth(), sh = stage.getHeight(), vw = stageStickerTv.getWidth(), vh = stageStickerTv.getHeight();
+                if (sw > 0 && sh > 0) {
+                    stageStickerTv.setTranslationX(Math.max(Ui.dp(this, 8), Math.min(sw - vw - Ui.dp(this, 8), editOpts.stickerX * sw - vw / 2f)));
+                    stageStickerTv.setTranslationY(Math.max(Ui.dp(this, 38), Math.min(sh - vh - Ui.dp(this, 10), editOpts.stickerY * sh - vh / 2f)));
+                }
+            });
+        } else {
+            stageStickerTv.setVisibility(View.GONE);
+            stickerToolChip.setText("😀 Sticker"); stickerToolChip.setTextColor(Ui.txt(this));
+        }
+    }
+
+    private void refreshMetaBadgeText() {
+        if (videoMeta == null) return;
+        StringBuilder sb = new StringBuilder();
+        int durSec = videoMeta.durationSec;
+        if (editOpts.trimEndMs > editOpts.trimStartMs && totalDurationMs > 0) {
+            durSec = Math.max(1, Math.round((editOpts.trimEndMs - editOpts.trimStartMs) / 1000f));
+        }
+        if (durSec > 0) sb.append(String.format(Locale.US, "⏱ %d:%02d", durSec / 60, durSec % 60));
+        if (videoMeta.sizeBytes > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(String.format(Locale.US, "%.1f MB", videoMeta.sizeBytes / 1048576f));
+        }
+        if (videoMeta.width > 0 && videoMeta.height > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(videoMeta.width).append("×").append(videoMeta.height);
+        }
+        if (sb.length() > 0) { metaBadge.setText(sb.toString()); metaBadge.setVisibility(View.VISIBLE); }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
         ReelUploadManager.addListener(uploadListener);
+        if (videoUri != null) { trimLoopHandler.removeCallbacks(trimLoopRunnable); trimLoopHandler.post(trimLoopRunnable); }
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         ReelUploadManager.removeListener(uploadListener);
+        trimLoopHandler.removeCallbacks(trimLoopRunnable);
         try { previewVideo.pause(); } catch (Throwable ignored) { }
     }
 
@@ -361,56 +904,47 @@ public class AddReelActivity extends Activity {
         videoMeta = null;
         safetyVerified = false;
         safetyScanning = true;
+        totalDurationMs = 0;
 
         emptyPlaceholder.setVisibility(View.GONE);
         soundBadge.setVisibility(View.VISIBLE);
-        safetyBadge.setVisibility(View.VISIBLE);
-        safetyBadge.setText("🛡 Checking video safety…");
-        safetyBadge.setBackground(Ui.round(this, 0xCC1E293B, 10));
-        Ui.pad(safetyBadge, 10, 5, 10, 5);
+        safetyBadge.setVisibility(View.GONE);
+        resetAllEdits();
 
-        // Start instant preview
         previewVideo.setVideoURI(picked);
         previewVideo.setOnPreparedListener(mp -> {
             previewMp = mp;
             mp.setLooping(true);
+            int d = mp.getDuration();
+            if (d > 0) { totalDurationMs = d; if (editOpts.trimEndMs <= 0) editOpts.trimEndMs = d; }
             float vol = previewMuted ? 0f : 1f;
             mp.setVolume(vol, vol);
+            if (Math.abs(editOpts.playbackSpeed - 1.0f) > 0.02f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try { mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(editOpts.playbackSpeed)); } catch (Throwable ignored) {}
+            }
             previewPoster.setVisibility(View.GONE);
             previewVideo.start();
+            trimLoopHandler.removeCallbacks(trimLoopRunnable);
+            trimLoopHandler.post(trimLoopRunnable);
         });
 
-        // Extract duration, MB size, resolution & instant poster thumbnail off main thread (~25ms)
         new Thread(() -> {
             final Cloudinary.VideoMeta m = Cloudinary.inspectVideo(getApplicationContext(), picked);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed() || !picked.equals(videoUri)) return;
                 videoMeta = m;
+                if (totalDurationMs <= 0 && m.durationSec > 0) {
+                    totalDurationMs = m.durationSec * 1000;
+                    if (editOpts.trimEndMs <= 0) editOpts.trimEndMs = totalDurationMs;
+                }
                 if (m.posterJpeg != null && m.posterJpeg.length > 0 && !previewVideo.isPlaying()) {
-                    previewPoster.setImageBitmap(
-                            BitmapFactory.decodeByteArray(m.posterJpeg, 0, m.posterJpeg.length));
+                    previewPoster.setImageBitmap(BitmapFactory.decodeByteArray(m.posterJpeg, 0, m.posterJpeg.length));
                     previewPoster.setVisibility(View.VISIBLE);
                 }
-                StringBuilder sb = new StringBuilder();
-                if (m.durationSec > 0) {
-                    sb.append(String.format(Locale.US, "⏱ %d:%02d", m.durationSec / 60, m.durationSec % 60));
-                }
-                if (m.sizeBytes > 0) {
-                    if (sb.length() > 0) sb.append(" · ");
-                    sb.append(String.format(Locale.US, "%.1f MB", m.sizeBytes / 1048576f));
-                }
-                if (m.width > 0 && m.height > 0) {
-                    if (sb.length() > 0) sb.append(" · ");
-                    sb.append(m.width).append("×").append(m.height);
-                }
-                if (sb.length() > 0) {
-                    metaBadge.setText(sb.toString());
-                    metaBadge.setVisibility(View.VISIBLE);
-                }
+                refreshMetaBadgeText();
             });
         }, "reel-meta-inspect").start();
 
-        // Run ContentSafetyEngine ONCE right now so Upload button starts in 0.0ms!
         ContentSafetyEngine.scanMediaAsync(this, java.util.Collections.singletonList(picked), true, "", verdict -> {
             if (isFinishing() || isDestroyed() || !picked.equals(videoUri)) return;
             safetyScanning = false;
@@ -427,9 +961,7 @@ public class AddReelActivity extends Activity {
                 Ui.toast(this, verdict.message);
             } else {
                 safetyVerified = true;
-                safetyBadge.setText("🛡 Ready for Turbo Upload ✓");
-                safetyBadge.setBackground(Ui.round(this, 0xCC065F46, 10));
-                Ui.pad(safetyBadge, 10, 5, 10, 5);
+                safetyBadge.setVisibility(View.GONE);
             }
         });
     }
@@ -445,12 +977,13 @@ public class AddReelActivity extends Activity {
             return;
         }
         String cap = captionInput.getText() == null ? "" : captionInput.getText().toString().trim();
-        ContentSafetyEngine.Verdict textV = ContentSafetyEngine.checkText(cap);
+        ContentSafetyEngine.Verdict textV = ContentSafetyEngine.checkText(
+                cap + " " + (editOpts.overlayText != null ? editOpts.overlayText : ""));
         if (textV.unsafe) {
             Ui.toast(this, textV.message);
             return;
         }
         try { previewVideo.pause(); } catch (Throwable ignored) { }
-        ReelUploadManager.startUpload(this, videoUri, cap, videoMeta, safetyVerified);
+        ReelUploadManager.startUpload(this, videoUri, cap, videoMeta, safetyVerified, editOpts);
     }
 }
