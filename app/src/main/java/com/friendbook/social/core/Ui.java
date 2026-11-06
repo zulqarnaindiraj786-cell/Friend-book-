@@ -269,6 +269,14 @@ public class Ui {
         iv.setPadding(0, 0, 0, 0);
         iv.setBackground(null);
         iv.clearColorFilter();
+        if (url != null && url.startsWith("ad_company_logo:")) {
+            try {
+                int adId = Integer.parseInt(url.substring("ad_company_logo:".length()).trim());
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setImageDrawable(AdsConfig.createCompanyLogoDrawableById(c, adId));
+                return;
+            } catch (Throwable ignored) { }
+        }
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())
@@ -303,6 +311,14 @@ public class Ui {
         iv.setPadding(0, 0, 0, 0);
         iv.setBackground(null);
         iv.clearColorFilter();
+        if (url != null && url.startsWith("ad_company_logo:")) {
+            try {
+                int adId = Integer.parseInt(url.substring("ad_company_logo:".length()).trim());
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setImageDrawable(AdsConfig.createCompanyLogoDrawableById(c, adId));
+                return;
+            } catch (Throwable ignored) { }
+        }
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())

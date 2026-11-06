@@ -1125,7 +1125,7 @@ public class ReelsFragment extends Fragment {
                 bodyView.setVisibility(View.VISIBLE);
                 ctaButton.setText(cr.cta);
                 ctaButton.setVisibility(View.VISIBLE);
-                iconView.setImageResource(com.friendbook.social.R.drawable.ic_friendbook_team_logo);
+                iconView.setImageDrawable(AdsConfig.createCompanyLogoDrawable(itemView.getContext(), cr));
                 iconView.setVisibility(View.VISIBLE);
                 mediaView.setVisibility(View.GONE);
 
@@ -1304,7 +1304,9 @@ public class ReelsFragment extends Fragment {
                 }
 
                 if (ad.getIcon() == null) {
-                    iconView.setVisibility(View.GONE);
+                    AdsConfig.SponsoredCreative cr = AdsConfig.getCreativeForSlot(c, boundSlotOrdinal + 10000);
+                    iconView.setImageDrawable(AdsConfig.createCompanyLogoDrawable(c, cr));
+                    iconView.setVisibility(View.VISIBLE);
                 } else {
                     iconView.setImageDrawable(ad.getIcon().getDrawable());
                     iconView.setClipToOutline(true);

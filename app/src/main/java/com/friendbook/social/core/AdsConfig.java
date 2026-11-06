@@ -312,10 +312,10 @@ public class AdsConfig {
     }
 
     private static final SponsoredCreative[] CATALOG = new SponsoredCreative[]{
-            new SponsoredCreative(0, "Creator Studio 4K Pro", "FriendBook Creators",
-                    "Go Live in HD, earn instant gifts & grow your audience faster with Pro Creator tools.",
-                    "Explore Now", "Free Upgrade", "LIVE STUDIO", "Go Live & Earn Gems 💎",
-                    "HD Stream • Instant Gifts • Creator Analytics", 0xFF1877F2, 0xFF0A3D91, 4.9f),
+            new SponsoredCreative(0, "StreamDeck 4K Capture Pro", "Elgato Studio Gear",
+                    "Broadcast in 4K60 HDR with ultra-low latency USB-C capture & customizable tactile keys.",
+                    "Shop Gear", "Official Warranty", "PRO STREAM 🎥", "StreamDeck 4K60 Pro 🎥",
+                    "4K60 HDR Capture • Tactile LCD Keys • Plug & Play", 0xFF1877F2, 0xFF0A3D91, 4.9f),
             new SponsoredCreative(1, "HyperStrike Mobile Arena", "Apex Interactive Games",
                     "Squad up in 60FPS battle royale matches with ultra-low ping servers & voice chat.",
                     "Play Free", "Google Play • 4.8★", "60FPS GAMING", "HyperStrike Season 9 🎮",
@@ -669,16 +669,89 @@ public class AdsConfig {
         return "sponsored_ad_creative_" + cr.id;
     }
 
+    /**
+     * Renders a crisp, high-DPI company brand logo Drawable specific to the advertiser (`cr.advertiser`),
+     * using that company's brand gradient, category emblem & company initials — NEVER FriendBook's logo!
+     */
+    public static android.graphics.drawable.Drawable createCompanyLogoDrawable(Context c, SponsoredCreative cr) {
+        if (c == null || cr == null) return null;
+        int sz = 144;
+        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bmp);
+
+        android.graphics.Paint bgPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setShader(new android.graphics.LinearGradient(
+                0, 0, sz, sz, cr.bannerColorStart, cr.bannerColorEnd, android.graphics.Shader.TileMode.CLAMP));
+        android.graphics.RectF rect = new android.graphics.RectF(2f, 2f, sz - 2f, sz - 2f);
+        canvas.drawRoundRect(rect, 34f, 34f, bgPaint);
+
+        // Subtle inner glossy ring
+        android.graphics.Paint ringPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        ringPaint.setStyle(android.graphics.Paint.Style.STROKE);
+        ringPaint.setStrokeWidth(3.5f);
+        ringPaint.setColor(0x55FFFFFF);
+        canvas.drawRoundRect(new android.graphics.RectF(7f, 7f, sz - 7f, sz - 7f), 29f, 29f, ringPaint);
+
+        // Extract category emoji from bannerBadge if present, plus company initials
+        String emoji = "";
+        if (cr.bannerBadge != null) {
+            for (int i = 0; i < cr.bannerBadge.length(); ) {
+                int cp = cr.bannerBadge.codePointAt(i);
+                if (cp > 0x2000) {
+                    emoji = new String(Character.toChars(cp));
+                    break;
+                }
+                i += Character.charCount(cp);
+            }
+        }
+        String initials = extractInitials(cr.advertiser);
+
+        android.graphics.Paint txtPaint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        txtPaint.setColor(0xFFFFFFFF);
+        txtPaint.setTextAlign(android.graphics.Paint.Align.CENTER);
+        txtPaint.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
+
+        if (!emoji.isEmpty()) {
+            txtPaint.setTextSize(46f);
+            canvas.drawText(emoji, sz / 2f, sz * 0.49f, txtPaint);
+            txtPaint.setTextSize(26f);
+            txtPaint.setColor(0xEEFFFFFF);
+            canvas.drawText(initials, sz / 2f, sz * 0.81f, txtPaint);
+        } else {
+            txtPaint.setTextSize(52f);
+            canvas.drawText(initials, sz / 2f, sz * 0.62f, txtPaint);
+        }
+        return new android.graphics.drawable.BitmapDrawable(c.getResources(), bmp);
+    }
+
+    public static android.graphics.drawable.Drawable createCompanyLogoDrawableById(Context c, int uniqueId) {
+        return createCompanyLogoDrawable(c, buildCreativeForUniqueId(uniqueId));
+    }
+
+    private static String extractInitials(String name) {
+        if (name == null || name.trim().isEmpty()) return "AD";
+        String[] parts = name.trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (!p.isEmpty() && Character.isLetterOrDigit(p.charAt(0))) {
+                sb.append(Character.toUpperCase(p.charAt(0)));
+                if (sb.length() == 2) break;
+            }
+        }
+        return sb.length() > 0 ? sb.toString() : "AD";
+    }
+
     public static com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
         SponsoredCreative cr = getCreativeForSlot(slotKey);
         String docId = "sponsored_ad_creative_" + cr.id;
+        String companyLogoToken = "ad_company_logo:" + cr.id;
         com.friendbook.social.models.Models.Post p = AD_POST_CACHE.get(docId);
         if (p == null) {
             p = new com.friendbook.social.models.Models.Post();
             p.id = docId;
             p.authorId = "friendbook_sponsored";
             p.authorName = cr.advertiser;
-            p.authorPhoto = Ui.TEAM_AVATAR_TOKEN;
+            p.authorPhoto = companyLogoToken;
             p.content = cr.headline + " — " + cr.body;
             p.privacy = "Only me"; // Keeps ad doc out of regular HomeFragment post query while real for likes/comments
             p.createdAt = 1L;
@@ -686,6 +759,9 @@ public class AdsConfig {
             p.comments = 0;
             p.shares = 0;
             AD_POST_CACHE.put(docId, p);
+        } else {
+            p.authorName = cr.advertiser;
+            p.authorPhoto = companyLogoToken;
         }
         return p;
     }
@@ -694,6 +770,7 @@ public class AdsConfig {
     public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         final String docId = adPost.id;
+        final String companyLogoToken = adPost.authorPhoto;
         if (!AD_POST_FETCHED.add(docId)) {
             if (onHydrated != null) onHydrated.run();
             return;
@@ -707,6 +784,7 @@ public class AdsConfig {
                             adPost.likes = Math.max(0, remote.likes);
                             adPost.comments = Math.max(0, remote.comments);
                             adPost.shares = Math.max(0, remote.shares);
+                            adPost.authorPhoto = companyLogoToken;
                             if (remote.reactionsMap != null) {
                                 adPost.reactionsMap.clear();
                                 adPost.reactionsMap.putAll(remote.reactionsMap);
@@ -722,7 +800,8 @@ public class AdsConfig {
                             seed.put("id", docId);
                             seed.put("authorId", "friendbook_sponsored");
                             seed.put("authorName", adPost.authorName);
-                            seed.put("authorPhoto", Ui.TEAM_AVATAR_TOKEN);
+                            seed.put("authorPhoto", companyLogoToken);
+                            seed.put("authorPhotoUrl", companyLogoToken);
                             seed.put("content", adPost.content);
                             seed.put("privacy", "Only me");
                             seed.put("createdAt", 1L);

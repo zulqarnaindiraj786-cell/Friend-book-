@@ -2255,7 +2255,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             bodyView.setVisibility(View.VISIBLE);
             ctaButton.setText(cr.cta);
             ctaButton.setVisibility(View.VISIBLE);
-            iconView.setImageResource(com.friendbook.social.R.drawable.ic_friendbook_team_logo);
+            iconView.setImageDrawable(com.friendbook.social.core.AdsConfig.createCompanyLogoDrawable(c, cr));
             iconView.setVisibility(View.VISIBLE);
             mediaView.setVisibility(View.GONE);
 
@@ -2465,7 +2465,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
 
             if (ad.getIcon() == null) {
-                iconView.setVisibility(View.GONE);
+                com.friendbook.social.core.AdsConfig.SponsoredCreative cr =
+                        com.friendbook.social.core.AdsConfig.getCreativeForSlot(c, boundSlotOrdinal);
+                iconView.setImageDrawable(com.friendbook.social.core.AdsConfig.createCompanyLogoDrawable(c, cr));
+                iconView.setVisibility(View.VISIBLE);
             } else {
                 iconView.setImageDrawable(ad.getIcon().getDrawable());
                 iconView.setClipToOutline(true);
