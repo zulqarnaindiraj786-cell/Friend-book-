@@ -70,23 +70,27 @@ def main():
             raise RuntimeError('Existing Cloudflare deployment secret is unavailable')
         with requests.Session() as session:
             session.headers['Authorization'] = 'Bearer ' + token
-            for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql', '0011_additive_app_documents.sql'):
-                sql_text = Path('cloudflare/migrations/' + migration).read_text()
-                for stmt in statements(sql_text):
-                    upper = stmt.upper()
-                    if not upper.startswith(('CREATE TABLE IF NOT EXISTS ', 'CREATE INDEX IF NOT EXISTS ')):
-                        raise RuntimeError('Non-additive SQL statement refused')
-                    results = cloudflare(session, 'POST', '/d1/database/' + DATABASE + '/query', {'sql': stmt, 'params': []})
-                    if not isinstance(results, list) or not results or any(row.get('success') is not True for row in results):
-                        raise RuntimeError('Additive D1 schema was not verified: ' + migration)
-            has_docs = cloudflare(
-                session,
-                'POST',
-                '/d1/database/' + DATABASE + '/query',
-                {'sql': 'SELECT 1 AS ready FROM friendbook_cf_documents LIMIT 1', 'params': []},
-            )
-            already_seeded = bool(isinstance(has_docs, list) and has_docs and has_docs[0].get('results'))
+            already_seeded = False
+            try:
+                has_docs = cloudflare(
+                    session,
+                    'POST',
+                    '/d1/database/' + DATABASE + '/query',
+                    {'sql': 'SELECT 1 AS ready FROM friendbook_cf_documents LIMIT 1', 'params': []},
+                )
+                already_seeded = bool(isinstance(has_docs, list) and has_docs and has_docs[0].get('results'))
+            except Exception:
+                already_seeded = False
             if not already_seeded:
+                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql', '0011_additive_app_documents.sql'):
+                    sql_text = Path('cloudflare/migrations/' + migration).read_text()
+                    for stmt in statements(sql_text):
+                        upper = stmt.upper()
+                        if not upper.startswith(('CREATE TABLE IF NOT EXISTS ', 'CREATE INDEX IF NOT EXISTS ')):
+                            raise RuntimeError('Non-additive SQL statement refused')
+                        results = cloudflare(session, 'POST', '/d1/database/' + DATABASE + '/query', {'sql': stmt, 'params': []})
+                        if not isinstance(results, list) or not results or any(row.get('success') is not True for row in results):
+                            raise RuntimeError('Additive D1 schema was not verified: ' + migration)
                 promote = cloudflare(
                     session,
                     'POST',

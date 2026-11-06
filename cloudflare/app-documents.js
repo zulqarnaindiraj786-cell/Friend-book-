@@ -91,8 +91,8 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
-const DOC_CACHE_TTL_MS = 60_000;
-const LIST_CACHE_TTL_MS = 30_000;
+const DOC_CACHE_TTL_MS = 600_000;
+const LIST_CACHE_TTL_MS = 600_000;
 const docCache = new WeakMap();
 const listCache = new WeakMap();
 
@@ -113,8 +113,7 @@ export async function readD1DocumentFields(db, path) {
   if (hit && hit.expiresAt > now) return hit.fields;
   try {
     const row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
-    if (!row?.document_json) return null;
-    const fields = toFirestoreFields(row.document_json);
+    const fields = row?.document_json ? toFirestoreFields(row.document_json) : null;
     cache.set(path, { fields, expiresAt: now + DOC_CACHE_TTL_MS });
     return fields;
   } catch {
@@ -157,21 +156,12 @@ export async function appDocuments(request, env, identity) {
     }
     try {
       const rows = await env.DB.prepare(
-        `SELECT d.doc_id, d.document_json, d.updated_at,
-           (SELECT COALESCE(SUM(t.total), 0) FROM friendbook_cf_reaction_totals t WHERE t.resource = d.path) AS d1_likes,
-           (SELECT COUNT(*) FROM friendbook_cf_comments c WHERE c.resource = d.path) AS d1_comments
-         FROM friendbook_cf_documents d
-         WHERE d.collection = ?
-         ORDER BY d.updated_at DESC, d.path DESC LIMIT ?`
+        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
       ).bind(collection, limit).all();
       const documents = [];
       for (const row of rows?.results || []) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
-        if (doc) {
-          if (Number(row.d1_likes) > Number(doc.likes || 0)) doc.likes = Number(row.d1_likes);
-          if (Number(row.d1_comments) > Number(doc.comments || 0)) doc.comments = Number(row.d1_comments);
-          documents.push(doc);
-        }
+        if (doc) documents.push(doc);
       }
       lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
       return json({ collection, documents });

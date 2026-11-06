@@ -13,19 +13,32 @@ export function isFreshOnline(online, visible, lastSeen, now) {
   return Boolean(online) && visible !== false && visible !== 0
     && Number.isFinite(lastSeen) && lastSeen > 0 && lastSeen <= now && (now - lastSeen) < PRESENCE_TTL_MS;
 }
+const presenceCache = new WeakMap();
+const typingCache = new Map();
+
+function getPresenceMap(db) {
+  let map = presenceCache.get(db);
+  if (!map) {
+    map = new Map();
+    presenceCache.set(db, map);
+  }
+  return map;
+}
+
 async function writePresence(db, uid, online, visible, now) {
   if (!db) return;
-  await db.prepare(`INSERT INTO friendbook_cf_presence(uid, online, visible, last_seen, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(uid) DO UPDATE SET
-      online = excluded.online,
-      visible = excluded.visible,
-      last_seen = CASE WHEN excluded.last_seen > friendbook_cf_presence.last_seen THEN excluded.last_seen ELSE friendbook_cf_presence.last_seen END,
-      updated_at = excluded.updated_at`)
-    .bind(uid, online ? 1 : 0, visible ? 1 : 0, now, now).run();
+  const map = getPresenceMap(db);
+  const prev = map.get(uid);
+  const bestSeen = prev && prev.last_seen > now ? prev.last_seen : now;
+  map.set(uid, { online: online ? 1 : 0, visible: visible ? 1 : 0, last_seen: bestSeen });
 }
 async function readPresence(db, uid, now) {
-  const row = await db.prepare('SELECT online, visible, last_seen FROM friendbook_cf_presence WHERE uid = ?').bind(uid).first();
+  const map = getPresenceMap(db);
+  let row = map.get(uid);
+  if (row === undefined) {
+    row = await db.prepare('SELECT online, visible, last_seen FROM friendbook_cf_presence WHERE uid = ?').bind(uid).first();
+    map.set(uid, row || null);
+  }
   if (!row || row.visible === 0) return { uid, online: false, lastSeen: 0 };
   const lastSeen = Number(row.last_seen) || 0;
   return { uid, online: isFreshOnline(row.online === 1, true, lastSeen, now), lastSeen };
@@ -64,20 +77,28 @@ export async function presenceRealtime(request, env, identity) {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
       if (!body || typeof body.typing !== 'boolean') return json({ error: 'Invalid typing state' }, 400);
-      try {
-        await env.DB.prepare(`INSERT INTO friendbook_cf_typing(chat_id, uid, typing, updated_at)
-          VALUES (?, ?, ?, ?) ON CONFLICT(chat_id, uid) DO UPDATE SET typing=excluded.typing, updated_at=excluded.updated_at`)
-          .bind(chatId, uid, body.typing ? 1 : 0, now).run();
-        return json({ chatId, typing: body.typing });
-      } catch { return json({ error: 'Typing unavailable' }, 503); }
+      let chatMap = typingCache.get(chatId);
+      if (!chatMap) {
+        chatMap = new Map();
+        typingCache.set(chatId, chatMap);
+      }
+      if (body.typing) chatMap.set(uid, now);
+      else chatMap.delete(uid);
+      return json({ chatId, typing: body.typing });
     }
     if (request.method === 'GET') {
-      try {
-        const row = await env.DB.prepare(
-          'SELECT COUNT(*) AS active FROM friendbook_cf_typing WHERE chat_id = ? AND uid != ? AND typing = 1 AND updated_at > ?'
-        ).bind(chatId, uid, now - TYPING_TTL_MS).first();
-        return json({ chatId, typing: Number(row?.active || 0) > 0 });
-      } catch { return json({ error: 'Typing unavailable' }, 503); }
+      const chatMap = typingCache.get(chatId);
+      let active = false;
+      if (chatMap) {
+        for (const [peerUid, ts] of chatMap.entries()) {
+          if (now - ts <= TYPING_TTL_MS) {
+            if (peerUid !== uid) active = true;
+          } else {
+            chatMap.delete(peerUid);
+          }
+        }
+      }
+      return json({ chatId, typing: active });
     }
     return json({ error: 'Method not allowed' }, 405);
   }
