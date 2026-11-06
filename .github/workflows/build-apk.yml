@@ -2,10 +2,16 @@ name: Build FriendBook Signed APK and AAB
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
   push:
     branches: [ main, 'arena/**' ]
     # Worker-only changes must not rebuild/re-upload the existing Android release.
     paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
+
+concurrency:
+  group: friendbook-apk-release-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -184,9 +190,10 @@ jobs:
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           publish() {
             local OUTPUT CODE
@@ -205,9 +212,9 @@ jobs:
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
             publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber
-            publish release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
+            publish release edit "$TAG" --latest --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
           else
-            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$GITHUB_SHA" \
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$TARGET_SHA" \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"
