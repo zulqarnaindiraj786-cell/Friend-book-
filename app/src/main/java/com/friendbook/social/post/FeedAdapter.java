@@ -1844,13 +1844,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final com.google.android.gms.ads.nativead.MediaView mediaView;
         final android.widget.Button ctaButton;
         final LinearLayout ctaBar;
+        final TextView adSocialSummaryTv, adLikeBtnTv, adCommentBtnTv, adShareBtnTv;
         com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
         int requestSeq = 0;
+        int boundSlotOrdinal = 0;
 
         AdVH(ViewGroup parent) {
             super(android.view.LayoutInflater.from(parent.getContext())
                     .inflate(com.friendbook.social.R.layout.native_ad_layout, parent, false));
-            Context c = parent.getContext();
+            final Context c = parent.getContext();
             nativeAdView = (com.google.android.gms.ads.nativead.NativeAdView) itemView;
             nativeAdView.setBackground(Ui.roundStroke(c, Ui.card(c), 10, Ui.div(c), 1));
 
@@ -1878,6 +1880,59 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             ctaButton.setBackground(Ui.round(c, Ui.BLUE, 8));
             mediaView.setImageScaleType(ImageView.ScaleType.CENTER_CROP);
 
+            // Facebook-style Social Engagement Bar (Like · Comment · Share) on every Sponsored Ad!
+            LinearLayout cardInner = nativeAdView.findViewById(com.friendbook.social.R.id.native_ad_card_inner);
+            adSocialSummaryTv = Ui.tv(c, "👍 ❤️ 18  ·  4 comments · 2 shares", 12.5f, Ui.sub(c));
+            Ui.pad(adSocialSummaryTv, 12, 8, 12, 6);
+
+            LinearLayout socialRow = Ui.row(c);
+            socialRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(socialRow, 6, 4, 6, 6);
+
+            adLikeBtnTv = Ui.tvBold(c, "👍  Like", 13.5f, Ui.sub(c));
+            adLikeBtnTv.setGravity(Gravity.CENTER);
+            Ui.pad(adLikeBtnTv, 8, 9, 8, 9);
+
+            adCommentBtnTv = Ui.tvBold(c, "💬  Comment", 13.5f, Ui.sub(c));
+            adCommentBtnTv.setGravity(Gravity.CENTER);
+            Ui.pad(adCommentBtnTv, 8, 9, 8, 9);
+
+            adShareBtnTv = Ui.tvBold(c, "↗  Share", 13.5f, Ui.sub(c));
+            adShareBtnTv.setGravity(Gravity.CENTER);
+            Ui.pad(adShareBtnTv, 8, 9, 8, 9);
+
+            socialRow.addView(adLikeBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
+            socialRow.addView(adCommentBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
+            socialRow.addView(adShareBtnTv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            if (cardInner != null) {
+                cardInner.addView(Ui.divider(c));
+                cardInner.addView(adSocialSummaryTv);
+                cardInner.addView(Ui.divider(c));
+                cardInner.addView(socialRow);
+            }
+
+            adLikeBtnTv.setOnClickListener(v -> {
+                Ui.haptic(v);
+                com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
+                        c, boundSlotOrdinal, null, () -> refreshAdSocialUi(c));
+            });
+            adLikeBtnTv.setOnLongClickListener(v -> {
+                Reactions.show(adLikeBtnTv, picked ->
+                        com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
+                                c, boundSlotOrdinal, picked, () -> refreshAdSocialUi(c)));
+                return true;
+            });
+            View.OnClickListener openCmts = v ->
+                    com.friendbook.social.core.AdsConfig.openSponsoredCommentsSheet(
+                            c, boundSlotOrdinal, headlineView.getText(), () -> refreshAdSocialUi(c));
+            adCommentBtnTv.setOnClickListener(openCmts);
+            adSocialSummaryTv.setOnClickListener(openCmts);
+            adShareBtnTv.setOnClickListener(v ->
+                    com.friendbook.social.core.AdsConfig.shareSponsoredAd(
+                            c, boundSlotOrdinal, headlineView.getText(), bodyView.getText(),
+                            () -> refreshAdSocialUi(c)));
+
             // Register all clickable NativeAdView asset views
             nativeAdView.setHeadlineView(headlineView);
             nativeAdView.setBodyView(bodyView);
@@ -1888,6 +1943,46 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             nativeAdView.setStoreView(storeView);
             nativeAdView.setAdvertiserView(advertiserView);
             nativeAdView.setMediaView(mediaView);
+        }
+
+        private void refreshAdSocialUi(Context c) {
+            String myRx = com.friendbook.social.core.AdsConfig.getAdMyReaction(c, boundSlotOrdinal);
+            int likes = com.friendbook.social.core.AdsConfig.getAdLikeCount(c, boundSlotOrdinal);
+            int cmts = com.friendbook.social.core.AdsConfig.getAdCommentCount(c, boundSlotOrdinal);
+            int shares = com.friendbook.social.core.AdsConfig.getAdShareCount(c, boundSlotOrdinal);
+            adSocialSummaryTv.setText("👍 ❤️ " + likes + "   ·   " + cmts + " comments  ·  " + shares + " shares");
+            if (myRx == null || myRx.isEmpty()) {
+                adLikeBtnTv.setText("👍  Like");
+                adLikeBtnTv.setTextColor(Ui.sub(c));
+            } else {
+                adLikeBtnTv.setText(Reactions.emoji(myRx) + "  " + Reactions.label(myRx));
+                adLikeBtnTv.setTextColor(Reactions.color(myRx));
+            }
+        }
+
+        private void populateShowcaseFallback(Context c, int slotOrdinal) {
+            String[][] promos = {
+                    {"friendbook Creator Boost", "Sponsored · Official", "Reach more viewers on Feed & Reels with high-speed HD streaming and Creator Monetization.", "Explore Now"},
+                    {"friendbook Live Studio", "Sponsored · Live", "Go Live with crystal-clear low-latency audio, PK Battles, Golden Lion & Private Jet gifts!", "Try Live"},
+                    {"friendbook Marketplace", "Sponsored · Featured", "Discover trending local deals, connect with buyers in real time, and grow your business.", "Learn More"}
+            };
+            String[] p = promos[Math.abs(slotOrdinal) % promos.length];
+            headlineView.setText(p[0]);
+            advertiserView.setText(p[1]);
+            advertiserView.setVisibility(View.VISIBLE);
+            bodyView.setText(p[2]);
+            bodyView.setVisibility(View.VISIBLE);
+            ctaButton.setText(p[3]);
+            ctaButton.setVisibility(View.VISIBLE);
+            iconView.setImageResource(com.friendbook.social.R.drawable.ic_friendbook_team_logo);
+            iconView.setVisibility(View.VISIBLE);
+            mediaView.setVisibility(View.GONE);
+            starsView.setRating(4.9f);
+            starsView.setVisibility(View.VISIBLE);
+            storeView.setText("friendbook Official");
+            storeView.setVisibility(View.VISIBLE);
+            priceView.setText("Free");
+            priceView.setVisibility(View.VISIBLE);
         }
 
         private void destroyCurrentAd() {
@@ -1929,10 +2024,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal) {
             final int mySeq = ++requestSeq;
+            this.boundSlotOrdinal = slotOrdinal;
             destroyCurrentAd();
-            collapse();
 
             final Context ctx = itemView.getContext();
+            refreshAdSocialUi(ctx);
             final String unitId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(rawUnitId)
                     ? rawUnitId.trim()
                     : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
@@ -1948,6 +2044,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
 
+            // Always show Sponsored slot immediately (never leave empty gap while AdMob loads!)
+            expand(ctx);
+            populateShowcaseFallback(ctx, slotOrdinal);
             com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
             android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
                     "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
@@ -2025,8 +2124,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                 populateNativeAdView(fallback, ctx);
                                                 nativeAdView.requestLayout();
                                             } else {
-                                                destroyCurrentAd();
-                                                collapse();
+                                                expand(ctx);
+                                                populateShowcaseFallback(ctx, slotOrdinal);
                                             }
                                         }
                                     }
@@ -2040,8 +2139,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
                         "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
                 com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
-                destroyCurrentAd();
-                collapse();
+                expand(ctx);
+                populateShowcaseFallback(ctx, slotOrdinal);
             }
         }
 

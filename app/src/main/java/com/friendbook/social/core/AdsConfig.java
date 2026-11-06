@@ -465,4 +465,194 @@ public class AdsConfig {
             }
         }
     }
+
+    // ------------------------------------------------------------------------
+    // 💬 Facebook-Style Sponsored Ad Social Engagement (Like / Comment / Share)
+    // ------------------------------------------------------------------------
+    private static String adDocId(int slotKey) {
+        return "sponsored_ad_slot_" + (Math.abs(slotKey) % 12);
+    }
+
+    public static String getAdMyReaction(Context c, int slotKey) {
+        if (c == null) return "";
+        String uid = Fb.uid() == null ? "guest" : Fb.uid();
+        return prefs(c).getString("ad_rx_" + uid + "_" + (Math.abs(slotKey) % 12), "");
+    }
+
+    public static int getAdLikeCount(Context c, int slotKey) {
+        int base = 18 + ((Math.abs(slotKey) * 7) % 45);
+        if (c == null) return base;
+        int delta = prefs(c).getInt("ad_likes_delta_" + (Math.abs(slotKey) % 12), 0);
+        String myRx = getAdMyReaction(c, slotKey);
+        return Math.max(1, base + delta + (myRx.isEmpty() ? 0 : 1));
+    }
+
+    public static int getAdCommentCount(Context c, int slotKey) {
+        int base = 4 + ((Math.abs(slotKey) * 3) % 14);
+        if (c == null) return base;
+        int extra = prefs(c).getInt("ad_cmts_count_" + (Math.abs(slotKey) % 12), 0);
+        return base + extra;
+    }
+
+    public static int getAdShareCount(Context c, int slotKey) {
+        int base = 2 + ((Math.abs(slotKey) * 2) % 9);
+        if (c == null) return base;
+        int extra = prefs(c).getInt("ad_shares_count_" + (Math.abs(slotKey) % 12), 0);
+        return base + extra;
+    }
+
+    public static void setOrToggleAdReaction(Context c, int slotKey, String picked, Runnable onUpdated) {
+        if (c == null) return;
+        String uid = Fb.uid() == null ? "guest" : Fb.uid();
+        String key = "ad_rx_" + uid + "_" + (Math.abs(slotKey) % 12);
+        String cur = prefs(c).getString(key, "");
+        String next;
+        if (picked == null) {
+            next = cur.isEmpty() ? "like" : "";
+        } else {
+            next = picked;
+        }
+        prefs(c).edit().putString(key, next).apply();
+        if (onUpdated != null) onUpdated.run();
+        try {
+            if (Fb.uid() != null) {
+                Map<String, Object> m = new HashMap<>();
+                m.put("userId", Fb.uid());
+                m.put("userName", Fb.myName());
+                m.put("type", next.isEmpty() ? "none" : next);
+                m.put("updatedAt", FieldValue.serverTimestamp());
+                Fb.db().collection("sponsored_ads").document(adDocId(slotKey))
+                        .collection("reactions").document(Fb.uid())
+                        .set(m, SetOptions.merge());
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    public static void shareSponsoredAd(Context c, int slotKey, CharSequence headline, CharSequence body, Runnable onUpdated) {
+        if (c == null) return;
+        int bucket = Math.abs(slotKey) % 12;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putInt("ad_shares_count_" + bucket, sp.getInt("ad_shares_count_" + bucket, 0) + 1).apply();
+        if (onUpdated != null) onUpdated.run();
+        String h = headline != null && headline.length() > 0 ? headline.toString() : "Sponsored on friendbook";
+        String b = body != null && body.length() > 0 ? ("\n" + body) : "";
+        android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(android.content.Intent.EXTRA_TEXT, "📢 " + h + b + "\n\n" + PLAY_STORE_URL);
+        c.startActivity(android.content.Intent.createChooser(send, "Share Sponsored Post"));
+    }
+
+    public static void openSponsoredCommentsSheet(final Context c, final int slotKey, CharSequence headline, final Runnable onUpdated) {
+        if (c == null) return;
+        final int bucket = Math.abs(slotKey) % 12;
+        final String docId = adDocId(slotKey);
+        android.widget.LinearLayout root = Ui.col(c);
+        Ui.pad(root, 16, 12, 16, 8);
+
+        String titleStr = (headline != null && headline.length() > 0) ? headline.toString() : "Sponsored Post";
+        android.widget.TextView sub = Ui.tv(c, "📢 " + titleStr, 12.5f, Ui.sub(c));
+        sub.setPadding(0, 0, 0, Ui.dp(c, 8));
+        root.addView(sub);
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(c);
+        final android.widget.LinearLayout listCol = Ui.col(c);
+        sv.addView(listCol);
+        android.widget.LinearLayout.LayoutParams svLp =
+                new android.widget.LinearLayout.LayoutParams(-1, Ui.dp(c, 210));
+        root.addView(sv, svLp);
+
+        // Seed default + locally saved comments immediately
+        final Runnable renderLocal = () -> {
+            listCol.removeAllViews();
+            String[][] defaults = {
+                    {"Ali Raza", "Bohat zabardast offer hai 👍🔥"},
+                    {"Sana Khan", "Nice sponsored post ❤️"}
+            };
+            for (String[] d : defaults) {
+                android.widget.LinearLayout item = Ui.col(c);
+                item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
+                Ui.pad(item, 10, 6, 10, 6);
+                android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
+                ilp.bottomMargin = Ui.dp(c, 6);
+                item.addView(Ui.tvBold(c, d[0], 12.5f, Ui.txt(c)));
+                item.addView(Ui.tv(c, d[1], 13f, Ui.txt(c)));
+                listCol.addView(item, ilp);
+            }
+            String savedRaw = prefs(c).getString("ad_cmts_list_" + bucket, "");
+            if (savedRaw != null && !savedRaw.isEmpty()) {
+                for (String line : savedRaw.split("\n")) {
+                    if (line.trim().isEmpty()) continue;
+                    int sep = line.indexOf("::");
+                    String author = sep > 0 ? line.substring(0, sep) : "User";
+                    String text = sep > 0 ? line.substring(sep + 2) : line;
+                    android.widget.LinearLayout item = Ui.col(c);
+                    item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
+                    Ui.pad(item, 10, 6, 10, 6);
+                    android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
+                    ilp.bottomMargin = Ui.dp(c, 6);
+                    item.addView(Ui.tvBold(c, author, 12.5f, Ui.txt(c)));
+                    item.addView(Ui.tv(c, text, 13f, Ui.txt(c)));
+                    listCol.addView(item, ilp);
+                }
+            }
+        };
+        renderLocal.run();
+
+        // Also fetch shared comments once from Firestore on sheet open
+        try {
+            Fb.db().collection("sponsored_ads").document(docId).collection("comments")
+                    .limit(20).get()
+                    .addOnSuccessListener(snap -> {
+                        if (snap == null || snap.isEmpty()) return;
+                        for (com.google.firebase.firestore.DocumentSnapshot d : snap.getDocuments()) {
+                            String aName = d.getString("authorName");
+                            String txt = d.getString("text");
+                            if (txt == null || txt.trim().isEmpty()) continue;
+                            android.widget.LinearLayout item = Ui.col(c);
+                            item.setBackground(Ui.round(c, Ui.inputBg(c), 10));
+                            Ui.pad(item, 10, 6, 10, 6);
+                            android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(-1, -2);
+                            ilp.bottomMargin = Ui.dp(c, 6);
+                            item.addView(Ui.tvBold(c, aName == null || aName.isEmpty() ? "User" : aName, 12.5f, Ui.txt(c)));
+                            item.addView(Ui.tv(c, txt, 13f, Ui.txt(c)));
+                            listCol.addView(item, ilp);
+                        }
+                    });
+        } catch (Throwable ignored) { }
+
+        final android.widget.EditText input = Ui.input(c, "Write a comment…");
+        android.widget.LinearLayout.LayoutParams inLp = new android.widget.LinearLayout.LayoutParams(-1, -2);
+        inLp.topMargin = Ui.dp(c, 8);
+        root.addView(input, inLp);
+
+        new android.app.AlertDialog.Builder(c)
+                .setTitle("💬 Sponsored Post Comments")
+                .setView(root)
+                .setPositiveButton("Post Comment", (d, w) -> {
+                    String txt = input.getText().toString().trim();
+                    if (txt.isEmpty()) return;
+                    String meName = Fb.myName();
+                    if (meName == null || meName.trim().isEmpty()) meName = "You";
+                    SharedPreferences sp = prefs(c);
+                    String prev = sp.getString("ad_cmts_list_" + bucket, "");
+                    String updated = (prev == null || prev.isEmpty() ? "" : (prev + "\n"))
+                            + meName + "::" + txt.replace("\n", " ");
+                    sp.edit()
+                            .putString("ad_cmts_list_" + bucket, updated)
+                            .putInt("ad_cmts_count_" + bucket, sp.getInt("ad_cmts_count_" + bucket, 0) + 1)
+                            .apply();
+                    if (onUpdated != null) onUpdated.run();
+                    Ui.toast(c, "💬 Comment posted!");
+                    try {
+                        Map<String, Object> cm = new HashMap<>();
+                        cm.put("authorId", Fb.uid());
+                        cm.put("authorName", meName);
+                        cm.put("text", txt);
+                        cm.put("createdAt", FieldValue.serverTimestamp());
+                        Fb.db().collection("sponsored_ads").document(docId).collection("comments").add(cm);
+                    } catch (Throwable ignored) { }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
 }
