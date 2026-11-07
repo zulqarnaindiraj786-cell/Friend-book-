@@ -42,6 +42,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     public interface Actions {
         void longPress(Models.Message m);
         default void onCallClick(Models.Message m) { }
+        default void onReactionSummaryClick(Models.Message m) { }
     }
 
     private static final long GROUP_WINDOW_MS = 180_000L; // 3 minutes
@@ -219,25 +220,32 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         callTextCol.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 4), 0);
         TextView callTitle = Ui.tvBold(c, "", 14.5f, 0);
         TextView callSub = Ui.tv(c, "", 12f, 0);
-        callTextCol.addView(callTitle);
-        callTextCol.addView(callSub);
-        callRow.addView(callTextCol);
+        callTextCol.addView(callTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        callTextCol.addView(callSub, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        callRow.addView(callTextCol, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        bubble.addView(senderHeader);
+        bubble.addView(senderHeader, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         bubble.addView(quote, qlp);
         bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
-        bubble.addView(text);
+        bubble.addView(text, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         bubble.addView(voiceRow, new LinearLayout.LayoutParams(Ui.dp(c, 206), ViewGroup.LayoutParams.WRAP_CONTENT));
-        bubble.addView(callRow);
+        bubble.addView(callRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView react = Ui.tvBold(c, "", 11.5f, 0);
-        Ui.pad(react, 6, 2, 6, 2);
+        Ui.pad(react, 8, 3, 8, 3);
         react.setVisibility(View.GONE);
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rlp.topMargin = Ui.dp(c, -4);
 
-        bubbleCol.addView(bubble);
+        bubbleCol.addView(bubble, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         bubbleCol.addView(react, rlp);
 
         // Right 16dp mini seen-avatar / delivery status slot (for outgoing messages, matching screenshot!)
@@ -407,15 +415,19 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             }
         }
 
-        // 4. Reactions summary chip
+        // 4. Reactions summary chip (tappable to view who reacted!)
         String rs = m.reactionSummary();
         if (rs.isEmpty()) {
             h.react.setVisibility(View.GONE);
+            h.react.setOnClickListener(null);
         } else {
             h.react.setVisibility(View.VISIBLE);
             h.react.setText(rs);
             h.react.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
             h.react.setTextColor(Ui.txt(c));
+            h.react.setOnClickListener(v -> {
+                if (actions != null) actions.onReactionSummaryClick(m);
+            });
         }
 
         // 5. Quoted reply snippet

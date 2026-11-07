@@ -63,13 +63,34 @@ public class Reactions {
     }
 
     public static String emojiFor(String type) {
-        for (int i = 0; i < TYPES.length; i++) if (TYPES[i].equals(type)) return EMOJI[i];
+        if ("thanks".equals(type) || "🙏".equals(type)) return "🙏";
+        for (int i = 0; i < TYPES.length; i++) {
+            if (TYPES[i].equals(type) || EMOJI[i].equals(type)) return EMOJI[i];
+        }
         return "👍";
     }
 
     public static String labelFor(String type) {
-        for (int i = 0; i < TYPES.length; i++) if (TYPES[i].equals(type)) return LABELS[i];
+        if ("thanks".equals(type) || "🙏".equals(type)) return "Thanks";
+        for (int i = 0; i < TYPES.length; i++) {
+            if (TYPES[i].equals(type) || EMOJI[i].equals(type)) return LABELS[i];
+        }
         return "Like";
+    }
+
+    public static String normalizeMessageReactionType(String raw) {
+        if (raw == null) return "like";
+        String s = raw.trim();
+        if ("🙏".equals(s) || "thanks".equalsIgnoreCase(s)) return "thanks";
+        for (int i = 0; i < TYPES.length; i++) {
+            if (TYPES[i].equalsIgnoreCase(s) || EMOJI[i].equals(s)) return TYPES[i];
+        }
+        if (s.contains("❤") || s.contains("♥")) return "love";
+        if (s.contains("😂")) return "haha";
+        if (s.contains("😮")) return "wow";
+        if (s.contains("😢")) return "sad";
+        if (s.contains("😡")) return "angry";
+        return "like";
     }
 
     public static int colorFor(String type) {
@@ -567,6 +588,121 @@ public class Reactions {
         renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all");
     }
 
+    /**
+     * 👥 friendbook Pro "People who reacted to Message" ("Kis kis user ne message ko react kiya") Viewer!
+     */
+    public static void showMessageReactors(final Activity activity, final Models.Message msg,
+                                           final boolean isTeamChat, final Runnable onMergedUpdate) {
+        if (activity == null || activity.isFinishing() || msg == null) return;
+
+        LinearLayout root = Ui.col(activity);
+        root.setBackgroundColor(Ui.card(activity));
+        Ui.pad(root, 14, 12, 14, 8);
+
+        final TextView titleTv = Ui.tvBold(activity, "Message reactions", 17, Ui.txt(activity));
+        root.addView(titleTv);
+
+        HorizontalScrollView filterScroll = new HorizontalScrollView(activity);
+        filterScroll.setHorizontalScrollBarEnabled(false);
+        final LinearLayout filterRow = Ui.row(activity);
+        Ui.pad(filterRow, 0, 10, 0, 8);
+        filterScroll.addView(filterRow);
+        root.addView(filterScroll);
+        root.addView(Ui.divider(activity));
+
+        ScrollView sv = new ScrollView(activity);
+        final LinearLayout listCol = Ui.col(activity);
+        Ui.pad(listCol, 0, 6, 0, 10);
+        sv.addView(listCol);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, Ui.dp(activity, 320)));
+
+        final AlertDialog dlg = new AlertDialog.Builder(activity)
+                .setView(root)
+                .setNegativeButton("Close", null)
+                .create();
+        dlg.show();
+
+        final Map<String, ReactorEntry> byUid = new LinkedHashMap<>();
+        final Runnable renderNow = () -> {
+            if (activity.isFinishing() || !dlg.isShowing()) return;
+            List<ReactorEntry> all = new ArrayList<>(byUid.values());
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            for (String t : TYPES) counts.put(t, 0);
+            counts.put("thanks", 0);
+            for (ReactorEntry r : all) {
+                counts.put(r.type, (counts.get(r.type) == null ? 0 : counts.get(r.type)) + 1);
+            }
+            titleTv.setText("Message reactions · " + all.size());
+            renderReactorView(activity, dlg, filterRow, listCol, all, counts, "all");
+        };
+
+        if (msg.reactions != null) {
+            for (Map.Entry<String, String> e : msg.reactions.entrySet()) {
+                if (e.getKey() == null || e.getKey().isEmpty()) continue;
+                String uid = e.getKey();
+                ReactorEntry r = new ReactorEntry();
+                r.uid = uid;
+                r.type = normalizeMessageReactionType(e.getValue());
+                if (msg.reactorNames != null) r.name = msg.reactorNames.get(uid);
+                if (msg.reactorPhotos != null) r.photo = msg.reactorPhotos.get(uid);
+                Models.User cached = FastCache.getUser(uid);
+                if (cached != null) {
+                    if (r.name == null || r.name.isEmpty()) r.name = cached.displayName;
+                    if (r.photo == null || r.photo.isEmpty()) r.photo = cached.photoUrl;
+                    r.tickLevel = cached.tickLevel;
+                }
+                byUid.put(uid, r);
+            }
+        }
+        renderNow.run();
+
+        if (isTeamChat || Ui.TEAM_USER_ID.equals(msg.senderId)) {
+            String sharedDocId = msg.sharedTeamReactionDocId();
+            Fb.db().collection("chats").document("team_shared_reactions")
+                    .collection("messages").document(sharedDocId)
+                    .get()
+                    .addOnSuccessListener(doc -> {
+                        if (doc == null || !doc.exists() || activity.isFinishing()) return;
+                        Models.Message shared = Models.Message.fromDoc(doc);
+                        boolean changed = false;
+                        if (shared.reactions != null) {
+                            if (msg.reactions == null) msg.reactions = new HashMap<>();
+                            if (msg.reactorNames == null) msg.reactorNames = new HashMap<>();
+                            if (msg.reactorPhotos == null) msg.reactorPhotos = new HashMap<>();
+                            for (Map.Entry<String, String> e : shared.reactions.entrySet()) {
+                                String uid = e.getKey();
+                                if (uid == null || uid.isEmpty()) continue;
+                                if (!e.getValue().equals(msg.reactions.get(uid))) {
+                                    msg.reactions.put(uid, e.getValue());
+                                    changed = true;
+                                }
+                                String nm = shared.reactorNames != null ? shared.reactorNames.get(uid) : null;
+                                String ph = shared.reactorPhotos != null ? shared.reactorPhotos.get(uid) : null;
+                                if (nm != null && !nm.isEmpty()) msg.reactorNames.put(uid, nm);
+                                if (ph != null && !ph.isEmpty()) msg.reactorPhotos.put(uid, ph);
+                                ReactorEntry r = byUid.get(uid);
+                                if (r == null) {
+                                    r = new ReactorEntry();
+                                    r.uid = uid;
+                                }
+                                r.type = normalizeMessageReactionType(e.getValue());
+                                if (nm != null && !nm.isEmpty()) r.name = nm;
+                                if (ph != null && !ph.isEmpty()) r.photo = ph;
+                                Models.User cached = FastCache.getUser(uid);
+                                if (cached != null) {
+                                    if (r.name == null || r.name.isEmpty()) r.name = cached.displayName;
+                                    if (r.photo == null || r.photo.isEmpty()) r.photo = cached.photoUrl;
+                                    r.tickLevel = cached.tickLevel;
+                                }
+                                byUid.put(uid, r);
+                            }
+                        }
+                        if (changed && onMergedUpdate != null) onMergedUpdate.run();
+                        renderNow.run();
+                    });
+        }
+    }
+
     static void renderReactorView(
             final Activity activity,
             final AlertDialog dlg,
@@ -589,6 +725,11 @@ public class Reactions {
                 addFilterChip(activity, filterRow, EMOJI[i] + " " + c, t.equals(activeFilter), () ->
                         renderReactorView(activity, dlg, filterRow, listCol, all, counts, t));
             }
+        }
+        Integer thanksCount = counts.get("thanks");
+        if (thanksCount != null && thanksCount > 0) {
+            addFilterChip(activity, filterRow, "🙏 " + thanksCount, "thanks".equals(activeFilter), () ->
+                    renderReactorView(activity, dlg, filterRow, listCol, all, counts, "thanks"));
         }
 
         listCol.removeAllViews();

@@ -631,6 +631,7 @@ public class Models {
 
     public static class Message {
         public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, videoUrl, type, voiceUrl;
+        public String broadcastId = "";
         public String replyToText, replyToSender;
         public String callType, callStatus;
         public int callDurationSec;
@@ -639,6 +640,17 @@ public class Models {
         public boolean isSeen, isDelivered, isDeleted;
         public long createdAt;
         public Map<String, String> reactions = new HashMap<>(); // uid → emoji
+        public Map<String, String> reactorNames = new HashMap<>(); // uid → displayName
+        public Map<String, String> reactorPhotos = new HashMap<>(); // uid → photoUrl
+
+        public String sharedTeamReactionDocId() {
+            if (broadcastId != null && !broadcastId.isEmpty()) return "broadcast_" + broadcastId;
+            if (id != null && id.startsWith("broadcast_")) return id;
+            String sig = (text == null ? "" : text.trim()) + "|"
+                    + (imageUrl == null ? "" : imageUrl) + "|"
+                    + (videoUrl == null ? "" : videoUrl);
+            return "team_msg_" + Integer.toHexString(sig.hashCode());
+        }
 
         @SuppressWarnings("unchecked")
         public static Message fromDoc(DocumentSnapshot d) {
@@ -653,6 +665,7 @@ public class Models {
             m0.imageUrl = Format.str(m, "imageUrl");
             m0.videoUrl = Format.str(m, "videoUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
+            m0.broadcastId = Format.str(m, "broadcastId");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");
             m0.callType = Format.str(m, "callType");
@@ -679,23 +692,48 @@ public class Models {
                                 v instanceof String ? (String) v : "❤️");
                 }
             }
+            m0.reactorNames = new HashMap<>();
+            Object rn = m == null ? null : m.get("reactorNames");
+            if (rn instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rn).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof String) {
+                        m0.reactorNames.put(String.valueOf(e.getKey()), (String) e.getValue());
+                    }
+                }
+            }
+            m0.reactorPhotos = new HashMap<>();
+            Object rp = m == null ? null : m.get("reactorPhotos");
+            if (rp instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rp).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof String) {
+                        m0.reactorPhotos.put(String.valueOf(e.getKey()), (String) e.getValue());
+                    }
+                }
+            }
             return m0;
         }
 
-        /** grouped display like "❤️2 👍1". */
+        /** Like-style reaction summary with total count: e.g. "👍 1", "👍 4", "👍 ❤️ 5". */
         public String reactionSummary() {
-            if (reactions.isEmpty()) return "";
-            Map<String, Integer> agg = new HashMap<>();
+            if (reactions == null || reactions.isEmpty()) return "";
+            Map<String, Integer> agg = new java.util.LinkedHashMap<>();
             for (String e : reactions.values()) {
+                if (e == null || e.trim().isEmpty()) continue;
                 Integer x = agg.get(e);
                 agg.put(e, x == null ? 1 : x + 1);
             }
+            if (agg.isEmpty()) return "";
+            List<Map.Entry<String, Integer>> sorted = new ArrayList<>(agg.entrySet());
+            java.util.Collections.sort(sorted, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
             StringBuilder sb = new StringBuilder();
-            for (Map.Entry<String, Integer> e : agg.entrySet()) {
+            int shown = 0;
+            for (Map.Entry<String, Integer> e : sorted) {
+                if (shown >= 3) break;
+                if (shown > 0) sb.append(" ");
                 sb.append(e.getKey());
-                if (e.getValue() > 1) sb.append(e.getValue());
-                sb.append(" ");
+                shown++;
             }
+            sb.append(" ").append(reactions.size());
             return sb.toString().trim();
         }
     }
