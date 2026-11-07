@@ -1,4 +1,4 @@
-import { uploadVideo, retryVideoCleanup } from './cloudflare/video-r2.js';
+import { uploadVideo, uploadPhoto, retryVideoCleanup } from './cloudflare/video-r2.js';
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
@@ -41,11 +41,12 @@ export function createWorker(verify = verifyFirebaseToken) {
       }
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const video = path === '/v1/videos';
+      const photo = path === '/v1/photos';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !presence && !docs) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -71,6 +72,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
       if (video) return uploadVideo(request, env, uid);
+      if (photo) return uploadPhoto(request, env, uid);
       if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);

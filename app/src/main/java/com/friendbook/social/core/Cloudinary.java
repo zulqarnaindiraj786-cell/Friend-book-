@@ -40,7 +40,91 @@ public class Cloudinary {
     private static final String PRESET = "Myapp_upload";
     private static final String ENDPOINT =
             "https://api.cloudinary.com/v1_1/" + CLOUD_NAME + "/auto/upload";
+    private static final String R2_PHOTO_ENDPOINT =
+            "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/photos";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    private static String sha256Hex(byte[] data) throws Exception {
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(data);
+        StringBuilder sb = new StringBuilder(64);
+        for (byte b : hash) sb.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xFF));
+        return sb.toString();
+    }
+
+    /**
+     * Uploads photo/audio bytes directly to Cloudflare R2 bucket `friendbook` ("Save Forever").
+     * Returns https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/photos/<owner>/<id>.jpg
+     */
+    private static String uploadBytesToR2(byte[] data, String mime, final ProgressListener progressListener) throws Exception {
+        if (data == null || data.length == 0) throw new IllegalArgumentException("Empty photo bytes");
+        com.google.firebase.auth.FirebaseUser user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) throw new IllegalStateException("Not signed in");
+        String token = com.google.android.gms.tasks.Tasks.await(
+                user.getIdToken(false), 20, java.util.concurrent.TimeUnit.SECONDS).getToken();
+        if (token == null || token.isEmpty()) throw new IllegalStateException("Missing auth token");
+        String photoId = sha256Hex(data);
+        String cleanMime = (mime == null || mime.isEmpty()) ? "image/jpeg" : mime;
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(R2_PHOTO_ENDPOINT).openConnection();
+        try {
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(90000);
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(data.length);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("X-Photo-Id", photoId);
+            conn.setRequestProperty("X-Photo-Mime", cleanMime);
+            conn.setRequestProperty("Content-Type", cleanMime);
+
+            int chunk = 16 * 1024;
+            try (OutputStream out = new BufferedOutputStream(conn.getOutputStream(), chunk)) {
+                int offset = 0;
+                int lastPct = -1;
+                while (offset < data.length) {
+                    int len = Math.min(chunk, data.length - offset);
+                    out.write(data, offset, len);
+                    offset += len;
+                    if (progressListener != null) {
+                        final int pct = Math.min(96, (int) ((offset * 96L) / data.length));
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            final long sentNow = offset;
+                            final long totalNow = data.length;
+                            MAIN.post(() -> progressListener.onProgress(pct, sentNow, totalNow));
+                        }
+                    }
+                }
+                out.flush();
+            }
+
+            int code = conn.getResponseCode();
+            InputStream rs = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+            StringBuilder sb = new StringBuilder();
+            if (rs != null) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(rs))) {
+                    String line;
+                    while ((line = br.readLine()) != null) sb.append(line);
+                }
+            }
+            if (code >= 200 && code < 300) {
+                JSONObject json = new JSONObject(sb.toString());
+                String url = json.optString("url", "");
+                if (url.startsWith(R2VideoClient.ORIGIN + "/photos/")) {
+                    if (progressListener != null) {
+                        final long totalNow = data.length;
+                        MAIN.post(() -> progressListener.onProgress(100, totalNow, totalNow));
+                    }
+                    return url;
+                }
+            }
+            throw new java.io.IOException("R2 photo upload HTTP " + code);
+        } finally {
+            conn.disconnect();
+        }
+    }
 
     public interface ProgressListener {
         void onProgress(int percent, long sentBytes, long totalBytes);
@@ -184,6 +268,13 @@ public class Cloudinary {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
+                try {
+                    String r2Url = uploadBytesToR2(jpegBytes, "image/jpeg", null);
+                    if (r2Url != null && !r2Url.isEmpty()) {
+                        tcs.setResult(r2Url);
+                        return;
+                    }
+                } catch (Throwable ignored) { }
                 String boundary = "fbthumb" + System.currentTimeMillis();
                 conn = (HttpURLConnection) new URL(ENDPOINT).openConnection();
                 conn.setRequestMethod("POST");
@@ -253,6 +344,33 @@ public class Cloudinary {
 
                 byte[] compressedImg = compressImageFor2G(ctx, uri, mime);
                 boolean isVideo = mime.startsWith("video/");
+                if (!isVideo) {
+                    try {
+                        byte[] r2Payload = compressedImg;
+                        String r2Mime = compressedImg != null ? "image/jpeg" : mime;
+                        if (r2Payload == null) {
+                            try (InputStream rawIn = ctx.getContentResolver().openInputStream(uri);
+                                 ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                                if (rawIn != null) {
+                                    byte[] tmp = new byte[16 * 1024];
+                                    int r;
+                                    while ((r = rawIn.read(tmp)) != -1) {
+                                        if (bos.size() + r > 25_000_000) break;
+                                        bos.write(tmp, 0, r);
+                                    }
+                                    r2Payload = bos.toByteArray();
+                                }
+                            }
+                        }
+                        if (r2Payload != null && r2Payload.length > 0) {
+                            String r2Url = uploadBytesToR2(r2Payload, r2Mime, progressListener);
+                            if (r2Url != null && !r2Url.isEmpty()) {
+                                tcs.setResult(r2Url);
+                                return;
+                            }
+                        }
+                    } catch (Throwable ignored) { }
+                }
                 String ext = "bin";
                 if (compressedImg != null) {
                     mime = "image/jpeg";

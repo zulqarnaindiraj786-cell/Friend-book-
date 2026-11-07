@@ -214,3 +214,57 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
   }
  }
 }
+
+const MAX_PHOTO_BYTES = 25_000_000;
+function photoExtAndMime(rawMime) {
+ const m = String(rawMime || '').toLowerCase().split(';')[0].trim();
+ if (m === 'image/png') return { ext: 'png', mime: 'image/png' };
+ if (m === 'image/webp') return { ext: 'webp', mime: 'image/webp' };
+ if (m === 'image/gif') return { ext: 'gif', mime: 'image/gif' };
+ if (m === 'audio/mp4' || m === 'audio/m4a' || m === 'audio/x-m4a') return { ext: 'm4a', mime: 'audio/mp4' };
+ if (m === 'audio/mpeg' || m === 'audio/mp3') return { ext: 'mp3', mime: 'audio/mpeg' };
+ return { ext: 'jpg', mime: 'image/jpeg' };
+}
+
+export async function uploadPhoto(request, env, uid) {
+ if (!env.VIDEO_BUCKET || env.VIDEO_R2_ENABLED !== 'true') {
+  return json({ error: 'R2 photo storage is not configured' }, 503);
+ }
+ if (!['GET', 'POST'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
+ if (new URL(request.url).search) return json({ error: 'Query parameters forbidden' }, 400);
+ const id = request.headers.get('X-Photo-Id') || '';
+ const { ext, mime } = photoExtAndMime(request.headers.get('X-Photo-Mime') || request.headers.get('Content-Type'));
+ if (!/^[a-f0-9]{64}$/.test(id)) return json({ error: 'Photo identity required' }, 400);
+ const owner = await hash(uid);
+ const key = `photos/${owner}/${id}.${ext}`;
+ if (request.method === 'GET') {
+  try {
+   const object = await env.VIDEO_BUCKET.head(key);
+   return object && object.size > 0
+    ? json({ url: `${VIDEO_ORIGIN}/${key}`, bytes: object.size, retention: 'forever', provider: 'r2' })
+    : json({ error: 'Photo not found' }, 404);
+  } catch {
+   return json({ error: 'Photo lookup unavailable' }, 503);
+  }
+ }
+ if (!request.body) return json({ error: 'Photo body required' }, 400);
+ try {
+  const existing = await env.VIDEO_BUCKET.head(key);
+  if (existing && existing.size > 0) {
+   await request.body.cancel();
+   return json({ url: `${VIDEO_ORIGIN}/${key}`, bytes: existing.size, retention: 'forever', provider: 'r2' });
+  }
+  const bytes = await boundedBytes(request, MAX_PHOTO_BYTES);
+  const meta = {
+   httpMetadata: { contentType: mime, cacheControl: 'public,max-age=31536000,immutable' },
+   customMetadata: { owner, photo_id: id, retention: 'forever' },
+  };
+  let stored;
+  try { stored = await env.VIDEO_BUCKET.put(key, bytes, { onlyIf: { etagDoesNotMatch: '*' }, ...meta }); }
+  catch { stored = await env.VIDEO_BUCKET.put(key, bytes, meta); }
+  const verified = (await env.VIDEO_BUCKET.head(key)) || stored || { size: bytes.byteLength };
+  return json({ url: `${VIDEO_ORIGIN}/${key}`, bytes: verified.size, retention: 'forever', provider: 'r2' });
+ } catch {
+  return json({ error: 'Photo upload to R2 failed' }, 502);
+ }
+}

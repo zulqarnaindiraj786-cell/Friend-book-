@@ -17,7 +17,7 @@ function input(data) {
   const text = data.text, media = data.mediaUrl || '', mentions=data.mentions || [];
   if(typeof text!=='string' || text.length>5000 || (!text.trim() && !media) || typeof media!=='string' || media.length>4096 ||
     !Array.isArray(mentions) || mentions.length>100) throw Error('Invalid content');
-  if(media){const u=new URL(media);if(u.protocol!=='https:' || u.hostname!=='res.cloudinary.com' || u.username || u.password)throw Error('Invalid media');}
+  if(media){const u=new URL(media);if(u.protocol!=='https:' || (u.hostname!=='res.cloudinary.com' && u.hostname!=='pub-88ab0a56178742af95cbbf62df152a67.r2.dev') || u.username || u.password)throw Error('Invalid media');}
   for(const m of mentions)if(!m || typeof m.uid!=='string' || m.uid.length>128 || typeof m.label!=='string' || m.label.length>200 ||
     !Number.isSafeInteger(m.start) || !Number.isSafeInteger(m.end) || m.start<0 || m.end<m.start || m.end>text.length)throw Error('Invalid mention');
   return {text,media,mentions:JSON.stringify(mentions)};
