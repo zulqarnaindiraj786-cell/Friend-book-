@@ -210,16 +210,12 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK for Real Native Advanced Ads
+        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK on background thread
         ConsentManager.gatherConsentAndInitAds(this, () -> {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
         });
-
-        // 7. Silently pre-warm top Reels onto SSD cache after Home renders so first Reels tap plays in ~15ms!
-        container.postDelayed(() ->
-                com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()), 900L);
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {

@@ -249,7 +249,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (adapter != null && a != null) {
             adapter.setAdsConfig(com.friendbook.social.core.AdsConfig.nativeId(),
                     com.friendbook.social.core.AdsConfig.nativeAdsEnabled());
-            adapter.notifyDataSetChanged();
         }
     }
 

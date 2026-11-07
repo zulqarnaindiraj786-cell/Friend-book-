@@ -141,17 +141,22 @@ public final class ConsentManager {
         if (mobileAdsInitStarted.compareAndSet(false, true)) {
             // Safety fallback: if Play Services takes > 2200ms to fire callback, unblock pending ad requests
             MAIN_HANDLER.postDelayed(() -> markReadyAndFlush(appCtx), 2200L);
-            try {
-                MobileAds.initialize(appCtx, initializationStatus -> {
-                    Log.i(AdsConfig.LOG_TAG, "MobileAds SDK initialized (App ID: "
-                            + AdsConfig.APP_ID + ", Feed: " + AdsConfig.FEED_NATIVE_ID
-                            + ", Reels: " + AdsConfig.REELS_NATIVE_ID + ")");
+            // Initialize MobileAds on a background thread (Google official recommendation to prevent UI thread ANR/hang!)
+            Thread initThread = new Thread(() -> {
+                try {
+                    MobileAds.initialize(appCtx, initializationStatus -> {
+                        Log.i(AdsConfig.LOG_TAG, "MobileAds SDK initialized (App ID: "
+                                + AdsConfig.APP_ID + ", Feed: " + AdsConfig.FEED_NATIVE_ID
+                                + ", Reels: " + AdsConfig.REELS_NATIVE_ID + ")");
+                        markReadyAndFlush(appCtx);
+                    });
+                } catch (Throwable t) {
+                    Log.e(AdsConfig.LOG_TAG, "MobileAds.initialize failed: " + t.getMessage(), t);
                     markReadyAndFlush(appCtx);
-                });
-            } catch (Throwable t) {
-                Log.e(AdsConfig.LOG_TAG, "MobileAds.initialize failed: " + t.getMessage(), t);
-                markReadyAndFlush(appCtx);
-            }
+                }
+            }, "admob-bg-init");
+            initThread.setPriority(Thread.NORM_PRIORITY - 1);
+            initThread.start();
         }
     }
 

@@ -237,12 +237,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private android.speech.tts.TextToSpeech tts;
 
     public void setPymk(java.util.List<Models.User> users) {
+        if ((users == null || users.isEmpty()) && pymkUsers.isEmpty()) return;
         pymkUsers.clear();
         if (users != null) pymkUsers.addAll(users);
         if (showHeader) notifyItemChanged(0);
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
+        if ((lives == null || lives.isEmpty()) && activeLives.isEmpty()) return;
         activeLives.clear();
         if (lives != null) activeLives.addAll(lives);
         if (showHeader) notifyItemChanged(0);
@@ -934,22 +936,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             vh.image.setOnTouchListener(vh.photoTouchListener);
         } else if (isVideo) {
-            // Video posts: instant poster frame without downloading remote .mp4 files in Glide during scroll!
+            // Video posts: instant poster frame without decoding .mp4 files or doing disk I/O during scroll!
             vh.image.setVisibility(View.VISIBLE);
             String vThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(p.mediaUrl, "");
-            java.io.File localCachedVideo = vThumb.isEmpty()
-                    ? com.friendbook.social.reels.ReelVideoCache.getCachedFile(c, p.mediaUrl)
-                    : null;
             if (!vThumb.isEmpty()) {
                 Ui.imgFeed(c, vh.image, vThumb);
-            } else if (localCachedVideo != null) {
-                com.bumptech.glide.Glide.with(c.getApplicationContext())
-                        .load(localCachedVideo)
-                        .centerCrop()
-                        .dontAnimate()
-                        .into(vh.image);
-            } else if (p.authorPhoto != null && !p.authorPhoto.isEmpty()) {
-                Ui.imgFeed(c, vh.image, p.authorPhoto);
             } else {
                 try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.image); } catch (Throwable ignored) {}
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
