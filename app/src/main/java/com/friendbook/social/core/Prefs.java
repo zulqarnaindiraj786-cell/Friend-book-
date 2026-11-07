@@ -517,11 +517,24 @@ public class Prefs {
     }
 
     /** Record exact used & saved bytes from WebP/2G compression. */
+    private static long memBytesUsed = 0L;
+    private static long memBytesSaved = 0L;
+    private static long lastBytesFlushMs = 0L;
+
     public static void recordBytes(Context c, long used, long saved) {
+        memBytesUsed += Math.max(0L, used);
+        memBytesSaved += Math.max(0L, saved);
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastBytesFlushMs < 30_000L) return;
+        lastBytesFlushMs = now;
+        long flushUsed = memBytesUsed;
+        long flushSaved = memBytesSaved;
+        memBytesUsed = 0L;
+        memBytesSaved = 0L;
         SharedPreferences sp = p(c);
         sp.edit()
-                .putLong("dataBytesUsed", sp.getLong("dataBytesUsed", 0L) + Math.max(0L, used))
-                .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + Math.max(0L, saved))
+                .putLong("dataBytesUsed", sp.getLong("dataBytesUsed", 0L) + flushUsed)
+                .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + flushSaved)
                 .apply();
     }
 

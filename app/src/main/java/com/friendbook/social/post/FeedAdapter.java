@@ -250,13 +250,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         notifyDataSetChanged();
     }
 
-    /** Rebinds only Feed Ad slots when a new NativeAd arrives in the pool — zero post scroll jump! */
+    /** Rebinds only Feed Ad slots that are still waiting for an ad — never touches already-loaded Ad slots! */
     public void notifyAdSlotsOnly() {
         if (!adsActive() || posts.isEmpty()) return;
         int total = getItemCount();
         for (int pos = offset(); pos < total - footerCount(); pos++) {
             if (isAdSlot(pos - offset())) {
-                notifyItemChanged(pos);
+                int slotOrd = Math.max(0, (pos - offset()) / NATIVE_AD_STEP);
+                if (!com.friendbook.social.core.AdsConfig.hasFeedSlotAd(slotOrd)) {
+                    notifyItemChanged(pos);
+                }
             }
         }
     }
@@ -1875,6 +1878,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
         final TextView extraReactsTv, tagSummary, commentsSummary, likeEmojiTv, likeTxt, commentTxt, shareTxt;
         com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+        com.google.android.gms.ads.nativead.NativeAd boundNativeAdViewTarget;
         int requestSeq = 0;
         int boundSlotOrdinal = -1;
         boolean adRequestInFlight = false;
@@ -2312,6 +2316,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         private void destroyCurrentAd() {
             currentNativeAd = null;
+            boundNativeAdViewTarget = null;
         }
 
         private void collapse() {
@@ -2355,9 +2360,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.inDetailScreen = preserveExistingSlotAd;
             final Context ctx = itemView.getContext();
             if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
-                expand(ctx);
-                populateNativeAdView(currentNativeAd, ctx);
-                refreshAdSocialUi(ctx);
+                if (boundNativeAdViewTarget != currentNativeAd) {
+                    expand(ctx);
+                    populateNativeAdView(currentNativeAd, ctx);
+                    refreshAdSocialUi(ctx);
+                }
                 return;
             }
             if (this.boundSlotOrdinal == slotOrdinal && adRequestInFlight) {
@@ -2370,7 +2377,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     expand(ctx);
                     populateNativeAdView(nowReady, ctx);
                     refreshAdSocialUi(ctx);
-                    nativeAdView.requestLayout();
                 }
                 return;
             }
@@ -2380,15 +2386,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.adRequestInFlight = false;
             destroyCurrentAd();
 
-            if (preserveExistingSlotAd) {
-                com.friendbook.social.core.AdsConfig.resolveUniqueAdId(ctx, slotOrdinal);
-            } else {
-                // Always allocate a brand-new unseen ad creative for every bind — NEVER repeat an old ad!
-                com.friendbook.social.core.AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal);
-            }
-            refreshAdSocialUi(ctx);
+            com.friendbook.social.core.AdsConfig.resolveUniqueAdId(ctx, slotOrdinal);
             com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
-                if (mySeq == requestSeq) refreshAdSocialUi(ctx);
+                if (mySeq == requestSeq && currentNativeAd != null) refreshAdSocialUi(ctx);
             });
             final String unitId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(rawUnitId)
                     ? rawUnitId.trim()
@@ -2402,7 +2402,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 expand(ctx);
                 populateNativeAdView(preloaded, ctx);
                 refreshAdSocialUi(ctx);
-                nativeAdView.requestLayout();
                 return;
             }
 
@@ -2420,7 +2419,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     expand(ctx);
                     populateNativeAdView(readyAfterInit, ctx);
                     refreshAdSocialUi(ctx);
-                    nativeAdView.requestLayout();
                     return;
                 }
                 requestRealFeedAdFromUnit(ctx, unitId, slotOrdinal, mySeq, true);
@@ -2459,7 +2457,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                             com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
                                     com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
                                     if (mySeq != requestSeq || currentNativeAd != null) {
-                                        com.friendbook.social.core.AdsConfig.notifyChange();
                                         return;
                                     }
                                     adRequestInFlight = false;
@@ -2469,8 +2466,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                     expand(ctx);
                                     populateNativeAdView(nativeAd, ctx);
                                     refreshAdSocialUi(ctx);
-                                    nativeAdView.requestLayout();
-                                    com.friendbook.social.core.AdsConfig.notifyChange();
                                 })
                                 .withAdListener(new com.google.android.gms.ads.AdListener() {
                                     @Override
@@ -2531,8 +2526,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 .withNativeAdOptions(adOptions)
                                 .build();
 
-                // Request a batch of 3 deduplicated ads in one auction (1st fills this slot, 2nd & 3rd fill pool!)
-                adLoader.loadAds(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false), 3);
+                adLoader.loadAd(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false));
             } catch (Throwable t) {
                 adRequestInFlight = false;
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
@@ -2543,15 +2537,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+            if (boundNativeAdViewTarget == ad) return;
+            boundNativeAdViewTarget = ad;
             adShowcaseBanner.setVisibility(View.GONE);
             headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
 
             if (ad.getMediaContent() != null) {
                 mediaView.setMediaContent(ad.getMediaContent());
                 mediaView.setVisibility(View.VISIBLE);
-                if (ad.getMediaContent().hasVideoContent() && ad.getMediaContent().getVideoController() != null) {
-                    try { ad.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
-                }
             } else {
                 mediaView.setVisibility(View.GONE);
             }
@@ -2611,12 +2604,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void onRecycled() {
-            if (inDetailScreen || adRequestInFlight) {
-                return;
-            }
-            requestSeq++;
-            com.friendbook.social.core.AdsConfig.evictSlotAd(boundSlotOrdinal);
-            destroyCurrentAd();
+            // Keep slot ad in FEED_SLOT_ADS during scroll so scrolling up/down is 0.0ms with zero layout jump!
         }
     }
 

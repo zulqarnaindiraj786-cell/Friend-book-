@@ -653,6 +653,10 @@ public class AdsConfig {
         return polled;
     }
 
+    public static synchronized boolean hasFeedSlotAd(int slotOrdinal) {
+        return FEED_SLOT_ADS.containsKey(slotOrdinal);
+    }
+
     public static synchronized void putFeedSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
         if (ad != null) {
             if (!FEED_SLOT_ADS.containsKey(slotOrdinal)) {
@@ -858,7 +862,7 @@ public class AdsConfig {
                                         offerDistinctToPool(REELS_POOL, nativeAd);
                                     }
                                 }
-                                notifyChange();
+                                if (done) notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
                                 @Override
@@ -883,8 +887,7 @@ public class AdsConfig {
                             .withNativeAdOptions(adOptions)
                             .build();
             loaderRef[0] = adLoader;
-            // Request a single multi-ad auction batch of 5 deduplicated ads from AdMob!
-            adLoader.loadAds(new com.google.android.gms.ads.AdRequest.Builder().build(), 5);
+            adLoader.loadAds(new com.google.android.gms.ads.AdRequest.Builder().build(), 3);
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
                 if (isFeedPool) feedInFlight = 0;
