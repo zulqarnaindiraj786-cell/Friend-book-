@@ -118,6 +118,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setLayoutManager(lm);
         rv.setItemAnimator(null); // zero jank / zero blink on realtime updates
         rv.setItemViewCacheSize(24);
+        rv.getRecycledViewPool().setMaxRecycledViews(1, 30);
         adapter = new FeedAdapter(a, this);
         rv.setAdapter(adapter);
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {

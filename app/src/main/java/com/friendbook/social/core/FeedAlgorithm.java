@@ -146,7 +146,7 @@ public final class FeedAlgorithm {
         pendingPostImpressions.add(postId);
     }
 
-    /** Record that the user watched a Reel / Video (immediately persisted for TikTok-style no-repeat discovery!). */
+    /** Record that the user watched a Reel / Video (flushed on pause/refresh for zero scroll jank!). */
     public static synchronized void recordVideoImpression(Context c, String reelOrPostId) {
         if (reelOrPostId == null || reelOrPostId.isEmpty()) return;
         ensureLoaded(c);
@@ -154,7 +154,6 @@ public final class FeedAlgorithm {
         videoLastEpoch.put(reelOrPostId, currentEpoch);
         videoSeenCount.put(reelOrPostId, getOrZero(videoSeenCount, reelOrPostId) + 1);
         lastTopReelId = reelOrPostId;
-        persist(c);
     }
 
     /** Optional user control in Feed Preferences: clear seen history so everything feels brand new. */
