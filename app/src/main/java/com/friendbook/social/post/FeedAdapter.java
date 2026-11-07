@@ -71,6 +71,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public boolean showHeader = true;
     public boolean showFooter = true;
     public boolean showInlineComments = true;
+    /** When >= 0 (in PostDetailActivity for a Sponsored Ad), renders ONLY that 1 real AdVH and ZERO PostVH! */
+    public int standaloneAdSlotOrdinal = -1;
 
     public FeedAdapter(Activity a, Host h) {
         this.activity = a;
@@ -144,6 +146,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (payload-only — ZERO height/scroll jump!). */
     public void onFastReactionUpdate(String postId, String mine, int total) {
         if (postId == null) return;
+        if (standaloneAdSlotOrdinal >= 0 && postId.startsWith("sponsored_ad_")) {
+            notifyItemChanged(0);
+            return;
+        }
         String me = Fb.uid();
         for (int i = 0; i < posts.size(); i++) {
             Models.Post p = posts.get(i);
@@ -272,6 +278,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private int adCount() {
+        if (standaloneAdSlotOrdinal >= 0) return 1;
         if (!adsActive() || posts.isEmpty()) return 0;
         if (posts.size() < NATIVE_AD_EVERY_N_POSTS) return 1;
         return posts.size() / NATIVE_AD_EVERY_N_POSTS;
@@ -279,6 +286,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Does this feed slot (after the header) hold a Native Ad? */
     private boolean isAdSlot(int slot) {
+        if (standaloneAdSlotOrdinal >= 0) return slot == 0;
         if (!adsActive() || posts.isEmpty()) return false;
         if (posts.size() < NATIVE_AD_EVERY_N_POSTS) {
             return slot == posts.size();
@@ -292,7 +300,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return slot - ((slot + 1) / NATIVE_AD_STEP);
     }
 
-    private int slotCount() { return posts.size() + adCount(); }
+    private int slotCount() {
+        if (standaloneAdSlotOrdinal >= 0) return 1;
+        return posts.size() + adCount();
+    }
 
     @Override public int getItemCount() { return offset() + slotCount() + footerCount(); }
 
@@ -446,8 +457,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
-            int adSlotOrdinal = Math.max(0, (position - offset()) / NATIVE_AD_STEP);
-            ((AdVH) h).loadFreshFeedNativeAd(nativeAdUnitId, adSlotOrdinal);
+            int adSlotOrdinal = standaloneAdSlotOrdinal >= 0
+                    ? standaloneAdSlotOrdinal
+                    : Math.max(0, (position - offset()) / NATIVE_AD_STEP);
+            ((AdVH) h).loadFreshFeedNativeAd(nativeAdUnitId, adSlotOrdinal, standaloneAdSlotOrdinal >= 0);
         } else {
             // Guard: realtime list swaps between measure & bind must not crash the feed.
             // A broken post gets a small placeholder card — NEVER an invisible one
@@ -1865,6 +1878,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int requestSeq = 0;
         int boundSlotOrdinal = -1;
         boolean adRequestInFlight = false;
+        boolean inDetailScreen = false;
 
         AdVH(ViewGroup parent) {
             super(android.view.LayoutInflater.from(parent.getContext())
@@ -2040,9 +2054,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 c, boundSlotOrdinal, picked, () -> refreshAdSocialUi(c)));
                 return true;
             });
-            View.OnClickListener openCmts = v ->
-                    com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
-                            c, boundSlotOrdinal, () -> refreshAdSocialUi(c));
+            View.OnClickListener openCmts = v -> {
+                if (inDetailScreen) return;
+                com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c));
+            };
             comment.setOnClickListener(openCmts);
             commentsSummary.setOnClickListener(openCmts);
             reactSummaryWrap.setOnClickListener(v ->
@@ -2192,6 +2208,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             // 3. Inline Comments + Circular Avatar + "Write a comment…" Bar (100% identical to PostVH!)
             adInlineCommentsCol.removeAllViews();
+            if (inDetailScreen) {
+                adInlineCommentsCol.setVisibility(View.GONE);
+                return;
+            }
             adInlineCommentsCol.setVisibility(View.VISIBLE);
             adInlineCommentsCol.addView(Ui.divider(c));
 
@@ -2328,6 +2348,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal) {
+            loadFreshFeedNativeAd(rawUnitId, slotOrdinal, false);
+        }
+
+        void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal, final boolean preserveExistingSlotAd) {
+            this.inDetailScreen = preserveExistingSlotAd;
             final Context ctx = itemView.getContext();
             if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
                 expand(ctx);
@@ -2355,8 +2380,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.adRequestInFlight = false;
             destroyCurrentAd();
 
-            // Always allocate a brand-new unseen ad creative for every bind — NEVER repeat an old ad!
-            com.friendbook.social.core.AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal);
+            if (preserveExistingSlotAd) {
+                com.friendbook.social.core.AdsConfig.resolveUniqueAdId(ctx, slotOrdinal);
+            } else {
+                // Always allocate a brand-new unseen ad creative for every bind — NEVER repeat an old ad!
+                com.friendbook.social.core.AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal);
+            }
             refreshAdSocialUi(ctx);
             com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
                 if (mySeq == requestSeq) refreshAdSocialUi(ctx);
@@ -2541,11 +2570,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 ctaButton.setText(ad.getCallToAction());
             }
 
-            if (ad.getIcon() == null) {
-                com.friendbook.social.core.AdsConfig.SponsoredCreative cr =
-                        com.friendbook.social.core.AdsConfig.getCreativeForSlot(c, boundSlotOrdinal);
-                iconView.setImageDrawable(com.friendbook.social.core.AdsConfig.createCompanyLogoDrawable(c, cr));
-                iconView.setVisibility(View.VISIBLE);
+            if (ad.getIcon() == null || ad.getIcon().getDrawable() == null) {
+                iconView.setVisibility(View.GONE);
             } else {
                 iconView.setImageDrawable(ad.getIcon().getDrawable());
                 iconView.setClipToOutline(true);
@@ -2585,8 +2611,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void onRecycled() {
-            if (adRequestInFlight) {
-                // Let the in-flight AdLoader finish into FEED_SLOT_ADS so collapsed 0px view still gets its ad!
+            if (inDetailScreen || adRequestInFlight) {
                 return;
             }
             requestSeq++;

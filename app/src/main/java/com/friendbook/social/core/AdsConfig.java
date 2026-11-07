@@ -981,26 +981,22 @@ public class AdsConfig {
     }
 
     public static com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
-        SponsoredCreative cr = getCreativeForSlot(slotKey);
-        String docId = "sponsored_ad_creative_" + cr.id;
-        String companyLogoToken = "ad_company_logo:" + cr.id;
+        int uniqueId = resolveUniqueAdId(cachedAppCtx, slotKey);
+        String docId = "sponsored_ad_creative_" + uniqueId;
         com.friendbook.social.models.Models.Post p = AD_POST_CACHE.get(docId);
         if (p == null) {
             p = new com.friendbook.social.models.Models.Post();
             p.id = docId;
             p.authorId = "friendbook_sponsored";
-            p.authorName = cr.advertiser;
-            p.authorPhoto = companyLogoToken;
-            p.content = cr.headline + " — " + cr.body;
+            p.authorName = "Sponsored";
+            p.authorPhoto = "";
+            p.content = "Sponsored";
             p.privacy = "Only me"; // Keeps ad doc out of regular HomeFragment post query while real for likes/comments
-            p.createdAt = 1L;
+            p.createdAt = System.currentTimeMillis();
             p.likes = 0;
             p.comments = 0;
             p.shares = 0;
             AD_POST_CACHE.put(docId, p);
-        } else {
-            p.authorName = cr.advertiser;
-            p.authorPhoto = companyLogoToken;
         }
         return p;
     }
@@ -1009,7 +1005,6 @@ public class AdsConfig {
     public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         final String docId = adPost.id;
-        final String companyLogoToken = adPost.authorPhoto;
         if (!AD_POST_FETCHED.add(docId)) {
             if (onHydrated != null) onHydrated.run();
             return;
@@ -1023,7 +1018,7 @@ public class AdsConfig {
                             adPost.likes = Math.max(0, remote.likes);
                             adPost.comments = Math.max(0, remote.comments);
                             adPost.shares = Math.max(0, remote.shares);
-                            adPost.authorPhoto = companyLogoToken;
+                            adPost.authorPhoto = "";
                             if (remote.reactionsMap != null) {
                                 adPost.reactionsMap.clear();
                                 adPost.reactionsMap.putAll(remote.reactionsMap);
@@ -1039,11 +1034,11 @@ public class AdsConfig {
                             seed.put("id", docId);
                             seed.put("authorId", "friendbook_sponsored");
                             seed.put("authorName", adPost.authorName);
-                            seed.put("authorPhoto", companyLogoToken);
-                            seed.put("authorPhotoUrl", companyLogoToken);
+                            seed.put("authorPhoto", "");
+                            seed.put("authorPhotoUrl", "");
                             seed.put("content", adPost.content);
                             seed.put("privacy", "Only me");
-                            seed.put("createdAt", 1L);
+                            seed.put("createdAt", System.currentTimeMillis());
                             seed.put("likes", 0);
                             seed.put("comments", 0);
                             seed.put("shares", 0);
@@ -1135,7 +1130,7 @@ public class AdsConfig {
     }
 
     /**
-     * Opens `PostDetailActivity` for Feed Sponsored Ads — 100% identical to tapping Comment on a Feed Post!
+     * Opens `PostDetailActivity` for Feed Sponsored Ads — shows ONLY the real AdMob Ad card + Comments!
      */
     public static void openFeedAdPostDetail(final Context c, final int slotKey, final Runnable onUpdated) {
         if (c == null) return;
@@ -1144,6 +1139,7 @@ public class AdsConfig {
         hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
         android.content.Intent i = new android.content.Intent(c, com.friendbook.social.post.PostDetailActivity.class);
         i.putExtra("post_id", adPost.id);
+        i.putExtra("ad_slot_ordinal", slotKey);
         i.putExtra("focus_comment", true);
         c.startActivity(i);
     }

@@ -1407,10 +1407,8 @@ public class ReelsFragment extends Fragment {
                     ctaButton.setText(ad.getCallToAction());
                 }
 
-                if (ad.getIcon() == null) {
-                    AdsConfig.SponsoredCreative cr = AdsConfig.getCreativeForSlot(c, boundSlotOrdinal + 10000);
-                    iconView.setImageDrawable(AdsConfig.createCompanyLogoDrawable(c, cr));
-                    iconView.setVisibility(View.VISIBLE);
+                if (ad.getIcon() == null || ad.getIcon().getDrawable() == null) {
+                    iconView.setVisibility(View.GONE);
                 } else {
                     iconView.setImageDrawable(ad.getIcon().getDrawable());
                     iconView.setClipToOutline(true);
