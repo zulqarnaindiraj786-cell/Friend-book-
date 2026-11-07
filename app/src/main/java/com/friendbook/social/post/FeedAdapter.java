@@ -2377,16 +2377,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
 
-            // Keep card expanded while AdMob loads so RecyclerView never recycles a 0px view & cancels requestSeq!
+            // Keep collapsed until real AdMob NativeAd arrives (never show "Sponsored • Loading Ad..." box!)
             adRequestInFlight = true;
-            expand(ctx);
-            adShowcaseBanner.setVisibility(View.GONE);
-            mediaView.setVisibility(View.GONE);
-            headlineView.setText("Sponsored • Loading Ad…");
-            advertiserView.setText("Google AdMob");
-            advertiserView.setVisibility(View.VISIBLE);
-            bodyView.setVisibility(View.GONE);
-            ctaButton.setVisibility(View.GONE);
+            collapse();
 
             com.friendbook.social.core.ConsentManager.runWhenInitialized(ctx, () -> {
                 if (mySeq != requestSeq) return;
@@ -2432,22 +2425,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 com.google.android.gms.ads.AdLoader adLoader =
                         new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
                                 .forNativeAd(nativeAd -> {
-                                    if (mySeq != requestSeq) {
-                                        com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
+                                    com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
+                                    nativeAd.setOnPaidEventListener(adValue ->
+                                            com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
+                                    com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
+                                    if (mySeq != requestSeq || currentNativeAd != null) {
+                                        com.friendbook.social.core.AdsConfig.notifyChange();
                                         return;
                                     }
                                     adRequestInFlight = false;
                                     currentNativeAd = nativeAd;
-                                    com.friendbook.social.core.AdsConfig.putFeedSlotAd(slotOrdinal, nativeAd);
-                                    com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
-                                    nativeAd.setOnPaidEventListener(adValue ->
-                                            com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
 
                                     // Expand BEFORE setNativeAd so Google Mobile Ads viewability registers impression
                                     expand(ctx);
                                     populateNativeAdView(nativeAd, ctx);
                                     refreshAdSocialUi(ctx);
                                     nativeAdView.requestLayout();
+                                    com.friendbook.social.core.AdsConfig.notifyChange();
                                 })
                                 .withAdListener(new com.google.android.gms.ads.AdListener() {
                                     @Override
@@ -2508,7 +2502,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 .withNativeAdOptions(adOptions)
                                 .build();
 
-                adLoader.loadAd(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false));
+                // Request a batch of 3 deduplicated ads in one auction (1st fills this slot, 2nd & 3rd fill pool!)
+                adLoader.loadAds(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false), 3);
             } catch (Throwable t) {
                 adRequestInFlight = false;
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
@@ -2590,8 +2585,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void onRecycled() {
+            if (adRequestInFlight) {
+                // Let the in-flight AdLoader finish into FEED_SLOT_ADS so collapsed 0px view still gets its ad!
+                return;
+            }
             requestSeq++;
-            adRequestInFlight = false;
             com.friendbook.social.core.AdsConfig.evictSlotAd(boundSlotOrdinal);
             destroyCurrentAd();
         }

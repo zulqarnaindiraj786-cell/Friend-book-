@@ -82,15 +82,27 @@ public class AdsConfig {
     }
 
     private static ChangeListener listener;
+    private static Runnable reelsPoolListener;
+    private static final android.os.Handler MAIN_UI_HANDLER =
+            new android.os.Handler(android.os.Looper.getMainLooper());
 
     public static void setChangeListener(ChangeListener l) {
         listener = l;
     }
 
+    public static void setReelsPoolListener(Runnable r) {
+        reelsPoolListener = r;
+    }
+
     public static void notifyChange() {
-        if (listener != null) {
-            listener.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
-        }
+        MAIN_UI_HANDLER.post(() -> {
+            if (listener != null) {
+                listener.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
+            }
+            if (reelsPoolListener != null) {
+                reelsPoolListener.run();
+            }
+        });
     }
 
     /** Validates that a unit ID belongs to our real production AdMob publisher (`pub-3387480177023669`). */
@@ -601,21 +613,27 @@ public class AdsConfig {
         final Context appCtx = context.getApplicationContext();
         ConsentManager.runWhenInitialized(appCtx, () -> {
             synchronized (AdsConfig.class) {
-                while (FEED_POOL.size() + feedInFlight < 3) {
-                    feedInFlight++;
+                if (FEED_POOL.size() < POOL_TARGET_SIZE && feedInFlight <= 0) {
+                    feedInFlight = 1;
                     preloadOneFeedAd(appCtx);
                 }
-                while (REELS_POOL.size() + reelsInFlight < 3) {
-                    reelsInFlight++;
+                if (REELS_POOL.size() < POOL_TARGET_SIZE && reelsInFlight <= 0) {
+                    reelsInFlight = 1;
                     preloadOneReelsAd(appCtx);
                 }
             }
         });
     }
 
-    private static int feedFallbackRotationIdx = 0;
-    private static int reelsFallbackRotationIdx = 0;
+    private static int requestTopicCounter = 0;
+    private static final String[] BROAD_AUCTION_TOPICS = new String[]{
+            "", "shopping", "games", "finance", "technology", "automotive", "travel", "entertainment"
+    };
 
+    /**
+     * Returns a distinct real AdMob NativeAd for `slotOrdinal`.
+     * NEVER reuses an already-bound NativeAd from another slot (fixes same-ad repetition!).
+     */
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
         resolveUniqueAdId(context, slotOrdinal);
         com.google.android.gms.ads.nativead.NativeAd existing = FEED_SLOT_ADS.get(slotOrdinal);
@@ -627,12 +645,6 @@ public class AdsConfig {
         if (polled == null) {
             polled = pollDistinctFromPool(REELS_POOL);
         }
-        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
-            polled = LOADED_FEED_ADS.get((feedFallbackRotationIdx++) % LOADED_FEED_ADS.size());
-        }
-        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
-            polled = LOADED_REELS_ADS.get((feedFallbackRotationIdx++) % LOADED_REELS_ADS.size());
-        }
         if (polled != null) {
             FEED_SLOT_ADS.put(slotOrdinal, polled);
             syncRealNativeAdToSlot(slotOrdinal, polled);
@@ -643,9 +655,12 @@ public class AdsConfig {
 
     public static synchronized void putFeedSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
         if (ad != null) {
-            rememberFeedAd(ad);
-            FEED_SLOT_ADS.put(slotOrdinal, ad);
-            syncRealNativeAdToSlot(slotOrdinal, ad);
+            if (!FEED_SLOT_ADS.containsKey(slotOrdinal)) {
+                FEED_SLOT_ADS.put(slotOrdinal, ad);
+                syncRealNativeAdToSlot(slotOrdinal, ad);
+            } else {
+                offerDistinctToPool(FEED_POOL, ad);
+            }
         }
     }
 
@@ -660,12 +675,6 @@ public class AdsConfig {
         if (polled == null) {
             polled = pollDistinctFromPool(FEED_POOL);
         }
-        if (polled == null && !LOADED_REELS_ADS.isEmpty()) {
-            polled = LOADED_REELS_ADS.get((reelsFallbackRotationIdx++) % LOADED_REELS_ADS.size());
-        }
-        if (polled == null && !LOADED_FEED_ADS.isEmpty()) {
-            polled = LOADED_FEED_ADS.get((reelsFallbackRotationIdx++) % LOADED_FEED_ADS.size());
-        }
         if (polled != null) {
             REELS_SLOT_ADS.put(slotOrdinal, polled);
             syncRealNativeAdToSlot(slotOrdinal + 10000, polled);
@@ -675,11 +684,44 @@ public class AdsConfig {
     }
 
     private static String lastPolledSignature = "";
+    private static final java.util.Set<String> SHOWN_SIGNATURES = new java.util.HashSet<>();
+
+    private static void offerDistinctToPool(
+            java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> pool,
+            com.google.android.gms.ads.nativead.NativeAd ad) {
+        if (ad == null) return;
+        String sig = adSignature(ad);
+        for (com.google.android.gms.ads.nativead.NativeAd existing : pool) {
+            if (sig.equals(adSignature(existing))) {
+                pool.offerLast(ad);
+                return;
+            }
+        }
+        boolean hasVideo = ad.getMediaContent() != null && ad.getMediaContent().hasVideoContent();
+        if (hasVideo) {
+            pool.offerFirst(ad);
+        } else {
+            pool.offerLast(ad);
+        }
+    }
 
     private static com.google.android.gms.ads.nativead.NativeAd pollDistinctFromPool(
             java.util.Deque<com.google.android.gms.ads.nativead.NativeAd> pool) {
         if (pool.isEmpty()) return null;
         int n = pool.size();
+        // Pass 1: prefer an ad whose signature has NEVER been shown yet in this session
+        for (int i = 0; i < n; i++) {
+            com.google.android.gms.ads.nativead.NativeAd candidate = pool.pollFirst();
+            if (candidate == null) continue;
+            String sig = adSignature(candidate);
+            if (!SHOWN_SIGNATURES.contains(sig)) {
+                SHOWN_SIGNATURES.add(sig);
+                lastPolledSignature = sig;
+                return candidate;
+            }
+            pool.offerLast(candidate);
+        }
+        // Pass 2: prefer an ad different from the immediately preceding slot
         for (int i = 0; i < n; i++) {
             com.google.android.gms.ads.nativead.NativeAd candidate = pool.pollFirst();
             if (candidate == null) continue;
@@ -700,7 +742,8 @@ public class AdsConfig {
         String h = ad.getHeadline() != null ? ad.getHeadline() : "";
         String a = ad.getAdvertiser() != null ? ad.getAdvertiser() : "";
         String b = ad.getBody() != null ? ad.getBody() : "";
-        return (h + "|" + a + "|" + b).trim();
+        String c = ad.getCallToAction() != null ? ad.getCallToAction() : "";
+        return (h + "|" + a + "|" + b + "|" + c).trim();
     }
 
     public static synchronized void syncRealNativeAdToSlot(int slotKey, com.google.android.gms.ads.nativead.NativeAd ad) {
@@ -722,14 +765,17 @@ public class AdsConfig {
     }
 
     public static synchronized boolean hasReadyReelsSlotOrPoolAd(int slotOrdinal) {
-        return REELS_SLOT_ADS.containsKey(slotOrdinal) || !REELS_POOL.isEmpty();
+        return !REELS_SLOT_ADS.isEmpty() || !REELS_POOL.isEmpty() || !FEED_POOL.isEmpty();
     }
 
     public static synchronized void putReelsSlotAd(int slotOrdinal, com.google.android.gms.ads.nativead.NativeAd ad) {
         if (ad != null) {
-            rememberReelsAd(ad);
-            REELS_SLOT_ADS.put(slotOrdinal, ad);
-            syncRealNativeAdToSlot(slotOrdinal + 10000, ad);
+            if (!REELS_SLOT_ADS.containsKey(slotOrdinal)) {
+                REELS_SLOT_ADS.put(slotOrdinal, ad);
+                syncRealNativeAdToSlot(slotOrdinal + 10000, ad);
+            } else {
+                offerDistinctToPool(REELS_POOL, ad);
+            }
         }
     }
 
@@ -746,73 +792,38 @@ public class AdsConfig {
     }
 
     /**
-     * Builds a clean, unrestricted Production AdRequest so 100% of Google AdMob's open-auction
-     * video & native demand can fill every Feed and Reels slot without keyword/URL No-Fill filtering.
+     * Builds a Production AdRequest that rotates single broad auction categories across calls
+     * so AdMob serves diverse campaigns without triggering No-Fill (Code 3).
      */
     public static com.google.android.gms.ads.AdRequest buildHighValueAdRequest(boolean isReels) {
-        return new com.google.android.gms.ads.AdRequest.Builder().build();
+        com.google.android.gms.ads.AdRequest.Builder b = new com.google.android.gms.ads.AdRequest.Builder();
+        int idx;
+        synchronized (AdsConfig.class) {
+            idx = (requestTopicCounter++) % BROAD_AUCTION_TOPICS.length;
+        }
+        String topic = BROAD_AUCTION_TOPICS[idx];
+        if (topic != null && !topic.isEmpty()) {
+            try { b.addKeyword(topic); } catch (Throwable ignored) { }
+        }
+        return b.build();
     }
 
     private static void preloadOneFeedAd(final Context appCtx) {
-        final String unitId = feedNativeId();
-        try {
-            recordAdRequest(appCtx);
-            com.google.android.gms.ads.VideoOptions videoOptions =
-                    new com.google.android.gms.ads.VideoOptions.Builder()
-                            .setStartMuted(true)
-                            .build();
-            com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
-                    new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
-                            .setAdChoicesPlacement(com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
-                            .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
-                            .setVideoOptions(videoOptions)
-                            .build();
-            com.google.android.gms.ads.AdLoader adLoader =
-                    new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
-                            .forNativeAd(nativeAd -> {
-                                synchronized (AdsConfig.class) {
-                                    feedInFlight = Math.max(0, feedInFlight - 1);
-                                    onNativeAdLoaded(appCtx);
-                                    nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
-                                    rememberFeedAd(nativeAd);
-                                    boolean hasVideo = nativeAd.getMediaContent() != null
-                                            && nativeAd.getMediaContent().hasVideoContent();
-                                    if (hasVideo) {
-                                        FEED_POOL.offerFirst(nativeAd);
-                                    } else {
-                                        FEED_POOL.offerLast(nativeAd);
-                                    }
-                                }
-                                notifyChange();
-                            })
-                            .withAdListener(new com.google.android.gms.ads.AdListener() {
-                                @Override
-                                public void onAdImpression() { recordAdImpression(appCtx); }
-                                @Override
-                                public void onAdClicked() { recordAdClick(appCtx); }
-                                @Override
-                                public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
-                                    synchronized (AdsConfig.class) {
-                                        feedInFlight = Math.max(0, feedInFlight - 1);
-                                    }
-                                    onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
-                                }
-                            })
-                            .withNativeAdOptions(adOptions)
-                            .build();
-            adLoader.loadAd(buildHighValueAdRequest(false));
-        } catch (Throwable t) {
-            synchronized (AdsConfig.class) {
-                feedInFlight = Math.max(0, feedInFlight - 1);
-            }
-        }
+        preloadBatchIntoPool(appCtx, feedNativeId(), true, true);
     }
 
     private static void preloadOneReelsAd(final Context appCtx) {
-        final String unitId = reelsNativeId();
+        preloadBatchIntoPool(appCtx, reelsNativeId(), false, true);
+    }
+
+    private static void preloadBatchIntoPool(
+            final Context appCtx,
+            final String unitId,
+            final boolean isFeedPool,
+            final boolean allowFallbackUnit) {
         try {
             recordAdRequest(appCtx);
-            boolean startMuted = !Prefs.reelsStartWithSound(appCtx);
+            boolean startMuted = isFeedPool || !Prefs.reelsStartWithSound(appCtx);
             com.google.android.gms.ads.VideoOptions videoOptions =
                     new com.google.android.gms.ads.VideoOptions.Builder()
                             .setStartMuted(startMuted)
@@ -823,20 +834,28 @@ public class AdsConfig {
                             .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                             .setVideoOptions(videoOptions)
                             .build();
+            final com.google.android.gms.ads.AdLoader[] loaderRef = new com.google.android.gms.ads.AdLoader[1];
+            MAIN_UI_HANDLER.postDelayed(() -> {
+                synchronized (AdsConfig.class) {
+                    if (isFeedPool) feedInFlight = 0;
+                    else reelsInFlight = 0;
+                }
+            }, 6000L);
             com.google.android.gms.ads.AdLoader adLoader =
                     new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
                             .forNativeAd(nativeAd -> {
+                                boolean done = loaderRef[0] == null || !loaderRef[0].isLoading();
                                 synchronized (AdsConfig.class) {
-                                    reelsInFlight = Math.max(0, reelsInFlight - 1);
+                                    if (done) {
+                                        if (isFeedPool) feedInFlight = 0;
+                                        else reelsInFlight = 0;
+                                    }
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
-                                    rememberReelsAd(nativeAd);
-                                    boolean hasVideo = nativeAd.getMediaContent() != null
-                                            && nativeAd.getMediaContent().hasVideoContent();
-                                    if (hasVideo) {
-                                        REELS_POOL.offerFirst(nativeAd);
+                                    if (isFeedPool) {
+                                        offerDistinctToPool(FEED_POOL, nativeAd);
                                     } else {
-                                        REELS_POOL.offerLast(nativeAd);
+                                        offerDistinctToPool(REELS_POOL, nativeAd);
                                     }
                                 }
                                 notifyChange();
@@ -848,18 +867,28 @@ public class AdsConfig {
                                 public void onAdClicked() { recordAdClick(appCtx); }
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
-                                    synchronized (AdsConfig.class) {
-                                        reelsInFlight = Math.max(0, reelsInFlight - 1);
+                                    int code = adError != null ? adError.getCode() : -1;
+                                    onNativeAdFailed(appCtx, code);
+                                    if (allowFallbackUnit) {
+                                        String altUnit = FEED_NATIVE_ID.equals(unitId) ? REELS_NATIVE_ID : FEED_NATIVE_ID;
+                                        preloadBatchIntoPool(appCtx, altUnit, isFeedPool, false);
+                                    } else {
+                                        synchronized (AdsConfig.class) {
+                                            if (isFeedPool) feedInFlight = 0;
+                                            else reelsInFlight = 0;
+                                        }
                                     }
-                                    onNativeAdFailed(appCtx, adError != null ? adError.getCode() : -1);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            adLoader.loadAd(buildHighValueAdRequest(true));
+            loaderRef[0] = adLoader;
+            // Request a single multi-ad auction batch of 5 deduplicated ads from AdMob!
+            adLoader.loadAds(new com.google.android.gms.ads.AdRequest.Builder().build(), 5);
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
-                reelsInFlight = Math.max(0, reelsInFlight - 1);
+                if (isFeedPool) feedInFlight = 0;
+                else reelsInFlight = 0;
             }
         }
     }

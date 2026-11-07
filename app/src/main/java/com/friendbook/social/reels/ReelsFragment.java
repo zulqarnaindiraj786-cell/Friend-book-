@@ -628,6 +628,11 @@ public class ReelsFragment extends Fragment {
 
     @Override public void onResume(){
         super.onResume();
+        AdsConfig.setReelsPoolListener(() -> {
+            if (adapter != null && pager != null) {
+                adapter.onPoolAdAvailable();
+            }
+        });
         if(pager!=null && adapter!=null){
             adapter.refreshVisibleHoldersInPlace(pager);
             pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));
@@ -659,6 +664,7 @@ public class ReelsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
+        AdsConfig.setReelsPoolListener(null);
         videoGeneration++; pagingVideos=false;
         ReelUploadManager.removeListener(bgUploadListener);
         if (reelsReg != null) { reelsReg.remove(); reelsReg = null; }
@@ -757,8 +763,20 @@ public class ReelsFragment extends Fragment {
             return true;
         }
 
+        private boolean lastAdsActive = false;
+
         private boolean adsActive() {
-            return AdsConfig.nativeAdsEnabled();
+            boolean active = AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0);
+            lastAdsActive = active;
+            return active;
+        }
+
+        void onPoolAdAvailable() {
+            if (!lastAdsActive && AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0)
+                    && !data.isEmpty()) {
+                lastAdsActive = true;
+                notifyDataSetChanged();
+            }
         }
 
         private int adCount() {
@@ -1259,16 +1277,16 @@ public class ReelsFragment extends Fragment {
                     com.google.android.gms.ads.AdLoader adLoader =
                             new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
                                     .forNativeAd(nativeAd -> {
-                                        if (mySeq != requestSeq) {
-                                            AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
+                                        AdsConfig.onNativeAdLoaded(ctx);
+                                        nativeAd.setOnPaidEventListener(adValue ->
+                                                AdsConfig.recordPaidEvent(ctx, adValue));
+                                        AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
+                                        if (mySeq != requestSeq || currentNativeAd != null) {
+                                            AdsConfig.notifyChange();
                                             return;
                                         }
                                         adRequestInFlight = false;
                                         currentNativeAd = nativeAd;
-                                        AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
-                                        AdsConfig.onNativeAdLoaded(ctx);
-                                        nativeAd.setOnPaidEventListener(adValue ->
-                                                AdsConfig.recordPaidEvent(ctx, adValue));
 
                                         loadingBox.setVisibility(View.GONE);
                                         nativeAdView.setVisibility(View.VISIBLE);
@@ -1328,8 +1346,7 @@ public class ReelsFragment extends Fragment {
                                                     requestRealReelsAdFromUnit(ctx, altUnit, slotOrdinal, mySeq, false);
                                                 } else {
                                                     adRequestInFlight = false;
-                                                    statusView.setText("Ad unavailable right now (Code "
-                                                            + adError.getCode() + "). Swipe for next video.");
+                                                    loadingBox.setVisibility(View.GONE);
                                                 }
                                             }
                                         }
@@ -1337,7 +1354,7 @@ public class ReelsFragment extends Fragment {
                                     .withNativeAdOptions(adOptions)
                                     .build();
 
-                    adLoader.loadAd(AdsConfig.buildHighValueAdRequest(true));
+                    adLoader.loadAds(AdsConfig.buildHighValueAdRequest(true), 3);
                 } catch (Throwable t) {
                     adRequestInFlight = false;
                     android.util.Log.e(AdsConfig.LOG_TAG,
