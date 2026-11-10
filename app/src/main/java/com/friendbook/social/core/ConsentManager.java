@@ -139,9 +139,9 @@ public final class ConsentManager {
             }
         }
         if (mobileAdsInitStarted.compareAndSet(false, true)) {
-            // Safety fallback: if Play Services takes > 2200ms to fire callback, unblock pending ad requests
-            MAIN_HANDLER.postDelayed(() -> markReadyAndFlush(appCtx), 2200L);
-            // Initialize MobileAds on a background thread (Google official recommendation to prevent UI thread ANR/hang!)
+            // Safety fallback: if Play Services takes > 900ms to fire callback, unblock pending ad requests immediately
+            MAIN_HANDLER.postDelayed(() -> markReadyAndFlush(appCtx), 900L);
+            // Initialize MobileAds on a dedicated thread to prevent UI thread ANR while booting AdMob fast
             Thread initThread = new Thread(() -> {
                 try {
                     MobileAds.initialize(appCtx, initializationStatus -> {
@@ -155,7 +155,7 @@ public final class ConsentManager {
                     markReadyAndFlush(appCtx);
                 }
             }, "admob-bg-init");
-            initThread.setPriority(Thread.NORM_PRIORITY - 1);
+            initThread.setPriority(Thread.NORM_PRIORITY + 1);
             initThread.start();
         }
     }
@@ -169,6 +169,7 @@ public final class ConsentManager {
         }
         MAIN_HANDLER.post(() -> {
             if (appCtx != null) {
+                AdsConfig.preloadFeedBatchNow(appCtx, 4);
                 AdsConfig.warmUpPools(appCtx);
             }
             for (Runnable r : toRun) {

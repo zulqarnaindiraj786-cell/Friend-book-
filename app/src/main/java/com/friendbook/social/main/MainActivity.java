@@ -210,8 +210,10 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK on background thread
+        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 4 Feed Ads on app open!
+        AdsConfig.preloadFeedBatchNow(this, 4);
         ConsentManager.gatherConsentAndInitAds(this, () -> {
+            AdsConfig.preloadFeedBatchNow(this, 4);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
@@ -371,6 +373,11 @@ public class MainActivity extends Activity {
      * Keeps fragments alive in memory via add + hide/show instead of destroying & recreating!
      */
     public void select(int tab) {
+        if (tab == TAB_REELS) {
+            AdsConfig.preloadReelsBatchNow(this, 4);
+        } else if (tab == TAB_HOME) {
+            AdsConfig.preloadFeedBatchNow(this, 4);
+        }
         if (tab == active) {
             if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();

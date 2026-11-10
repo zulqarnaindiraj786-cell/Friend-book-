@@ -301,6 +301,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         gblp.setMargins(Ui.dp(this, 2), 0, 0, Ui.dp(this, 2));
         avWrap.addView(guardBadge, gblp);
         heroTopStack.addView(avWrap, avWrapLp);
+        avWrap.bringToFront();
         body.addView(heroTopStack, new LinearLayout.LayoutParams(-1, -2));
 
         // 4. Hero Info Card (Bio + Action Buttons below the Avatar & Name Strip)
@@ -1461,7 +1462,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             boolean isRestr = Fb.me != null && Fb.me.restrictedUids != null
                     && Fb.me.restrictedUids.contains(uid);
             pm.getMenu().add(isRestr ? "🔓 Remove from Restricted list" : "🙈 Add to Restricted list");
-            pm.getMenu().add("📱 Show QR code");
             if (Admin.isAdmin()) {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
                 pm.getMenu().add(user != null && user.isSuspendedNow()
@@ -1490,7 +1490,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
             pm.getMenu().add("📦 Archive & Recycle Bin");
             pm.getMenu().add("🔗 Copy profile link");
-            pm.getMenu().add("📱 My Profile QR code");
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
         }
@@ -1552,9 +1551,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Fb.db().collection("users").document(Fb.uid())
                         .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
                 Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list");
-            } else if (t.contains("QR code")) {
-                Ui.showQrDialog(this, user != null ? user.displayName : "friendbook",
-                        com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
             } else if (t.contains("View as Public")) {
                 viewAsPublic = true;
                 viewAsBanner.setVisibility(View.VISIBLE);

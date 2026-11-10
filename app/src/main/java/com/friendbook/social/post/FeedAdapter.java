@@ -78,6 +78,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.activity = a;
         this.host = h;
         setHasStableIds(true);
+        com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, 4);
         com.friendbook.social.core.AdsConfig.warmUpPools(a);
     }
 
@@ -2384,16 +2385,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
 
-            // Keep collapsed when pool does not have an ad ready yet; in scrolling feed, let background pool warm up
-            // without running synchronous AdLoader IPC on the UI thread during scroll!
+            // Register instant slot waiter so the moment any preloaded batch ad arrives, this slot expands in 0ms!
             collapse();
+            adRequestInFlight = true;
+            com.friendbook.social.core.AdsConfig.registerFeedSlotWaiter(slotOrdinal, readyAd -> {
+                if (mySeq != requestSeq || currentNativeAd != null || readyAd == null) return;
+                adRequestInFlight = false;
+                currentNativeAd = readyAd;
+                expand(ctx);
+                populateNativeAdView(readyAd, ctx);
+                refreshAdSocialUi(ctx);
+                com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
+                    if (mySeq == requestSeq && currentNativeAd != null) refreshAdSocialUi(ctx);
+                });
+                com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(ctx);
+            });
             if (!preserveExistingSlotAd && slotOrdinal > 0) {
-                com.friendbook.social.core.AdsConfig.warmUpPools(ctx);
+                com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(ctx, 4);
                 return;
             }
-            adRequestInFlight = true;
             com.friendbook.social.core.ConsentManager.runWhenInitialized(ctx, () -> {
-                if (mySeq != requestSeq) return;
+                if (mySeq != requestSeq || currentNativeAd != null) return;
                 com.google.android.gms.ads.nativead.NativeAd readyAfterInit =
                         com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
                 if (readyAfterInit != null) {
@@ -2464,6 +2476,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                                 "[FeedNative] Ad impression recorded (slot=" + slotOrdinal
                                                         + ", unitId=" + unitId + ")");
                                         com.friendbook.social.core.AdsConfig.recordAdImpression(ctx);
+                                        com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(ctx);
                                     }
 
                                     @Override
@@ -2509,7 +2522,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                                 .withNativeAdOptions(adOptions)
                                 .build();
 
-                adLoader.loadAd(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false));
+                adLoader.loadAds(com.friendbook.social.core.AdsConfig.buildHighValueAdRequest(false), 4);
             } catch (Throwable t) {
                 adRequestInFlight = false;
                 android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
