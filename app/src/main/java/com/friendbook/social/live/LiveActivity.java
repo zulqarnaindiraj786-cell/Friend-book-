@@ -154,6 +154,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private TextView pkWinnerHeadlineTv;
     private TextView pkRematchBtn;
     private TextView pkExitPkBtn;
+    private TextView pkLeaveMatchBtn;
 
     // Co-Host PIP Card (Top-Right under header)
     private FrameLayout coHostCard;
@@ -268,6 +269,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private int pkDurationSec = 180;
     private String lastHandledPkInviteId = "";
     private String lastScoredPkRoundKey = "";
+    private final Set<String> endedPkBattleIds = new HashSet<>();
+    private long coHostLeftLocallyUntilMs = 0L;
 
     // Co-Host, Moderation, Q&A, Polls & Leaderboard State
     private String activeCoHostUid = "";
@@ -668,6 +671,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         FrameLayout.LayoutParams tmLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         tmLp.topMargin = Ui.dp(this, 6);
         stageWrap.addView(pkTimerPillTv, tmLp);
+
+        // Always-visible "🚪 Leave Match" pill for any participant (Host A, Host B, or PK Guest) to leave anytime!
+        pkLeaveMatchBtn = Ui.roundChip(this, "🚪 Leave Match", 0xEEFE2C55, 0xFFFFFFFF, 11f);
+        Ui.pad(pkLeaveMatchBtn, 10, 4, 10, 4);
+        pkLeaveMatchBtn.setVisibility(View.GONE);
+        pkLeaveMatchBtn.setOnClickListener(v -> promptLeaveCurrentMatch());
+        FrameLayout.LayoutParams lmBtnLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        lmBtnLp.topMargin = Ui.dp(this, 6);
+        lmBtnLp.rightMargin = Ui.dp(this, 8);
+        stageWrap.addView(pkLeaveMatchBtn, lmBtnLp);
 
         // Center VS Clash Emblem
         TextView vsBadge = Ui.tvBold(this, "VS", 12f, 0xFFFFFFFF);
@@ -1716,7 +1729,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         // 2-User Split-Screen PK Battle Room Sync
         boolean docPkActive = Boolean.TRUE.equals(m.get("pkActive"));
         String docPkId = Format.str(m, "pkBattleId");
-        if (docPkActive && !docPkId.isEmpty()) {
+        if (docPkActive && !docPkId.isEmpty() && !endedPkBattleIds.contains(docPkId)) {
             subscribeToPkBattle(docPkId);
         } else if (!docPkActive && !isHost && pkBattleActive) {
             teardownPkStageUi();
@@ -1881,6 +1894,43 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     promptViewerRequestedPk(uid, name, photo);
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, "⚔️ requested a PK Battle!", "system"));
+            } else if ("pk_leave".equals(type)) {
+                String leftPkId = Format.str(m, "pkBattleId");
+                if (!leftPkId.isEmpty()) endedPkBattleIds.add(leftPkId);
+                if (isNewPacket) {
+                    if (isHost && liveId != null) {
+                        Map<String, Object> lu = new HashMap<>();
+                        lu.put("pkActive", false);
+                        lu.put("pkBattleId", "");
+                        Fb.db().collection("lives").document(liveId).update(lu);
+                    }
+                    if (pkBattleActive) {
+                        teardownPkStageUi();
+                        if (!uid.equals(Fb.uid())) {
+                            Ui.toast(this, "🚪 " + name + " left the Live Match");
+                        }
+                    }
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, "🚪 left the Live Match", "system"));
+            } else if ("cohost_leave".equals(type)) {
+                if (isNewPacket && isHost && liveId != null && uid.equals(activeCoHostUid)) {
+                    Map<String, Object> cu = new HashMap<>();
+                    cu.put("coHostUid", "");
+                    cu.put("coHostName", "");
+                    cu.put("coHostFrameB64", "");
+                    cu.put("coHostAudioB64", "");
+                    Fb.db().collection("lives").document(liveId).update(cu);
+                    if (rtdbStreamRef != null) {
+                        try {
+                            Map<String, Object> rClear = new HashMap<>();
+                            rClear.put("cv", "");
+                            rClear.put("ca", "");
+                            rClear.put("cCamOff", true);
+                            rtdbStreamRef.updateChildren(rClear);
+                        } catch (Throwable ignored) { }
+                    }
+                }
+                visibleMessages.add(new ChatItem(id, uid, name, photo, "🚪 left the Co-Host stage", "system"));
             } else if ("qa".equals(type)) {
                 if (isNewPacket) {
                     qaItems.add(0, new ChatItem(id, uid, name, photo, text, "qa"));
@@ -1955,8 +2005,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
 
+        if (activeCoHostUid.equals(me) && System.currentTimeMillis() < coHostLeftLocallyUntilMs) {
+            return;
+        }
+
         coHostCard.setVisibility(View.VISIBLE);
         coHostLabelTv.setText("🤝 " + (activeCoHostName.isEmpty() ? "Co-Host" : activeCoHostName));
+        coHostCloseBtn.setText(isHost ? "✕" : "🚪 Leave");
         coHostCloseBtn.setVisibility((isHost || activeCoHostUid.equals(me)) ? View.VISIBLE : View.GONE);
         if (coHostCamToggleBtn != null) {
             coHostCamToggleBtn.setVisibility(activeCoHostUid.equals(me) ? View.VISIBLE : View.GONE);
@@ -2107,10 +2162,39 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("coHostFrameB64", "");
             upd.put("coHostAudioB64", "");
             Fb.db().collection("lives").document(liveId).update(upd);
+            if (rtdbStreamRef != null) {
+                try {
+                    Map<String, Object> rClear = new HashMap<>();
+                    rClear.put("cv", "");
+                    rClear.put("ca", "");
+                    rClear.put("cCamOff", true);
+                    rtdbStreamRef.updateChildren(rClear);
+                } catch (Throwable ignored) { }
+            }
         } else if (isMeActiveCoHost) {
+            coHostLeftLocallyUntilMs = System.currentTimeMillis() + 15_000L;
+            activeCoHostUid = "";
             stopLocalCoHostStreaming();
             coHostCard.setVisibility(View.GONE);
-            postSystemChat("👋 " + Fb.myName() + " left the Co-Host stage");
+            if (rtdbStreamRef != null) {
+                try {
+                    Map<String, Object> rClear = new HashMap<>();
+                    rClear.put("cv", "");
+                    rClear.put("ca", "");
+                    rClear.put("cCamOff", true);
+                    rtdbStreamRef.updateChildren(rClear);
+                } catch (Throwable ignored) { }
+            }
+            if (liveId != null) {
+                Map<String, Object> leavePkt = new HashMap<>();
+                leavePkt.put("type", "cohost_leave");
+                leavePkt.put("uid", Fb.uid());
+                leavePkt.put("name", Fb.myName());
+                leavePkt.put("text", "🚪 left the Co-Host stage");
+                leavePkt.put("createdAtMs", System.currentTimeMillis());
+                Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
+            }
+            Ui.toast(this, "🚪 You left the Co-Host match");
         }
     }
 
@@ -2558,6 +2642,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     upd.put("coHostUid", item.uid);
                     upd.put("coHostName", item.name);
                     Fb.db().collection("lives").document(liveId).update(upd);
+                    if (Fb.uid() != null) {
+                        LivePkAndGiftsUi.sendDirectLiveInviteToUser(
+                                Fb.uid(), item.uid,
+                                hostId != null && !hostId.isEmpty() ? hostId : Fb.uid(),
+                                hostNameStr, hostPhotoStr, liveTitleStr, liveId);
+                    }
                 });
 
                 opts.add("👢 Remove / Kick " + item.name + " from Live");
@@ -2796,7 +2886,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             Ui.toast(this, "Start your Live first to invite friends!");
             return;
         }
-        LivePkAndGiftsUi.showInviteFriendsDrawer(this, liveId, hostNameStr, liveTitleStr);
+        String hUid = (hostId != null && !hostId.isEmpty()) ? hostId : (Fb.uid() == null ? "" : Fb.uid());
+        LivePkAndGiftsUi.showInviteFriendsDrawer(this, liveId, hUid, hostNameStr, hostPhotoStr, liveTitleStr);
     }
 
     private void showHostSettingsSheet() {
@@ -3156,8 +3247,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         inv.put("text", "challenged " + targetHostName + " to a PK Battle!");
         inv.put("createdAtMs", System.currentTimeMillis());
         Fb.db().collection("lives").document(targetLiveId).collection("chat").add(inv);
+        LivePkAndGiftsUi.sendDirectLiveInviteToUser(
+                me, targetHostUid,
+                hostId != null && !hostId.isEmpty() ? hostId : me,
+                hostNameStr, hostPhotoStr, liveTitleStr, liveId);
 
-        Ui.toast(this, "⚔️ PK Challenge sent to " + targetHostName + " — waiting to accept...");
+        Ui.toast(this, "⚔️ PK Challenge & Live Video sent to " + targetHostName + "'s Inbox!");
     }
 
     private void challengeViewerToPk(@NonNull String targetUid,
@@ -3200,7 +3295,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         inv.put("createdAtMs", System.currentTimeMillis());
         Fb.db().collection("lives").document(liveId).collection("chat").add(inv);
 
-        Ui.toast(this, "⚔️ PK Invite sent to " + targetName + "!");
+        LivePkAndGiftsUi.sendDirectLiveInviteToUser(
+                me, targetUid,
+                hostId != null && !hostId.isEmpty() ? hostId : me,
+                hostNameStr, hostPhotoStr, liveTitleStr, liveId);
+
+        Ui.toast(this, "⚔️ PK Invite & Live Video sent to " + targetName + "'s Inbox!");
     }
 
     private void promptIncomingPkChallenge(final String incomingPkId,
@@ -3362,6 +3462,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
         if ("ended".equals(status)) {
+            if (!pkBattleId.isEmpty()) endedPkBattleIds.add(pkBattleId);
+            if (isHost && liveId != null) {
+                Map<String, Object> lu = new HashMap<>();
+                lu.put("pkActive", false);
+                lu.put("pkBattleId", "");
+                Fb.db().collection("lives").document(liveId).update(lu);
+            }
             teardownPkStageUi();
             return;
         }
@@ -3419,13 +3526,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             applyPkLayoutGeometry(true);
         }
 
-        // Update PK Names, Avatars, Mute Buttons & Score Bar!
+        // Update PK Names, Avatars, Mute Buttons, Leave Match Button & Score Bar!
         pkLeftNameBadge.setText("🔴 " + pkHostAName);
         pkRightNameBadge.setText("🔵 " + pkHostBName);
         Ui.avatar(this, pkLeftAvatar, pkHostAPhoto);
         Ui.avatar(this, pkRightAvatar, pkHostBPhoto);
         pkLeftMuteBtn.setVisibility("A".equals(pkRole) ? View.GONE : View.VISIBLE);
         pkRightMuteBtn.setVisibility("B".equals(pkRole) ? View.GONE : View.VISIBLE);
+        if (pkLeaveMatchBtn != null) {
+            boolean canLeave = isHost || "A".equals(pkRole) || "B".equals(pkRole) || isMePkGuest;
+            pkLeaveMatchBtn.setVisibility(canLeave ? View.VISIBLE : View.GONE);
+        }
         liveBadgeTv.setText("⚔️ PK LIVE");
 
         updatePkScoreBarUi();
@@ -3475,6 +3586,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             pkLeftResultStamp.setVisibility(View.GONE);
             pkRightResultStamp.setVisibility(View.GONE);
             pkResultBanner.setVisibility(View.GONE);
+            if (pkLeaveMatchBtn != null) pkLeaveMatchBtn.setVisibility(View.GONE);
             liveBadgeTv.setText("🔴 LIVE");
 
             if (isHost) {
@@ -3576,10 +3688,24 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         postSystemChat("🔄 PK REMATCH STARTED!");
     }
 
+    private void promptLeaveCurrentMatch() {
+        Ui.confirm(this, "🚪 Leave Live Match?",
+                "You will exit the current split-screen match while staying in the Live stream.",
+                "Leave Match", this::endActivePkBattle);
+    }
+
     private void endActivePkBattle() {
-        if (!pkBattleId.isEmpty()) {
-            Fb.db().collection("chats").document("pkbattle_" + pkBattleId)
-                    .set(Fb.map("status", "ended"), SetOptions.merge());
+        String oldPkId = pkBattleId;
+        String oldLiveA = pkLiveIdA;
+        String oldLiveB = pkLiveIdB;
+        if (!oldPkId.isEmpty()) {
+            endedPkBattleIds.add(oldPkId);
+            Map<String, Object> endDoc = new HashMap<>();
+            endDoc.put("status", "ended");
+            endDoc.put("endedByUid", Fb.uid() == null ? "" : Fb.uid());
+            endDoc.put("endedByName", Fb.myName());
+            Fb.db().collection("chats").document("pkbattle_" + oldPkId)
+                    .set(endDoc, SetOptions.merge());
         }
         if (isHost && liveId != null) {
             Map<String, Object> lu = new HashMap<>();
@@ -3587,7 +3713,24 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             lu.put("pkBattleId", "");
             Fb.db().collection("lives").document(liveId).update(lu);
         }
+        Map<String, Object> leavePkt = new HashMap<>();
+        leavePkt.put("type", "pk_leave");
+        leavePkt.put("uid", Fb.uid() == null ? "" : Fb.uid());
+        leavePkt.put("name", Fb.myName());
+        leavePkt.put("pkBattleId", oldPkId);
+        leavePkt.put("text", "🚪 left the Live Match");
+        leavePkt.put("createdAtMs", System.currentTimeMillis());
+        if (liveId != null && !liveId.isEmpty()) {
+            Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
+        }
+        if (!oldLiveA.isEmpty() && !oldLiveA.equals(liveId)) {
+            Fb.db().collection("lives").document(oldLiveA).collection("chat").add(leavePkt);
+        }
+        if (!oldLiveB.isEmpty() && !oldLiveB.equals(liveId) && !oldLiveB.equals(oldLiveA)) {
+            Fb.db().collection("lives").document(oldLiveB).collection("chat").add(leavePkt);
+        }
         teardownPkStageUi();
+        Ui.toast(this, "🚪 Left Live Match");
     }
 
     private void teardownPkStageUi() {
@@ -3692,6 +3835,32 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void confirmExitOrEnd() {
         if (!isLiveStarted) {
             finish();
+            return;
+        }
+        boolean inPkMatch = pkBattleActive && (isHost || "A".equals(pkRole) || "B".equals(pkRole) || isMePkGuest);
+        boolean inCoHostMatch = isMeActiveCoHost || (isHost && !activeCoHostUid.isEmpty());
+        if (inPkMatch) {
+            String[] opts = {
+                    "🚪 Leave Match Only (Stay in Live)",
+                    isHost ? "🛑 End Entire Live Broadcast" : "✕ Exit Live Room"
+            };
+            Ui.choose(this, "⚔️ Live Match Active", opts, which -> {
+                if (which == 0) endActivePkBattle();
+                else if (isHost) endHostBroadcastAndShowSummary();
+                else finish();
+            });
+            return;
+        }
+        if (inCoHostMatch) {
+            String[] opts = {
+                    isHost ? "🚪 End Co-Host Match (Return to Solo Live)" : "🚪 Leave Co-Host Match (Keep Watching)",
+                    isHost ? "🛑 End Entire Live Broadcast" : "✕ Exit Live Room"
+            };
+            Ui.choose(this, "🤝 Co-Host Match Active", opts, which -> {
+                if (which == 0) removeActiveCoHost();
+                else if (isHost) endHostBroadcastAndShowSummary();
+                else finish();
+            });
             return;
         }
         if (isHost) {

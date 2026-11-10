@@ -721,8 +721,21 @@ public final class LivePkAndGiftsUi {
                                                @NonNull String liveId,
                                                @NonNull String hostName,
                                                @NonNull String liveTitle) {
+        String me = Fb.uid() == null ? "" : Fb.uid();
+        String photo = Fb.myPhoto() == null ? "" : Fb.myPhoto();
+        showInviteFriendsDrawer(a, liveId, me, hostName, photo, liveTitle);
+    }
+
+    public static void showInviteFriendsDrawer(@NonNull Activity a,
+                                               @NonNull String liveId,
+                                               @NonNull String hostUid,
+                                               @NonNull String hostName,
+                                               @NonNull String hostPhoto,
+                                               @NonNull String liveTitle) {
         final String me = Fb.uid();
         if (me == null) return;
+        final String resolvedHostUid = hostUid.isEmpty() ? me : hostUid;
+        final String resolvedHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
 
         final AlertDialog dialog = new AlertDialog.Builder(a).create();
         LinearLayout sheet = Ui.col(a);
@@ -742,7 +755,7 @@ public final class LivePkAndGiftsUi {
         head.addView(close);
         sheet.addView(head);
 
-        final TextView inviteAllBtn = Ui.tvBold(a, "🔔 Invite All Followers & Friends", 13f, Color.WHITE);
+        final TextView inviteAllBtn = Ui.tvBold(a, "🔔 Send Live Video Invite to All Friends", 13f, Color.WHITE);
         inviteAllBtn.setGravity(Gravity.CENTER);
         inviteAllBtn.setBackground(Ui.round(a, 0xFFFE2C55, 20));
         Ui.pad(inviteAllBtn, 14, 10, 14, 10);
@@ -801,17 +814,18 @@ public final class LivePkAndGiftsUi {
                 LinearLayout info = Ui.col(a);
                 info.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 8), 0);
                 info.addView(Ui.tvBold(a, u.displayName, 13.5f, Color.WHITE));
-                info.addView(Ui.tv(a, u.isOnline ? "🟢 Active now" : "Tap Invite to notify", 11f,
+                info.addView(Ui.tv(a, u.isOnline ? "🟢 Active now · Sends Live Video to Inbox" : "Tap Invite · Sends Live Video to Inbox", 11f,
                         u.isOnline ? 0xFF69F0AE : 0x99FFFFFF));
                 row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
 
-                final TextView invBtn = Ui.roundChip(a, "Invite", 0xFFFE2C55, Color.WHITE, 12);
+                final TextView invBtn = Ui.roundChip(a, "🔴 Invite", 0xFFFE2C55, Color.WHITE, 12);
                 Ui.pad(invBtn, 14, 7, 14, 7);
                 invBtn.setOnClickListener(v -> {
-                    invBtn.setText("Invited ✓");
+                    invBtn.setText("Sent to Inbox ✓");
                     invBtn.setEnabled(false);
                     invBtn.setBackground(Ui.round(a, 0x33FFFFFF, 16));
-                    sendDirectLiveInviteToUser(me, u.uid, hostName, liveTitle, liveId);
+                    sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
+                    Ui.toast(a, "🔴 Live video invite sent to " + u.displayName + "'s inbox!");
                 });
                 row.addView(invBtn);
                 listCol.addView(row);
@@ -821,29 +835,46 @@ public final class LivePkAndGiftsUi {
         inviteAllBtn.setOnClickListener(v -> {
             int sent = 0;
             for (Models.User u : friendUsers) {
-                sendDirectLiveInviteToUser(me, u.uid, hostName, liveTitle, liveId);
+                sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
                 if (++sent >= 25) break;
             }
-            inviteAllBtn.setText("✓ Invited " + sent + " Friends!");
+            inviteAllBtn.setText("✓ Sent Live Video to " + sent + " Inboxes!");
             inviteAllBtn.setEnabled(false);
             inviteAllBtn.setBackground(Ui.round(a, 0xFF2E7D32, 20));
-            Ui.toast(a, "🔔 Live invite sent to " + sent + " friends!");
+            Ui.toast(a, "🔴 Live video invite sent to " + sent + " friends' inboxes!");
         });
 
         presentBottomDialog(dialog, sheet);
     }
 
-    private static void sendDirectLiveInviteToUser(@NonNull String me,
-                                                   @NonNull String targetUid,
-                                                   @NonNull String hostName,
-                                                   @NonNull String liveTitle,
-                                                   @NonNull String liveId) {
-        Notify.send(targetUid, "live_invite",
-                "🔴 invited you to join LIVE: " + liveTitle, liveId);
+    public static void sendDirectLiveInviteToUser(@NonNull String me,
+                                                  @NonNull String targetUid,
+                                                  @NonNull String hostName,
+                                                  @NonNull String liveTitle,
+                                                  @NonNull String liveId) {
+        sendDirectLiveInviteToUser(me, targetUid, me, hostName,
+                Fb.myPhoto() == null ? "" : Fb.myPhoto(), liveTitle, liveId);
+    }
 
-        // Also drop a clean invite message in their 1:1 Chat so they see it immediately!
+    public static void sendDirectLiveInviteToUser(@NonNull String me,
+                                                  @NonNull String targetUid,
+                                                  @NonNull String hostUid,
+                                                  @NonNull String hostName,
+                                                  @NonNull String hostPhoto,
+                                                  @NonNull String liveTitle,
+                                                  @NonNull String liveId) {
+        if (me.isEmpty() || targetUid.isEmpty() || me.equals(targetUid)) return;
+        String cleanHostUid = hostUid.isEmpty() ? me : hostUid;
+        String cleanHostName = hostName.isEmpty() ? Fb.myName() : hostName;
+        String cleanHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        String cleanTitle = liveTitle.isEmpty() ? (cleanHostName + " is Live!") : liveTitle;
+
+        Notify.send(targetUid, "live_invite",
+                "🔴 invited you to join LIVE: " + cleanTitle, liveId);
+
+        // Deliver a TikTok-style clickable Live Video card directly into their 1:1 Inbox!
         String cid = Fb.chatId(me, targetUid);
-        String inviteText = "🔴 Join " + hostName + "'s LIVE now: \"" + liveTitle + "\" (Open Live Hub to watch live!)";
+        String inviteText = "🔴 LIVE Video: " + cleanHostName + " invited you to join \"" + cleanTitle + "\" — Tap video to join Live!";
         long now = System.currentTimeMillis();
         DocumentReference chatRef = Fb.db().collection("chats").document(cid);
         Map<String, Object> msg = new HashMap<>();
@@ -852,7 +883,13 @@ public final class LivePkAndGiftsUi {
         msg.put("senderPhoto", Fb.myPhoto() == null ? "" : Fb.myPhoto());
         msg.put("receiverId", targetUid);
         msg.put("text", inviteText);
-        msg.put("type", "text");
+        msg.put("type", "live_invite");
+        msg.put("liveId", liveId);
+        msg.put("liveHostId", cleanHostUid);
+        msg.put("liveHostName", cleanHostName);
+        msg.put("liveHostPhoto", cleanHostPhoto);
+        msg.put("liveTitle", cleanTitle);
+        msg.put("imageUrl", cleanHostPhoto);
         msg.put("isDelivered", false);
         msg.put("isSeen", false);
         msg.put("createdAt", FieldValue.serverTimestamp());
@@ -861,9 +898,22 @@ public final class LivePkAndGiftsUi {
 
         Map<String, Object> room = new HashMap<>();
         room.put("participants", Arrays.asList(me, targetUid));
-        room.put("lastMessage", inviteText);
+        room.put("lastMessage", "🔴 LIVE Video · Tap to join " + cleanHostName + "'s Live!");
         room.put("lastMessageTime", FieldValue.serverTimestamp());
         room.put("lastMessageTimeMs", now);
+        Map<String, Object> pNames = new HashMap<>();
+        pNames.put(me, Fb.myName());
+        Models.User cachedPeer = FastCache.getUser(targetUid);
+        if (cachedPeer != null && cachedPeer.displayName != null && !cachedPeer.displayName.isEmpty()) {
+            pNames.put(targetUid, cachedPeer.displayName);
+        }
+        room.put("participantNames", pNames);
+        Map<String, Object> pPhotos = new HashMap<>();
+        pPhotos.put(me, Fb.myPhoto() == null ? "" : Fb.myPhoto());
+        if (cachedPeer != null && cachedPeer.photoUrl != null && !cachedPeer.photoUrl.isEmpty()) {
+            pPhotos.put(targetUid, cachedPeer.photoUrl);
+        }
+        room.put("participantPhotos", pPhotos);
         Map<String, Object> unread = new HashMap<>();
         unread.put(targetUid, FieldValue.increment(1));
         unread.put(me, 0);
@@ -907,7 +957,7 @@ public final class LivePkAndGiftsUi {
         sheet.addView(desc);
 
         if (pkCurrentlyActive) {
-            TextView endPkBtn = Ui.tvBold(a, "🛑 End Current PK Battle (Return to Solo Live)", 13.5f, Color.WHITE);
+            TextView endPkBtn = Ui.tvBold(a, "🚪 Leave Current Live Match (Return to Solo Live)", 13.5f, Color.WHITE);
             endPkBtn.setGravity(Gravity.CENTER);
             endPkBtn.setBackground(Ui.round(a, 0xFFE53935, 20));
             Ui.pad(endPkBtn, 14, 11, 14, 11);
@@ -1038,7 +1088,7 @@ public final class LivePkAndGiftsUi {
                     listCol.addView(sec2);
 
                     if (candidates.isEmpty()) {
-                        listCol.addView(Ui.tv(a, "Invite friends to join your room and challenge them to a PK Match!", 12f, 0x88FFFFFF));
+                        listCol.addView(Ui.tv(a, "Invite friends below to send a Live Video to their Inbox & battle!", 12f, 0x88FFFFFF));
                     } else {
                         for (Map.Entry<String, String> e : candidates.entrySet()) {
                             final String vUid = e.getKey();
@@ -1054,6 +1104,41 @@ public final class LivePkAndGiftsUi {
                             listCol.addView(row);
                         }
                     }
+
+                    // 3. Invite Any Friend via Inbox Live Video Card!
+                    final LinearLayout friendsSecCol = Ui.col(a);
+                    listCol.addView(friendsSecCol);
+                    Fb.db().collection("users").limit(25).get().addOnSuccessListener(uSnap -> {
+                        if (a.isFinishing() || uSnap == null) return;
+                        List<Models.User> fList = new ArrayList<>();
+                        for (DocumentSnapshot ud : uSnap.getDocuments()) {
+                            Models.User u = Models.User.fromDoc(ud);
+                            if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
+                            if (candidates.containsKey(u.uid)) continue;
+                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
+                            FastCache.putUser(u);
+                            fList.add(u);
+                        }
+                        if (fList.isEmpty()) return;
+                        fList.sort((u1, u2) -> Boolean.compare(u2.isOnline, u1.isOnline));
+                        TextView sec3 = Ui.tvBold(a, "💌 INVITE FRIENDS VIA INBOX LIVE VIDEO (" + fList.size() + ")", 11f, 0xFF69F0AE);
+                        sec3.setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 6));
+                        friendsSecCol.addView(sec3);
+                        for (final Models.User fu : fList) {
+                            LinearLayout row = buildOpponentRow(a, fu.photoUrl, fu.displayName,
+                                    (fu.isOnline ? "🟢 Online · " : "") + "Sends clickable Live Video to Inbox",
+                                    "🔴 Invite Match",
+                                    v -> {
+                                        dialog.dismiss();
+                                        cb.onChallengeViewerOrFriend(
+                                                fu.uid,
+                                                fu.displayName == null ? "Friend" : fu.displayName,
+                                                fu.photoUrl == null ? "" : fu.photoUrl,
+                                                durationsSec[selDurIdx[0]]);
+                                    });
+                            friendsSecCol.addView(row);
+                        }
+                    });
                 });
 
         quickMatchBtn.setOnClickListener(v -> {

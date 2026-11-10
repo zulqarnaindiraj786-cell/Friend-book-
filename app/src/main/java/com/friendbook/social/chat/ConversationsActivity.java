@@ -577,10 +577,13 @@ public class ConversationsActivity extends Activity {
             }
 
             boolean unread = r.unread > 0;
-            h.last.setText(r.room.lastMessage == null || r.room.lastMessage.isEmpty()
-                    ? "Say hi 👋" : r.room.lastMessage);
-            h.last.setTypeface(null, unread ? Typeface.BOLD : Typeface.NORMAL);
-            h.last.setTextColor(unread ? Ui.txt(ConversationsActivity.this) : Ui.sub(ConversationsActivity.this));
+            String lastTxt = r.room.lastMessage == null || r.room.lastMessage.isEmpty()
+                    ? "Say hi 👋" : r.room.lastMessage;
+            boolean isLiveMsg = lastTxt.startsWith("🔴 LIVE") || lastTxt.startsWith("🔴 Join ");
+            h.last.setText(lastTxt);
+            h.last.setTypeface(null, (unread || isLiveMsg) ? Typeface.BOLD : Typeface.NORMAL);
+            h.last.setTextColor(isLiveMsg ? 0xFFFE2C55
+                    : (unread ? Ui.txt(ConversationsActivity.this) : Ui.sub(ConversationsActivity.this)));
             h.time.setText(r.room.lastMessageTime > 0 ? Format.ago(r.room.lastMessageTime) : "now");
             Ui.setBadge(h.badge, r.unread);
 

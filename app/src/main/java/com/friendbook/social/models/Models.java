@@ -632,6 +632,7 @@ public class Models {
     public static class Message {
         public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, videoUrl, type, voiceUrl;
         public String broadcastId = "";
+        public String liveId = "", liveHostId = "", liveHostName = "", liveHostPhoto = "", liveTitle = "";
         public String replyToText, replyToSender;
         public String callType, callStatus;
         public int callDurationSec;
@@ -666,6 +667,11 @@ public class Models {
             m0.videoUrl = Format.str(m, "videoUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
             m0.broadcastId = Format.str(m, "broadcastId");
+            m0.liveId = Format.str(m, "liveId");
+            m0.liveHostId = Format.str(m, "liveHostId");
+            m0.liveHostName = Format.str(m, "liveHostName");
+            m0.liveHostPhoto = Format.str(m, "liveHostPhoto");
+            m0.liveTitle = Format.str(m, "liveTitle");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");
             m0.callType = Format.str(m, "callType");

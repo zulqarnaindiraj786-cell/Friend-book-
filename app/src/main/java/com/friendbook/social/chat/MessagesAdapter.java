@@ -227,9 +227,75 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         callRow.addView(callTextCol, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // TikTok-Style Live Video Invite Card (224dp x 272dp)
+        FrameLayout liveCard = new FrameLayout(c);
+        liveCard.setBackground(Ui.roundStroke(c, 0xFF10131C, 18, 0xFFFE2C55, 2));
+        liveCard.setClipToOutline(true);
+        liveCard.setVisibility(View.GONE);
+
+        ImageView livePreviewIv = new ImageView(c);
+        livePreviewIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        liveCard.addView(livePreviewIv, new FrameLayout.LayoutParams(-1, -1));
+
+        View liveTopGrad = new View(c);
+        liveTopGrad.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xBB000000, 0x00000000}));
+        liveCard.addView(liveTopGrad, new FrameLayout.LayoutParams(-1, Ui.dp(c, 58), Gravity.TOP));
+
+        View liveBotGrad = new View(c);
+        liveBotGrad.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.BOTTOM_TOP,
+                new int[]{0xEE0D0F17, 0x990D0F17, 0x00000000}));
+        liveCard.addView(liveBotGrad, new FrameLayout.LayoutParams(-1, Ui.dp(c, 134), Gravity.BOTTOM));
+
+        TextView liveBadgeTv = Ui.roundChip(c, "🔴 LIVE VIDEO", 0xFFFE2C55, Color.WHITE, 10.5f);
+        Ui.pad(liveBadgeTv, 9, 4, 9, 4);
+        FrameLayout.LayoutParams lbLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        lbLp.setMargins(Ui.dp(c, 10), Ui.dp(c, 10), 0, 0);
+        liveCard.addView(liveBadgeTv, lbLp);
+
+        TextView liveSoundPill = Ui.roundChip(c, "🔊 Tap to Watch", 0xAA000000, Color.WHITE, 10f);
+        Ui.pad(liveSoundPill, 8, 4, 8, 4);
+        FrameLayout.LayoutParams lspLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        lspLp.setMargins(0, Ui.dp(c, 10), Ui.dp(c, 10), 0);
+        liveCard.addView(liveSoundPill, lspLp);
+
+        TextView liveCenterPlay = Ui.tvBold(c, "▶", 24f, Color.WHITE);
+        liveCenterPlay.setGravity(Gravity.CENTER);
+        liveCenterPlay.setBackground(Ui.roundStroke(c, 0x88000000, 28, 0xEEFFFFFF, 2));
+        liveCard.addView(liveCenterPlay, new FrameLayout.LayoutParams(
+                Ui.dp(c, 54), Ui.dp(c, 54), Gravity.CENTER));
+
+        LinearLayout liveBotCol = Ui.col(c);
+        Ui.pad(liveBotCol, 10, 8, 10, 10);
+        LinearLayout liveHostRow = Ui.row(c);
+        liveHostRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView liveHostAv = new ImageView(c);
+        liveHostRow.addView(liveHostAv, new LinearLayout.LayoutParams(Ui.dp(c, 28), Ui.dp(c, 28)));
+        TextView liveHostNameTv = Ui.tvBold(c, "", 13f, Color.WHITE);
+        liveHostNameTv.setSingleLine(true);
+        liveHostNameTv.setPadding(Ui.dp(c, 7), 0, 0, 0);
+        liveHostRow.addView(liveHostNameTv, new LinearLayout.LayoutParams(0, -2, 1f));
+        liveBotCol.addView(liveHostRow);
+
+        TextView liveTitleTv = Ui.tv(c, "", 11.5f, 0xEEFFFFFF);
+        liveTitleTv.setMaxLines(2);
+        liveTitleTv.setPadding(0, Ui.dp(c, 4), 0, Ui.dp(c, 8));
+        liveBotCol.addView(liveTitleTv);
+
+        TextView liveWatchBtn = Ui.tvBold(c, "🔴 Watch LIVE Now", 12.5f, Color.WHITE);
+        liveWatchBtn.setGravity(Gravity.CENTER);
+        liveWatchBtn.setBackground(Ui.round(c, 0xFFFE2C55, 16));
+        Ui.pad(liveWatchBtn, 12, 8, 12, 8);
+        liveBotCol.addView(liveWatchBtn, new LinearLayout.LayoutParams(-1, -2));
+
+        liveCard.addView(liveBotCol, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+
         bubble.addView(senderHeader, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         bubble.addView(quote, qlp);
+        bubble.addView(liveCard, new LinearLayout.LayoutParams(Ui.dp(c, 224), Ui.dp(c, 272)));
         bubble.addView(img, new LinearLayout.LayoutParams(Ui.dp(c, 220), Ui.dp(c, 165)));
         bubble.addView(text, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -280,6 +346,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         VH vh = new VH(row, av, bubble, senderHeader, quote, text, img,
                 voiceRow, play, dur, speed,
                 callRow, callIcon, callTitle, callSub,
+                liveCard, livePreviewIv, liveBadgeTv, liveHostAv, liveHostNameTv, liveTitleTv, liveWatchBtn,
                 react, statusSlot, seenAv, tickDot);
         vh.mine = mine;
         return vh;
@@ -297,6 +364,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.statusSlot.setVisibility(View.GONE);
             h.senderHeader.setVisibility(View.GONE);
             h.quote.setVisibility(View.GONE);
+            h.liveCard.setVisibility(View.GONE);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
@@ -441,11 +509,15 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.quote.setVisibility(View.GONE);
         }
 
-        // 6. Content payload: Deleted / Sticker / Call Card / Voice Note / Photo+Text
+        // 6. Content payload: Deleted / Sticker / Live Video Card / Call Card / Voice Note / Photo+Text
+        boolean isLiveInvite = "live_invite".equals(m.type)
+                || (m.liveId != null && !m.liveId.isEmpty())
+                || (m.text != null && (m.text.contains("Open Live Hub to watch live!") || m.text.startsWith("🔴 LIVE Video:")));
         boolean isCall = "call".equals(m.type);
         boolean isVoice = "voice".equals(m.type) && m.voiceUrl != null && !m.voiceUrl.isEmpty();
         boolean hasVideo = m.videoUrl != null && !m.videoUrl.isEmpty();
         boolean hasImage = m.imageUrl != null && !m.imageUrl.isEmpty();
+        h.liveCard.setVisibility(View.GONE);
 
         if (m.isDeleted) {
             h.text.setTextSize(14.5f);
@@ -456,6 +528,15 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
+        } else if (isLiveInvite) {
+            h.text.setVisibility(View.GONE);
+            h.img.setVisibility(View.GONE);
+            h.voiceRow.setVisibility(View.GONE);
+            h.callRow.setVisibility(View.GONE);
+            h.liveCard.setVisibility(View.VISIBLE);
+            h.bubble.setPadding(Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3));
+            h.bubble.setBackground(Ui.round(c, 0xFF10131C, 20));
+            bindLiveInviteVideoCard(c, h, m);
         } else if ("sticker".equals(m.type)) {
             h.text.setVisibility(View.VISIBLE);
             h.img.setVisibility(View.GONE);
@@ -586,6 +667,90 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         return gd;
     }
 
+    private static final Map<String, android.graphics.Bitmap> LIVE_PREVIEW_FRAMES = new HashMap<>();
+
+    private void bindLiveInviteVideoCard(final Activity c, final VH h, final Models.Message m) {
+        final String hostUid = (m.liveHostId != null && !m.liveHostId.isEmpty())
+                ? m.liveHostId : (m.senderId == null ? "" : m.senderId);
+        String hostName = (m.liveHostName != null && !m.liveHostName.isEmpty())
+                ? m.liveHostName : (m.senderName != null && !m.senderName.isEmpty() ? m.senderName : "Live Creator");
+        String hostPhoto = (m.liveHostPhoto != null && !m.liveHostPhoto.isEmpty())
+                ? m.liveHostPhoto : (m.imageUrl != null && !m.imageUrl.isEmpty()
+                        ? m.imageUrl : (m.senderPhoto != null && !m.senderPhoto.isEmpty() ? m.senderPhoto : peerPhoto));
+        String title = (m.liveTitle != null && !m.liveTitle.isEmpty())
+                ? m.liveTitle : (m.text != null && !m.text.isEmpty() ? m.text : (hostName + " is Live now!"));
+
+        h.liveHostNameTv.setText(hostName);
+        h.liveTitleTv.setText("🔴 " + title);
+        h.liveBadgeTv.setText("🔴 LIVE VIDEO");
+        h.liveWatchBtn.setText("▶ Tap to Join LIVE");
+        Ui.avatar(c, h.liveHostAv, hostPhoto);
+
+        final String lid = m.liveId == null ? "" : m.liveId;
+        android.graphics.Bitmap cachedBmp = !lid.isEmpty() ? LIVE_PREVIEW_FRAMES.get(lid) : null;
+        if (cachedBmp != null && !cachedBmp.isRecycled()) {
+            h.livePreviewIv.setImageBitmap(cachedBmp);
+        } else if (Ui.hasRealPhoto(hostPhoto)) {
+            Ui.img(c, h.livePreviewIv, hostPhoto);
+        } else {
+            h.livePreviewIv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
+        }
+
+        if (!lid.isEmpty()) {
+            Fb.db().collection("lives").document(lid).get().addOnSuccessListener(doc -> {
+                if (c.isFinishing() || doc == null || !doc.exists()) return;
+                String status = Format.str(doc.getData(), "status");
+                boolean isStillLive = !"ended".equalsIgnoreCase(status);
+                h.liveBadgeTv.setText(isStillLive ? "🔴 LIVE NOW" : "⏹ LIVE ENDED");
+                h.liveBadgeTv.setBackground(Ui.round(c, isStillLive ? 0xFFFE2C55 : 0xAA37474F, 12));
+                String frameB64 = Format.str(doc.getData(), "liveFrameB64");
+                if (!frameB64.isEmpty()) {
+                    try {
+                        byte[] raw = android.util.Base64.decode(frameB64, android.util.Base64.DEFAULT);
+                        android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length);
+                        if (bmp != null) {
+                            LIVE_PREVIEW_FRAMES.put(lid, bmp);
+                            h.livePreviewIv.setImageBitmap(bmp);
+                        }
+                    } catch (Throwable ignored) { }
+                }
+            });
+        }
+
+        View.OnClickListener openLiveClick = v -> {
+            if (!lid.isEmpty()) {
+                Intent li = new Intent(c, com.friendbook.social.live.LiveActivity.class);
+                li.putExtra("live_id", lid);
+                li.putExtra("host_id", hostUid);
+                c.startActivity(li);
+            } else if (!hostUid.isEmpty()) {
+                Fb.db().collection("lives")
+                        .whereEqualTo("hostId", hostUid)
+                        .whereEqualTo("status", "live")
+                        .limit(1)
+                        .get()
+                        .addOnSuccessListener(snap -> {
+                            if (c.isFinishing()) return;
+                            if (snap != null && !snap.isEmpty()) {
+                                String foundId = snap.getDocuments().get(0).getId();
+                                Intent li = new Intent(c, com.friendbook.social.live.LiveActivity.class);
+                                li.putExtra("live_id", foundId);
+                                li.putExtra("host_id", hostUid);
+                                c.startActivity(li);
+                            } else {
+                                c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
+                            }
+                        })
+                        .addOnFailureListener(e -> c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
+            } else {
+                c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
+            }
+        };
+        h.liveCard.setOnClickListener(openLiveClick);
+        h.liveWatchBtn.setOnClickListener(openLiveClick);
+        h.bubble.setOnClickListener(openLiveClick);
+    }
+
     private void toggleVoice(Models.Message m) {
         if (m == null || m.voiceUrl == null || m.voiceUrl.isEmpty()) {
             Ui.toast(activity, "Voice note unavailable");
@@ -663,20 +828,24 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
     }
 
     static class VH extends RecyclerView.ViewHolder {
-        ImageView av, img, callIcon, seenAv;
+        ImageView av, img, callIcon, seenAv, livePreviewIv, liveHostAv;
         LinearLayout bubble, voiceRow, callRow;
-        android.widget.FrameLayout statusSlot;
+        android.widget.FrameLayout statusSlot, liveCard;
         TextView senderHeader, quote, text, play, dur, speed, callTitle, callSub, react, tickDot;
+        TextView liveBadgeTv, liveHostNameTv, liveTitleTv, liveWatchBtn;
         boolean mine;
 
         VH(View v, ImageView a, LinearLayout b, TextView sh, TextView q, TextView t, ImageView i,
            LinearLayout vr, TextView pl, TextView du, TextView sp,
            LinearLayout cr, ImageView ci, TextView ct, TextView cs,
+           android.widget.FrameLayout lc, ImageView lpIv, TextView lbTv, ImageView lhAv, TextView lhNm, TextView ltTv, TextView lwBtn,
            TextView re, android.widget.FrameLayout ss, ImageView sa, TextView td) {
             super(v);
             av = a; bubble = b; senderHeader = sh; quote = q; text = t; img = i;
             voiceRow = vr; play = pl; dur = du; speed = sp;
             callRow = cr; callIcon = ci; callTitle = ct; callSub = cs;
+            liveCard = lc; livePreviewIv = lpIv; liveBadgeTv = lbTv; liveHostAv = lhAv;
+            liveHostNameTv = lhNm; liveTitleTv = ltTv; liveWatchBtn = lwBtn;
             react = re; statusSlot = ss; seenAv = sa; tickDot = td;
         }
     }
