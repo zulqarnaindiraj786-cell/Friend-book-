@@ -109,7 +109,14 @@ jobs:
         run: |
           set +e
           gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "Retrying Gradle build after transient artifact fetch..."
+            sleep 5
+            gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+            RC=$?
+          fi
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Surface bounded unit-test failure details
