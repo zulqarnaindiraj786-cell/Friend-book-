@@ -1895,8 +1895,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         @Override public void onBindViewHolder(@NonNull RVH h, int position) {
             Models.Reel r = reels.get(position);
-            if (r.videoUrl != null && !r.videoUrl.isEmpty()) {
-                Ui.img(ProfileActivity.this, h.thumb, r.videoUrl);
+            String rThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(r.videoUrl, r.thumbUrl);
+            if (!rThumb.isEmpty()) {
+                Ui.img(ProfileActivity.this, h.thumb, rThumb);
+            } else {
+                h.thumb.setImageDrawable(Ui.round(ProfileActivity.this, 0xFF18191A, 0));
             }
             h.countTv.setText("▶ " + Format.count(Math.max(1, r.likes + r.comments)));
             h.itemView.setOnClickListener(v -> {

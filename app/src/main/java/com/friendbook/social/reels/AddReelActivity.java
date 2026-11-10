@@ -189,7 +189,7 @@ public class AddReelActivity extends Activity {
         stage.addView(previewVideo, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
         previewPoster = new ImageView(this);
-        previewPoster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        previewPoster.setScaleType(ImageView.ScaleType.FIT_CENTER);
         previewPoster.setVisibility(View.GONE);
         stage.addView(previewPoster, new FrameLayout.LayoutParams(-1, -1));
 
@@ -747,7 +747,7 @@ public class AddReelActivity extends Activity {
         editOpts.stickerText = ""; editOpts.stickerX = 0.78f; editOpts.stickerY = 0.32f; editOpts.stickerScale = 1.0f;
         editOpts.filterPreset = "none"; editOpts.filterOverlayColor = 0;
         editOpts.playbackSpeed = 1.0f; editOpts.muteOriginalAudio = false; editOpts.audioTitle = "";
-        editOpts.trimStartMs = 0; editOpts.trimEndMs = totalDurationMs; editOpts.coverTimeMs = -1L;
+        editOpts.trimStartMs = 0; editOpts.trimEndMs = 0; editOpts.coverTimeMs = -1L;
         previewMuted = false;
         trimStartSeek.setProgress(0); trimEndSeek.setProgress(1000); coverSeek.setProgress(0);
         filterStripScroll.setVisibility(View.GONE); trimPanel.setVisibility(View.GONE); coverPanel.setVisibility(View.GONE);
@@ -826,6 +826,10 @@ public class AddReelActivity extends Activity {
         if (videoMeta.width > 0 && videoMeta.height > 0) {
             if (sb.length() > 0) sb.append(" · ");
             sb.append(videoMeta.width).append("×").append(videoMeta.height);
+        }
+        if (videoMeta.frameRate > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(videoMeta.frameRate).append(" FPS");
         }
         if (sb.length() > 0) { metaBadge.setText(sb.toString()); metaBadge.setVisibility(View.VISIBLE); }
     }
@@ -920,7 +924,7 @@ public class AddReelActivity extends Activity {
             previewMp = mp;
             mp.setLooping(true);
             int d = mp.getDuration();
-            if (d > 0) { totalDurationMs = d; if (editOpts.trimEndMs <= 0) editOpts.trimEndMs = d; }
+            if (d > 0) { totalDurationMs = d; }
             float vol = previewMuted ? 0f : 1f;
             mp.setVolume(vol, vol);
             if (Math.abs(editOpts.playbackSpeed - 1.0f) > 0.02f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -939,7 +943,6 @@ public class AddReelActivity extends Activity {
                 videoMeta = m;
                 if (totalDurationMs <= 0 && m.durationSec > 0) {
                     totalDurationMs = m.durationSec * 1000;
-                    if (editOpts.trimEndMs <= 0) editOpts.trimEndMs = totalDurationMs;
                 }
                 if (m.posterJpeg != null && m.posterJpeg.length > 0 && !previewVideo.isPlaying()) {
                     previewPoster.setImageBitmap(BitmapFactory.decodeByteArray(m.posterJpeg, 0, m.posterJpeg.length));

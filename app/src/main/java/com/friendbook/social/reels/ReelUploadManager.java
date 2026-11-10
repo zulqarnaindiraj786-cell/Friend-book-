@@ -158,10 +158,10 @@ public final class ReelUploadManager {
                 return;
             }
 
-            // 1b. If creator trimmed video or muted original audio, physically remux MP4 via MediaExtractor + MediaMuxer!
+            // 1b. Only remux if creator explicitly trimmed video or muted original audio;
+            // otherwise upload the 100% untouched original MP4 bytes to preserve exact FPS, frame & fast-start moov!
             File finalFile = rawStagedFile;
-            boolean hasTrim = opts.trimStartMs > 0 || (opts.trimEndMs > opts.trimStartMs && meta != null
-                    && meta.durationSec > 0 && opts.trimEndMs < (meta.durationSec * 1000 - 350));
+            boolean hasTrim = opts.trimStartMs > 0 || (opts.trimEndMs > opts.trimStartMs);
             if (hasTrim || opts.muteOriginalAudio) {
                 File remuxed = new File(stagingDir, "edited_" + System.currentTimeMillis() + ".mp4");
                 if (remuxTrimAndAudio(rawStagedFile, remuxed, opts.trimStartMs, opts.trimEndMs, opts.muteOriginalAudio)
@@ -406,7 +406,10 @@ public final class ReelUploadManager {
             muxer.start();
             java.nio.ByteBuffer dstBuf = java.nio.ByteBuffer.allocate(maxChunk);
             android.media.MediaCodec.BufferInfo bufferInfo = new android.media.MediaCodec.BufferInfo();
-            long basePtsUs = -1L;
+            long[] trackBasePtsUs = new long[trackCount];
+            long[] lastWrittenPtsUs = new long[trackCount];
+            java.util.Arrays.fill(trackBasePtsUs, -1L);
+            java.util.Arrays.fill(lastWrittenPtsUs, -1L);
 
             while (true) {
                 int trackIndex = extractor.getSampleTrackIndex();
@@ -418,10 +421,15 @@ public final class ReelUploadManager {
                     dstBuf.clear();
                     int sampleSize = extractor.readSampleData(dstBuf, 0);
                     if (sampleSize < 0) break;
-                    if (basePtsUs < 0L) basePtsUs = sampleTimeUs;
+                    if (trackBasePtsUs[trackIndex] < 0L) trackBasePtsUs[trackIndex] = sampleTimeUs;
+                    long pts = Math.max(0L, sampleTimeUs - trackBasePtsUs[trackIndex]);
+                    if (pts <= lastWrittenPtsUs[trackIndex]) {
+                        pts = lastWrittenPtsUs[trackIndex] + 1L;
+                    }
+                    lastWrittenPtsUs[trackIndex] = pts;
                     bufferInfo.offset = 0;
                     bufferInfo.size = sampleSize;
-                    bufferInfo.presentationTimeUs = Math.max(0L, sampleTimeUs - basePtsUs);
+                    bufferInfo.presentationTimeUs = pts;
                     int sampleFlags = extractor.getSampleFlags();
                     int codecFlags = 0;
                     if ((sampleFlags & android.media.MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {

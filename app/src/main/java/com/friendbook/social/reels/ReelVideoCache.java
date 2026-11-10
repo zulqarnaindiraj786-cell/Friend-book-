@@ -93,9 +93,8 @@ public final class ReelVideoCache {
     }
 
     /**
-     * Injects fast-start H.264 progressive MP4 streaming transforms on Cloudinary video URLs:
-     * - Standard / 4G / Wi-Fi: 720p H.264 AAC q_auto:good (~1.8–3.5 MB instead of 50+ MB raw!)
-     * - Data Saver / Slow 2G:  480p H.264 AAC q_auto:eco  (~700 KB–1.2 MB!)
+     * Preserves the uploaded video's exact original frame (aspect ratio / resolution) and frame rate (FPS).
+     * Only applies lightweight progressive MP4 remux if the user explicitly enabled Data Saver / 2G mode.
      */
     public static String optimizeStreamUrl(Context c, String rawUrl) {
         if (rawUrl == null || rawUrl.isEmpty()) return "";
@@ -103,21 +102,13 @@ public final class ReelVideoCache {
         if (u.startsWith("file:") || u.startsWith("content:")) return u;
         int idx = u.indexOf("/video/upload/");
         if (idx > 0 && u.contains("cloudinary.com")) {
-            String prefix = u.substring(0, idx + "/video/upload/".length());
-            String rest = u.substring(idx + "/video/upload/".length());
-            // Avoid double-injecting if transformations are already present
-            if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
-                boolean cellular=false;
-                if(c!=null)try{
-                    android.net.ConnectivityManager manager=(android.net.ConnectivityManager)c.getSystemService(Context.CONNECTIVITY_SERVICE);
-                    android.net.NetworkCapabilities caps=manager==null?null:manager.getNetworkCapabilities(manager.getActiveNetwork());
-                    cellular=caps!=null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
-                }catch(SecurityException ignored){}
-                boolean eco = c != null && (cellular || Prefs.dataSaver(c) || FastCache.isSlow2G(c));
-                String transform = eco
-                        ? "f_mp4,vc_h264,ac_aac,q_auto:eco,w_480,c_limit/"
-                        : "f_mp4,vc_h264,ac_aac,q_auto:good,w_720,c_limit/";
-                return prefix + transform + rest;
+            boolean explicitEco = c != null && (Prefs.dataSaver(c) || FastCache.isSlow2G(c));
+            if (explicitEco) {
+                String prefix = u.substring(0, idx + "/video/upload/".length());
+                String rest = u.substring(idx + "/video/upload/".length());
+                if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
+                    return prefix + "f_mp4,vc_h264,ac_aac,q_auto:good/" + rest;
+                }
             }
         }
         return u;
@@ -328,13 +319,44 @@ public final class ReelVideoCache {
     }
 
     /**
-     * Silently warms the top 2 Reels in the background shortly after app startup so the very first
+     * Called AFTER the active Reel has already started rendering on screen so there is zero bandwidth
+     * contention during initial start: caches the active Reel + next 2 upcoming Reels into local SSD.
+     */
+    public static void warmUpcomingAfterPlay(Context c, List<Models.Reel> reels, int currentIndex) {
+        if (c == null || reels == null || reels.isEmpty()) return;
+        Context appCtx = c.getApplicationContext();
+        int start = Math.max(0, currentIndex);
+        int end = Math.min(reels.size() - 1, start + 2);
+        for (int i = start; i <= end; i++) {
+            Models.Reel r = reels.get(i);
+            if (r == null || r.videoUrl == null || r.videoUrl.isEmpty()) continue;
+            String thumb = deriveThumbUrl(r.videoUrl, r.thumbUrl);
+            if (!thumb.isEmpty()) {
+                try {
+                    Glide.with(appCtx).load(thumb).preload();
+                } catch (Throwable ignored) { }
+            }
+            if (!Prefs.dataSaver(appCtx)) {
+                prefetchSingle(appCtx, r.videoUrl);
+            }
+        }
+    }
+
+    /**
+     * Silently warms the top Reels in the background shortly after app startup so the very first
      * tap on the Reels tab starts playing in ~15ms with zero cold-network wait!
      */
     public static void warmStartupReels(final Context c) {
         if (c == null || Prefs.dataSaver(c) || !STARTUP_WARMED.compareAndSet(false, true)) return;
         final Context appCtx = c.getApplicationContext();
         try {
+            int warmed = 0;
+            for (Models.Post p : FastCache.getFeed()) {
+                if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+                    prefetchSingle(appCtx, p.mediaUrl);
+                    if (++warmed >= 2) break;
+                }
+            }
             Fb.db().collection("reels")
                     .orderBy("createdAt", Query.Direction.DESCENDING)
                     .limit(3)

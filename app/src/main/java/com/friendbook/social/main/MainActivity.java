@@ -224,6 +224,9 @@ public class MainActivity extends Activity {
             startBadgeListeners();
             watchReferralsForFreeTick();
             AdsConfig.startWatching();
+            notificationPermissionHandler.postDelayed(
+                    () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
+                    2000L);
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
@@ -686,9 +689,6 @@ public class MainActivity extends Activity {
         if (freshSession) {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onWarmSessionResume();
-            }
-            if (tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment && active != TAB_REELS) {
-                ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
         }
         if (getIntent().getBooleanExtra("push_friends", false)) {

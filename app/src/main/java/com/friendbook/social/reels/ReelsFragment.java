@@ -410,11 +410,31 @@ public class ReelsFragment extends Fragment {
                     byId.remove(leftover.id);
                 }
             }
+            if (initialReelId != null && !initialReelId.isEmpty()) {
+                for (int i = 0; i < merged.size(); i++) {
+                    if (initialReelId.equals(merged.get(i).id)) {
+                        if (i > 0) {
+                            merged.add(0, merged.remove(i));
+                            updatedOrder.remove(initialReelId);
+                            updatedOrder.add(0, initialReelId);
+                        }
+                        break;
+                    }
+                }
+            }
             sessionReelOrderIds.clear();
             sessionReelOrderIds.addAll(updatedOrder);
         } else {
             sessionReelOrderIds.clear();
             merged = FeedAlgorithm.rankReels(act, candidates, initialReelId);
+            if (initialReelId != null && !initialReelId.isEmpty()) {
+                for (int i = 0; i < merged.size(); i++) {
+                    if (initialReelId.equals(merged.get(i).id)) {
+                        if (i > 0) merged.add(0, merged.remove(i));
+                        break;
+                    }
+                }
+            }
             if (optimistic != null) {
                 merged.remove(optimistic);
                 merged.add(0, optimistic);
@@ -507,6 +527,13 @@ public class ReelsFragment extends Fragment {
         }
 
         // 2. 0.0ms Instant Seed from FastCache (Home Feed videos already in memory!)
+        boolean hasPinnedTarget = (initialReelId == null || initialReelId.isEmpty());
+        for (Models.Reel r : fromReels) {
+            if (r != null && initialReelId != null && initialReelId.equals(r.id)) hasPinnedTarget = true;
+        }
+        for (Models.Reel r : fromPosts) {
+            if (r != null && initialReelId != null && initialReelId.equals(r.id)) hasPinnedTarget = true;
+        }
         for (Models.Post p : com.friendbook.social.core.FastCache.getFeed()) {
             if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
                 if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
@@ -514,9 +541,12 @@ public class ReelsFragment extends Fragment {
                 if (loadedVideoIds.add("posts/" + p.id)) {
                     fromPosts.add(Models.Reel.fromVideoPost(p));
                 }
+                if (initialReelId != null && initialReelId.equals(p.id)) {
+                    hasPinnedTarget = true;
+                }
             }
         }
-        if (!fromReels.isEmpty() || !fromPosts.isEmpty()) {
+        if (hasPinnedTarget && (!fromReels.isEmpty() || !fromPosts.isEmpty())) {
             rebuildMergedFeed(true);
         } else if (initialLoadingBox != null) {
             initialLoadingBox.setVisibility(View.VISIBLE);
@@ -538,7 +568,7 @@ public class ReelsFragment extends Fragment {
                             added = true;
                         }
                     }
-                    if (added) rebuildMergedFeed(false);
+                    if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 });
 
         loadNextVideos();
@@ -559,15 +589,23 @@ public class ReelsFragment extends Fragment {
         if(reel.videoUrl==null || reel.videoUrl.isEmpty() || (Fb.me!=null && Fb.me.blocked.contains(reel.authorId))) return;
         if(Prefs.isPostHidden(getActivity(),reel.id)) return;
         if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) return;
-        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) (nativeReel?fromReels:fromPosts).add(reel);
-        boolean linked=initialReelId!=null && initialReelId.equals(doc.getId());
-        rebuildMergedFeed(linked);
-        if(linked && pager!=null) pager.setCurrentItem(0,false);
+        List<Models.Reel> bucket = nativeReel ? fromReels : fromPosts;
+        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
+            bucket.add(0, reel);
+        } else {
+            for (int i = 0; i < bucket.size(); i++) {
+                if (bucket.get(i) != null && doc.getId().equals(bucket.get(i).id)) {
+                    bucket.set(i, reel);
+                    break;
+                }
+            }
+        }
+        boolean wasEmpty = (adapter == null || adapter.rawReels().isEmpty());
+        rebuildMergedFeed(wasEmpty);
     }
     private void loadNextVideos() {
         if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
         pagingVideos=true; final int generation=videoGeneration; final String actor=Fb.uid();
-        final boolean isInitialBatch = (reelsCursor == null && postsCursor == null && initialReelId == null);
         if (reelsCursor == null && postsCursor == null) {
             com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
                 if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
@@ -581,7 +619,7 @@ public class ReelsFragment extends Fragment {
                     if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
                     if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added = true; }
                 }
-                if (added) rebuildMergedFeed(false);
+                if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
             });
         }
         // Two sources contribute five metadata documents each: at most ten per batch.
@@ -593,7 +631,7 @@ public class ReelsFragment extends Fragment {
                 if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
                     loadNextVideos();
                 } else {
-                    rebuildMergedFeed(isInitialBatch);
+                    rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 }
             }
         };
@@ -647,13 +685,10 @@ public class ReelsFragment extends Fragment {
         if (hidden) {
             adapter.pauseAll(pager);
         } else {
-            Activity act = getActivity();
-            if (act != null && initialReelId == null) {
-                FeedAlgorithm.nextRefreshGeneration(act);
-                AdsConfig.clearReelsSlotAds(act);
-                if (moreReels || moreVideoPosts) loadNextVideos();
-                rebuildMergedFeed(true);
-                pager.setCurrentItem(0, false);
+            if (adapter.rawReels().isEmpty()) {
+                resetVideoPages();
+            } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
+                loadNextVideos();
             }
             pager.post(() -> {
                 adapter.playOnly(pager, pager.getCurrentItem());
@@ -706,7 +741,7 @@ public class ReelsFragment extends Fragment {
             }
             // Prefix-append fast path: when new Reels/VideoPosts arrive at the end, append without touching active Reel!
             if (!forceReset && !data.isEmpty() && incoming.size() > data.size()
-                    && data.size() >= REELS_PER_AD && isPrefixMatch(data, incoming)) {
+                    && isPrefixMatch(data, incoming)) {
                 int oldAdapterCount = getItemCount();
                 for (int i = 0; i < data.size(); i++) {
                     data.set(i, incoming.get(i));
@@ -775,26 +810,26 @@ public class ReelsFragment extends Fragment {
             if (!lastAdsActive && AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0)
                     && !data.isEmpty()) {
                 lastAdsActive = true;
-                notifyDataSetChanged();
+                int ads = data.size() / REELS_PER_AD;
+                for (int k = 0; k < ads; k++) {
+                    int adPos = (k + 1) * REEL_AD_STEP - 1;
+                    notifyItemInserted(adPos);
+                }
             }
         }
 
         private int adCount() {
             if (!adsActive() || data.isEmpty()) return 0;
-            if (data.size() < REELS_PER_AD) return 1;
             return data.size() / REELS_PER_AD;
         }
 
         boolean isAdPos(int pos) {
             if (!adsActive() || data.isEmpty() || pos < 0) return false;
-            if (data.size() < REELS_PER_AD) {
-                return pos == data.size();
-            }
             return ((pos + 1) % REEL_AD_STEP == 0) && ((pos / REEL_AD_STEP) < adCount());
         }
 
         int reelIndexForPos(int pos) {
-            if (!adsActive() || data.size() < REELS_PER_AD) return pos;
+            if (!adsActive()) return pos;
             return pos - ((pos + 1) / REEL_AD_STEP);
         }
 
@@ -1516,7 +1551,7 @@ public class ReelsFragment extends Fragment {
 
                 // 2. Instant 0.0ms Poster Thumbnail Overlay (hidden the exact ms video frame #1 renders)
                 posterView = new ImageView(a);
-                posterView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                posterView.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 root.addView(posterView, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
                 // 2b. Creator Color Filter Tint + Sticker + Text Overlay Layers
@@ -1637,8 +1672,11 @@ public class ReelsFragment extends Fragment {
                 // Bottom Creator Info + Quick "Add a comment…" + Ultra-Thin Playback Scrub Bar
                 LinearLayout bottomCol = Ui.col(a);
                 bottomCol.setElevation(Ui.dp(a, 22));
-                bottomCol.setBackgroundColor(0x4D000000);
-                Ui.pad(bottomCol, 14, 10, 72, 10);
+                android.graphics.drawable.GradientDrawable bottomGrad = new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[]{0x00000000, 0x44000000, 0x99000000});
+                bottomCol.setBackground(bottomGrad);
+                Ui.pad(bottomCol, 14, 16, 72, 10);
                 FrameLayout.LayoutParams bip = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
                 bottomCol.setLayoutParams(bip);
 
@@ -1971,7 +2009,7 @@ public class ReelsFragment extends Fragment {
                 // 0.0ms Instant Poster Frame without downloading remote .mp4 via Glide in parallel with MediaPlayer!
                 Context c = itemView.getContext();
                 String thumbUrl = ReelVideoCache.deriveThumbUrl(r.videoUrl, r.thumbUrl);
-                File localCached = thumbUrl.isEmpty() ? ReelVideoCache.getCachedFile(c, r.videoUrl) : null;
+                File localCached = ReelVideoCache.getCachedFile(c, r.videoUrl);
                 bufferingSpinner.setVisibility((localCached == null && autoPlayNow) ? View.VISIBLE : View.GONE);
                 if (!thumbUrl.isEmpty()) {
                     posterView.setVisibility(View.VISIBLE);
@@ -1980,7 +2018,7 @@ public class ReelsFragment extends Fragment {
                     posterView.setVisibility(View.VISIBLE);
                     com.bumptech.glide.Glide.with(c.getApplicationContext())
                             .load(localCached)
-                            .centerCrop()
+                            .fitCenter()
                             .dontAnimate()
                             .into(posterView);
                 } else {
@@ -2136,24 +2174,13 @@ public class ReelsFragment extends Fragment {
                 float videoRatio = (float) videoW / videoH;
                 Matrix matrix = new Matrix();
                 float sx, sy;
-                // Portrait / vertical videos fill full screen (CENTER_CROP); landscape videos FIT_CENTER
-                boolean isVerticalVideo = videoH >= videoW * 0.95f;
-                if (isVerticalVideo) {
-                    if (videoRatio > viewRatio) {
-                        sx = videoRatio / viewRatio;
-                        sy = 1f;
-                    } else {
-                        sx = 1f;
-                        sy = viewRatio / videoRatio;
-                    }
+                // Preserve 100% of the creator's uploaded video frame (aspect ratio) without cropping or stretching!
+                if (videoRatio > viewRatio) {
+                    sx = 1f;
+                    sy = viewRatio / videoRatio;
                 } else {
-                    if (videoRatio > viewRatio) {
-                        sx = 1f;
-                        sy = viewRatio / videoRatio;
-                    } else {
-                        sx = videoRatio / viewRatio;
-                        sy = 1f;
-                    }
+                    sx = videoRatio / viewRatio;
+                    sy = 1f;
                 }
                 matrix.setScale(sx, sy, viewW / 2f, viewH / 2f);
                 textureView.setTransform(matrix);
@@ -2171,6 +2198,8 @@ public class ReelsFragment extends Fragment {
                         if (wantPlay && activeMp != null && mpPrepared) {
                             posterView.setVisibility(View.GONE);
                             bufferingSpinner.setVisibility(View.GONE);
+                            int rIdx = reelIndexForPos(getBindingAdapterPosition());
+                            ReelVideoCache.warmUpcomingAfterPlay(itemView.getContext(), data, rIdx);
                         }
                     }, 90L);
                     uiHandler.removeCallbacks(progressTicker);

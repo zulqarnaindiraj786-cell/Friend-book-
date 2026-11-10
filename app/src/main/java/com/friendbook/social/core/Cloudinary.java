@@ -135,6 +135,7 @@ public class Cloudinary {
         public int durationSec;
         public int width;
         public int height;
+        public int frameRate;
         public byte[] posterJpeg;
     }
 
@@ -163,6 +164,26 @@ public class Cloudinary {
             } else {
                 meta.width = vw;
                 meta.height = vh;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                String fpsStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE);
+                if (fpsStr != null && !fpsStr.trim().isEmpty()) {
+                    try {
+                        meta.frameRate = Math.round(Float.parseFloat(fpsStr.trim()));
+                    } catch (Throwable ignored) { }
+                }
+            }
+            if (meta.frameRate <= 0 && android.os.Build.VERSION.SDK_INT >= 28) {
+                String frameCountStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT);
+                if (frameCountStr != null && dur != null) {
+                    try {
+                        long frames = Long.parseLong(frameCountStr.trim());
+                        long ms = Long.parseLong(dur.trim());
+                        if (frames > 0 && ms > 0) {
+                            meta.frameRate = Math.round((frames * 1000f) / ms);
+                        }
+                    } catch (Throwable ignored) { }
+                }
             }
             Bitmap frame = mmr.getFrameAtTime(150_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame == null) frame = mmr.getFrameAtTime(0L);
