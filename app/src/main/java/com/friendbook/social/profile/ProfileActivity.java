@@ -204,13 +204,25 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         });
         LinearLayout body = Ui.col(this);
         body.setClipChildren(false);
+        body.setClipToPadding(false);
 
-        // 3. Cover Photo + Bottom-Right Circular Camera Button
+        // 3. Unified Hero Stack: Cover Photo (196dp) + White Name Strip + Full Unclipped 114dp Circular Avatar!
+        // Using a single FrameLayout with positive topMargin (138dp) guarantees 100% of the circular
+        // profile picture is inside [0..height] bounds and NEVER gets clipped in half by ViewGroup clipToPadding!
+        int coverHeight = Ui.dp(this, 196);
+        int avSize = Ui.dp(this, 114);
+        int innerAv = Ui.dp(this, 106);
+
+        FrameLayout heroTopStack = new FrameLayout(this);
+        heroTopStack.setBackgroundColor(Ui.card(this));
+        heroTopStack.setClipChildren(false);
+        heroTopStack.setClipToPadding(false);
+
         FrameLayout coverFrame = new FrameLayout(this);
         cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         cover.setBackgroundColor(0xFF90949C);
-        coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, Ui.dp(this, 168)));
+        coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, coverHeight));
 
         FrameLayout coverCamWrap = new FrameLayout(this);
         coverCamWrap.setBackground(Ui.roundStroke(this, Ui.card(this), 19, Ui.div(this), 1));
@@ -220,27 +232,49 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         cclp.setMargins(0, 0, Ui.dp(this, 12), Ui.dp(this, 10));
         coverCamBtn = coverCamWrap;
         coverFrame.addView(coverCamWrap, cclp);
-        body.addView(coverFrame, new LinearLayout.LayoutParams(-1, Ui.dp(this, 168)));
+        heroTopStack.addView(coverFrame, new FrameLayout.LayoutParams(-1, coverHeight, Gravity.TOP));
 
-        // 4. Hero Info Card: Left Overlapping Circular Avatar + Right Name, Tick & Bold Stats!
-        LinearLayout infoCard = Ui.col(this);
-        infoCard.setBackgroundColor(Ui.card(this));
-        infoCard.setClipChildren(false);
-        Ui.pad(infoCard, 14, 0, 14, 14);
+        // White Name & Stats Strip directly below Cover Photo (right of the 114dp circular avatar)
+        LinearLayout rightNameCol = Ui.col(this);
+        rightNameCol.setBackgroundColor(Ui.card(this));
+        rightNameCol.setMinimumHeight(Ui.dp(this, 70));
+        rightNameCol.setPadding(Ui.dp(this, 140), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 8));
+        FrameLayout.LayoutParams rncLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        rncLp.topMargin = coverHeight;
 
-        LinearLayout avatarAndNameRow = Ui.row(this);
-        avatarAndNameRow.setClipChildren(false);
-        avatarAndNameRow.setGravity(Gravity.TOP);
+        LinearLayout nameRow = Ui.row(this);
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
+        nameT = Ui.tvBold(this, "", 20.5f, Ui.txt(this));
+        nameRow.addView(nameT);
+        nameTick = new ImageView(this);
+        nameTick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
+        nameTick.setVisibility(View.GONE);
+        int nts = Ui.dp(this, 18);
+        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
+        ntp.leftMargin = Ui.dp(this, 5);
+        nameRow.addView(nameTick, ntp);
+        rightNameCol.addView(nameRow);
 
-        // Left-aligned overlapping 106dp circular avatar with 4dp white ring + 📷 badge
+        statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
+        statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
+        rightNameCol.addView(statsT);
+
+        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
+        presenceT.setVisibility(View.GONE);
+        rightNameCol.addView(presenceT);
+        heroTopStack.addView(rightNameCol, rncLp);
+
+        // Full 114dp Circular Profile Picture overlapping bottom-left of Cover Photo & top-left of Name Strip
         FrameLayout avWrap = new FrameLayout(this);
-        int avSize = Ui.dp(this, 106);
-        LinearLayout.LayoutParams avWrapLp = new LinearLayout.LayoutParams(avSize, avSize);
-        avWrapLp.topMargin = Ui.dp(this, -34);
+        avWrap.setClipChildren(false);
+        avWrap.setClipToPadding(false);
+        avWrap.setElevation(Ui.dp(this, 6));
+        FrameLayout.LayoutParams avWrapLp = new FrameLayout.LayoutParams(avSize, avSize, Gravity.TOP | Gravity.START);
+        avWrapLp.leftMargin = Ui.dp(this, 14);
+        avWrapLp.topMargin = coverHeight - (avSize / 2);
 
         FrameLayout whiteRing = new FrameLayout(this);
         whiteRing.setBackground(Ui.circle(Ui.card(this)));
-        int innerAv = Ui.dp(this, 98);
         avatar = new ImageView(this);
         Ui.avatarLarge(this, avatar, null);
         whiteRing.addView(avatar, new FrameLayout.LayoutParams(innerAv, innerAv, Gravity.CENTER));
@@ -262,37 +296,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         FrameLayout.LayoutParams gblp = new FrameLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28), Gravity.BOTTOM | Gravity.START);
         gblp.setMargins(Ui.dp(this, 2), 0, 0, Ui.dp(this, 2));
         avWrap.addView(guardBadge, gblp);
-        avatarAndNameRow.addView(avWrap, avWrapLp);
+        heroTopStack.addView(avWrap, avWrapLp);
+        body.addView(heroTopStack, new LinearLayout.LayoutParams(-1, -2));
 
-        // Right of Avatar: Bold Name + Scalloped Blue Tick + Bold Stats ("8 followers · 0 following · 8 posts")
-        LinearLayout rightNameCol = Ui.col(this);
-        LinearLayout.LayoutParams rncLp = new LinearLayout.LayoutParams(0, -2, 1);
-        rncLp.leftMargin = Ui.dp(this, 14);
-        rncLp.topMargin = Ui.dp(this, 10);
-
-        LinearLayout nameRow = Ui.row(this);
-        nameRow.setGravity(Gravity.CENTER_VERTICAL);
-        nameT = Ui.tvBold(this, "", 20, Ui.txt(this));
-        nameRow.addView(nameT);
-        nameTick = new ImageView(this);
-        nameTick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
-        nameTick.setVisibility(View.GONE);
-        int nts = Ui.dp(this, 18);
-        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
-        ntp.leftMargin = Ui.dp(this, 5);
-        nameRow.addView(nameTick, ntp);
-        rightNameCol.addView(nameRow);
-
-        statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
-        statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
-        rightNameCol.addView(statsT);
-
-        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
-        presenceT.setVisibility(View.GONE);
-        rightNameCol.addView(presenceT);
-
-        avatarAndNameRow.addView(rightNameCol, rncLp);
-        infoCard.addView(avatarAndNameRow);
+        // 4. Hero Info Card (Bio + Action Buttons below the Avatar & Name Strip)
+        LinearLayout infoCard = Ui.col(this);
+        infoCard.setBackgroundColor(Ui.card(this));
+        infoCard.setClipChildren(false);
+        infoCard.setClipToPadding(false);
+        Ui.pad(infoCard, 14, 2, 14, 14);
 
         // Category ("🎬 Digital creator") + Bio
         categoryT = Ui.tv(this, "🎬 Digital creator", 14, Ui.txt(this));
@@ -596,21 +608,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         // Cover & Avatar taps + Direct Camera Upload Buttons!
         View.OnClickListener coverClick = v -> {
+            String currentCover = (user != null && Ui.hasRealPhoto(user.coverUrl))
+                    ? user.coverUrl
+                    : (user != null && Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
             if (mine && !viewAsPublic) {
                 Ui.choose(this, "Cover photo", new String[]{
                         "👁 View full cover photo (HD)",
                         "🖼 Upload new cover photo"
                 }, w -> {
-                    if (w == 0) openFullscreenImage(user != null ? user.coverUrl : null, "Cover Photo", false);
+                    if (w == 0) openFullscreenImage(currentCover, "Cover Photo", false);
                     else pickImage(REQ_PICK_COVER);
                 });
             } else {
-                openFullscreenImage(user != null ? user.coverUrl : null,
+                openFullscreenImage(currentCover,
                         (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false);
             }
         };
-        cover.setOnClickListener(v -> openFullscreenImage(user != null ? user.coverUrl : null,
-                (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false));
+        cover.setOnClickListener(v -> {
+            String currentCover = (user != null && Ui.hasRealPhoto(user.coverUrl))
+                    ? user.coverUrl
+                    : (user != null && Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
+            openFullscreenImage(currentCover,
+                    (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false);
+        });
         coverCamBtn.setOnClickListener(coverClick);
 
         avatar.setOnClickListener(v -> {
@@ -1018,8 +1038,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (guardBadge != null) {
             guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
         }
-        if (Ui.hasRealPhoto(user.coverUrl)) {
-            Ui.img(this, cover, user.coverUrl);
+        String coverDisplayUrl = Ui.hasRealPhoto(user.coverUrl)
+                ? user.coverUrl
+                : (Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
+        if (coverDisplayUrl != null) {
+            Ui.img(this, cover, coverDisplayUrl);
         } else {
             try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
             cover.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF90949C));

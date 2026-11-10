@@ -348,7 +348,7 @@ public class Ui {
         }
         Glide.with(c.getApplicationContext()).load(hdUrl)
                 .circleCrop()
-                .override(160, 160)
+                .override(512, 512)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
