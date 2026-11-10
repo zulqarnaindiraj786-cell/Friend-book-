@@ -887,12 +887,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.playBadge.setTextSize(44);
         vh.pageBadge.setVisibility(View.GONE);
         int targetMediaH = textOnlyPhotoHidden ? Ui.dp(c, 92)
-                : (isVideo ? Ui.dp(c, 240) : (fImg != null ? Ui.dp(c, 320) : 0));
+                : (isVideo ? Ui.dp(c, 240) : (fImg != null ? Ui.dp(c, 420) : 0));
         ViewGroup.LayoutParams wp = vh.mediaWrap.getLayoutParams();
         if (wp.height != targetMediaH) {
             wp.height = targetMediaH;
             vh.mediaWrap.setLayoutParams(wp);
         }
+        vh.mediaWrap.setBackgroundColor(Ui.isDark(c) ? 0xFF141518 : 0xFFF0F2F5);
         vh.mediaWrap.setVisibility((fImg != null || isVideo) ? View.VISIBLE : View.GONE);
 
         if (textOnlyPhotoHidden) {
@@ -909,9 +910,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.mediaWrap.setOnClickListener(v -> {
                 com.friendbook.social.core.FastCache.revealPhoto(p.id);
                 ViewGroup.LayoutParams nwp = vh.mediaWrap.getLayoutParams();
-                nwp.height = Ui.dp(c, 320);
+                nwp.height = Ui.dp(c, 420);
                 vh.mediaWrap.setLayoutParams(nwp);
                 vh.playBadge.setVisibility(View.GONE);
+                vh.image.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 Ui.imgFeed(c, vh.image, fImg);
                 vh.image.setOnClickListener(iv -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
@@ -2684,9 +2686,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             // ---- media: single full-width edge-to-edge image with fixed height (zero scroll height jump!) ----
             mediaWrap = new FrameLayout(c);
-            card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 320)));
+            mediaWrap.setBackgroundColor(Ui.isDark(c) ? 0xFF141518 : 0xFFF0F2F5);
+            card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 420)));
             image = new ImageView(c);
-            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
             mediaWrap.addView(image, new FrameLayout.LayoutParams(-1, -1));
             final GestureDetector gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
                 @Override public boolean onDown(MotionEvent e) { return true; }

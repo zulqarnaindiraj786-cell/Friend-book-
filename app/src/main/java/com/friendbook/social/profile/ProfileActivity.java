@@ -206,22 +206,26 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         body.setClipChildren(false);
         body.setClipToPadding(false);
 
-        // 3. Unified Hero Stack: Cover Photo (196dp) + White Name Strip + Full Unclipped 114dp Circular Avatar!
-        // Using a single FrameLayout with positive topMargin (138dp) guarantees 100% of the circular
-        // profile picture is inside [0..height] bounds and NEVER gets clipped in half by ViewGroup clipToPadding!
+        // 3. Unified Hero Stack: Cover Photo (196dp) + White Name Strip + Full Unclipped 136dp Circular Avatar!
+        // Using a single FrameLayout with explicit minimumHeight guarantees 100% of the circular
+        // profile picture is inside [0..height] bounds and NEVER gets clipped or overlapped by infoCard!
         int coverHeight = Ui.dp(this, 196);
-        int avSize = Ui.dp(this, 114);
-        int innerAv = Ui.dp(this, 106);
+        int avSize = Ui.dp(this, 136);
+        int innerAv = Ui.dp(this, 128);
+        int belowCoverMinH = (avSize / 2) + Ui.dp(this, 16);
 
         FrameLayout heroTopStack = new FrameLayout(this);
         heroTopStack.setBackgroundColor(Ui.card(this));
+        heroTopStack.setMinimumHeight(coverHeight + belowCoverMinH);
         heroTopStack.setClipChildren(false);
         heroTopStack.setClipToPadding(false);
 
         FrameLayout coverFrame = new FrameLayout(this);
         cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        cover.setBackgroundColor(0xFF90949C);
+        cover.setBackground(new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
         coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, coverHeight));
 
         FrameLayout coverCamWrap = new FrameLayout(this);
@@ -234,11 +238,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         coverFrame.addView(coverCamWrap, cclp);
         heroTopStack.addView(coverFrame, new FrameLayout.LayoutParams(-1, coverHeight, Gravity.TOP));
 
-        // White Name & Stats Strip directly below Cover Photo (right of the 114dp circular avatar)
+        // White Name & Stats Strip directly below Cover Photo (right of the 136dp circular avatar)
         LinearLayout rightNameCol = Ui.col(this);
         rightNameCol.setBackgroundColor(Ui.card(this));
-        rightNameCol.setMinimumHeight(Ui.dp(this, 70));
-        rightNameCol.setPadding(Ui.dp(this, 140), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 8));
+        rightNameCol.setMinimumHeight(belowCoverMinH);
+        rightNameCol.setPadding(Ui.dp(this, 160), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
         FrameLayout.LayoutParams rncLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         rncLp.topMargin = coverHeight;
 
@@ -941,6 +945,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void renderVisiblePhotos() {
         List<String> media=new ArrayList<>();
+        if (user != null) {
+            if (Ui.hasRealPhoto(user.photoUrl) && !media.contains(user.photoUrl)) media.add(user.photoUrl);
+            if (Ui.hasRealPhoto(user.coverUrl) && !media.contains(user.coverUrl)) media.add(user.coverUrl);
+        }
         for(Models.Post post:allLoadedPosts){if(!canSee(post))continue;
             if(post.mediaUrls!=null)for(String url:post.mediaUrls)if(!media.contains(url))media.add(url);
             if(post.mediaUrl!=null && !post.mediaUrl.isEmpty() && !media.contains(post.mediaUrl))media.add(post.mediaUrl);
@@ -1038,15 +1046,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (guardBadge != null) {
             guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
         }
-        String coverDisplayUrl = Ui.hasRealPhoto(user.coverUrl)
-                ? user.coverUrl
-                : (Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
-        if (coverDisplayUrl != null) {
-            Ui.img(this, cover, coverDisplayUrl);
+        if (Ui.hasRealPhoto(user.coverUrl)) {
+            Ui.img(this, cover, user.coverUrl);
         } else {
             try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
-            cover.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF90949C));
+            cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
         }
+        renderVisiblePhotos();
 
         coverCamBtn.setVisibility(mine && !viewAsPublic ? View.VISIBLE : View.GONE);
         avatarCamBtn.setVisibility(mine && !viewAsPublic ? View.VISIBLE : View.GONE);

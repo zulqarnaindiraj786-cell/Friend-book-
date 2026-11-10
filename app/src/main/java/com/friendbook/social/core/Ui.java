@@ -240,8 +240,8 @@ public class Ui {
         }
         String transform;
         if (avatar) {
-            // Face-aware crisp WebP avatar so heads/faces are never chopped or blurry!
-            transform = "w_240,h_240,c_fill,g_auto,f_webp,q_auto:good/";
+            // Preserve full portrait framing so SmartAvatarCircleTransform never chops heads/faces in half!
+            transform = "w_480,c_limit,f_webp,q_auto:good/";
         } else if (FastCache.isSlow2G(c) || Prefs.photoQuality(c) == 0) {
             transform = "w_480,c_limit,f_webp,q_auto:eco/";
         } else if (Prefs.photoQuality(c) == 1 || Prefs.turbo2g(c)) {
@@ -251,6 +251,80 @@ public class Ui {
         }
         return url.substring(0, idx + "/image/upload/".length()) + transform + after;
     }
+
+    /**
+     * Smart Portrait-Aware Circular Avatar Transform:
+     * Standard Glide CircleCrop slices portrait photos at exact 50% vertical height (cutting off the top of the head).
+     * SmartAvatarCircleTransform frames the upper portrait region (top 14% offset) so the full head, face & shoulders
+     * appear cleanly inside the circle just like Facebook!
+     */
+    private static final com.bumptech.glide.load.resource.bitmap.BitmapTransformation SMART_AVATAR_CIRCLE_TRANSFORM =
+            new com.bumptech.glide.load.resource.bitmap.BitmapTransformation() {
+                private static final String ID = "com.friendbook.social.core.Ui.SmartAvatarCircleTransform.v1";
+                private final byte[] ID_BYTES = ID.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+                @Override
+                protected android.graphics.Bitmap transform(
+                        @androidx.annotation.NonNull com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool pool,
+                        @androidx.annotation.NonNull android.graphics.Bitmap inBitmap,
+                        int outWidth, int outHeight) {
+                    int size = Math.min(outWidth, outHeight);
+                    if (size <= 0) size = Math.min(inBitmap.getWidth(), inBitmap.getHeight());
+                    if (size <= 0) return inBitmap;
+
+                    int inW = inBitmap.getWidth();
+                    int inH = inBitmap.getHeight();
+                    if (inW <= 0 || inH <= 0) return inBitmap;
+
+                    android.graphics.Bitmap result = pool.get(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+                    result.setHasAlpha(true);
+
+                    float scale;
+                    float dx = 0f;
+                    float dy = 0f;
+                    if (inW > inH) {
+                        scale = (float) size / (float) inH;
+                        dx = (size - inW * scale) * 0.5f;
+                    } else {
+                        scale = (float) size / (float) inW;
+                        // Upper-portrait framing (14% from top instead of 50% center) so vertical portraits show full head & face!
+                        dy = (size - inH * scale) * 0.14f;
+                    }
+
+                    android.graphics.Canvas canvas = new android.graphics.Canvas(result);
+                    canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
+
+                    android.graphics.Paint circlePaint = new android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG | android.graphics.Paint.DITHER_FLAG | android.graphics.Paint.FILTER_BITMAP_FLAG);
+                    android.graphics.BitmapShader shader = new android.graphics.BitmapShader(
+                            inBitmap, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
+                    android.graphics.Matrix matrix = new android.graphics.Matrix();
+                    matrix.setScale(scale, scale);
+                    matrix.postTranslate(dx, dy);
+                    shader.setLocalMatrix(matrix);
+                    circlePaint.setShader(shader);
+
+                    float r = size / 2f;
+                    canvas.drawCircle(r, r, r, circlePaint);
+                    canvas.setBitmap(null);
+                    return result;
+                }
+
+                @Override
+                public boolean equals(Object o) {
+                    return o != null && o.getClass() == getClass();
+                }
+
+                @Override
+                public int hashCode() {
+                    return ID.hashCode();
+                }
+
+                @Override
+                public void updateDiskCacheKey(@androidx.annotation.NonNull java.security.MessageDigest messageDigest) {
+                    messageDigest.update(ID_BYTES);
+                }
+            };
 
     /** Returns full-resolution HD uncropped URL for Full-Screen DP & Photo Viewer. */
     public static String hdImageUrl(String url) {
@@ -297,7 +371,7 @@ public class Ui {
         }
         String fastUrl = optimizeImageUrl(c, url.trim(), true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
-                .circleCrop()
+                .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(240, 240)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
@@ -343,12 +417,12 @@ public class Ui {
         if (idx >= 0) {
             String after = cleanUrl.substring(idx + "/image/upload/".length());
             if (!after.startsWith("w_") && !after.startsWith("f_") && !after.startsWith("q_") && !after.startsWith("c_")) {
-                hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_512,h_512,c_fill,g_auto,f_webp,q_auto:best/" + after;
+                hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_960,c_limit,f_webp,q_auto:best/" + after;
             }
         }
         Glide.with(c.getApplicationContext()).load(hdUrl)
-                .circleCrop()
-                .override(512, 512)
+                .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
+                .override(640, 640)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
@@ -360,8 +434,8 @@ public class Ui {
 
     /**
      * Full-aspect-ratio Feed & DP Post Photo loader (friendbook style):
-     * Uses explicit override(720, 720) so Glide hits memory cache synchronously inside onBindViewHolder
-     * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener!
+     * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
+     * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
     public static void imgFeed(Context c, ImageView iv, String url) {
         Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
@@ -370,14 +444,14 @@ public class Ui {
         Prefs.recordBytes(c, 38_000L, 162_000L);
         if (Prefs.fullPhotoDisplay(c)) {
             Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(720, 720)
+                    .override(960, 1200)
                     .fitCenter()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
                     .placeholder(ph).error(ph).into(iv);
         } else {
             Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(720, 720)
+                    .override(960, 1200)
                     .centerCrop()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
