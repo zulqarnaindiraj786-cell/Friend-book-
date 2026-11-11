@@ -18,13 +18,13 @@ const KV_WINDOW = 300_000;
 const T0 = 1_700_000_000_000;
 
 /**
- * In-memory D1 + KV fixture. Every query is counted so the tests can prove the thing the product
- * needs: counting and serving views performs ZERO D1 SELECTs, D1 is written at most once per hour
- * per resource, and the KV aggregate key is rewritten at most once every two minutes.
+ * In-memory D1 + KV fixture that classifies every statement, so the tests can prove the two things
+ * this design exists for: counting or serving a view performs ZERO D1 SELECTs, and the counting rule
+ * is ONE view per user per resource forever (checked by a write-only insert, never by a read).
  */
 function fixture({ withKv = true, kvSeed = null, gate = null } = {}) {
   const sql = new DatabaseSync(':memory:');
-  const queries = { selects: 0, upserts: 0, schema: 0 };
+  const queries = { selects: 0, schema: 0, dedupe: 0, totals: 0 };
   const seenSql = [];
   const store = new Map();
   if (kvSeed) store.set('views:live:v1', JSON.stringify(kvSeed));
@@ -34,21 +34,34 @@ function fixture({ withKv = true, kvSeed = null, gate = null } = {}) {
     seenSql.push(text);
     const normalized = text.replace(/\s+/g, ' ').trim();
     const isSelect = /^SELECT/i.test(normalized);
-    const isWrite = /^(INSERT|UPDATE|DELETE|CREATE)/i.test(normalized);
     const isSchema = /^CREATE/i.test(normalized);
+    const isDedupe = /friendbook_cf_view_last/i.test(normalized) && !isSelect && !isSchema;
+    const isTotals = /friendbook_cf_view_counters/i.test(normalized) && !isSelect && !isSchema;
     const count = () => {
       if (isSelect) queries.selects += 1;
       else if (isSchema) queries.schema += 1;
-      else if (isWrite) queries.upserts += 1;
+      else if (isDedupe) queries.dedupe += 1;
+      else if (isTotals) queries.totals += 1;
     };
-    // Each statement yields once before touching SQLite, exactly like real network I/O: a test can
-    // therefore prove that a flush handed to ctx.waitUntil did NOT run before the response returned.
-    // `gate` lets a test keep storage I/O in flight: anything awaited behind it can only finish
-    // after the test releases it, which is how deferral to ctx.waitUntil is proven.
+    // `changes()` is what tells the Worker whether a (resource, uid) pair was new - the write is the
+    // de-dupe check, which is why no SELECT is ever needed.
+    const changes = () => sql.prepare('SELECT changes() AS n').get().n;
+    // `gate` holds the hourly totals write in flight so a test can prove it was deferred to
+    // ctx.waitUntil instead of delaying the response. The inline de-dupe insert is never gated.
     const bind = (...params) => ({
-      async first() { if (gate && isWrite && !isSchema) await gate; await null; count(); const row = sql.prepare(normalized).get(...params); return row === undefined ? null : row; },
+      async first() {
+        if (gate && isTotals) await gate;
+        await null; count();
+        const row = sql.prepare(normalized).get(...params);
+        return row === undefined ? null : row;
+      },
       async all() { await null; count(); return { results: sql.prepare(normalized).all(...params) }; },
-      async run() { await null; count(); sql.prepare(normalized).run(...params); return { success: true }; },
+      async run() {
+        if (gate && isTotals) await gate;
+        await null; count();
+        sql.prepare(normalized).run(...params);
+        return { success: true, meta: { changes: changes() } };
+      },
     });
     return {
       bind,
@@ -93,17 +106,21 @@ async function call(env, { path = '/v1/views/reels/r1', method = 'GET', uid = 'u
   return { status: response.status, body: await response.json() };
 }
 
-test('counting and serving views issue zero D1 SELECTs and zero D1 writes inside the hour', async t => {
+/** One view POST from one distinct watcher: `viewer(3)` is the third different user. */
+const viewer = (n) => `user${n}`;
+
+test('counting and serving views issue zero D1 SELECTs, and totals wait for the hourly window', async t => {
   resetViewState();
   const f = fixture({ kvSeed: { 'reels/r1': 40 } }); t.after(f.close);
   let clock = T0;
   const now = () => clock;
 
-  for (let i = 0; i < 6; i++) {
-    clock += 1000; // a real re-watch one second later
-    const { status, body } = await call(f.env, { method: 'POST' }, now);
+  for (let i = 1; i <= 6; i++) {
+    clock += 1000;
+    const { status, body } = await call(f.env, { method: 'POST', uid: viewer(i) }, now);
     assert.equal(status, 200);
-    assert.equal(body.counted, true);
+    assert.equal(body.counted, true, 'a first-time watcher counts');
+    assert.equal(body.dedupe, 'once-per-user');
   }
   const batch = await call(f.env, { path: '/v1/views?collection=reels', ids: 'r1,missing' }, now);
   const single = await call(f.env, {}, now);
@@ -113,41 +130,84 @@ test('counting and serving views issue zero D1 SELECTs and zero D1 writes inside
   assert.equal(single.body.views, 46);
   assert.equal(single.body.storage, 'kv+memory');
   assert.equal(f.queries.selects, 0, 'the view path must never SELECT from D1');
-  assert.equal(f.queries.upserts, 0, 'the KV seed counts as recently persisted, so D1 waits out the hour');
-  assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_view_counters").get().n, 0);
+  assert.equal(f.queries.totals, 0, 'the KV seed counts as recently persisted, so the total waits out the hour');
+  assert.equal(f.queries.dedupe, 6, 'one write-only de-dupe insert per first-time watcher, never a read');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_view_last').get().n, 6);
   assert.deepEqual([...viewCounterState().dirty], ['reels/r1'], 'the six views are queued for the hourly D1 write');
   assert.equal(f.kv.writes, 0, 'six seconds of counting did not need a KV write either');
 });
 
-test('D1 receives one write per resource per hour holding the full live total', async t => {
+test('a repeat watcher is refused by the durable de-dupe without any D1 read', async t => {
+  resetViewState();
+  const f = fixture({ kvSeed: { 'reels/r1': 40 } }); t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  const first = await call(f.env, { method: 'POST' }, now);
+  assert.equal(first.body.counted, true);
+  assert.equal(first.body.views, 41);
+
+  // Same user, same second: the memory cache settles it, no storage call at all.
+  const again = await call(f.env, { method: 'POST' }, now);
+  assert.equal(again.body.counted, false);
+  assert.equal(again.body.views, 41);
+  assert.equal(f.queries.dedupe, 1, 'the repeat cost nothing');
+
+  // A second watcher, five minutes later, so the aggregate is durable in KV before the isolate dies.
+  clock += KV_WINDOW;
+  const other = await call(f.env, { method: 'POST', uid: 'user2' }, now);
+  assert.equal(other.body.counted, true);
+  assert.equal(other.body.views, 42);
+  assert.equal(f.kv.writes, 1, 'the snapshot that survives an isolate restart was written');
+
+  // The first watcher comes back a month later, and this isolate has forgotten everything:
+  // still ONE view for them, restored total, and still no D1 read.
+  clock += 30 * 24 * HOUR;
+  resetViewState();
+  const muchLater = await call(f.env, { method: 'POST' }, now);
+  assert.equal(muchLater.body.counted, false, 'ONE view per user per Reel, forever');
+  assert.equal(muchLater.body.views, 42, 'the KV aggregate restored the total without touching D1');
+  assert.equal(f.queries.selects, 0, 'the durable de-dupe is checked by a write, never by a read');
+  assert.equal(f.queries.dedupe, 3, 'a cold isolate asks D1 once per watcher, and D1 answers "already counted"');
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_view_last').get().n, 2,
+    'no second row was ever written for the same user');
+
+  // A brand new watcher is a real new view.
+  const third = await call(f.env, { method: 'POST', uid: 'user3' }, now);
+  assert.equal(third.body.counted, true);
+  assert.equal(third.body.views, 43);
+});
+
+test('D1 receives one totals write per resource per hour holding the full live total', async t => {
   resetViewState();
   const f = fixture({ kvSeed: { 'reels/r1': 10 } }); t.after(f.close);
   let clock = T0;
   const now = () => clock;
-  const post = () => call(f.env, { method: 'POST' }, now);
+  let watchers = 0;
+  const post = () => call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
 
   // A resource that was never persisted is written at once, so a brand new Reel cannot be lost.
-  await call(f.env, { path: '/v1/views/reels/new1', method: 'POST' }, now);
-  assert.equal(f.queries.upserts, 1, 'the first ever write of a resource happens at once');
+  await call(f.env, { path: '/v1/views/reels/new1', method: 'POST', uid: 'fresh-eyes' }, now);
+  assert.equal(f.queries.totals, 1, 'the first ever totals write of a resource happens at once');
   assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/new1'").get().views, 1);
   assert.ok(f.queries.schema >= 4, 'the Worker created its own tables and index without a migration run');
 
-  // 54 minutes of watching: counted and served live, but D1 is not written again.
+  // 54 minutes of watching by six different people: counted and served live, no totals write.
   for (let i = 0; i < 6; i++) { clock += 9 * 60_000; await post(); }
-  assert.equal(f.queries.upserts, 1, 'no D1 write inside the hourly window');
+  assert.equal(f.queries.totals, 1, 'no totals write inside the hourly window');
   assert.equal((await call(f.env, {}, now)).body.views, 16, 'the live total still grows');
   assert.equal(viewCounterState().dirty.has('reels/r1'), true);
 
-  // Crossing the hour writes the FULL live total in ONE statement — still no SELECT.
+  // Crossing the hour writes the FULL live total in ONE statement - still no SELECT.
   clock += 10 * 60_000;
   const flushed = (await post()).body;
-  assert.equal(f.queries.upserts, 2);
+  assert.equal(f.queries.totals, 2);
   assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r1'").get().views, 17);
   assert.equal(flushed.views, 17);
   assert.equal(flushed.d1Pending, false, 'the hourly write cleared the pending flag');
   assert.equal(viewCounterState().dirty.has('reels/r1'), false);
   assert.equal(f.queries.selects, 0);
-  assert.ok(f.kv.writes <= 12, `the hourly D1 writes added no unbudgeted KV writes (${f.kv.writes})`);
+  assert.ok(f.kv.writes <= 12, `the hourly writes added no unbudgeted KV writes (${f.kv.writes})`);
 });
 
 test('the hourly D1 write can never lower a stored total (MAX semantics)', async t => {
@@ -160,14 +220,16 @@ test('the hourly D1 write can never lower a stored total (MAX semantics)', async
   let clock = T0;
   const now = () => clock;
 
-  // Only r1 is watched: five real views over the next hour (a sixth inside one second would not count).
-  for (let i = 0; i < 3; i++) { clock += 2000; await call(f.env, { method: 'POST' }, now); }
-  clock += 1000; await call(f.env, { method: 'POST' }, now);
+  // Only r1 is watched, by five different people over the next hour.
+  for (let i = 1; i <= 5; i++) { clock += 2000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
+  // The first watcher coming back changes nothing.
+  const repeat = await call(f.env, { method: 'POST', uid: viewer(1) }, now);
+  assert.equal(repeat.body.counted, false);
   clock += HOUR;
-  const flushed = (await call(f.env, { method: 'POST' }, now)).body;
+  const flushed = (await call(f.env, { method: 'POST', uid: 'viewer6' }, now)).body;
 
-  assert.equal(flushed.views, 505, 'the seeded total plus five real views');
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r1'").get().views, 505);
+  assert.equal(flushed.views, 506, 'the seeded total plus six real, distinct viewers');
+  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r1'").get().views, 506);
   assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r2'").get().views, 70,
     'a resource nobody watched is never rewritten');
   assert.equal(f.queries.selects, 0);
@@ -212,30 +274,15 @@ test('without a KV binding the counters still work from memory and never read D1
   f.sql.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 7, 1)");
   let clock = T0;
   const now = () => clock;
-  for (let i = 0; i < 3; i++) { clock += 1000; await call(f.env, { method: 'POST' }, now); }
+  for (let i = 1; i <= 3; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
   const served = await call(f.env, {}, now);
   assert.equal(served.body.views, 10, 'the historical total was restored once, then counted in memory');
   assert.equal(served.body.storage, 'memory');
   assert.equal(f.queries.selects, 1, 'one bounded seed read for the whole isolate, not one per view');
   assert.equal(f.kv.reads, 0);
-  for (let i = 0; i < 10; i++) { clock += 1000; await call(f.env, { method: 'POST' }, now); }
-  assert.equal(f.queries.selects, 1, 'thirteen more views added zero D1 reads');
-});
-
-test('the one-second floor stops a double-fired callback but never a real re-watch', async t => {
-  resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 0 } }); t.after(f.close);
-  let clock = T0;
-  const now = () => clock;
-  const post = (uid = 'user1') => call(f.env, { method: 'POST', uid }, now);
-
-  assert.equal((await post()).body.counted, true, 'the first second of watching counts');
-  assert.equal((await post()).body.counted, false, 'a callback fired twice in the same second cannot double count');
-  clock += 1000;
-  assert.equal((await post()).body.counted, true, 'the same user watching again counts again');
-  assert.equal((await post('user2')).body.counted, true, 'another user is independent');
-  assert.equal((await call(f.env, {}, now)).body.views, 3);
-  assert.equal(f.queries.selects, 0);
+  for (let i = 4; i <= 13; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
+  assert.equal(f.queries.selects, 1, 'ten more viewers added zero D1 reads');
+  assert.equal((await call(f.env, {}, now)).body.views, 20);
 });
 
 test('the KV aggregate is written at most once per five minutes of counting', async t => {
@@ -243,24 +290,28 @@ test('the KV aggregate is written at most once per five minutes of counting', as
   const f = fixture({ kvSeed: { 'reels/r1': 0 } }); t.after(f.close);
   let clock = T0;
   const now = () => clock;
+  let watchers = 0;
 
-  for (let i = 0; i < 20; i++) { clock += 1000; await call(f.env, { method: 'POST' }, now); }
+  for (let i = 0; i < 20; i++) {
+    clock += 1000;
+    await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
+  }
   assert.equal(f.kv.writes, 0, 'twenty seconds of counting never rewrote KV');
 
   clock += KV_WINDOW;
-  await call(f.env, { method: 'POST' }, now);
+  await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
   assert.equal(f.kv.writes, 1);
   assert.deepEqual(JSON.parse(f.store.get('views:live:v1')), { 'reels/r1': 21 },
     'the snapshot holds what was counted at flush time');
 
   const before = f.kv.writes;
   clock += 1000;
-  await call(f.env, { method: 'POST' }, now);
+  await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
   assert.equal(f.kv.writes, before, 'inside the five minute window nothing is rewritten');
   assert.equal(f.queries.selects, 0);
 });
 
-test('waitUntil defers the flushes so the response is never blocked by storage', async t => {
+test('waitUntil defers the totals write so the response is never blocked by storage', async t => {
   resetViewState();
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -268,14 +319,15 @@ test('waitUntil defers the flushes so the response is never blocked by storage',
   const pending = [];
   const ctx = { waitUntil: (promise) => pending.push(promise) };
 
-  // D1 and KV are both stuck behind the gate, yet the response comes back immediately.
-  const response = await call(f.env, { path: '/v1/views/reels/fresh', method: 'POST' }, () => T0, ctx);
+  // The hourly totals write and the KV snapshot are both stuck behind the gate, yet the response
+  // comes back at once (the inline de-dupe insert is not gated - it decides whether to count).
+  const response = await call(f.env, { path: '/v1/views/reels/fresh', method: 'POST', uid: 'new-eyes' }, () => T0, ctx);
   assert.equal(response.status, 200);
   assert.equal(response.body.views, 1, 'the live count is served without waiting for storage');
-  assert.equal(response.body.d1Pending, true, 'the write is still in flight, and the client is told so');
+  assert.equal(response.body.d1Pending, true, 'the totals write is still in flight, and the client is told so');
   assert.equal(pending.length, 1, 'the flush was handed to the runtime, not awaited inline');
   assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_view_counters").get().n, 0,
-    'nothing reached D1 while the response was being served');
+    'nothing reached the counters table while the response was being served');
 
   release();
   await Promise.allSettled(pending);
@@ -290,9 +342,9 @@ test('input validation, methods and auth fail closed without writing data', asyn
   assert.equal((await call(f.env, { path: '/v1/views/stories/x', method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { path: '/v1/views/reels/..', method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { path: '/v1/views/reels/a,b', method: 'POST' }, now)).status, 400);
+  assert.equal((await call(f.env, { path: '/v1/views/reels/' + 'x'.repeat(129), method: 'POST' }, now)).status, 400);
   // A trailing slash is not a resource: worker.js 404s it, and the module itself refuses the POST.
   assert.equal((await call(f.env, { path: '/v1/views/reels/', method: 'POST' }, now)).status, 405);
-  assert.equal((await call(f.env, { path: '/v1/views/reels/' + 'x'.repeat(129), method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { method: 'DELETE' }, now)).status, 405);
   assert.equal((await call(f.env, { path: '/v1/views', method: 'POST' }, now)).status, 405);
   assert.equal((await call(f.env, { path: '/v1/views', uid: 'user1' }, now)).status, 400, 'collection is required');
@@ -301,14 +353,15 @@ test('input validation, methods and auth fail closed without writing data', asyn
 
   const many = Array.from({ length: 51 }, (_, i) => `r${i}`).join(',');
   assert.equal((await call(f.env, { path: '/v1/views?collection=reels', ids: many }, now)).status, 400);
-  assert.equal(f.queries.upserts, 0, 'rejected requests never write');
+  assert.equal(f.queries.totals, 0, 'rejected requests never write a total');
+  assert.equal(f.queries.dedupe, 0, 'rejected requests never write a de-dupe row');
   assert.equal(f.queries.selects, 0, 'rejected requests never read');
 });
 
 test('migration is repeatable and keeps production view rows untouched', async t => {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
-  sql.exec("CREATE TABLE posts (id TEXT PRIMARY KEY, views INTEGER)");
+  sql.exec('CREATE TABLE posts (id TEXT PRIMARY KEY, views INTEGER)');
   sql.exec("INSERT INTO posts VALUES ('p1', 900)");
   const text = MIGRATIONS.map((name) => ({ name, text: readMigration(name) }));
   for (const pass of [1, 2]) {
@@ -320,6 +373,8 @@ test('migration is repeatable and keeps production view rows untouched', async t
   assert.equal(sql.prepare('SELECT views FROM posts WHERE id = ?').get('p1').views, 900);
   const columns = sql.prepare('SELECT name FROM pragma_table_info(?)').all('friendbook_cf_view_counters');
   assert.deepEqual(columns.map((row) => row.name), ['resource', 'views', 'updated_at']);
+  const dedupeColumns = sql.prepare('SELECT name FROM pragma_table_info(?)').all('friendbook_cf_view_last');
+  assert.deepEqual(dedupeColumns.map((row) => row.name), ['resource', 'uid', 'last_at']);
 });
 
 test('worker exposes /v1/views behind the Firebase token gate', async t => {
@@ -333,7 +388,11 @@ test('worker exposes /v1/views behind the Firebase token gate', async t => {
 
   const counted = await (await fetchWith('/v1/views/reels/r1', 'POST')).json();
   assert.equal(counted.views, 13);
+  assert.equal(counted.counted, true);
   assert.equal(counted.storage, 'kv+memory');
+  const repeat = await (await fetchWith('/v1/views/reels/r1', 'POST')).json();
+  assert.equal(repeat.counted, false, 'the same user watching again does not count again');
+  assert.equal(repeat.views, 13);
   const served = await (await fetchWith('/v1/views/reels/r1', 'GET')).json();
   assert.equal(served.views, 13);
 
