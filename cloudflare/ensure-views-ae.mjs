@@ -2,8 +2,13 @@
 // count comes from AE's uniq(uid) - which is what keeps "1 user = 1 view" true with ZERO D1 writes.
 //
 // Idempotent and offline: it only edits wrangler.toml. Whether the account can actually use
-// Analytics Engine is decided by `wrangler deploy` (the deploy step strips this binding and retries
-// if it is refused), and cloudflare/report-views-ae.mjs reports the real API answer after deploy.
+// Analytics Engine is decided by `wrangler deploy` (the deploy step removes ONLY this binding and
+// retries if it is refused), and cloudflare/report-views-ae.mjs publishes the real API answer after
+// the deploy - including the exact wrangler error when a binding was refused.
+//
+// The key is `dataset`, NOT `dataset_name`: wrangler 4 reports `dataset_name` as an unexpected field,
+// drops it, and names the dataset after the binding. Every view event would then land in a dataset
+// called "AE" and every query for `friendbook_views` would answer "unknown field".
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const BINDING = 'AE';
@@ -31,7 +36,7 @@ if (/^\[\[analytics_engine_datasets\]\]/m.test(text)) {
 # "1 user = 1 view" needs no D1 row at all. Never written to D1, never read from it.
 [[analytics_engine_datasets]]
 binding = "${BINDING}"
-dataset_name = "${DATASET}"
+dataset = "${DATASET}"
 
 `;
   text = insertBefore(text, block);
@@ -49,11 +54,20 @@ if (/^CF_ACCOUNT_ID\s*=/m.test(text)) {
   warn('CLOUDFLARE_ACCOUNT_ID unavailable here; the Worker can still write AE events but cannot query them.');
 }
 
+// Repair a config written by an older run of this script (see the header note).
+if (/^dataset_name\s*=/m.test(text)) {
+  text = text.replace(/^dataset_name\s*=\s*/m, 'dataset = ');
+  console.log('Renamed the Analytics Engine dataset key to `dataset` (wrangler 4 ignores `dataset_name`).');
+}
+if (!new RegExp(`^dataset = "${DATASET}"$`, 'm').test(text)) {
+  warn(`Analytics Engine dataset is not bound as '${DATASET}'; counts fall back to the snapshot + memory.`);
+}
+
 writeFileSync(WRANGLER, text);
 
 // The Worker reads AE with an encrypted secret (CF_AE_TOKEN), never with a plaintext var.
 if (!process.env.CLOUDFLARE_API_TOKEN) {
   warn('CLOUDFLARE_API_TOKEN unavailable here; AE counts will be served from KV + memory instead (still zero D1 writes).');
 }
-console.log('View counters: Analytics Engine events + uniq(uid) counts, KV live snapshot, D1 never written.');
+console.log('View counters: Analytics Engine events + uniq(uid) counts, KV/R2 live snapshot, D1 never written.');
 process.exit(0);

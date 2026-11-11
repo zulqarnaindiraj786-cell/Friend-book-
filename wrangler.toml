@@ -35,7 +35,7 @@ not_found_handling = "none"
 # "1 user = 1 view" needs no D1 row at all. Never written to D1, never read from it.
 [[analytics_engine_datasets]]
 binding = "AE"
-dataset_name = "friendbook_views"
+dataset = "friendbook_views"
 
 # Existing owner-provided bucket. Never create or replace it.
 [[r2_buckets]]
