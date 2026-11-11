@@ -24,8 +24,9 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 | --- | --- | --- |
 | Analytics Engine (`AE`, dataset `friendbook_views`) | Every view event + the real de-duplicated count | 1 event per view; ≤ 1 query per isolate per minute |
 | Workers KV (`VIEWS`, key `views:live:v1`) | Snapshot shared across isolates | 1 read per isolate, ≤ 288 writes/day per isolate |
+| R2 object (`views/live/v1.json`) | The same snapshot when KV cannot be bound to the Worker | 1 read per isolate, ≤ 288 Class A writes/day per isolate |
 | Worker memory | What a request is actually served from | free |
-| D1 | **Not written.** One bounded, read-only seed — only if AE *and* KV are both empty | 0 writes, ≤ 500 rows read once per isolate, only as a last resort |
+| D1 | **Not written.** One bounded, read-only seed — only if AE *and* the snapshot are both empty | 0 writes, ≤ 500 rows read once per isolate, only as a last resort |
 
 `served total = max(pre-AE history, AE uniq(uid)) + views counted in this isolate since AE last answered`
 
@@ -34,12 +35,17 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 * On every AE refresh, whatever AE absorbed is subtracted from that bridge
   (`bridged = sinceAe - (aeBase - previousAeBase)`), so a caught-up answer never double counts and a
   lagging answer never makes a number dip.
-* The KV snapshot stores `max(history, AE uniq)` when AE is answering — the de-duplicated truth, never
+* The snapshot stores `max(history, AE uniq)` when AE is answering — the de-duplicated truth, never
   one isolate's temporary bridge. Without AE it stores the live total, because then nothing else
   records it.
-* A cold isolate reads KV once, then asks AE once. Only if both come back empty does it run the
-  read-only seed `SELECT resource, views … ORDER BY views DESC LIMIT 500` and cache it in KV, so the
-  numbers users already saw survive a lost KV namespace. That is the only D1 statement left.
+* A cold isolate reads the snapshot once, then asks AE once. Only if both come back empty does it run
+  the read-only seed `SELECT resource, views … ORDER BY views DESC LIMIT 500` and cache it back, so
+  the numbers users already saw survive a lost namespace. That is the only D1 statement left.
+* **Which snapshot store:** `env.VIEWS` (Workers KV) when it is bound, otherwise ONE small JSON
+  object at `views/live/v1.json` in the existing R2 bucket. That object lives under its own prefix,
+  can never address a `videos/` key, and the module contains no `delete` call of any kind — the
+  bucket keeps videos forever exactly as before. Without either, a new isolate would start from zero
+  and the numbers users already saw would go backwards.
 
 ### De-dupe across isolates, honestly
 
@@ -63,23 +69,38 @@ remembers what worked for the life of the isolate:
    `dimensions { name count uniq }`.
 
 Reads need `CF_AE_TOKEN` (an **encrypted Worker secret**, never a plaintext `--var`) and
-`CF_ACCOUNT_ID`. Without them the Worker still writes every event and still counts in KV + memory,
-reporting `"storage": "kv+memory"` — and still writing nothing to D1.
+`CF_ACCOUNT_ID`. Without them the Worker still writes every event and still counts from the snapshot
++ memory, reporting `"storage": "kv+memory"` or `"r2+memory"` — and still writing nothing to D1.
 
 Because the exact AE answer shape can only be confirmed against the real account, each deploy runs
-`cloudflare/report-views-ae.mjs`, which fetches the deployed `/health` (proving which bindings
-shipped) plus the raw SQL and GraphQL responses, and refreshes a single marked comment on the open
-pull request. That comment is the verification record.
+`cloudflare/report-views-ae.mjs`, which publishes to one marked comment on the open pull request:
+the raw wrangler output of **every** deploy attempt and which one shipped, the deployed `/health`
+flags, `GET /user/tokens/verify`, the KV namespace answer, every AE SQL answer, and the AE dataset's
+real GraphQL field name discovered by schema introspection. That comment is the verification record;
+a green run alone proves nothing about bindings.
+
+Two facts it already established, and what they changed here:
+
+* `wrangler` 4 rejects `dataset_name` as an unexpected field, drops it and names the dataset after
+  the binding. The events would have landed in a dataset called `AE`, and GraphQL answered
+  `unknown field "friendbook_views"`. The correct key is **`dataset = "friendbook_views"`**;
+  `ensure-views-ae.mjs` also repairs an older config that still says `dataset_name`.
+* The AE binding was refused by the deploy and the KV namespace could not be listed, so production
+  shipped with `ae: false, kv: false`. That is a token-scope answer, not a code answer, and the
+  report names the permissions it needs: `Analytics Engine: Edit` + `Read` and
+  `Workers KV Storage: Edit`. Until they exist, the counters run on the R2 snapshot + memory.
 
 ## Fallbacks — a refused binding must never break a release
 
 * `cloudflare/ensure-views-ae.mjs` inserts `[[analytics_engine_datasets]] binding = "AE"
-  dataset_name = "friendbook_views"` **before** the `# Existing owner-provided bucket.` anchor,
-  because the deploy step's R2-scope fallback truncates `wrangler.toml` there.
-* The deploy step retries progressively: full config → without R2 → without Analytics Engine →
-  without either. Each retry only edits the CI working copy; the repo keeps the real configuration.
-* `/health` reports `views: { ae, kv, aeReadToken }` (booleans only), so a deploy can be checked
-  without authenticating.
+  dataset = "friendbook_views"` before the R2 block, next to the KV binding.
+* The deploy step tries `full` → `no-ae` → `no-r2` → `no-ae-no-r2`, and each attempt removes **only
+  that one block** from the CI working copy. The previous fallback truncated `wrangler.toml` at the
+  R2 anchor, which silently deleted everything after it — the KV binding and the cron triggers.
+  Every attempt keeps its raw wrangler output in `/tmp/deploy-logs`, records `DEPLOY_ATTEMPT_USED`
+  and saves the config that shipped; the repo file is always restored.
+* `/health` reports `views: { ae, kv, r2Snapshot, aeReadToken }` (booleans only), so a deploy can be
+  checked without authenticating.
 
 ## Contract
 
@@ -90,7 +111,8 @@ GET  /v1/views?collection=reels&ids=a,b,c -> { collection, views: { id: n }, sto
 GET  /v1/views?collection=reels&top=25    -> { collection, views: { id: n }, storage }   (cap 50)
 ```
 
-`storage` is `ae+kv+memory`, `kv+memory` or `memory` — whatever this isolate can really use.
+`storage` is `ae+kv+memory`, `kv+memory`, `ae+r2+memory`, `r2+memory` or `memory` — whatever this
+isolate can really use.
 `event` is `analytics-engine` when the view event was accepted, `none` when there is no AE binding.
 Every route requires a verified Firebase ID token; Firebase stores no view data.
 
@@ -104,19 +126,23 @@ For 1,000,000 view POSTs from 100,000 people (200,000 of them first-time views o
 | D1 rows written | 2,000,000 | 200,000 + hourly totals | **0** |
 | AE events | – | – | 1,000,000 (one per view request) |
 | AE queries | – | – | ≤ 1,440/day per isolate |
-| KV reads / writes | 0 | 1 per isolate / ≤ 288 per day | 1 per isolate / ≤ 288 per day |
+| KV reads / writes | 0 | 1 per isolate / ≤ 288 per day | 1 per isolate / ≤ 288 per day (or the same on the R2 object when KV is unbound) |
 | Counted views | 1,000,000 | 200,000 | **200,000** (`uniq(uid)`) |
 | Home Feed cost | 1 batched read per load | 0 | **0** |
 
 ## Tests
 
-* `cloudflare/test/view-counters.test.js` — 12 tests with a fake AE binding, a fake KV, a stubbed AE
+* `cloudflare/test/view-counters.test.js` — 14 tests with a fake AE binding, a fake KV, a fake R2
+  bucket that throws on any key outside `views/` and has no `delete` method, a stubbed AE
   query API and a D1 that counts statements: one event per view with **zero D1 statements prepared**,
   one view per user across ten watches, AE `uniq` re-basing a cold isolate, the bridge never dipping
   or double counting, one AE query per minute deferred to `ctx.waitUntil`, GraphQL-only accounts,
   no-AE fallback, the read-only last-resort seed, the KV throttle, batched/top reads, fail-closed
-  validation and auth, and the deployed route plus `/health` bindings through `createWorker`.
+  validation and auth, the R2 snapshot surviving an isolate restart, AE winning over an older
+  snapshot, and the deployed route plus `/health` bindings through `createWorker`.
 * `scripts/tests/test_cloudflare_view_counters.py` — source guards: no `INSERT`, `UPDATE`, `DELETE`,
   `CREATE TABLE`, `.run()`, `ON CONFLICT` or `ensureSchema` may appear in `view-counters.js`; the AE
-  binding must sit before the R2 anchor; CI must bind AE, store the token as a secret and report raw
-  answers; the Home Feed must contain no views client at all.
+  binding must use `dataset`, not `dataset_name`; no `VIDEO_BUCKET.delete` or `videos/` key may
+  appear; CI must bind AE, store the token as a secret, keep the deploy fallbacks surgical (no
+  truncation), log every attempt and report raw answers; the Home Feed must contain no views client
+  at all.

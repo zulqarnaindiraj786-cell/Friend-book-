@@ -48,9 +48,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('SELECT resource, views FROM friendbook_cf_view_counters ORDER BY views DESC LIMIT ?', worker)
         self.assertIn('const SEED_LIMIT = 500;', worker)
         self.assertIn('if (state.totals.size === 0 && env?.DB)', worker)
-        # Live reads come from memory, refilled from Analytics Engine and the KV snapshot.
+        # Live reads come from memory, refilled from Analytics Engine and the snapshot store.
         self.assertIn("const KV_KEY = 'views:live:v1';", worker)
         self.assertIn("await env.VIEWS.get(KV_KEY, { type: 'json', cacheTtl: 60 })", worker)
+        self.assertIn("const snapshotStore = (env) => (env?.VIEWS ? 'kv' : (env?.VIDEO_BUCKET ? 'r2' : null));", worker)
+        self.assertIn('const store = snapshotStore(env);', worker)
         self.assertIn('if (state.loaded) return;', worker)
         self.assertIn('state.totals.get(resource) ?? 0', worker)
         absent(self, 'SELECT views FROM friendbook_cf_view_counters WHERE resource', worker, 'view-counters.js')
@@ -76,7 +78,23 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # The snapshot stores AE's de-duplicated truth (plus pre-AE history), never this isolate's
         # temporary bridge, and only falls back to the live total when AE is not answering.
         self.assertIn('return state.aeUsable ? historical : Math.max(historical, state.totals.get(resource) ?? 0);', worker)
-        self.assertIn("const storageMode = () => [state.aeUsable ? 'ae' : null, state.kvUsable ? 'kv' : null, 'memory']", worker)
+        self.assertIn("state.kvUsable ? (state.snapshotStore === 'r2' ? 'r2' : 'kv') : null,", worker)
+        self.assertIn('if (!snapshotStore(env)) return false;', worker)
+        self.assertIn('if (snapshotStore(env)) await flushKv(env, seededAt, true);', worker)
+
+    def test_the_r2_snapshot_fallback_never_touches_a_video(self):
+        worker = (CLOUDFLARE / 'view-counters.js').read_text()
+        # When Workers KV cannot be bound to the Worker, one small counters object in the existing R2
+        # bucket keeps the numbers from collapsing to zero on every new isolate.
+        self.assertIn("const R2_SNAPSHOT_KEY = 'views/live/v1.json';", worker)
+        self.assertIn('await env.VIDEO_BUCKET.put(R2_SNAPSHOT_KEY, JSON.stringify(snapshot),', worker)
+        self.assertIn("const object = await env.VIDEO_BUCKET.get(R2_SNAPSHOT_KEY);", worker)
+        # It lives under its own prefix, cannot reach a video key, and nothing in the module deletes.
+        self.assertTrue(worker.index("'views/live/v1.json'") < worker.index('env.VIDEO_BUCKET.put'))
+        absent(self, 'VIDEO_BUCKET.delete', worker, 'view-counters.js')
+        absent(self, "'videos/", worker, 'view-counters.js')
+        absent(self, '.delete(', worker.replace('state.counted.delete(', '').replace('state.sinceAe.delete(', ''),
+               'view-counters.js')
     def test_storage_flushes_never_block_the_response(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
         self.assertIn("if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise);", worker)
@@ -131,7 +149,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         config = (ROOT / 'wrangler.toml').read_text()
         self.assertIn('[[analytics_engine_datasets]]', config)
         self.assertIn('binding = "AE"', config)
-        self.assertIn('dataset_name = "friendbook_views"', config)
+        # wrangler 4 reports `dataset_name` as an unexpected field, drops it, and names the dataset
+        # after the binding - so every event would land in a dataset called "AE" and every query for
+        # `friendbook_views` would answer "unknown field". The key must be `dataset`.
+        self.assertIn('dataset = "friendbook_views"', config)
+        self.assertNotIn('dataset_name', config)
         self.assertIn('CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"', config)
         # Before the R2 anchor, or the R2-strip deploy fallback would truncate it away.
         self.assertLess(config.index('[[analytics_engine_datasets]]'),
@@ -143,12 +165,26 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         script = (CLOUDFLARE / 'ensure-views-ae.mjs').read_text()
         self.assertIn("const BINDING = 'AE';", script)
         self.assertIn("const DATASET = 'friendbook_views';", script)
+        self.assertIn('dataset = \"${DATASET}\"', script)
+        self.assertNotIn('dataset_name = \"${DATASET}\"', script)
+        # It also repairs a config an older run wrote with the wrong key.
+        self.assertIn("if (/^dataset_name\\s*=/m.test(text))", script)
         self.assertIn("const ANCHOR = '# Existing owner-provided bucket.';", script)
         self.assertIn('process.exit(0)', script, 'provisioning must never fail a release')
         report = (CLOUDFLARE / 'report-views-ae.mjs').read_text()
         self.assertIn('<!-- friendbook-views-ae-report -->', report)
         self.assertIn('/analytics_engine/sql?query=', report)
-        self.assertIn('https://api.cloudflare.com/client/v4/graphql', report)
+        self.assertIn("const API = 'https://api.cloudflare.com/client/v4';", report)
+        self.assertIn('fetch(`${API}/graphql`', report)
+        # The report must show WHY a binding is missing, not only that it is: the raw output of every
+        # deploy attempt, the token's own scope answer, the KV namespace answer and the real GraphQL
+        # field name of the dataset (discovered by introspection, never assumed).
+        self.assertIn("/tmp/deploy-logs", report)
+        self.assertIn('DEPLOY_ATTEMPT_USED', report)
+        self.assertIn('/user/tokens/verify', report)
+        self.assertIn('/storage/kv/namespaces', report)
+        self.assertIn('__type(name: \"Viewer\")', report)
+        self.assertIn('Analytics Engine > Edit', report)
         self.assertIn('process.exit(0)', report)
         workflow = (ROOT / '.github/workflows/deploy-cloudflare.yml').read_text()
         self.assertIn('pull-requests: write', workflow)
@@ -159,12 +195,27 @@ class CloudflareViewCounterGuards(unittest.TestCase):
                         workflow.index('npm run deploy'), 'AE must be bound before the deploy')
         self.assertLess(workflow.index('npm run deploy'),
                         workflow.index('node cloudflare/report-views-ae.mjs'), 'and reported after it')
-        # A refused AE binding must never break a release: the deploy step strips it and retries.
+        # A refused AE binding must never break a release, and must never cost another binding: the
+        # fallbacks remove ONE block each (the old truncation at the R2 anchor silently deleted the KV
+        # binding and the cron triggers that come after it).
+        self.assertIn("re.sub(r'# Every view is one Analytics Engine event[\\s\\S]*?\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
         self.assertIn("re.sub(r'\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
+        self.assertIn("re.sub(r'# Existing owner-provided bucket[\\s\\S]*?\\[\\[r2_buckets\\]\\][^\\[]*', '', text)", workflow)
+        self.assertNotIn('p.write_text(text[:idx])', workflow, 'no truncation fallback may remain')
+        for attempt in ['attempt full \"$VARS_R2_ON\"', 'attempt no-ae \"$VARS_R2_ON\"',
+                        'attempt no-r2 \"$VARS_R2_OFF\"', 'attempt no-ae-no-r2 \"$VARS_R2_OFF\"']:
+            self.assertIn(attempt, workflow)
+        # Each attempt keeps its raw wrangler output for the report, and records which one shipped.
+        self.assertIn('mkdir -p /tmp/deploy-logs', workflow)
+        self.assertIn('echo \"DEPLOY_ATTEMPT_USED=$label\" >> \"$GITHUB_ENV\"', workflow)
+        self.assertIn('cp wrangler.toml /tmp/wrangler.toml.shipped', workflow)
+        self.assertIn('cp /tmp/wrangler.toml.bak wrangler.toml', workflow,
+                      'the repo config is always restored, whatever shipped')
 
     def test_health_reports_the_view_bindings_without_exposing_data(self):
         worker = (ROOT / 'worker.js').read_text()
         self.assertIn("const views = { ae: Boolean(env.AE), kv: Boolean(env.VIEWS), "
+                      "r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), "
                       "aeReadToken: Boolean(env.CF_AE_TOKEN) };", worker)
         self.assertIn('return json({ ok: row?.connected === 1, views }', worker)
 
