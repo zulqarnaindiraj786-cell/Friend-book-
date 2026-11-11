@@ -103,7 +103,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
         # One event per view: the resource is AE's index (its grouping key), and collection, id and
         # uid travel as blobs so uniq(blob3) can enforce the rule at aggregation time.
-        self.assertIn('env.AE.writeDataPoint({', worker)
+        self.assertIn('env.ANALYTICS_ENGINE.writeDataPoint({', worker)
         self.assertIn('indexes: [resource.slice(0, 128)]', worker)
         self.assertIn('dimensions: [collection, id.slice(0, 128), String(uid).slice(0, 128)]', worker)
         self.assertIn('metrics: [1]', worker)
@@ -148,7 +148,8 @@ class CloudflareViewCounterGuards(unittest.TestCase):
     def test_analytics_engine_is_bound_before_the_r2_anchor(self):
         config = (ROOT / 'wrangler.toml').read_text()
         self.assertIn('[[analytics_engine_datasets]]', config)
-        self.assertIn('binding = "AE"', config)
+        self.assertIn('binding = "ANALYTICS_ENGINE"', config)
+        self.assertNotIn('binding = "AE"', config, 'a stale binding name points at nothing')
         # wrangler 4 reports `dataset_name` as an unexpected field, drops it, and names the dataset
         # after the binding - so every event would land in a dataset called "AE" and every query for
         # `friendbook_views` would answer "unknown field". The key must be `dataset`.
@@ -163,7 +164,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
 
     def test_ci_binds_ae_stores_the_read_token_and_reports_raw_answers(self):
         script = (CLOUDFLARE / 'ensure-views-ae.mjs').read_text()
-        self.assertIn("const BINDING = 'AE';", script)
+        self.assertIn("const BINDING = 'ANALYTICS_ENGINE';", script)
         self.assertIn("const DATASET = 'friendbook_views';", script)
         self.assertIn('dataset = \"${DATASET}\"', script)
         self.assertNotIn('dataset_name = \"${DATASET}\"', script)
@@ -222,9 +223,30 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('cp /tmp/wrangler.toml.bak wrangler.toml', workflow,
                       'the repo config is always restored, whatever shipped')
 
+    def test_the_analytics_engine_binding_name_matches_in_every_file(self):
+        # The owner created the dataset in the dashboard as `friendbook_views` bound to
+        # `ANALYTICS_ENGINE`. A binding name that differs between the config and the code means the
+        # Worker writes no events and reads no counts while every test still passes - so the name is
+        # taken from wrangler.toml and every consumer is checked against it.
+        import re
+        config = (ROOT / 'wrangler.toml').read_text()
+        block = re.search(r'\[\[analytics_engine_datasets\]\]([\s\S]*?)(?=\n\[|\Z)', config)
+        self.assertIsNotNone(block, 'the Analytics Engine binding must exist')
+        binding = re.search(r'binding = "([^"]+)"', block.group(1)).group(1)
+        dataset = re.search(r'dataset = "([^"]+)"', block.group(1)).group(1)
+        self.assertEqual(dataset, 'friendbook_views', 'the dataset the owner created')
+        self.assertEqual(binding, 'ANALYTICS_ENGINE', 'the binding the owner created')
+        worker = (CLOUDFLARE / 'view-counters.js').read_text()
+        self.assertIn(f'env.{binding}.writeDataPoint({{', worker)
+        self.assertIn(f'if (!env?.{binding} || !env?.CF_AE_TOKEN', worker)
+        self.assertIn(f'ae: Boolean(env.{binding}),', (ROOT / 'worker.js').read_text())
+        self.assertIn(f"const BINDING = '{binding}';", (CLOUDFLARE / 'ensure-views-ae.mjs').read_text())
+        self.assertIn(f'env.{binding} = {{ writeDataPoint:', (CLOUDFLARE / 'test/view-counters.test.js').read_text())
+        absent(self, 'env.AE.', worker, 'view-counters.js')
+
     def test_health_reports_the_view_bindings_without_exposing_data(self):
         worker = (ROOT / 'worker.js').read_text()
-        self.assertIn("const views = { ae: Boolean(env.AE), kv: Boolean(env.VIEWS), "
+        self.assertIn("const views = { ae: Boolean(env.ANALYTICS_ENGINE), kv: Boolean(env.VIEWS), "
                       "r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), "
                       "aeReadToken: Boolean(env.CF_AE_TOKEN) };", worker)
         self.assertIn('return json({ ok: row?.connected === 1, views }', worker)

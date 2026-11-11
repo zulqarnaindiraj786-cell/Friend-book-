@@ -9,7 +9,8 @@ path simply stopped writing to them.
 ## The three rules
 
 1. **Every view is one Analytics Engine event.** A view that reaches the Worker is written with
-   `env.AE.writeDataPoint({ indexes: [resource], dimensions: [collection, id, uid], metrics: [1] })`.
+   `env.ANALYTICS_ENGINE.writeDataPoint({ indexes: [resource], dimensions: [collection, id, uid],
+   metrics: [1] })`.
 2. **D1 receives ZERO writes** from the view path — no totals upsert, no per-user stamp, no
    `CREATE TABLE`. It also performs zero reads, with one documented exception below.
 3. **ONE view per user per video, forever.** One second of watching is enough; the whole video, a
@@ -22,7 +23,7 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 
 | Layer | Role | Cost |
 | --- | --- | --- |
-| Analytics Engine (`AE`, dataset `friendbook_views`) | Every view event + the real de-duplicated count | 1 event per view; ≤ 1 query per isolate per minute |
+| Analytics Engine (`ANALYTICS_ENGINE`, dataset `friendbook_views`) | Every view event + the real de-duplicated count | 1 event per view; ≤ 1 query per isolate per minute |
 | Workers KV (`VIEWS`, key `views:live:v1`) | Snapshot shared across isolates | 1 read per isolate, ≤ 288 writes/day per isolate |
 | R2 object (`views/live/v1.json`) | The same snapshot when KV cannot be bound to the Worker | 1 read per isolate, ≤ 288 Class A writes/day per isolate |
 | Worker memory | What a request is actually served from | free |
@@ -104,8 +105,11 @@ Two facts it already established, and what they changed here:
 
 ## Fallbacks — a refused binding must never break a release
 
-* `cloudflare/ensure-views-ae.mjs` inserts `[[analytics_engine_datasets]] binding = "AE"
-  dataset = "friendbook_views"` before the R2 block, next to the KV binding.
+* `cloudflare/ensure-views-ae.mjs` inserts `[[analytics_engine_datasets]] binding =
+  "ANALYTICS_ENGINE" dataset = "friendbook_views"` before the R2 block, next to the KV binding, and
+  repairs an older config that used the binding name `AE`. Those are the exact names the owner created
+  in the Cloudflare dashboard (Workers > Analytics Engine > `friendbook_views`), so the dataset exists
+  on the account and the Worker binds to it instead of asking Cloudflare to create one.
 * The deploy step tries `full` → `no-ae` → `no-r2` → `no-ae-no-r2`, and each attempt removes **only
   that one block** from the CI working copy. The previous fallback truncated `wrangler.toml` at the
   R2 anchor, which silently deleted everything after it — the KV binding and the cron triggers.
