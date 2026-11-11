@@ -734,6 +734,14 @@ public class ReelsFragment extends Fragment {
         private static final int VT_REEL_AD = 1;
         private static final int REELS_PER_AD = 3;
         private static final int REEL_AD_STEP = REELS_PER_AD + 1;
+        /**
+         * Reels this process has already sent a view for. Counting rule (product decision): ONE view
+         * per user per Reel, forever - watching it again, looping it or finishing it changes nothing.
+         * This set stops the pointless repeat requests; the Worker de-dupes per uid as well, so the
+         * number can never be inflated even after a reinstall or on another device.
+         */
+        private static final java.util.Set<String> SESSION_COUNTED_VIEWS =
+                java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
 
         private final Activity activity;
         private final List<Models.Reel> data = new ArrayList<>();
@@ -1419,7 +1427,7 @@ public class ReelsFragment extends Fragment {
             Models.Reel reel;
             /** True once this play-through reached one second and its view was sent to Cloudflare. */
             boolean viewCountedThisPlay = false;
-            /** Last observed playback position, used to detect a loop/rewind (= a new real watch). */
+            /** Last observed playback position, used to detect a loop/rewind of the same Reel. */
             int lastTickPos = 0;
 
             private final Handler uiHandler = new Handler(Looper.getMainLooper());
@@ -1438,8 +1446,8 @@ public class ReelsFragment extends Fragment {
                                 scrubBar.setProgress((int) ((pos * 1000L) / dur));
                             }
                             // A rewind means the Reel looped (setLooping(true)) or the trim window
-                            // restarted: the user is watching it again, so the next second counts
-                            // as another real view.
+                            // restarted. One second of real watching is enough to count this user's
+                            // ONE view for this Reel; loops and re-watches never add another.
                             if (pos + 400 < lastTickPos) {
                                 viewCountedThisPlay = false;
                             }
@@ -2135,8 +2143,9 @@ public class ReelsFragment extends Fragment {
                     float vol = (muted || hasAttachedSound) ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
                     if (!activeMp.isPlaying()) activeMp.start();
-                    // Starting from (near) the beginning is a new watch: re-arm the one-second view
-                    // counter. Resuming after a pause keeps the already counted view as it is.
+                    // Starting from (near) the beginning re-arms the one-second check. Whether the
+                    // user watches one second or the whole Reel, at most ONE view is ever counted
+                    // for them - countRealView() and the Worker both refuse a second one.
                     try {
                         if (activeMp.getCurrentPosition() < 600) {
                             viewCountedThisPlay = false;
@@ -2189,21 +2198,26 @@ public class ReelsFragment extends Fragment {
             }
 
             /**
-             * Counts ONE real view in Cloudflare (Worker `/v1/views`) after one second of actual
-             * watching. Firebase is authentication only: nothing is written to Firestore and the
-             * number is never guessed locally — the Worker returns the live total, which it keeps in
-             * memory + KV and persists to D1 once an hour, so a view costs ZERO D1 row reads.
-             * Re-watches and loops count again; the Worker floors it to one counted view per user
-             * per second.
+             * Counts this user's ONE real view in Cloudflare (Worker `/v1/views`) after one second of
+             * actual watching - watching the whole Reel or only a second makes no difference, and
+             * watching it again never counts twice. Firebase is authentication only: nothing is
+             * written to Firestore and the number is never guessed locally; the Worker returns the
+             * live total it keeps in memory + KV and persists to D1 once an hour (zero D1 row reads).
              */
             private void countRealView() {
                 if (reel == null || reel.id == null || reel.id.isEmpty() || reel.id.startsWith("opt_")) return;
                 final Models.Reel viewedReel = reel;
+                final String key = viewedReel.collectionName() + "|" + viewedReel.id;
+                // Already sent this Reel in this app session: no repeat request, no repeat view.
+                if (!SESSION_COUNTED_VIEWS.add(key)) return;
                 try {
                     com.friendbook.social.core.CloudflareViews.recordView(
                             viewedReel.collectionName(), viewedReel.id,
                             total -> viewedReel.views = Math.max(viewedReel.views, Math.max(0, total)));
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) {
+                    // Nothing was sent, so a later play may try again.
+                    SESSION_COUNTED_VIEWS.remove(key);
+                }
             }
 
             private void togglePlayPause() {
