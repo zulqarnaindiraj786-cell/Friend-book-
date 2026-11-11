@@ -85,10 +85,22 @@ Two facts it already established, and what they changed here:
   the binding. The events would have landed in a dataset called `AE`, and GraphQL answered
   `unknown field "friendbook_views"`. The correct key is **`dataset = "friendbook_views"`**;
   `ensure-views-ae.mjs` also repairs an older config that still says `dataset_name`.
-* The AE binding was refused by the deploy and the KV namespace could not be listed, so production
-  shipped with `ae: false, kv: false`. That is a token-scope answer, not a code answer, and the
-  report names the permissions it needs: `Analytics Engine: Edit` + `Read` and
-  `Workers KV Storage: Edit`. Until they exist, the counters run on the R2 snapshot + memory.
+* What production answered on the deploy that shipped (`no-ae`), verbatim from wrangler:
+  `A request to the Cloudflare API (/accounts/92f3d04598822de2e49e14561218d090/workers/scripts/
+  rough-firefly-dd7b/versions) failed. You need to enable Analytics Engine. Head to the Cloudflare
+  Dashboard to enable: https://dash.cloudflare.com/92f3d04598822de2e49e14561218d090/workers/
+  analytics-engine [code: 10089]` — Analytics Engine is **not enabled on the account yet**. It is one
+  dashboard switch, not a code or token change; the binding, the dataset name and the event shape are
+  all in place, and the very next deploy binds them.
+* Workers KV is a separate answer: listing namespaces with the deploy token returns
+  `HTTP 401 {"errors":[{"code":10000,"message":"Authentication error"}]}`, so the KV namespace could
+  not be created or bound. That needs `Account > Workers KV Storage > Edit` on the token. It is no
+  longer urgent, because the R2 snapshot fallback is live in production
+  (`/health` → `{"ae":false,"kv":false,"r2Snapshot":true,"aeReadToken":true}`).
+* Reads are refused for the same reason as the binding: every AE SQL probe answers
+  `HTTP 403 Authorization error`, and GraphQL answers `HTTP 200` with
+  `unknown field "friendbook_views"` because no dataset exists yet. Once Analytics Engine is enabled,
+  the report comment shows both answers turn real — that is the only proof accepted here.
 
 ## Fallbacks — a refused binding must never break a release
 
