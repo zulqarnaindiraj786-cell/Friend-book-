@@ -104,52 +104,75 @@ jobs:
             echo '::error::CLOUDFLARE_API_TOKEN repository secret is missing or unavailable to this workflow. Do not paste it in chat.'
             exit 1
           fi
-          DEPLOY_VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
-          DEPLOY_VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
-          if npm run deploy -- $DEPLOY_VARS_R2_ON; then
-            echo 'Deployed with D1, Realtime, R2 and Analytics Engine bindings.'
-            exit 0
-          fi
+          mkdir -p /tmp/deploy-logs
+          rm -f /tmp/deploy-logs/*.log /tmp/wrangler.toml.shipped
           cp wrangler.toml /tmp/wrangler.toml.bak
-          echo '::warning::First deploy refused; retrying without the R2 bucket binding (config preserved in repo).'
-          python3 - <<'PY'
-          import pathlib
-          p = pathlib.Path('wrangler.toml')
-          text = p.read_text()
-          idx = text.find('# Existing owner-provided bucket.')
-          if idx != -1:
-              p.write_text(text[:idx])
-          PY
-          if npm run deploy -- $DEPLOY_VARS_R2_OFF; then
-            mv /tmp/wrangler.toml.bak wrangler.toml
-            exit 0
-          fi
-          mv /tmp/wrangler.toml.bak wrangler.toml
-          echo '::warning::Deploy still refused; retrying without the Analytics Engine binding. Views then count in KV + memory, still with zero D1 writes.'
-          python3 - <<'PY'
+          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
+          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
+
+          # Removes ONLY the Analytics Engine block. D1, R2, KV, crons and vars all stay, so a refused
+          # AE binding can never cost another binding the way the old truncation fallback did.
+          strip_ae() {
+            python3 - <<'PY'
           import pathlib, re
           p = pathlib.Path('wrangler.toml')
           text = p.read_text()
-          text = re.sub(r'# Every view is one Analytics Engine event.*?\n\n', '', text, flags=re.S)
+          text = re.sub(r'# Every view is one Analytics Engine event[\s\S]*?\[\[analytics_engine_datasets\]\][^\[]*', '', text)
           text = re.sub(r'\[\[analytics_engine_datasets\]\][^\[]*', '', text)
           p.write_text(text)
-          print('Analytics Engine binding removed for this deploy attempt only.')
           PY
-          if npm run deploy -- $DEPLOY_VARS_R2_ON; then
-            exit 0
-          fi
-          echo '::warning::Retrying the last resort: no Analytics Engine and no R2 binding.'
-          cp wrangler.toml /tmp/wrangler.toml.bak
-          python3 - <<'PY'
-          import pathlib
+          }
+
+          # Removes ONLY the R2 block: the KV binding and the cron triggers sit after it.
+          strip_r2() {
+            python3 - <<'PY'
+          import pathlib, re
           p = pathlib.Path('wrangler.toml')
           text = p.read_text()
-          idx = text.find('# Existing owner-provided bucket.')
-          if idx != -1:
-              p.write_text(text[:idx])
+          text = re.sub(r'# Existing owner-provided bucket[\s\S]*?\[\[r2_buckets\]\][^\[]*', '', text)
+          text = re.sub(r'\[\[r2_buckets\]\][^\[]*', '', text)
+          p.write_text(text)
           PY
-          npm run deploy -- $DEPLOY_VARS_R2_OFF
-          mv /tmp/wrangler.toml.bak wrangler.toml
+          }
+
+          # Every attempt keeps its raw wrangler output; report-views-ae.mjs publishes it on the pull
+          # request, because a refused binding is otherwise invisible in a green run.
+          attempt() {
+            label="$1"; vars="$2"; log="/tmp/deploy-logs/$label.log"
+            cp /tmp/wrangler.toml.bak wrangler.toml
+            case "$label" in no-ae|no-ae-no-r2) strip_ae ;; esac
+            case "$label" in no-r2|no-ae-no-r2) strip_r2 ;; esac
+            {
+              echo "===== deploy attempt: $label ====="
+              echo "--- bindings in this attempt ---"
+              grep -E '^(binding|dataset|id|database_id|bucket_name|name|main|crons) ' wrangler.toml || true
+              echo "--- wrangler ---"
+            } > "$log"
+            # shellcheck disable=SC2086
+            if npm run deploy -- $vars >> "$log" 2>&1; then
+              cat "$log"
+              cp wrangler.toml /tmp/wrangler.toml.shipped
+              cp /tmp/wrangler.toml.bak wrangler.toml
+              echo "DEPLOY_ATTEMPT_USED=$label" >> "$GITHUB_ENV"
+              echo "Deployed with the '$label' configuration."
+              return 0
+            fi
+            echo "::warning::Deploy attempt '$label' was refused; its raw wrangler output is kept for the Analytics Engine report."
+            tail -n 25 "$log"
+            return 1
+          }
+
+          attempt full "$VARS_R2_ON" && exit 0
+          echo '::warning::Retrying without ONLY the Analytics Engine binding. Views then count in the snapshot + memory, still with zero D1 writes.'
+          attempt no-ae "$VARS_R2_ON" && exit 0
+          echo '::warning::Retrying without ONLY the R2 bucket binding (Analytics Engine kept).'
+          attempt no-r2 "$VARS_R2_OFF" && exit 0
+          echo '::warning::Last resort: no Analytics Engine and no R2 binding.'
+          attempt no-ae-no-r2 "$VARS_R2_OFF" && exit 0
+          cp /tmp/wrangler.toml.bak wrangler.toml
+          echo '::error::Every deploy attempt was refused. The raw wrangler output of each attempt is in the Analytics Engine report on the pull request.'
+          exit 1
+
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
