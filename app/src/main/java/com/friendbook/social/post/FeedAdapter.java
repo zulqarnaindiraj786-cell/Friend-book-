@@ -479,8 +479,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 nm.setPadding(0, Ui.dp(activity, 3), 0, Ui.dp(activity, 2));
                 card.addView(nm);
                 int vCnt = Math.max(1, Math.max(Format.intOf(live, "viewers"), Format.intOf(live, "viewerCount")));
-                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(vCnt),
-                        0xFFE41E3F, 0xFFFFFFFF, 9));
+                card.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(activity, "dot", Format.count(vCnt),
+                        9f, 0xFFE41E3F, 0xFFFFFFFF, 0xFFFFFFFF));
                 final String lid = Format.str(live, "_id");
                 final String hostId = Format.str(live, "hostId");
                 card.setOnClickListener(v -> {
@@ -1092,8 +1092,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setTextSize(14);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             vh.playBadge.setText(album > 1
-                    ? "🖼 Tap to view " + album + " photos (~14 KB each)"
-                    : "🖼 Tap to view photo (~14 KB)");
+                    ? "Tap to view " + album + " photos (~14 KB each)"
+                    : "Tap to view photo (~14 KB)");
             vh.mediaWrap.setOnClickListener(v -> {
                 com.friendbook.social.core.FastCache.revealPhoto(p.id);
                 ViewGroup.LayoutParams nwp = vh.mediaWrap.getLayoutParams();
@@ -1121,7 +1121,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
-                vh.pageBadge.setText("📷 " + album + " photos");
+                vh.pageBadge.setText(album + " photos");
             }
             vh.image.setOnTouchListener(vh.photoTouchListener);
         } else if (isVideo) {
@@ -1138,7 +1138,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
-            vh.playBadge.setText("▶ Tap to watch Reel");
+            vh.playBadge.setText("Tap to watch Reel");
             vh.mediaWrap.setOnClickListener(v -> {
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
@@ -1942,17 +1942,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
 
-            // 🔴 GO LIVE + 🎬 UPLOAD REEL + Live Hub strip (friendbook style)
+            // Go Live + Upload Reel + Live Hub strip (2026 vector chips, friendbook style)
             liveBox = Ui.col(c);
             liveBox.setBackgroundColor(Ui.card(c));
             LinearLayout liveTop = Ui.row(c);
             liveTop.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(liveTop, 12, 8, 12, 6);
-            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 12);
+            goLiveBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "dot", "Go Live", 12f, 0xFFE41E3F, 0xFFFFFFFF, 0xFFFFFFFF);
             Ui.pad(goLiveBtn, 12, 7, 12, 7);
             liveTop.addView(goLiveBtn);
 
-            TextView uploadReelChip = Ui.roundChip(c, "🎬 + Upload Reel", Ui.BLUE, 0xFFFFFFFF, 12);
+            TextView uploadReelChip = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "play", "Upload Reel", 12f, Ui.BLUE, 0xFFFFFFFF, 0xFFFFFFFF);
             Ui.pad(uploadReelChip, 12, 7, 12, 7);
             LinearLayout.LayoutParams urlp = new LinearLayout.LayoutParams(-2, -2);
             urlp.leftMargin = Ui.dp(c, 8);
@@ -1961,7 +1961,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             liveTop.addView(uploadReelChip, urlp);
 
             liveTop.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
-            TextView hubBtn = Ui.roundChip(c, "📺 Live Hub ›", Ui.inputBg(c), Ui.BLUE, 11);
+            TextView hubBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "camera", "Live Hub", 11f, Ui.inputBg(c), Ui.BLUE, Ui.BLUE);
             Ui.pad(hubBtn, 10, 6, 10, 6);
             hubBtn.setOnClickListener(v -> c.startActivity(
                     new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
@@ -2799,7 +2799,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 }
             });
             photoTouchListener = (v, ev) -> gd.onTouchEvent(ev);
-            playBadge = Ui.tv(c, "▶", 44, 0xEEFFFFFF);
+            playBadge = Ui.tv(c, "", 14, 0xEEFFFFFF);
             playBadge.setGravity(Gravity.CENTER);
             playBadge.setBackgroundColor(0x99000000);
             playBadge.setVisibility(View.GONE);
