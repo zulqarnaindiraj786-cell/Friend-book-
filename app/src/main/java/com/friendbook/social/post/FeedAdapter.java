@@ -270,7 +270,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * Reads the REAL view totals for the featured Reel pool from Cloudflare D1 (Worker `/v1/views`).
+     * Reads the REAL view totals for the featured Reel pool from the Cloudflare Worker (`/v1/views`).
      * Firebase is authentication only — no view counter is read from or written to Firestore. One
      * batched request per collection, cached 60s inside `CloudflareViews`, callback on the main
      * thread, and the card is re-bound only when a stored total actually differs.
@@ -295,7 +295,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 for (Models.Reel r : featuredReels) {
                     if (r == null || r.id == null || !collection.equals(r.collectionName())) continue;
                     Integer total = views.get(r.id);
-                    if (total != null && total.intValue() != r.views) {
+                    // Counts only grow: an id the Worker has not counted yet must never lower a
+                    // number the user already saw on screen.
+                    if (total != null && total.intValue() > r.views) {
                         r.views = total.intValue();
                         changed = true;
                     }
@@ -668,7 +670,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // for a Reel whose total has not been read yet. Never a synthesized number.
             Integer cloudViews = com.friendbook.social.core.CloudflareViews.cached(
                     featured.collectionName(), featured.id);
-            realViews = Math.max(0, cloudViews != null ? cloudViews.intValue() : featured.views);
+            realViews = Math.max(Math.max(0, featured.views), cloudViews != null ? cloudViews.intValue() : 0);
         }
         vh.firstPostReelViewsTv.setText(Format.count(realViews));
         if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
@@ -1590,7 +1592,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         java.util.Collections.singletonList(p.id),
                         cloudViews -> {
                             Integer stored = cloudViews != null ? cloudViews.get(p.id) : null;
-                            int viewCount = Math.max(0, stored != null ? stored.intValue() : p.views);
+                            int viewCount = Math.max(Math.max(0, p.views), stored != null ? stored.intValue() : 0);
                             new android.app.AlertDialog.Builder(c)
                                     .setTitle("Post Insights")
                                     .setMessage("Views: " + Format.count(viewCount) + "\n\n"

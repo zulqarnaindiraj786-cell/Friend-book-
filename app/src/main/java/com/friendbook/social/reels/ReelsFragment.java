@@ -2189,10 +2189,12 @@ public class ReelsFragment extends Fragment {
             }
 
             /**
-             * Counts ONE real view in Cloudflare D1 (Worker `/v1/views`) after one second of actual
+             * Counts ONE real view in Cloudflare (Worker `/v1/views`) after one second of actual
              * watching. Firebase is authentication only: nothing is written to Firestore and the
-             * number is never guessed locally — the Worker returns the stored total. Re-watches and
-             * loops count again; the Worker floors it to one counted view per user per second.
+             * number is never guessed locally — the Worker returns the live total, which it keeps in
+             * memory + KV and persists to D1 once an hour, so a view costs ZERO D1 row reads.
+             * Re-watches and loops count again; the Worker floors it to one counted view per user
+             * per second.
              */
             private void countRealView() {
                 if (reel == null || reel.id == null || reel.id.isEmpty() || reel.id.startsWith("opt_")) return;
@@ -2200,7 +2202,7 @@ public class ReelsFragment extends Fragment {
                 try {
                     com.friendbook.social.core.CloudflareViews.recordView(
                             viewedReel.collectionName(), viewedReel.id,
-                            total -> viewedReel.views = Math.max(0, total));
+                            total -> viewedReel.views = Math.max(viewedReel.views, Math.max(0, total)));
                 } catch (Throwable ignored) {}
             }
 

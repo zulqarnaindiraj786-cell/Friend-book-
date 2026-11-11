@@ -25,10 +25,15 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
- * Real view counters served by the Cloudflare Worker (D1) on `/v1/views`.
+ * Real view counters served by the Cloudflare Worker on `/v1/views`.
  *
- * Firebase is used for AUTHENTICATION ONLY here: the Worker verifies the Firebase ID token and
- * stores the counter in Cloudflare D1. A view count is never written to Firestore by this client.
+ * Firebase is used for AUTHENTICATION ONLY here: the Worker verifies the Firebase ID token and owns
+ * the counter. A view count is never written to Firestore by this client.
+ *
+ * The Worker counts in its own memory plus one Workers KV aggregate key and writes D1 at most once
+ * per hour per resource, so counting or reading a view costs ZERO D1 row reads. Nothing changes for
+ * this client: it still POSTs one real play and reads real totals, and every number it shows comes
+ * from the Worker — never a local guess, and never lower than one the user already saw.
  *
  * Counting rule (product decision): one second of real watching = one view, and the same user
  * watching again counts again. The Worker keeps a one-second floor per (resource, uid) so a double
@@ -89,10 +94,15 @@ public final class CloudflareViews {
         return COUNTS.get(resource(collection, id));
     }
 
+    /**
+     * Caches a total read from the Worker. View counts only ever grow, so a resource this Worker
+     * isolate has not counted yet (it reports 0) can never drag a number the user already saw down.
+     */
     private static void remember(String collection, String id, int views) {
         if (views < 0) return;
         String key = resource(collection, id);
-        COUNTS.put(key, views);
+        Integer known = COUNTS.get(key);
+        COUNTS.put(key, known != null ? Math.max(known.intValue(), views) : views);
         COUNTS_AT.put(key, SystemClock.elapsedRealtime());
     }
 
@@ -144,13 +154,13 @@ public final class CloudflareViews {
         }
     }
 
-    /** Counts one real view in Cloudflare D1 (one second of watching = one view). */
+    /** Counts one real view in Cloudflare (one second of watching = one view). */
     public static void recordView(String collection, String id) {
         recordView(collection, id, null);
     }
 
     /**
-     * Counts one real view in Cloudflare D1 and reports the authoritative total back on the main
+     * Counts one real view in Cloudflare and reports the authoritative total back on the main
      * thread. The callback is skipped when the Worker is unreachable — the count is never guessed.
      *
      * Calling this again for the same resource counts again (re-watches are real views); only two
