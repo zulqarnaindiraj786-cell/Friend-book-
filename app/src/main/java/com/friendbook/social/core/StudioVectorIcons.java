@@ -47,7 +47,16 @@ public final class StudioVectorIcons {
     }
 
     public static Drawable drawable(final Context c, final String rawToken, final int sizeDp, final int color) {
-        final int px = Math.max(12, Ui.dp(c, sizeDp));
+        return drawablePx(rawToken, Ui.dp(c, sizeDp), color);
+    }
+
+    /**
+     * Pixel-exact variant of {@link #drawable(Context, String, int, int)}: no Context and no density
+     * conversion, so an icon can be baked into a bitmap (Reel poster) at exactly the size the editor
+     * preview shows. The glyph always scales to the Drawable bounds.
+     */
+    public static Drawable drawablePx(final String rawToken, final int sizePx, final int color) {
+        final int px = Math.max(12, sizePx);
         final String key = normalizeToken(rawToken);
         return new Drawable() {
             private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -167,6 +176,65 @@ public final class StudioVectorIcons {
         return tv;
     }
 
+    /**
+     * Draggable sticker view for the Reel editor and the Reels player overlay.
+     *
+     * A sticker value that is a 2026 vector key ("flame", "heart", "crown", ...) is drawn as a real
+     * hardware-accelerated vector glyph — never as the literal word and never as a keyboard emoji.
+     * Any other value (text stickers saved by older builds) still renders as text, so historical
+     * Reels keep looking exactly like they did when they were uploaded.
+     */
+    public static TextView stickerView(final Context c, final int sizeDp, final int color) {
+        TextView tv = new TextView(c) {
+            private String token = "";
+            private Drawable cached;
+            private String cachedFor = "\u0000";
+
+            @Override
+            public void setText(CharSequence text, BufferType type) {
+                String next = text != null ? text.toString().trim() : "";
+                if (isVectorToken(next)) {
+                    super.setText("", type);
+                    if (!next.equals(token)) {
+                        token = next;
+                        cached = null;
+                        cachedFor = "\u0000";
+                        invalidate();
+                    }
+                } else {
+                    token = "";
+                    cached = null;
+                    super.setText(text, type);
+                }
+            }
+
+            @Override
+            protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                if (token.isEmpty()) return;
+                int sz = Math.max(Ui.dp(c, 20), Math.round(Math.min(getWidth(), getHeight()) * 0.94f));
+                String key = token + "|" + sz;
+                if (cached == null || !key.equals(cachedFor)) {
+                    cached = drawablePx(token, sz, color);
+                    cachedFor = key;
+                }
+                int l = Math.round((getWidth() - sz) / 2f);
+                int t = Math.round((getHeight() - sz) / 2f);
+                cached.setBounds(l, t, l + sz, t + sz);
+                cached.draw(canvas);
+            }
+        };
+        tv.setGravity(Gravity.CENTER);
+        tv.setTextSize(sizeDp * Prefs.fontScale(c));
+        tv.setTextColor(color);
+        tv.setIncludeFontPadding(true);
+        tv.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        int px = Ui.dp(c, sizeDp);
+        tv.setMinWidth(px);
+        tv.setMinHeight(px);
+        return tv;
+    }
+
     private static String normalizeToken(String raw) {
         if (raw == null) return "sparkle";
         String s = raw.trim();
@@ -249,6 +317,15 @@ public final class StudioVectorIcons {
         if (s.contains("👏") || "applause".equalsIgnoreCase(s) || "clap".equalsIgnoreCase(s)) return "applause";
         if (s.contains("😍") || s.contains("🥰") || "love_face".equalsIgnoreCase(s)) return "heart";
         if (s.contains("🏁") || "finish".equalsIgnoreCase(s)) return "flag";
+        // Legacy word stickers: an older Reel picker stored words ("FIRE", "HAHA", ...) instead of
+        // vector keys, and those words were drawn (and baked) literally. Map them to the real 2026
+        // glyph so Reels already uploaded play back with the intended sticker.
+        if ("fire".equalsIgnoreCase(s) || "hot".equalsIgnoreCase(s)) return "flame";
+        if ("haha".equalsIgnoreCase(s) || "lol".equalsIgnoreCase(s)) return "laugh";
+        if ("spark".equalsIgnoreCase(s) || "sparks".equalsIgnoreCase(s)) return "star";
+        if ("100".equals(s) || "hundred".equalsIgnoreCase(s)) return "trophy";
+        if ("bloom".equalsIgnoreCase(s) || "flower".equalsIgnoreCase(s)) return "rose";
+        if ("gem".equalsIgnoreCase(s) || "diamond".equalsIgnoreCase(s)) return "medal";
         return s.toLowerCase();
     }
 

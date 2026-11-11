@@ -1469,7 +1469,8 @@ public class ReelsFragment extends Fragment {
                 filterTintView.setFocusable(false);
                 root.addView(filterTintView, new FrameLayout.LayoutParams(-1, -1));
 
-                overlayStickerTv = Ui.tv(a, "", 48, Color.WHITE);
+                // Real 2026 vector stickers on playback; text stickers from older builds still render.
+                overlayStickerTv = com.friendbook.social.core.StudioVectorIcons.stickerView(a, 48, Color.WHITE);
                 overlayStickerTv.setVisibility(View.GONE);
                 overlayStickerTv.setElevation(Ui.dp(a, 18));
                 root.addView(overlayStickerTv, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));

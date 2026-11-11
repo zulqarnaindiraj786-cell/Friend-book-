@@ -532,15 +532,30 @@ public final class ReelUploadManager {
                 canvas.drawRect(0, 0, bw, bh, p);
             }
 
-            // 2. Sticker / Emoji overlay
+            // 2. Sticker overlay — baked with the SAME vector engine that draws it in the editor
             if (opts.stickerText != null && !opts.stickerText.trim().isEmpty()) {
-                p.setColor(0xFFFFFFFF);
-                float stSize = Math.max(24f, bw * 0.14f * Math.max(0.6f, Math.min(2.0f, opts.stickerScale)));
-                p.setTextSize(stSize);
-                p.setTextAlign(android.graphics.Paint.Align.CENTER);
-                float sx = Math.max(stSize, Math.min(bw - stSize, opts.stickerX * bw));
-                float sy = Math.max(stSize, Math.min(bh - stSize * 0.5f, opts.stickerY * bh));
-                canvas.drawText(opts.stickerText.trim(), sx, sy, p);
+                String sticker = opts.stickerText.trim();
+                float stScale = Math.max(0.6f, Math.min(2.0f, opts.stickerScale));
+                if (com.friendbook.social.core.StudioVectorIcons.isVectorToken(sticker)) {
+                    float box = Math.max(48f, bw * 0.22f * stScale);
+                    float cx = Math.max(box / 2f, Math.min(bw - box / 2f, opts.stickerX * bw));
+                    float cy = Math.max(box / 2f, Math.min(bh - box / 2f, opts.stickerY * bh));
+                    android.graphics.drawable.Drawable icon =
+                            com.friendbook.social.core.StudioVectorIcons.drawablePx(
+                                    sticker, Math.round(box), 0xFFFFFFFF);
+                    icon.setBounds(Math.round(cx - box / 2f), Math.round(cy - box / 2f),
+                            Math.round(cx + box / 2f), Math.round(cy + box / 2f));
+                    icon.draw(canvas);
+                } else {
+                    // Legacy text sticker saved by an older build: keep drawing it exactly as before.
+                    p.setColor(0xFFFFFFFF);
+                    float stSize = Math.max(24f, bw * 0.14f * stScale);
+                    p.setTextSize(stSize);
+                    p.setTextAlign(android.graphics.Paint.Align.CENTER);
+                    float sx = Math.max(stSize, Math.min(bw - stSize, opts.stickerX * bw));
+                    float sy = Math.max(stSize, Math.min(bh - stSize * 0.5f, opts.stickerY * bh));
+                    canvas.drawText(sticker, sx, sy, p);
+                }
             }
 
             // 3. Text overlay pill

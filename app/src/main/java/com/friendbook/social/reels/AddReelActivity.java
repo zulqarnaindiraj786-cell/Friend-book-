@@ -915,8 +915,8 @@ public class AddReelActivity extends Activity {
         attachStageDragListener(stageTextPill, true);
         stage.addView(stageTextPill, new FrameLayout.LayoutParams(-2, -2));
 
-        // Draggable Sticker Overlay
-        stageStickerTv = Ui.tvBold(this, "", 44f, Color.WHITE);
+        // Draggable Sticker Overlay — real 2026 vector stickers (legacy text stickers still render)
+        stageStickerTv = com.friendbook.social.core.StudioVectorIcons.stickerView(this, 44, Color.WHITE);
         stageStickerTv.setGravity(Gravity.CENTER);
         stageStickerTv.setVisibility(View.GONE);
         attachStageDragListener(stageStickerTv, false);
@@ -1466,19 +1466,49 @@ public class AddReelActivity extends Activity {
                 .show();
     }
 
+    /**
+     * Real 2026 vector stickers: the picker shows drawn icons (never keyboard emojis) and stores the
+     * vector KEY, so the editor, the player overlay and the baked poster all draw the same glyph.
+     */
+    private static final String[][] STICKER_TILES = {
+            {"flame", "Flame"}, {"heart", "Heart"}, {"laugh", "Haha"}, {"star", "Star"},
+            {"crown", "Crown"}, {"confetti", "Party"}, {"trophy", "Trophy"}, {"rose", "Rose"},
+            {"rocket", "Rocket"}, {"medal", "Medal"}, {"music", "Music"}, {"gift", "Gift"},
+            {"lion", "Lion"}, {"jet", "Jet"}, {"close", "Remove Sticker"},
+    };
+
     private void showStickerPickerDialog() {
-        final String[] stickers = {"FIRE", "LOVE", "HAHA", "SPARK", "CROWN", "PARTY", "100", "BLOOM", "ROCKET", "GEM", "MUSIC", "Remove Sticker"};
-        new AlertDialog.Builder(this)
+        android.widget.GridLayout grid = new android.widget.GridLayout(this);
+        grid.setColumnCount(5);
+        final int margin = Ui.dp(this, 7);
+        final int size = Ui.dp(this, 54);
+        grid.setPadding(margin, margin, margin, margin);
+        final AlertDialog[] dialogRef = new AlertDialog[1];
+        for (String[] tile : STICKER_TILES) {
+            final String key = tile[0];
+            final boolean removes = "close".equals(key);
+            TextView icon = com.friendbook.social.core.StudioVectorIcons.circleIconButton(this, key, 54,
+                    removes ? 0xFFFFEBEE : 0xFFF2F3F5,
+                    removes ? 0xFFE41E3F : 0xFF1A77F2,
+                    v -> {
+                        editOpts.stickerText = removes ? "" : key;
+                        refreshStageOverlays();
+                        if (dialogRef[0] != null) dialogRef[0].dismiss();
+                    });
+            icon.setContentDescription(tile[1]);
+            android.widget.GridLayout.LayoutParams lp = new android.widget.GridLayout.LayoutParams();
+            lp.width = size;
+            lp.height = size;
+            lp.setMargins(margin, margin, margin, margin);
+            grid.addView(icon, lp);
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Add Draggable Sticker")
-                .setItems(stickers, (d, which) -> {
-                    if (which == stickers.length - 1) {
-                        editOpts.stickerText = "";
-                    } else {
-                        editOpts.stickerText = stickers[which];
-                    }
-                    refreshStageOverlays();
-                })
-                .show();
+                .setView(grid)
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialogRef[0] = dialog;
+        dialog.show();
     }
 
     private void showEditorSettingsDialog() {
