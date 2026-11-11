@@ -34,7 +34,7 @@ not_found_handling = "none"
 # Every view is one Analytics Engine event; the count is AE's uniq(uid) per Reel/post, so
 # "1 user = 1 view" needs no D1 row at all. Never written to D1, never read from it.
 [[analytics_engine_datasets]]
-binding = "AE"
+binding = "ANALYTICS_ENGINE"
 dataset = "friendbook_views"
 
 # Existing owner-provided bucket. Never create or replace it.

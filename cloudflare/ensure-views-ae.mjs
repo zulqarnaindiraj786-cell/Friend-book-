@@ -11,7 +11,7 @@
 // called "AE" and every query for `friendbook_views` would answer "unknown field".
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const BINDING = 'AE';
+const BINDING = 'ANALYTICS_ENGINE';
 const DATASET = 'friendbook_views';
 const WRANGLER = new URL('../wrangler.toml', import.meta.url);
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || '';
@@ -54,7 +54,12 @@ if (/^CF_ACCOUNT_ID\s*=/m.test(text)) {
   warn('CLOUDFLARE_ACCOUNT_ID unavailable here; the Worker can still write AE events but cannot query them.');
 }
 
-// Repair a config written by an older run of this script (see the header note).
+// Repair a config written by an older run of this script (see the header note), and adopt the
+// binding name the owner created in the dashboard: a binding called anything else points at nothing.
+if (/^(\[\[analytics_engine_datasets\]\][\s\S]*?)binding = "AE"$/m.test(text)) {
+  text = text.replace(/^(\[\[analytics_engine_datasets\]\][\s\S]*?)binding = "AE"$/m, `$1binding = "${BINDING}"`);
+  console.log(`Renamed the Analytics Engine binding to ${BINDING}.`);
+}
 if (/^dataset_name\s*=/m.test(text)) {
   text = text.replace(/^dataset_name\s*=\s*/m, 'dataset = ');
   console.log('Renamed the Analytics Engine dataset key to `dataset` (wrangler 4 ignores `dataset_name`).');

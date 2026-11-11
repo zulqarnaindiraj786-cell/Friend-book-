@@ -66,7 +66,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         if (!env.DB) return json({ ok: false }, 503);
         // Binding flags only - no data, no counts. It proves what a deploy actually shipped:
         // views run on Analytics Engine (+ KV), and D1 is never written by the view path.
-        const views = { ae: Boolean(env.AE), kv: Boolean(env.VIEWS), r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), aeReadToken: Boolean(env.CF_AE_TOKEN) };
+        const views = { ae: Boolean(env.ANALYTICS_ENGINE), kv: Boolean(env.VIEWS), r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), aeReadToken: Boolean(env.CF_AE_TOKEN) };
         try {
           const row = await env.DB.prepare('SELECT 1 AS connected').first();
           return json({ ok: row?.connected === 1, views }, row?.connected === 1 ? 200 : 503);

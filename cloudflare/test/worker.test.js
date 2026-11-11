@@ -24,7 +24,7 @@ test('missing binding and failed DB return no internal details', async () => {
 });
 test('health reports the R2 snapshot fallback when Workers KV is not bound', async () => {
   const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
-  const response = await call('/health', { DB: db, AE: {}, VIDEO_BUCKET: {}, CF_AE_TOKEN: 'tok' });
+  const response = await call('/health', { DB: db, ANALYTICS_ENGINE: {}, VIDEO_BUCKET: {}, CF_AE_TOKEN: 'tok' });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(),
     { ok: true, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });

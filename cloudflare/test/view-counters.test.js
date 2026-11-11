@@ -70,7 +70,7 @@ function fixture({
     FIREBASE_PROJECT_ID: 'friendbook-17551',
     CF_ACCOUNT_ID: 'account-tag',
   };
-  if (withAe) env.AE = { writeDataPoint: (point) => { ae.events.push(point); } };
+  if (withAe) env.ANALYTICS_ENGINE = { writeDataPoint: (point) => { ae.events.push(point); } };
   if (aeToken) env.CF_AE_TOKEN = 'ae-read-token';
   if (withKv) {
     env.VIEWS = {

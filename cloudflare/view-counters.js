@@ -200,9 +200,9 @@ function rebuildTotals(resources) {
  * never writes to D1.
  */
 function writeViewEvent(env, collection, id, resource, uid, now) {
-  if (!env?.AE || typeof env.AE.writeDataPoint !== 'function') return false;
+  if (!env?.ANALYTICS_ENGINE || typeof env.ANALYTICS_ENGINE.writeDataPoint !== 'function') return false;
   try {
-    env.AE.writeDataPoint({
+    env.ANALYTICS_ENGINE.writeDataPoint({
       indexes: [resource.slice(0, 128)],
       dimensions: [collection, id.slice(0, 128), String(uid).slice(0, 128)],
       metrics: [1],
@@ -300,7 +300,7 @@ async function queryAeGraphql(env) {
  * views are never blocked, never faked, and nothing is written to D1 to compensate.
  */
 async function refreshFromAe(env, now) {
-  if (!env?.AE || !env?.CF_AE_TOKEN || !env?.CF_ACCOUNT_ID) return false;
+  if (!env?.ANALYTICS_ENGINE || !env?.CF_AE_TOKEN || !env?.CF_ACCOUNT_ID) return false;
   if (now - state.lastAeRefreshAt < AE_REFRESH_MS) return state.aeUsable;
   state.lastAeRefreshAt = now;
   try {
@@ -395,7 +395,7 @@ function defer(ctx, promise) {
 
 async function maybeFlush(env, resource, now, ctx) {
   const tasks = [];
-  if (env?.AE && env?.CF_AE_TOKEN && now - state.lastAeRefreshAt >= AE_REFRESH_MS) {
+  if (env?.ANALYTICS_ENGINE && env?.CF_AE_TOKEN && now - state.lastAeRefreshAt >= AE_REFRESH_MS) {
     tasks.push(refreshFromAe(env, now));
   } else if (snapshotStore(env) && now - state.lastKvFlushAt >= KV_FLUSH_MS) {
     tasks.push(flushKv(env, now));
