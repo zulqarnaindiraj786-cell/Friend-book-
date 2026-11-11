@@ -236,8 +236,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     // ---- live + PYMK + Featured Reels rows ----
     private final java.util.List<Models.User> pymkUsers = new ArrayList<>();
     private final java.util.List<Models.Reel> featuredReels = new ArrayList<>();
+    private static int featuredReelRotationCursor = (int) ((System.currentTimeMillis() / 1000L) & 0x3FFF);
     private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
     private android.speech.tts.TextToSpeech tts;
+
+    public void advanceFeaturedReelRotation() {
+        featuredReelRotationCursor++;
+        if (showHeader && !posts.isEmpty()) {
+            notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+        }
+    }
 
     public void setPymk(java.util.List<Models.User> users) {
         if ((users == null || users.isEmpty()) && pymkUsers.isEmpty()) return;
@@ -605,7 +613,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.firstPostPymkRow.addView(findCard, cp);
         }
 
-        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card
+        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card (rotates viral & fresh Reels, 100% real views)
         final Models.Reel featured = pickFeaturedReel();
         String posterUrl = resolveFeaturedReelPosterUrl(featured);
         if (posterUrl != null && !posterUrl.isEmpty()) {
@@ -615,11 +623,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.firstPostReelThumbIv); } catch (Throwable ignored) {}
             vh.firstPostReelThumbIv.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
         }
-        int viewCount = 1100;
-        if (featured != null) {
-            viewCount = Math.max(120, featured.likes * 19 + featured.comments * 11 + featured.shares * 23 + 1100);
-        }
-        vh.firstPostReelViewsTv.setText("👁 " + Format.count(viewCount));
+        int realViews = featured != null ? Math.max(0, featured.views) : 0;
+        vh.firstPostReelViewsTv.setText(Format.count(realViews));
         if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
             vh.firstPostReelCaptionTv.setText(featured.authorName + "  ·  Watch Reels ›");
         } else {
@@ -633,15 +638,32 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private Models.Reel pickFeaturedReel() {
-        if (!featuredReels.isEmpty()) {
-            return featuredReels.get(0);
-        }
-        for (Models.Post p : posts) {
-            if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
-                return Models.Reel.fromVideoPost(p);
+        java.util.List<Models.Reel> pool = new ArrayList<>();
+        java.util.Set<String> seenIds = new java.util.HashSet<>();
+        for (Models.Reel r : featuredReels) {
+            if (r != null && r.id != null && !r.id.isEmpty() && r.videoUrl != null && !r.videoUrl.isEmpty()
+                    && seenIds.add(r.id)) {
+                pool.add(r);
             }
         }
-        return null;
+        for (Models.Post p : posts) {
+            if (p != null && p.id != null && "video".equals(p.mediaType)
+                    && p.mediaUrl != null && !p.mediaUrl.isEmpty() && seenIds.add(p.id)) {
+                pool.add(Models.Reel.fromVideoPost(p));
+            }
+        }
+        if (pool.isEmpty()) return null;
+        // Sort by viral engagement (real views + likes + comments + shares + favorites) + recency
+        java.util.Collections.sort(pool, (a, b) -> {
+            long scoreA = (long) a.views * 3L + (long) a.likes * 5L + (long) a.comments * 6L
+                    + (long) a.shares * 8L + (long) a.favorites * 6L;
+            long scoreB = (long) b.views * 3L + (long) b.likes * 5L + (long) b.comments * 6L
+                    + (long) b.shares * 8L + (long) b.favorites * 6L;
+            if (scoreB != scoreA) return Long.compare(scoreB, scoreA);
+            return Long.compare(b.createdAt, a.createdAt);
+        });
+        int idx = Math.abs(featuredReelRotationCursor) % pool.size();
+        return pool.get(idx);
     }
 
     private String resolveFeaturedReelPosterUrl(Models.Reel r) {
@@ -1515,14 +1537,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("View post insights")) {
                 int rxCount = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 int cmCount = Math.max(p.comments, p.inlineComments != null ? p.inlineComments.size() : 0);
-                int reach = Math.max(12, rxCount * 11 + cmCount * 14 + p.shares * 22 + 18);
+                // 100% real counters only — never a fabricated/estimated reach number
                 new android.app.AlertDialog.Builder(c)
-                        .setTitle("📊 Post Insights")
-                        .setMessage("👁 Estimated Reach: " + Format.count(reach) + " people\n\n"
-                                + "👍 Total Reactions: " + rxCount + "\n"
-                                + "💬 Total Comments: " + cmCount + "\n"
-                                + "↗ Total Shares: " + p.shares + "\n"
-                                + "🔖 Total Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
+                        .setTitle("Post Insights")
+                        .setMessage("Views: " + Format.count(Math.max(0, p.views)) + "\n\n"
+                                + "Reactions: " + rxCount + "\n"
+                                + "Comments: " + cmCount + "\n"
+                                + "Shares: " + p.shares + "\n"
+                                + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
                         .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
                         .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
                         .setNegativeButton("Close", null)
@@ -2995,10 +3017,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             TextView reelTitle = Ui.tvBold(c, "Reels", 17, Ui.txt(c));
             reelTitle.setPadding(Ui.dp(c, 8), 0, 0, 0);
             reelHead.addView(reelTitle, new LinearLayout.LayoutParams(0, -2, 1f));
-            TextView reelDots = Ui.tvBold(c, "•••", 16, Ui.sub(c));
-            reelDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
+            ImageView reelDots = com.friendbook.social.core.StudioVectorIcons.iconView(c, "more", 18, Ui.sub(c));
+            reelDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 8));
             reelDots.setOnClickListener(v -> { if (host != null) host.openReelsTab(pickFeaturedReel()); });
-            reelHead.addView(reelDots);
+            reelHead.addView(reelDots, new LinearLayout.LayoutParams(Ui.dp(c, 30), Ui.dp(c, 30)));
             firstPostReelCard.addView(reelHead);
 
             firstPostReelPreviewBox = new FrameLayout(c);
@@ -3022,19 +3044,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // Center Circular Play Button (translucent dark circle + white border + white ▶ icon)
             FrameLayout playCircle = new FrameLayout(c);
             playCircle.setBackground(Ui.roundStroke(c, 0x66000000, 34, 0xEEFFFFFF, 2));
-            TextView playTriangle = Ui.tvBold(c, "▶", 24, 0xFFFFFFFF);
-            playTriangle.setGravity(Gravity.CENTER);
-            playTriangle.setPadding(Ui.dp(c, 3), 0, 0, 0);
-            playCircle.addView(playTriangle, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+            ImageView playTriangle = com.friendbook.social.core.StudioVectorIcons.iconView(c, "play", 26, 0xFFFFFFFF);
+            int triSz = Ui.dp(c, 28);
+            FrameLayout.LayoutParams triLp = new FrameLayout.LayoutParams(triSz, triSz, Gravity.CENTER);
+            triLp.leftMargin = Ui.dp(c, 3);
+            playCircle.addView(playTriangle, triLp);
             int playSz = Ui.dp(c, 68);
             firstPostReelPreviewBox.addView(playCircle, new FrameLayout.LayoutParams(playSz, playSz, Gravity.CENTER));
 
-            // Bottom-left view count badge ("👁 1.1K") + bottom-right watch prompt
+            // Bottom-left real view count badge + bottom-right watch prompt
             LinearLayout bottomMetaRow = Ui.row(c);
             bottomMetaRow.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(bottomMetaRow, 14, 10, 14, 12);
-            firstPostReelViewsTv = Ui.tvBold(c, "👁 1.1K", 14.5f, 0xFFFFFFFF);
+            firstPostReelViewsTv = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                    c, "eye", "0", 14.5f, 0, 0xFFFFFFFF, 0xFFFFFFFF);
+            firstPostReelViewsTv.setTypeface(firstPostReelViewsTv.getTypeface(), android.graphics.Typeface.BOLD);
             firstPostReelViewsTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+            firstPostReelViewsTv.setPadding(0, 0, 0, 0);
             bottomMetaRow.addView(firstPostReelViewsTv);
             bottomMetaRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
             firstPostReelCaptionTv = Ui.tvBold(c, "Tap to watch Reels ›", 12.5f, 0xEEFFFFFF);

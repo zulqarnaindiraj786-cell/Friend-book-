@@ -193,6 +193,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
         loadingPosts=false;restartPostsListener();
         pymkLoaded=false;loadPymk();startStoriesListener(true);
+        if (adapter != null) adapter.advanceFeaturedReelRotation();
         featuredReelsLoaded=false;loadFeaturedReelsForHome();
         loadNotesUsers();
         if (scrollTop && rv != null) rv.scrollToPosition(0);
@@ -474,6 +475,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         FastCache.addReactionObserver(reactionObserver);
         startFriendsListener();
         loadPymk();
+        // Every time Home is opened the Featured Reels card rotates to the NEXT viral/fresh Reel
+        // (never the same video on repeat) while the view counter stays 100% real.
+        if (adapter != null) adapter.advanceFeaturedReelRotation();
         loadFeaturedReelsForHome();
         if(!loadedPosts || !java.util.Objects.equals(feedAccount,Fb.uid())) restartPostsListener();
         startStoriesListener();
@@ -582,7 +586,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             adapter.setFeaturedReels(featuredReels);
         }
         // 2. Check Cloudflare D1/Worker reels
-        com.friendbook.social.core.CloudflareStore.list("reels", 4, docs -> {
+        com.friendbook.social.core.CloudflareStore.list("reels", 12, docs -> {
             if (!isAdded() || docs == null) return;
             boolean changed = false;
             for (Map<String, Object> m : docs) {
@@ -594,7 +598,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
         });
         // 3. One-shot Firestore reels query (cache first, then network)
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(4)
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
                 .get(Source.CACHE)
                 .addOnSuccessListener(cacheSnap -> {
                     if (!isAdded() || cacheSnap == null) return;
@@ -605,7 +609,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     }
                     if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
                 });
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(4)
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
                 .get()
                 .addOnSuccessListener(snap -> {
                     featuredReelsLoading = false;
