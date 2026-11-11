@@ -163,16 +163,36 @@ function deployEvidence() {
   return { attempts, shippedBindings: bindings, shipped };
 }
 
+/**
+ * Finds the pull request to comment on. It never throws (a report must not fail a release) and every
+ * reason it cannot publish is emitted as a workflow annotation, because the CI log is not readable
+ * from a review: a silently skipped report would look exactly like a report that found nothing wrong.
+ */
 async function findPull() {
-  if (!repo || !branch || !token) return null;
+  if (!repo || !branch || !token) {
+    warn(`Report not published: GITHUB_REPOSITORY='${repo || 'MISSING'}' GITHUB_REF_NAME='${branch || 'MISSING'}' `
+      + `GITHUB_TOKEN=${token ? 'present' : 'MISSING'}`);
+    return null;
+  }
   const [owner, name] = repo.split('/');
-  const list = await fetch(
-    `https://api.github.com/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=5`,
-    { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'friendbook-ae-report' } },
-  );
-  if (!list.ok) return null;
-  const pulls = await list.json();
-  return Array.isArray(pulls) && pulls.length > 0 ? { owner, name, number: pulls[0].number } : null;
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'friendbook-ae-report' };
+  const base = `https://api.github.com/repos/${owner}/${name}/pulls?state=open`;
+  // Filtered first, then unfiltered: a refused `head` filter must not cost the report.
+  for (const url of [`${base}&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=5`, `${base}&per_page=25`]) {
+    try {
+      const list = await fetch(url, { headers });
+      const body = await list.text();
+      if (!list.ok) { warn(`Pull request list answered HTTP ${list.status}: ${clip(body, 300)}`); continue; }
+      const pulls = JSON.parse(body);
+      if (!Array.isArray(pulls) || pulls.length === 0) continue;
+      const match = pulls.find((entry) => entry?.head?.ref === branch) || pulls[0];
+      return { owner, name, number: match.number };
+    } catch (error) {
+      warn(`Pull request list failed: ${error.message}`);
+    }
+  }
+  warn(`No open pull request found for ${owner}:${branch}; the report was printed to the CI log only.`);
+  return null;
 }
 
 async function publish(body) {
@@ -186,17 +206,21 @@ async function publish(body) {
     const match = Array.isArray(comments) ? comments.find((entry) => String(entry?.body || '').includes(MARKER)) : null;
     if (match) {
       const updated = await fetch(`${base}/${match.id}`, { method: 'PATCH', headers, body: JSON.stringify({ body }) });
-      console.log(updated.ok ? `Updated PR #${pull.number} comment ${match.id} with the Analytics Engine report.` : `Could not update the comment (HTTP ${updated.status}).`);
-      return;
+      if (updated.ok) { console.log(`Updated PR #${pull.number} comment ${match.id} with the Analytics Engine report.`); return; }
+      warn(`Could not update comment ${match.id} (HTTP ${updated.status}): ${clip(await updated.text(), 300)}`);
+    } else {
+      const created = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ body }) });
+      if (created.ok) { console.log(`Posted the Analytics Engine report to PR #${pull.number}.`); return; }
+      warn(`Could not post the report to PR #${pull.number} (HTTP ${created.status}): ${clip(await created.text(), 300)}`);
     }
-    const created = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ body }) });
-    console.log(created.ok ? `Posted the Analytics Engine report to PR #${pull.number}.` : `Could not post the report (HTTP ${created.status}).`);
   } catch (error) {
-    warn(`Could not publish the report (${error.message}); printing it to the log instead.`);
-    console.log(body);
+    warn(`Could not publish the report (${error.message}).`);
   }
+  console.log(body);
 }
 
+// A diagnostic that throws would turn a shipped release red, so everything below is guarded.
+try {
 const evidence = deployEvidence();
 const health = await probeHealth();
 const tokenVerify = await probeTokenVerify();
@@ -287,4 +311,7 @@ if (graphql.probe) {
 lines.push('', 'Guessed alias form (`POST /client/v4/graphql`)', `HTTP ${graphqlGuess.status}`, fence(graphqlGuess.body));
 
 await publish(lines.join('\n'));
+} catch (error) {
+  warn(`The Analytics Engine report could not be produced: ${error.message}`);
+}
 process.exit(0);
