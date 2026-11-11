@@ -69,6 +69,7 @@ public class AdsConfig {
     private static final String KEY_CLICKS = "ad_clicks";
     private static final String KEY_FAILS = "ad_fails";
     private static final String KEY_LAST_ERROR = "last_error_code";
+    private static final String KEY_LAST_ERROR_MSG = "last_error_message";
     private static final String KEY_MICROS = "paid_micros_total";
 
     private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
@@ -169,13 +170,30 @@ public class AdsConfig {
     }
 
     public static void onNativeAdFailed(Context c, int errorCode) {
+        onNativeAdFailed(c, errorCode, null);
+    }
+
+    /**
+     * Stores the REAL reason AdMob refused (domain + message), so "no ads showing" can be diagnosed
+     * on the device instead of guessed: Settings -> AdMob shows it, and it is logged to Logcat.
+     */
+    public static void onNativeAdFailed(Context c, int errorCode, String detail) {
         if (c == null) return;
         SharedPreferences sp = prefs(c);
+        String msg = detail == null ? "" : detail.trim();
+        if (msg.length() > 200) msg = msg.substring(0, 200);
         sp.edit()
                 .putLong(KEY_FAILS, sp.getLong(KEY_FAILS, 0L) + 1L)
                 .putInt(KEY_LAST_ERROR, errorCode)
+                .putString(KEY_LAST_ERROR_MSG, msg)
                 .apply();
+        Log.w(LOG_TAG, "Native ad load failed: code=" + errorCode + (msg.isEmpty() ? "" : " (" + msg + ")"));
     }
+
+    /** Current pool fill, for the Admin fill-check screen (never a fake ad, just the truth). */
+    public static synchronized int feedPoolSize() { return FEED_POOL.size(); }
+
+    public static synchronized int reelsPoolSize() { return REELS_POOL.size(); }
 
     public static void recordAdImpression(Context c) {
         if (c == null) return;
@@ -204,12 +222,21 @@ public class AdsConfig {
         long clicks = sp.getLong(KEY_CLICKS, 0L);
         long fails = sp.getLong(KEY_FAILS, 0L);
         int lastErr = sp.getInt(KEY_LAST_ERROR, -1);
+        String lastMsg = sp.getString(KEY_LAST_ERROR_MSG, "");
         double usd = sp.getLong(KEY_MICROS, 0L) / 1_000_000.0;
-        String errLabel = lastErr < 0 ? "None" : ("Code " + lastErr);
+        String errLabel = lastErr < 0 ? "None"
+                : ("Code " + lastErr + (lastMsg == null || lastMsg.isEmpty() ? "" : " — " + lastMsg));
         return String.format(Locale.US,
                 "Mode: Real Production Only  •  Requests: %d  •  Loaded: %d\n"
-                        + "Impressions: %d  •  Clicks: %d  •  Failed: %d (Last error: %s)  •  Est: $%.4f",
-                req, loads, imps, clicks, fails, errLabel, usd);
+                        + "Impressions: %d  •  Clicks: %d  •  Failed: %d (Last error: %s)  •  Est: $%.4f\n"
+                        + "Pool now: Feed %d/%d  •  Reels %d/%d\n"
+                        + "Switches: native ads %s (Admin master %s, Remote Config %s)  •  SDK initialized: %s",
+                req, loads, imps, clicks, fails, errLabel, usd,
+                FEED_POOL.size(), AD_POOL_SIZE, REELS_POOL.size(), AD_POOL_SIZE,
+                nativeAdsEnabled() ? "ON" : "OFF",
+                masterSwitchEnabled ? "ON" : "OFF",
+                remoteAllowed ? "ON" : "OFF",
+                ConsentManager.isAdsSdkInitialized() ? "yes" : "not yet");
     }
 
     /** Reads bundled assets/app-ads.txt for instant verification inside the app. */
@@ -313,6 +340,13 @@ public class AdsConfig {
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private static int feedInFlight = 0;
     private static int reelsInFlight = 0;
+    private static long feedInFlightSinceMs = 0L;
+    private static long reelsInFlightSinceMs = 0L;
+    /**
+     * A stranded in-flight flag (for example a request deferred until SDK init that never ran) must
+     * never block the pool for the rest of the process. Anything older than this is treated as dead.
+     */
+    private static final long IN_FLIGHT_STALE_MS = 15_000L;
     private static long lastFeedFailAtMs = 0L;
     private static long lastReelsFailAtMs = 0L;
     private static int preservedDetailSlotKey = -1;
@@ -679,6 +713,7 @@ public class AdsConfig {
         cachedAppCtx = appCtx;
         preloadFeedBatchNow(appCtx, AD_POOL_SIZE);
         preloadReelsBatchNow(appCtx, AD_POOL_SIZE);
+        startPoolTopUpTicker(appCtx);
     }
 
     /**
@@ -694,8 +729,10 @@ public class AdsConfig {
                 long now = System.currentTimeMillis();
                 if (now - lastFeedFailAtMs < FAIL_COOLDOWN_MS) return;
                 int missing = AD_POOL_SIZE - FEED_POOL.size();
+                if (feedInFlight > 0 && now - feedInFlightSinceMs > IN_FLIGHT_STALE_MS) feedInFlight = 0;
                 if (missing > 0 && feedInFlight <= 0) {
                     feedInFlight = 1;
+                    feedInFlightSinceMs = now;
                     // Fast first fill: with an empty pool ask for ONE ad — a single request lands
                     // noticeably sooner than a 5-ad batch — then the pool is topped back up to 5
                     // straight after that ad arrives (see the forNativeAd callback).
@@ -705,6 +742,7 @@ public class AdsConfig {
                     preloadBatchIntoPool(appCtx, feedNativeId(), true, reqCount);
                 }
             }
+            startPoolTopUpTicker(appCtx);
         }));
     }
 
@@ -721,8 +759,10 @@ public class AdsConfig {
                 long now = System.currentTimeMillis();
                 if (now - lastReelsFailAtMs < FAIL_COOLDOWN_MS) return;
                 int missing = AD_POOL_SIZE - REELS_POOL.size();
+                if (reelsInFlight > 0 && now - reelsInFlightSinceMs > IN_FLIGHT_STALE_MS) reelsInFlight = 0;
                 if (missing > 0 && reelsInFlight <= 0) {
                     reelsInFlight = 1;
+                    reelsInFlightSinceMs = now;
                     // Fast first fill for Reels too: one ad first, the remaining four right after.
                     int reqCount = REELS_POOL.isEmpty()
                             ? 1
@@ -730,7 +770,44 @@ public class AdsConfig {
                     preloadBatchIntoPool(appCtx, reelsNativeId(), false, reqCount);
                 }
             }
+            startPoolTopUpTicker(appCtx);
         }));
+    }
+
+    /**
+     * Foreground pool top-up: while the app is open, an under-filled pool is asked again every 30s.
+     * Bounded by design — it respects the no-fill cooldown and the in-flight guard, stops as soon as
+     * the app goes to the background, and never runs a tight retry loop. This is what makes an ad
+     * appear a few seconds after a cold-start no-fill instead of never.
+     */
+    private static final long POOL_TOP_UP_INTERVAL_MS = 30_000L;
+    private static boolean poolTopUpRunning = false;
+    private static final Runnable POOL_TOP_UP = new Runnable() {
+        @Override
+        public void run() {
+            Context ctx = cachedAppCtx;
+            if (ctx == null || !nativeAdsEnabled() || !com.friendbook.social.App.isForeground()) {
+                poolTopUpRunning = false;
+                return;
+            }
+            synchronized (AdsConfig.class) {
+                if (FEED_POOL.size() < AD_POOL_SIZE) {
+                    preloadFeedBatchNow(ctx, AD_POOL_SIZE - FEED_POOL.size());
+                }
+                if (REELS_POOL.size() < AD_POOL_SIZE) {
+                    preloadReelsBatchNow(ctx, AD_POOL_SIZE - REELS_POOL.size());
+                }
+            }
+            MAIN_UI_HANDLER.postDelayed(this, POOL_TOP_UP_INTERVAL_MS);
+        }
+    };
+
+    /** Starts (or keeps) the foreground top-up ticker. Idempotent and safe to call from any entry point. */
+    public static synchronized void startPoolTopUpTicker(Context context) {
+        if (context != null) cachedAppCtx = context.getApplicationContext();
+        if (cachedAppCtx == null || poolTopUpRunning || !nativeAdsEnabled()) return;
+        poolTopUpRunning = true;
+        MAIN_UI_HANDLER.postDelayed(POOL_TOP_UP, POOL_TOP_UP_INTERVAL_MS);
     }
 
     /** Loads a fresh Feed NativeAd in the background to replace a consumed/disposed ad and keep the 5-ad pool full. */
@@ -1067,15 +1144,19 @@ public class AdsConfig {
         preloadBatchIntoPool(appCtx, reelsNativeId(), false, AD_POOL_SIZE);
     }
 
-    private static void failPendingWaiters(final boolean isFeedPool) {
+    /**
+     * Tells every waiting Feed/Reels slot "no ad yet", so the slot collapses and content shows with
+     * zero gap — but it KEEPS the waiter registered, because the next preloaded ad must still fill
+     * that slot. Clearing the waiters is what made a slot that collapsed once stay empty until the
+     * user re-bound or refreshed it. A ViewHolder that has since been rebound ignores the callback.
+     */
+    private static void notifyWaitersNoAdYet(final boolean isFeedPool) {
         java.util.List<SlotAdReadyCallback> callbacks = new java.util.ArrayList<>();
         synchronized (AdsConfig.class) {
             if (isFeedPool) {
                 callbacks.addAll(FEED_SLOT_WAITERS.values());
-                FEED_SLOT_WAITERS.clear();
             } else {
                 callbacks.addAll(REELS_SLOT_WAITERS.values());
-                REELS_SLOT_WAITERS.clear();
             }
         }
         if (!callbacks.isEmpty()) {
@@ -1161,7 +1242,10 @@ public class AdsConfig {
                                 @Override
                                 public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
                                     int code = adError != null ? adError.getCode() : -1;
-                                    onNativeAdFailed(appCtx, code);
+                                    String detail = adError != null
+                                            ? (adError.getDomain() + ": " + adError.getMessage())
+                                            : "unknown error";
+                                    onNativeAdFailed(appCtx, code, detail);
                                     // If ad fails, do NOT retry in a loop — record cooldown and let feed/reels show content without ad.
                                     boolean scheduleFirstFillRetry;
                                     synchronized (AdsConfig.class) {
@@ -1177,7 +1261,7 @@ public class AdsConfig {
                                             reelsFirstFillRetryUsed = true;
                                         }
                                     }
-                                    failPendingWaiters(isFeedPool);
+                                    notifyWaitersNoAdYet(isFeedPool);
                                     // Cold-start no-fill is usually transient (SDK still warming up),
                                     // so allow exactly ONE automatic retry per pool per process after
                                     // 3s. The flag makes a second automatic retry impossible: this is
@@ -1208,7 +1292,7 @@ public class AdsConfig {
                     lastReelsFailAtMs = System.currentTimeMillis();
                 }
             }
-            failPendingWaiters(isFeedPool);
+            notifyWaitersNoAdYet(isFeedPool);
         }
     }
 
