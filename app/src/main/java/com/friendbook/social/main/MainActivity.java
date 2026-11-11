@@ -283,6 +283,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Switches directly to the Reels tab when the user taps the Featured Reels card on the Home Feed. */
+    public void openReelsTabFromFeed(com.friendbook.social.models.Models.Reel featuredReel) {
+        clearReelsBadgeNow();
+        select(TAB_REELS);
+        if (featuredReel != null && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
+            ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).focusFeaturedReel(featuredReel);
+        }
+    }
+
     /** Pro friendbook '+' Universal Create Menu. */
     private void showUniversalCreateSheet() {
         String[] opts = {

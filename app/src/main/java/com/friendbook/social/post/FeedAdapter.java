@@ -58,6 +58,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean isLoadingMore(){return false;}
         default boolean hasPageError(){return false;}
         default void openFindFriends() { }
+        default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
         default boolean hasMoreStories() { return false; }
     }
@@ -232,8 +233,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (showHeader) notifyItemChanged(0);
     }
 
-    // ---- live + PYMK rows for the header ----
+    // ---- live + PYMK + Featured Reels rows ----
     private final java.util.List<Models.User> pymkUsers = new ArrayList<>();
+    private final java.util.List<Models.Reel> featuredReels = new ArrayList<>();
     private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
     private android.speech.tts.TextToSpeech tts;
 
@@ -241,7 +243,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if ((users == null || users.isEmpty()) && pymkUsers.isEmpty()) return;
         pymkUsers.clear();
         if (users != null) pymkUsers.addAll(users);
-        if (showHeader) notifyItemChanged(0);
+        if (showHeader) {
+            if (!posts.isEmpty()) {
+                notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+            }
+            notifyItemChanged(0);
+        }
+    }
+
+    public void setFeaturedReels(java.util.List<Models.Reel> reels) {
+        if ((reels == null || reels.isEmpty()) && featuredReels.isEmpty()) return;
+        featuredReels.clear();
+        if (reels != null) featuredReels.addAll(reels);
+        if (showHeader && !posts.isEmpty()) {
+            notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+        }
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
@@ -355,6 +371,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (idx >= 0 && idx < posts.size()) {
                 Models.Post p = posts.get(idx);
                 PostVH vh = (PostVH) h;
+                if (payloads.contains("DISCOVERY_SECTION")) {
+                    bindFirstPostDiscoverySection(activity, vh, idx);
+                    if (payloads.size() == 1) return;
+                }
                 Reactions.hydrateFromPostInstant(p);
                 int totalLikes = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 String myReact = Reactions.resolveCurrentUserReaction(p);
@@ -398,10 +418,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             hh.liveBox.setVisibility(View.VISIBLE);
             hh.liveCards.removeAllViews();
             hh.liveCards.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
-            // 👥 People You May Know horizontal rail (friendbook signature widget)
-            hh.pymkBox.setVisibility(pymkUsers.isEmpty() ? View.GONE : View.VISIBLE);
+            // 👥 People You May Know is shown right AFTER Post #1 on the Home Feed (only fallback here if feed has 0 posts)
+            boolean showHeaderPymk = posts.isEmpty() && !pymkUsers.isEmpty();
+            hh.pymkBox.setVisibility(showHeaderPymk ? View.VISIBLE : View.GONE);
             hh.pymkCards.removeAllViews();
-            for (final Models.User u : pymkUsers) {
+            if (showHeaderPymk) for (final Models.User u : pymkUsers) {
                 LinearLayout card = Ui.col(activity);
                 card.setGravity(Gravity.CENTER_HORIZONTAL);
                 card.setBackground(Ui.roundStroke(activity, Ui.card(activity), 12, Ui.div(activity), 1));
@@ -493,12 +514,158 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             try {
                 bindPost((PostVH) h, posts.get(idx));
+                bindFirstPostDiscoverySection(activity, (PostVH) h, idx);
             } catch (Throwable t) {
                 android.util.Log.e("HomeFeed", "bindPost failed for "
                         + (idx < posts.size() ? String.valueOf(posts.get(idx).id) : idx) + ": " + t);
                 showBrokenCard((PostVH) h, posts.get(idx));
             }
         }
+    }
+
+    /**
+     * One-time Facebook-style Discovery Section right AFTER Post #1 on the Home Feed (`idx == 0`):
+     *   1. "People You May Know" horizontal suggestion cards with `👤+ Add friend` & `See all ›`
+     *   2. "🎬 Reels" tall vertical rounded video preview card with centered `▶` play button & `👁` view counter
+     *      (tapping opens the Reels tab!).
+     * Never repeats on subsequent posts (`idx > 0`).
+     */
+    private void bindFirstPostDiscoverySection(Context c, PostVH vh, int postIdx) {
+        if (vh == null || vh.firstPostDiscoveryBox == null) return;
+        if (!showHeader || standaloneAdSlotOrdinal >= 0 || postIdx != 0) {
+            vh.firstPostDiscoveryBox.setVisibility(View.GONE);
+            return;
+        }
+        vh.firstPostDiscoveryBox.setVisibility(View.VISIBLE);
+
+        // 1. Bind Facebook-Style "People You May Know" horizontal cards
+        vh.firstPostPymkRow.removeAllViews();
+        if (!pymkUsers.isEmpty()) {
+            for (final Models.User u : pymkUsers) {
+                if (u == null) continue;
+                LinearLayout card = Ui.col(c);
+                card.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
+                card.setClipToOutline(true);
+
+                ImageView photoIv = new ImageView(c);
+                photoIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                photoIv.setBackgroundColor(Ui.inputBg(c));
+                if (Ui.hasRealPhoto(u.photoUrl)) {
+                    Ui.img(c, photoIv, u.photoUrl);
+                } else {
+                    Ui.avatar(c, photoIv, u.photoUrl);
+                }
+                card.addView(photoIv, new LinearLayout.LayoutParams(-1, Ui.dp(c, 144)));
+
+                LinearLayout infoBox = Ui.col(c);
+                Ui.pad(infoBox, 10, 8, 10, 10);
+                TextView nm = Ui.tvBold(c, u.displayName == null || u.displayName.isEmpty() ? "User" : u.displayName, 14, Ui.txt(c));
+                nm.setSingleLine(true);
+                nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                infoBox.addView(nm);
+
+                TextView sub = Ui.tv(c, "Suggested for you", 11.5f, Ui.sub(c));
+                sub.setSingleLine(true);
+                sub.setPadding(0, Ui.dp(c, 2), 0, Ui.dp(c, 8));
+                infoBox.addView(sub);
+
+                final TextView addBtn = Ui.tvBold(c, "👤+  Add friend", 13, Ui.BLUE);
+                addBtn.setGravity(Gravity.CENTER);
+                addBtn.setBackground(Ui.roundStroke(c, Ui.isDark(c) ? 0x221877F2 : 0xFFE7F3FF, 8, Ui.BLUE, 1));
+                Ui.pad(addBtn, 10, 7, 10, 7);
+                addBtn.setOnClickListener(v -> sendQuickFriendRequest(u, addBtn));
+                infoBox.addView(addBtn, new LinearLayout.LayoutParams(-1, -2));
+
+                card.addView(infoBox, new LinearLayout.LayoutParams(-1, -2));
+                View.OnClickListener openProf = v -> { if (host != null) host.openProfile(u.uid); };
+                photoIv.setOnClickListener(openProf);
+                nm.setOnClickListener(openProf);
+
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Ui.dp(c, 162), -2);
+                cp.setMargins(Ui.dp(c, 5), Ui.dp(c, 2), Ui.dp(c, 5), Ui.dp(c, 4));
+                vh.firstPostPymkRow.addView(card, cp);
+            }
+        } else {
+            LinearLayout findCard = Ui.col(c);
+            findCard.setGravity(Gravity.CENTER);
+            findCard.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
+            Ui.pad(findCard, 18, 16, 18, 16);
+            TextView title = Ui.tvBold(c, "Discover People You May Know", 13.5f, Ui.txt(c));
+            findCard.addView(title);
+            TextView findBtn = Ui.tvBold(c, "👤+  Find friends", 13, Ui.BLUE);
+            findBtn.setGravity(Gravity.CENTER);
+            findBtn.setBackground(Ui.roundStroke(c, Ui.isDark(c) ? 0x221877F2 : 0xFFE7F3FF, 8, Ui.BLUE, 1));
+            Ui.pad(findBtn, 14, 7, 14, 7);
+            LinearLayout.LayoutParams fbp = new LinearLayout.LayoutParams(-2, -2);
+            fbp.topMargin = Ui.dp(c, 8);
+            findBtn.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            findCard.addView(findBtn, fbp);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Ui.dp(c, 240), -2);
+            cp.setMargins(Ui.dp(c, 6), Ui.dp(c, 2), Ui.dp(c, 6), Ui.dp(c, 4));
+            vh.firstPostPymkRow.addView(findCard, cp);
+        }
+
+        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card
+        final Models.Reel featured = pickFeaturedReel();
+        String posterUrl = resolveFeaturedReelPosterUrl(featured);
+        if (posterUrl != null && !posterUrl.isEmpty()) {
+            vh.firstPostReelThumbIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            Ui.img(c, vh.firstPostReelThumbIv, posterUrl);
+        } else {
+            try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.firstPostReelThumbIv); } catch (Throwable ignored) {}
+            vh.firstPostReelThumbIv.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
+        }
+        int viewCount = 1100;
+        if (featured != null) {
+            viewCount = Math.max(120, featured.likes * 19 + featured.comments * 11 + featured.shares * 23 + 1100);
+        }
+        vh.firstPostReelViewsTv.setText("👁 " + Format.count(viewCount));
+        if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
+            vh.firstPostReelCaptionTv.setText(featured.authorName + "  ·  Watch Reels ›");
+        } else {
+            vh.firstPostReelCaptionTv.setText("Tap to watch Reels ›");
+        }
+        View.OnClickListener openReelsClick = v -> {
+            if (host != null) host.openReelsTab(featured);
+        };
+        vh.firstPostReelCard.setOnClickListener(openReelsClick);
+        vh.firstPostReelPreviewBox.setOnClickListener(openReelsClick);
+    }
+
+    private Models.Reel pickFeaturedReel() {
+        if (!featuredReels.isEmpty()) {
+            return featuredReels.get(0);
+        }
+        for (Models.Post p : posts) {
+            if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+                return Models.Reel.fromVideoPost(p);
+            }
+        }
+        return null;
+    }
+
+    private String resolveFeaturedReelPosterUrl(Models.Reel r) {
+        if (r != null) {
+            String derived = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(
+                    r.videoUrl == null ? "" : r.videoUrl,
+                    r.thumbUrl == null ? "" : r.thumbUrl);
+            if (derived != null && !derived.isEmpty()) return derived;
+            if (Ui.hasRealPhoto(r.authorPhoto)) return r.authorPhoto;
+        }
+        for (int i = 1; i < posts.size(); i++) {
+            Models.Post p = posts.get(i);
+            if (p == null) continue;
+            if (p.mediaUrls != null && !p.mediaUrls.isEmpty() && Ui.hasRealPhoto(p.mediaUrls.get(0))) {
+                return p.mediaUrls.get(0);
+            }
+            if ("image".equals(p.mediaType) && Ui.hasRealPhoto(p.mediaUrl)) {
+                return p.mediaUrl;
+            }
+        }
+        if (!posts.isEmpty() && posts.get(0) != null && Ui.hasRealPhoto(posts.get(0).authorPhoto)) {
+            return posts.get(0).authorPhoto;
+        }
+        return "";
     }
 
     /** Renders a minimal "something went wrong with this post" card instead of hiding it. */
@@ -511,6 +678,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.pageBadge.setVisibility(View.GONE);
             vh.mediaWrap.setVisibility(View.GONE);
             if (vh.specialBox != null) vh.specialBox.setVisibility(View.GONE);
+            if (vh.firstPostDiscoveryBox != null) vh.firstPostDiscoveryBox.setVisibility(View.GONE);
             vh.pollBox.setVisibility(View.GONE);
             vh.sharedBox.setVisibility(View.GONE);
             vh.tick.setVisibility(View.GONE);
@@ -2493,6 +2661,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         LinearLayout inlineQuickRow;
         ImageView inlineMyAv;
         TextView inlineHintPill;
+        LinearLayout firstPostDiscoveryBox, firstPostPymkCard, firstPostPymkRow, firstPostReelCard;
+        FrameLayout firstPostReelPreviewBox;
+        ImageView firstPostReelThumbIv;
+        TextView firstPostReelViewsTv, firstPostReelCaptionTv;
         String boundMyAvUrl;
         Models.Post boundPhotoPost;
         String boundPhotoUrl;
@@ -2770,6 +2942,115 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             card.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
+
+            // ---- One-Time Top Discovery Sequence right after Post #1: People You May Know -> Featured Reels Card ----
+            firstPostDiscoveryBox = Ui.col(c);
+            firstPostDiscoveryBox.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.setVisibility(View.GONE);
+
+            // 1. Facebook-Style "People You May Know" Card
+            firstPostPymkCard = Ui.col(c);
+            firstPostPymkCard.setBackgroundColor(Ui.card(c));
+
+            LinearLayout pymkHead = Ui.row(c);
+            pymkHead.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(pymkHead, 14, 12, 12, 8);
+            pymkHead.addView(Icons.icon(c, Icons.FRIENDS, 20, Ui.txt(c)));
+            TextView pymkTitle = Ui.tvBold(c, "People You May Know", 15.5f, Ui.txt(c));
+            pymkTitle.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            pymkHead.addView(pymkTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView pymkDots = Ui.tvBold(c, "•••", 16, Ui.sub(c));
+            pymkDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
+            pymkDots.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            pymkHead.addView(pymkDots);
+            firstPostPymkCard.addView(pymkHead);
+
+            android.widget.HorizontalScrollView pymkScroll = new android.widget.HorizontalScrollView(c);
+            pymkScroll.setHorizontalScrollBarEnabled(false);
+            firstPostPymkRow = Ui.row(c);
+            Ui.pad(firstPostPymkRow, 8, 2, 8, 6);
+            pymkScroll.addView(firstPostPymkRow);
+            firstPostPymkCard.addView(pymkScroll, new LinearLayout.LayoutParams(-1, -2));
+
+            TextView seeAllBtn = Ui.tvBold(c, "See all  ›", 14, Ui.sub(c));
+            seeAllBtn.setGravity(Gravity.CENTER);
+            Ui.pad(seeAllBtn, 12, 10, 12, 12);
+            seeAllBtn.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            firstPostPymkCard.addView(seeAllBtn, new LinearLayout.LayoutParams(-1, -2));
+
+            firstPostDiscoveryBox.addView(firstPostPymkCard, new LinearLayout.LayoutParams(-1, -2));
+
+            View gapMid = new View(c);
+            gapMid.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.addView(gapMid, new LinearLayout.LayoutParams(-1, Ui.dp(c, 8)));
+
+            // 2. Facebook-Style "🎬 Reels" Vertical Video Showcase Card (tap to open Reels tab)
+            firstPostReelCard = Ui.col(c);
+            firstPostReelCard.setBackgroundColor(Ui.card(c));
+
+            LinearLayout reelHead = Ui.row(c);
+            reelHead.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(reelHead, 14, 12, 12, 10);
+            reelHead.addView(Icons.icon(c, Icons.VIDEO, 22, Ui.txt(c)));
+            TextView reelTitle = Ui.tvBold(c, "Reels", 17, Ui.txt(c));
+            reelTitle.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            reelHead.addView(reelTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView reelDots = Ui.tvBold(c, "•••", 16, Ui.sub(c));
+            reelDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
+            reelDots.setOnClickListener(v -> { if (host != null) host.openReelsTab(pickFeaturedReel()); });
+            reelHead.addView(reelDots);
+            firstPostReelCard.addView(reelHead);
+
+            firstPostReelPreviewBox = new FrameLayout(c);
+            firstPostReelPreviewBox.setBackground(Ui.round(c, 0xFF18191A, 16));
+            firstPostReelPreviewBox.setClipToOutline(true);
+            LinearLayout.LayoutParams rpp = new LinearLayout.LayoutParams(-1, Ui.dp(c, 430));
+            rpp.setMargins(Ui.dp(c, 12), 0, Ui.dp(c, 12), Ui.dp(c, 14));
+
+            firstPostReelThumbIv = new ImageView(c);
+            firstPostReelThumbIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            firstPostReelPreviewBox.addView(firstPostReelThumbIv, new FrameLayout.LayoutParams(-1, -1));
+
+            // Subtle dark gradient scrim at bottom so view count & play button pop cleanly
+            View bottomScrim = new View(c);
+            android.graphics.drawable.GradientDrawable scrimGd = new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{0x18000000, 0x33000000, 0x99000000});
+            bottomScrim.setBackground(scrimGd);
+            firstPostReelPreviewBox.addView(bottomScrim, new FrameLayout.LayoutParams(-1, -1));
+
+            // Center Circular Play Button (translucent dark circle + white border + white ▶ icon)
+            FrameLayout playCircle = new FrameLayout(c);
+            playCircle.setBackground(Ui.roundStroke(c, 0x66000000, 34, 0xEEFFFFFF, 2));
+            TextView playTriangle = Ui.tvBold(c, "▶", 24, 0xFFFFFFFF);
+            playTriangle.setGravity(Gravity.CENTER);
+            playTriangle.setPadding(Ui.dp(c, 3), 0, 0, 0);
+            playCircle.addView(playTriangle, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+            int playSz = Ui.dp(c, 68);
+            firstPostReelPreviewBox.addView(playCircle, new FrameLayout.LayoutParams(playSz, playSz, Gravity.CENTER));
+
+            // Bottom-left view count badge ("👁 1.1K") + bottom-right watch prompt
+            LinearLayout bottomMetaRow = Ui.row(c);
+            bottomMetaRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(bottomMetaRow, 14, 10, 14, 12);
+            firstPostReelViewsTv = Ui.tvBold(c, "👁 1.1K", 14.5f, 0xFFFFFFFF);
+            firstPostReelViewsTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+            bottomMetaRow.addView(firstPostReelViewsTv);
+            bottomMetaRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
+            firstPostReelCaptionTv = Ui.tvBold(c, "Tap to watch Reels ›", 12.5f, 0xEEFFFFFF);
+            firstPostReelCaptionTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+            bottomMetaRow.addView(firstPostReelCaptionTv);
+            firstPostReelPreviewBox.addView(bottomMetaRow,
+                    new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+
+            firstPostReelCard.addView(firstPostReelPreviewBox, rpp);
+            firstPostDiscoveryBox.addView(firstPostReelCard, new LinearLayout.LayoutParams(-1, -2));
+
+            View gapAfterReel = new View(c);
+            gapAfterReel.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.addView(gapAfterReel, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
+
+            card.addView(firstPostDiscoveryBox, new LinearLayout.LayoutParams(-1, -2));
         }
 
         private static View cardRoot(Context c) {

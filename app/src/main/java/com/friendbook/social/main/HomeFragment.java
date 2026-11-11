@@ -70,8 +70,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean moreAvailable = true;
     private boolean loadingPosts, loadedPosts;
     private boolean pageError,pymkLoading,pymkLoaded;
+    private boolean featuredReelsLoaded, featuredReelsLoading;
     private String pymkActor;
     private final List<Models.User> pymkCandidates=new ArrayList<>();
+    private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
     private long lastFeedFetch;
@@ -191,6 +193,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
         loadingPosts=false;restartPostsListener();
         pymkLoaded=false;loadPymk();startStoriesListener(true);
+        featuredReelsLoaded=false;loadFeaturedReelsForHome();
         loadNotesUsers();
         if (scrollTop && rv != null) rv.scrollToPosition(0);
     }
@@ -470,6 +473,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
         startFriendsListener();
+        loadPymk();
+        loadFeaturedReelsForHome();
         if(!loadedPosts || !java.util.Objects.equals(feedAccount,Fb.uid())) restartPostsListener();
         startStoriesListener();
         startLivesListener();
@@ -556,6 +561,79 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if(u.uid!=null && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
                     && (Fb.me==null || !Fb.me.blocked.contains(u.uid)))rows.add(u);
         if(adapter!=null && getActivity()!=null)adapter.setPymk(FeedAlgorithm.rankPymk(getActivity(),rows,10));
+    }
+
+    /** Loads featured Reels once on Home open so the one-time Reels Showcase Card after Post #1 shows a real Reel preview. */
+    private void loadFeaturedReelsForHome() {
+        if (adapter == null) return;
+        if (featuredReelsLoaded && !featuredReels.isEmpty()) {
+            adapter.setFeaturedReels(featuredReels);
+            return;
+        }
+        if (featuredReelsLoading) return;
+        featuredReelsLoading = true;
+        // 1. Seed immediately from any cached video posts in FastCache so Frame #1 has a Reel ready
+        for (Models.Post p : FastCache.getFeed()) {
+            if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+                addFeaturedReelCandidate(Models.Reel.fromVideoPost(p));
+            }
+        }
+        if (!featuredReels.isEmpty()) {
+            adapter.setFeaturedReels(featuredReels);
+        }
+        // 2. Check Cloudflare D1/Worker reels
+        com.friendbook.social.core.CloudflareStore.list("reels", 4, docs -> {
+            if (!isAdded() || docs == null) return;
+            boolean changed = false;
+            for (Map<String, Object> m : docs) {
+                String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                if (id.isEmpty()) continue;
+                Models.Reel r = Models.Reel.fromMap(id, m);
+                if (addFeaturedReelCandidate(r)) changed = true;
+            }
+            if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
+        });
+        // 3. One-shot Firestore reels query (cache first, then network)
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(4)
+                .get(Source.CACHE)
+                .addOnSuccessListener(cacheSnap -> {
+                    if (!isAdded() || cacheSnap == null) return;
+                    boolean changed = false;
+                    for (DocumentSnapshot d : cacheSnap.getDocuments()) {
+                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
+                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
+                    }
+                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
+                });
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(4)
+                .get()
+                .addOnSuccessListener(snap -> {
+                    featuredReelsLoading = false;
+                    featuredReelsLoaded = true;
+                    if (!isAdded() || snap == null) return;
+                    boolean changed = false;
+                    for (DocumentSnapshot d : snap.getDocuments()) {
+                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
+                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
+                    }
+                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
+                })
+                .addOnFailureListener(err -> featuredReelsLoading = false);
+    }
+
+    private boolean addFeaturedReelCandidate(Models.Reel r) {
+        if (r == null || r.id == null || r.id.isEmpty() || r.videoUrl == null || r.videoUrl.isEmpty()) return false;
+        if (Fb.me != null && Fb.me.blocked.contains(r.authorId)) return false;
+        if (Prefs.isPostHidden(getActivity(), r.id)) return false;
+        for (Models.Reel existing : featuredReels) {
+            if (existing != null && r.id.equals(existing.id)) return false;
+        }
+        if (!r.isFromPost) {
+            featuredReels.add(0, r);
+        } else {
+            featuredReels.add(r);
+        }
+        return true;
     }
 
     // ---------- posts ----------
@@ -704,7 +782,16 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             forceReRank = false;
         }
         pageError=moreAvailable && finalFeed.isEmpty();
-        if (adapter != null) adapter.setPosts(finalFeed);
+        boolean addedReel = false;
+        for (Models.Post p : allVisible) {
+            if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
+                if (addFeaturedReelCandidate(Models.Reel.fromVideoPost(p))) addedReel = true;
+            }
+        }
+        if (adapter != null) {
+            if (addedReel || !featuredReels.isEmpty()) adapter.setFeaturedReels(featuredReels);
+            adapter.setPosts(finalFeed);
+        }
         updatePagingUi();
     }
 
@@ -871,6 +958,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             ((MainActivity) getActivity()).select(MainActivity.TAB_FRIENDS);
         } else if (getActivity() != null) {
             startActivity(new Intent(getActivity(), com.friendbook.social.friends.SearchActivity.class));
+        }
+    }
+
+    @Override
+    public void openReelsTab(Models.Reel featuredReel) {
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).openReelsTabFromFeed(featuredReel);
+        } else if (getActivity() != null && featuredReel != null && featuredReel.videoUrl != null && !featuredReel.videoUrl.isEmpty()) {
+            Intent i = new Intent(getActivity(), com.friendbook.social.reels.ReelPlayerActivity.class);
+            i.putExtra("reel_id", featuredReel.id);
+            i.putExtra("is_post", featuredReel.isFromPost);
+            i.putExtra("video_url", featuredReel.videoUrl);
+            i.putExtra("author_id", featuredReel.authorId);
+            i.putExtra("author_name", featuredReel.authorName);
+            i.putExtra("author_photo", featuredReel.authorPhoto);
+            i.putExtra("caption", featuredReel.caption);
+            i.putExtra("likes", featuredReel.likes);
+            i.putExtra("comments", featuredReel.comments);
+            i.putExtra("shares", featuredReel.shares);
+            startActivity(i);
         }
     }
 

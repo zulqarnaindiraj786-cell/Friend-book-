@@ -476,6 +476,27 @@ public class ReelsFragment extends Fragment {
         }
     }
 
+    /** Focuses a featured Reel at the top of the Reels tab when tapped from the Home Feed Reels card. */
+    public void focusFeaturedReel(Models.Reel featured) {
+        if (featured != null && featured.id != null && !featured.id.isEmpty()) {
+            initialReelId = featured.id;
+            if (featured.videoUrl != null && !featured.videoUrl.isEmpty()) {
+                String key = (featured.isFromPost ? "posts/" : "reels/") + featured.id;
+                if (loadedVideoIds.add(key)) {
+                    if (featured.isFromPost) fromPosts.add(0, featured);
+                    else fromReels.add(0, featured);
+                }
+            }
+            if (adapter != null && pager != null) {
+                rebuildMergedFeed(true);
+                pager.setCurrentItem(0, false);
+                pager.post(() -> {
+                    if (!isHidden() && pager != null) adapter.playOnly(pager, 0);
+                });
+            }
+        }
+    }
+
     private void appendEndlessCycleIfNeeded() {
         if (adapter == null || pager == null) return;
         List<Models.Reel> current = adapter.rawReels();
