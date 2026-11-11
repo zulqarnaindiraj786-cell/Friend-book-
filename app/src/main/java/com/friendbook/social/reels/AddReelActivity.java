@@ -453,7 +453,7 @@ public class AddReelActivity extends Activity {
                 tv.setShadowLayer(3f, 0f, 1f, 0xAA000000);
                 item.addView(tv);
                 View dot = new View(this);
-                dot.setBackground(Ui.circle(this, isSel ? Color.WHITE : Color.TRANSPARENT));
+                dot.setBackground(Ui.circle(isSel ? Color.WHITE : Color.TRANSPARENT));
                 LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(this, 5), Ui.dp(this, 5));
                 dlp.topMargin = Ui.dp(this, 4);
                 item.addView(dot, dlp);
@@ -501,7 +501,7 @@ public class AddReelActivity extends Activity {
         FrameLayout recordOuter = new FrameLayout(this);
         recordOuter.setBackground(Ui.roundStroke(this, 0x22FFFFFF, 42, Color.WHITE, 4));
         camRecordInnerView = new View(this);
-        camRecordInnerView.setBackground(Ui.circle(this, 0xFFFE2C55));
+        camRecordInnerView.setBackground(Ui.circle(0xFFFE2C55));
         FrameLayout.LayoutParams inLp = new FrameLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 64), Gravity.CENTER);
         recordOuter.addView(camRecordInnerView, inLp);
         recordOuter.setOnClickListener(v -> onRecordButtonTapped());
@@ -621,7 +621,7 @@ public class AddReelActivity extends Activity {
         stopAttachedSoundPreview();
         if (camRecordingTimerTv != null) camRecordingTimerTv.setVisibility(View.GONE);
         if (camRecordInnerView != null) {
-            camRecordInnerView.setBackground(Ui.circle(this, 0xFFFE2C55));
+            camRecordInnerView.setBackground(Ui.circle(0xFFFE2C55));
             FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                     Ui.dp(this, 64), Ui.dp(this, 64), Gravity.CENTER);
             camRecordInnerView.setLayoutParams(lp);
@@ -752,7 +752,7 @@ public class AddReelActivity extends Activity {
         // Expand/Collapse Chevron Button (⌄ / ⌃)
         railExpandChevronTv = Ui.tvBold(this, "⌄", 20f, Color.WHITE);
         railExpandChevronTv.setGravity(Gravity.CENTER);
-        railExpandChevronTv.setBackground(Ui.circle(this, 0x44000000));
+        railExpandChevronTv.setBackground(Ui.circle(0x44000000));
         LinearLayout.LayoutParams chlp = new LinearLayout.LayoutParams(Ui.dp(this, 32), Ui.dp(this, 32));
         chlp.topMargin = Ui.dp(this, 6);
         railExpandChevronTv.setOnClickListener(v -> {
@@ -844,9 +844,10 @@ public class AddReelActivity extends Activity {
         storyBtn.setGravity(Gravity.CENTER);
         storyBtn.setBackground(Ui.round(this, Color.WHITE, 24));
         Ui.pad(storyBtn, 12, 11, 12, 11);
-        ImageView myAv = Ui.avatar(this, Ui.dp(this, 22));
+        ImageView myAv = new ImageView(this);
+        myAv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         myAv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
-        storyBtn.addView(myAv);
+        storyBtn.addView(myAv, new LinearLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22)));
         TextView storyTv = Ui.tvBold(this, "  Your Story", 14.5f, 0xFF161823);
         storyBtn.addView(storyTv);
         storyBtn.setOnClickListener(v -> {
@@ -1019,7 +1020,7 @@ public class AddReelActivity extends Activity {
         for (int i = 0; i < shareBadges.length; i++) {
             TextView sb = Ui.tvBold(this, shareBadges[i], 14f, Color.WHITE);
             sb.setGravity(Gravity.CENTER);
-            sb.setBackground(Ui.circle(this, shareColors[i]));
+            sb.setBackground(Ui.circle(shareColors[i]));
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Ui.dp(this, 32), Ui.dp(this, 32));
             slp.leftMargin = Ui.dp(this, 8);
             shareRow.addView(sb, slp);
@@ -1100,7 +1101,7 @@ public class AddReelActivity extends Activity {
 
         if (showRedDot) {
             View dot = new View(this);
-            dot.setBackground(Ui.circle(this, 0xFFFE2C55));
+            dot.setBackground(Ui.circle(0xFFFE2C55));
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(this, 7), Ui.dp(this, 7));
             dlp.rightMargin = Ui.dp(this, 8);
             row.addView(dot, dlp);

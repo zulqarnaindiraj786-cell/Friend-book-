@@ -483,7 +483,7 @@ public final class TikTokReelStudioHelper {
                 coverImg.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 if (!item.authorPhoto.isEmpty()) {
                     try {
-                        Glide.with(act).load(Ui.optimizeImageUrl(item.authorPhoto)).into(coverImg);
+                        Glide.with(act).load(Ui.optimizeImageUrl(act, item.authorPhoto, true)).into(coverImg);
                     } catch (Throwable ignored) {}
                 } else {
                     coverImg.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
@@ -639,8 +639,8 @@ public final class TikTokReelStudioHelper {
                     .addOnSuccessListener(snap -> {
                         if (act.isFinishing() || snap == null) return;
                         for (DocumentSnapshot doc : snap.getDocuments()) {
-                            Models.Reel r = Models.Reel.fromDoc(doc);
-                            if (r != null) addReelToSoundMap(dedup, r);
+                            Models.Reel reel = Models.Reel.fromDoc(doc);
+                            if (reel != null) addReelToSoundMap(dedup, reel);
                         }
                         allSounds.clear();
                         allSounds.addAll(dedup.values());
