@@ -169,7 +169,7 @@ public final class ConsentManager {
         }
         MAIN_HANDLER.post(() -> {
             if (appCtx != null) {
-                AdsConfig.preloadFeedBatchNow(appCtx, 4);
+                AdsConfig.preloadFeedBatchNow(appCtx, AdsConfig.AD_POOL_SIZE);
                 AdsConfig.warmUpPools(appCtx);
             }
             for (Runnable r : toRun) {

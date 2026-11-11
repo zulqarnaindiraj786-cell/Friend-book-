@@ -210,10 +210,10 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 4 Feed Ads on app open!
-        AdsConfig.preloadFeedBatchNow(this, 4);
+        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 5 Feed Ads on app open!
+        AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
         ConsentManager.gatherConsentAndInitAds(this, () -> {
-            AdsConfig.preloadFeedBatchNow(this, 4);
+            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
@@ -374,9 +374,9 @@ public class MainActivity extends Activity {
      */
     public void select(int tab) {
         if (tab == TAB_REELS) {
-            AdsConfig.preloadReelsBatchNow(this, 4);
+            AdsConfig.preloadReelsBatchNow(this, AdsConfig.AD_POOL_SIZE);
         } else if (tab == TAB_HOME) {
-            AdsConfig.preloadFeedBatchNow(this, 4);
+            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
         }
         if (tab == active) {
             if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {

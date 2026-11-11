@@ -666,7 +666,7 @@ public class ReelsFragment extends Fragment {
 
     @Override public void onResume(){
         super.onResume();
-        AdsConfig.preloadReelsBatchNow(getActivity(), 4);
+        AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
         AdsConfig.setReelsPoolListener(() -> {
             if (adapter != null && pager != null) {
                 adapter.onPoolAdAvailable();
@@ -686,7 +686,7 @@ public class ReelsFragment extends Fragment {
         if (hidden) {
             adapter.pauseAll(pager);
         } else {
-            AdsConfig.preloadReelsBatchNow(getActivity(), 4);
+            AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
             if (adapter.rawReels().isEmpty()) {
                 resetVideoPages();
             } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
@@ -1154,6 +1154,10 @@ public class ReelsFragment extends Fragment {
             }
 
             private void destroyCurrentAd() {
+                if (currentNativeAd != null && boundSlotOrdinal >= 0) {
+                    AdsConfig.disposeShownSlotAd(
+                            itemView.getContext(), boundSlotOrdinal + 10000, currentNativeAd);
+                }
                 currentNativeAd = null;
             }
 
@@ -1207,6 +1211,10 @@ public class ReelsFragment extends Fragment {
                 priceView.setVisibility(View.VISIBLE);
             }
 
+            /**
+             * Binds a preloaded NativeAd from the 5-ad Reels Pool (`AdsConfig.getOrPollReelsAd`).
+             * NEVER calls `loadAd` inside `onBindViewHolder` and NEVER retries in a loop on failure!
+             */
             void loadFreshReelsNativeAd(final String rawUnitId, final int slotOrdinal) {
                 final Context ctx = itemView.getContext();
                 if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
@@ -1216,26 +1224,11 @@ public class ReelsFragment extends Fragment {
                     refreshReelAdSocial(ctx);
                     return;
                 }
-                if (this.boundSlotOrdinal == slotOrdinal && adRequestInFlight) {
-                    com.google.android.gms.ads.nativead.NativeAd nowReady =
-                            AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
-                    if (nowReady != null) {
-                        ++requestSeq;
-                        adRequestInFlight = false;
-                        currentNativeAd = nowReady;
-                        loadingBox.setVisibility(View.GONE);
-                        nativeAdView.setVisibility(View.VISIBLE);
-                        populateReelsNativeAd(nowReady, ctx);
-                        refreshReelAdSocial(ctx);
-                        nativeAdView.requestLayout();
-                    }
-                    return;
-                }
 
                 final int mySeq = ++requestSeq;
+                destroyCurrentAd();
                 this.boundSlotOrdinal = slotOrdinal;
                 this.adRequestInFlight = false;
-                destroyCurrentAd();
                 loadingBox.setVisibility(View.GONE);
                 statusView.setText("");
 
@@ -1245,9 +1238,6 @@ public class ReelsFragment extends Fragment {
                 AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal + 10000, () -> {
                     if (mySeq == requestSeq) refreshReelAdSocial(ctx);
                 });
-                final String unitId = AdsConfig.isRealProductionUnit(rawUnitId)
-                        ? rawUnitId.trim()
-                        : AdsConfig.REELS_NATIVE_ID;
 
                 ConsentManager.ensureInitialized(ctx);
                 adHeroBanner.setVisibility(View.GONE);
@@ -1263,153 +1253,26 @@ public class ReelsFragment extends Fragment {
                     return;
                 }
 
-                // Request a 100% REAL AdMob Video/Native Ad (ZERO fake/dummy fallback banners!)
+                // Wait for the background 5-ad Reels Pool (never call loadAd inside onBindViewHolder!)
                 adRequestInFlight = true;
                 nativeAdView.setVisibility(View.GONE);
-                statusView.setText("Loading Sponsored Video…");
-                loadingBox.setVisibility(View.VISIBLE);
+                statusView.setText("");
+                loadingBox.setVisibility(View.GONE);
                 AdsConfig.registerReelsSlotWaiter(slotOrdinal, readyAd -> {
-                    if (mySeq != requestSeq || currentNativeAd != null || readyAd == null) return;
+                    if (mySeq != requestSeq) return;
                     adRequestInFlight = false;
+                    if (readyAd == null || currentNativeAd != null) {
+                        loadingBox.setVisibility(View.GONE);
+                        return;
+                    }
                     currentNativeAd = readyAd;
                     loadingBox.setVisibility(View.GONE);
                     nativeAdView.setVisibility(View.VISIBLE);
                     populateReelsNativeAd(readyAd, ctx);
                     refreshReelAdSocial(ctx);
                     nativeAdView.requestLayout();
-                    AdsConfig.ensureReelsPoolReplenished(ctx);
                 });
-                ConsentManager.runWhenInitialized(ctx, () -> {
-                    if (mySeq != requestSeq || currentNativeAd != null) return;
-                    com.google.android.gms.ads.nativead.NativeAd readyAfterInit =
-                            AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
-                    if (readyAfterInit != null) {
-                        adRequestInFlight = false;
-                        currentNativeAd = readyAfterInit;
-                        loadingBox.setVisibility(View.GONE);
-                        nativeAdView.setVisibility(View.VISIBLE);
-                        populateReelsNativeAd(readyAfterInit, ctx);
-                        refreshReelAdSocial(ctx);
-                        nativeAdView.requestLayout();
-                        return;
-                    }
-                    requestRealReelsAdFromUnit(ctx, unitId, slotOrdinal, mySeq, true);
-                });
-            }
-
-            private void requestRealReelsAdFromUnit(
-                    final Context ctx,
-                    final String unitId,
-                    final int slotOrdinal,
-                    final int mySeq,
-                    final boolean allowBackupUnitRetry) {
-                AdsConfig.recordAdRequest(ctx);
-                android.util.Log.i(AdsConfig.LOG_TAG,
-                        "[ReelsNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
-
-                try {
-                    boolean startMuted = !Prefs.reelsStartWithSound(ctx);
-                    com.google.android.gms.ads.VideoOptions videoOptions =
-                            new com.google.android.gms.ads.VideoOptions.Builder()
-                                    .setStartMuted(startMuted)
-                                    .build();
-                    com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
-                            new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
-                                    .setAdChoicesPlacement(
-                                            com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
-                                    .setMediaAspectRatio(
-                                            com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
-                                    .setVideoOptions(videoOptions)
-                                    .build();
-
-                    com.google.android.gms.ads.AdLoader adLoader =
-                            new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
-                                    .forNativeAd(nativeAd -> {
-                                        AdsConfig.onNativeAdLoaded(ctx);
-                                        nativeAd.setOnPaidEventListener(adValue ->
-                                                AdsConfig.recordPaidEvent(ctx, adValue));
-                                        AdsConfig.putReelsSlotAd(slotOrdinal, nativeAd);
-                                        if (mySeq != requestSeq || currentNativeAd != null) {
-                                            AdsConfig.notifyChange();
-                                            return;
-                                        }
-                                        adRequestInFlight = false;
-                                        currentNativeAd = nativeAd;
-
-                                        loadingBox.setVisibility(View.GONE);
-                                        nativeAdView.setVisibility(View.VISIBLE);
-                                        populateReelsNativeAd(nativeAd, ctx);
-                                        refreshReelAdSocial(ctx);
-                                        nativeAdView.requestLayout();
-                                    })
-                                    .withAdListener(new com.google.android.gms.ads.AdListener() {
-                                        @Override
-                                        public void onAdLoaded() {
-                                            android.util.Log.i(AdsConfig.LOG_TAG,
-                                                    "[ReelsNative] Ad loaded successfully (slot=" + slotOrdinal
-                                                            + ", unitId=" + unitId + ")");
-                                        }
-
-                                        @Override
-                                        public void onAdImpression() {
-                                            android.util.Log.i(AdsConfig.LOG_TAG,
-                                                    "[ReelsNative] Ad impression recorded (slot=" + slotOrdinal
-                                                            + ", unitId=" + unitId + ")");
-                                            AdsConfig.recordAdImpression(ctx);
-                                            AdsConfig.ensureReelsPoolReplenished(ctx);
-                                        }
-
-                                        @Override
-                                        public void onAdClicked() {
-                                            android.util.Log.i(AdsConfig.LOG_TAG,
-                                                    "[ReelsNative] Ad clicked (slot=" + slotOrdinal
-                                                            + ", unitId=" + unitId + ")");
-                                            AdsConfig.recordAdClick(ctx);
-                                        }
-
-                                        @Override
-                                        public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError adError) {
-                                            android.util.Log.e(AdsConfig.LOG_TAG,
-                                                    "[ReelsNative] Ad failed to load! errorCode=" + adError.getCode()
-                                                            + ", message=" + adError.getMessage()
-                                                            + ", domain=" + adError.getDomain()
-                                                            + ", slot=" + slotOrdinal
-                                                            + ", unitId=" + unitId
-                                                            + ", responseInfo=" + adError.getResponseInfo());
-                                            AdsConfig.onNativeAdFailed(ctx, adError.getCode());
-                                            if (mySeq == requestSeq) {
-                                                com.google.android.gms.ads.nativead.NativeAd fallback =
-                                                        AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
-                                                if (fallback != null) {
-                                                    adRequestInFlight = false;
-                                                    currentNativeAd = fallback;
-                                                    loadingBox.setVisibility(View.GONE);
-                                                    nativeAdView.setVisibility(View.VISIBLE);
-                                                    populateReelsNativeAd(fallback, ctx);
-                                                    refreshReelAdSocial(ctx);
-                                                    nativeAdView.requestLayout();
-                                                } else if (allowBackupUnitRetry) {
-                                                    String altUnit = AdsConfig.REELS_NATIVE_ID.equals(unitId)
-                                                            ? AdsConfig.FEED_NATIVE_ID
-                                                            : AdsConfig.REELS_NATIVE_ID;
-                                                    requestRealReelsAdFromUnit(ctx, altUnit, slotOrdinal, mySeq, false);
-                                                } else {
-                                                    adRequestInFlight = false;
-                                                    loadingBox.setVisibility(View.GONE);
-                                                }
-                                            }
-                                        }
-                                    })
-                                    .withNativeAdOptions(adOptions)
-                                    .build();
-
-                    adLoader.loadAds(AdsConfig.buildHighValueAdRequest(true), 4);
-                } catch (Throwable t) {
-                    adRequestInFlight = false;
-                    android.util.Log.e(AdsConfig.LOG_TAG,
-                            "[ReelsNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
-                    AdsConfig.onNativeAdFailed(ctx, -1);
-                }
+                AdsConfig.ensureReelsPoolReplenished(ctx);
             }
 
             void playAdVideo() {
@@ -1499,8 +1362,8 @@ public class ReelsFragment extends Fragment {
             void onRecycled() {
                 requestSeq++;
                 adRequestInFlight = false;
-                AdsConfig.evictSlotAd(boundSlotOrdinal + 10000);
                 destroyCurrentAd();
+                AdsConfig.evictSlotAd(boundSlotOrdinal + 10000);
             }
         }
 
