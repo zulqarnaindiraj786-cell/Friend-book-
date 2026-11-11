@@ -81,6 +81,7 @@ public class ReelsFragment extends Fragment {
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
     private int videoGeneration;
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
+    private final java.util.Set<String> sessionViewedReelIds = new java.util.HashSet<>();
     private LinearLayout emptyState;
     private LinearLayout initialLoadingBox;
     private LinearLayout uploadStatusBanner;
@@ -135,7 +136,7 @@ public class ReelsFragment extends Fragment {
                         uploadStatusBanner.setVisibility(View.VISIBLE);
                         if (uploadStatusBar != null) uploadStatusBar.setProgress(Math.max(3, percent));
                         if (uploadStatusText != null) {
-                            uploadStatusText.setText("⏫ " + (message != null && !message.isEmpty()
+                            uploadStatusText.setText((message != null && !message.isEmpty()
                                     ? message : ("Uploading Reel… " + percent + "%")));
                         }
                         rebuildMergedFeed(false);
@@ -178,9 +179,8 @@ public class ReelsFragment extends Fragment {
         emptyState.setGravity(Gravity.CENTER);
         Ui.pad(emptyState, 28, 28, 28, 28);
         emptyState.setVisibility(View.GONE);
-        TextView ei = Ui.tv(a, "🎬", 56, Color.WHITE);
-        ei.setGravity(Gravity.CENTER);
-        emptyState.addView(ei);
+        ImageView ei = com.friendbook.social.core.StudioVectorIcons.iconView(a, "play", 62, 0x66FFFFFF);
+        emptyState.addView(ei, new LinearLayout.LayoutParams(Ui.dp(a, 68), Ui.dp(a, 68)));
         TextView et1 = Ui.tvBold(a, "No Reels yet — upload the first one!", 19, Color.WHITE);
         et1.setGravity(Gravity.CENTER);
         et1.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 4));
@@ -188,9 +188,8 @@ public class ReelsFragment extends Fragment {
         TextView et2 = Ui.tv(a, "Share short vertical videos with instant playback, reactions, comments & shares!", 13.5f, 0xBBFFFFFF);
         et2.setGravity(Gravity.CENTER);
         emptyState.addView(et2);
-        TextView createNow = Ui.tvBold(a, "🎬 ＋ Upload Reel", 15, Color.WHITE);
-        createNow.setBackground(Ui.roundStroke(a, 0xFFE41E3F, 22, 0xFFFFFFFF, 1));
-        Ui.pad(createNow, 22, 11, 22, 11);
+        TextView createNow = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "camera", "Upload Reel", 15f, 0xFFE41E3F, Color.WHITE, Color.WHITE);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
         clp.topMargin = Ui.dp(a, 18);
         createNow.setOnClickListener(v -> startActivity(new Intent(a, AddReelActivity.class)));
@@ -203,7 +202,7 @@ public class ReelsFragment extends Fragment {
         Ui.pad(initialLoadingBox, 24, 24, 24, 24);
         ProgressBar initSpin = new ProgressBar(a);
         initialLoadingBox.addView(initSpin, new LinearLayout.LayoutParams(Ui.dp(a, 42), Ui.dp(a, 42)));
-        TextView initTxt = Ui.tvBold(a, "🎬 Loading Videos…", 14.5f, 0xEEFFFFFF);
+        TextView initTxt = Ui.tvBold(a, "Loading Videos…", 14.5f, 0xEEFFFFFF);
         initTxt.setPadding(0, Ui.dp(a, 10), 0, 0);
         initialLoadingBox.addView(initTxt);
         root.addView(initialLoadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
@@ -250,15 +249,14 @@ public class ReelsFragment extends Fragment {
         });
         bar.addView(followingPill, flp);
 
-        TextView refreshPill = Ui.tvBold(a, "↻", 15f, Color.WHITE);
-        refreshPill.setGravity(Gravity.CENTER);
-        refreshPill.setBackground(Ui.roundStroke(a, 0x66000000, 15, 0x44FFFFFF, 1));
+        TextView refreshPill = com.friendbook.social.core.StudioVectorIcons.circleIconButton(
+                a, "flip", 30, 0x66000000, Color.WHITE, null);
         int rSz = Ui.dp(a, 30);
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rSz, rSz);
         rlp.leftMargin = Ui.dp(a, 5);
         refreshPill.setOnClickListener(v -> {
             refreshWithAlgorithm();
-            Ui.toast(a, "🎬 Fresh reels loaded");
+            Ui.toast(a, "Fresh reels loaded");
         });
         bar.addView(refreshPill, rlp);
 
@@ -280,7 +278,7 @@ public class ReelsFragment extends Fragment {
         uploadStatusBanner.setVisibility(View.GONE);
         LinearLayout.LayoutParams ublp = new LinearLayout.LayoutParams(-1, -2);
         ublp.setMargins(Ui.dp(a, 12), Ui.dp(a, 6), Ui.dp(a, 12), 0);
-        uploadStatusText = Ui.tvBold(a, "⏫ Uploading Reel…", 12f, Color.WHITE);
+        uploadStatusText = Ui.tvBold(a, "Uploading Reel…", 12f, Color.WHITE);
         uploadStatusBanner.addView(uploadStatusText);
         uploadStatusBar = new ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal);
         uploadStatusBar.setMax(100);
@@ -1039,22 +1037,22 @@ public class ReelsFragment extends Fragment {
                 adLikeCount.setGravity(Gravity.CENTER);
                 adLikeCount.setPadding(0, Ui.dp(a, 2), 0, Ui.dp(a, 10));
 
-                TextView cmtIcon = Ui.tv(a, "💬", 21, Color.WHITE);
-                cmtIcon.setGravity(Gravity.CENTER);
+                ImageView cmtIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "captions", 22, Color.WHITE);
                 adCommentBox = new FrameLayout(a);
                 adCommentBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
                 adCommentBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
-                adCommentBox.addView(cmtIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                int adIcSz = Ui.dp(a, 22);
+                adCommentBox.addView(cmtIcon, new FrameLayout.LayoutParams(adIcSz, adIcSz, Gravity.CENTER));
                 adCommentCount = Ui.tvBold(a, "Comment", 11f, Color.WHITE);
                 adCommentCount.setGravity(Gravity.CENTER);
                 adCommentCount.setPadding(0, Ui.dp(a, 2), 0, Ui.dp(a, 10));
 
-                TextView shrIcon = Ui.tvBold(a, "↗", 22, Color.WHITE);
-                shrIcon.setGravity(Gravity.CENTER);
+                ImageView shrIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "send", 21, Color.WHITE);
                 adShareBox = new FrameLayout(a);
                 adShareBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
                 adShareBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
-                adShareBox.addView(shrIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+                int adShSz = Ui.dp(a, 21);
+                adShareBox.addView(shrIcon, new FrameLayout.LayoutParams(adShSz, adShSz, Gravity.CENTER));
                 adShareCount = Ui.tvBold(a, "Share", 11f, Color.WHITE);
                 adShareCount.setGravity(Gravity.CENTER);
                 adShareCount.setPadding(0, Ui.dp(a, 2), 0, 0);
@@ -1127,7 +1125,8 @@ public class ReelsFragment extends Fragment {
                 bottomCard.addView(ctaButton, new LinearLayout.LayoutParams(-1, Ui.dp(a, 42)));
 
                 // 100% Identical to Reels VH Quick "💬  Add a comment…" Pill!
-                adQuickCommentPill = Ui.tv(a, "💬  Add a comment…", 13, 0xEEFFFFFF);
+                adQuickCommentPill = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                        a, "captions", "Add a comment…", 13f, 0, 0xEEFFFFFF, 0xEEFFFFFF);
                 adQuickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
                 Ui.pad(adQuickCommentPill, 14, 7, 14, 7);
                 LinearLayout.LayoutParams qclp = new LinearLayout.LayoutParams(-1, -2);
@@ -1398,8 +1397,10 @@ public class ReelsFragment extends Fragment {
             final TextView pausedBadge;
             final FrameLayout likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
             final ImageView likeOutlineIv, saveIconIv, shareIconIv, soundDiscAvatarIv;
-            final TextView likeIcon, likeCount, commentIcon, commentCount, saveCount, shareCount;
-            final TextView heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
+            final TextView likeIcon, likeCount, commentCount, saveCount, shareCount;
+            final ImageView commentIcon;
+            final ImageView heartBurst;
+            final TextView nameT, captionT, audioT, followT, quickCommentPill;
             final ImageView avatar, tick;
             final View filterTintView;
             final TextView overlayTextPill, overlayStickerTv;
@@ -1482,7 +1483,7 @@ public class ReelsFragment extends Fragment {
                 int spSz = Ui.dp(a, 38);
                 root.addView(bufferingSpinner, new FrameLayout.LayoutParams(spSz, spSz, Gravity.CENTER));
 
-                pausedBadge = Ui.tvBold(a, "▶", 38, 0xDDFFFFFF);
+                pausedBadge = com.friendbook.social.core.StudioVectorIcons.circleIconButton(a, "play", 62, 0x55000000, 0xDDFFFFFF, null);
                 pausedBadge.setGravity(Gravity.CENTER);
                 pausedBadge.setBackground(Ui.circle(0x66000000));
                 pausedBadge.setVisibility(View.GONE);
@@ -1490,10 +1491,12 @@ public class ReelsFragment extends Fragment {
                 root.addView(pausedBadge, new FrameLayout.LayoutParams(pbSz, pbSz, Gravity.CENTER));
 
                 // Giant animated heart burst on double-tap!
-                heartBurst = Ui.tv(a, "❤️", 82, Color.WHITE);
+                // 2026 vector heart burst (no keyboard emoji), tinted brand pink
+                heartBurst = com.friendbook.social.core.StudioVectorIcons.iconView(a, "heart", 86, 0xFFFF2D55);
                 heartBurst.setAlpha(0f);
                 heartBurst.setElevation(Ui.dp(a, 30));
-                root.addView(heartBurst, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+                int hbSz = Ui.dp(a, 96);
+                root.addView(heartBurst, new FrameLayout.LayoutParams(hbSz, hbSz, Gravity.CENTER));
 
                 // Right-Side TikTok Action Rail (Like · Comment · Favorite + Count · Share + Count · ••• · Spinning Sound Disc)
                 LinearLayout rail = Ui.col(a);
@@ -1518,9 +1521,8 @@ public class ReelsFragment extends Fragment {
                 likeBtnBox.addView(likeIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
                 likeCount = shadowLabel(a, "Like");
 
-                commentIcon = Ui.tv(a, "💬", 21, Color.WHITE);
-                commentIcon.setGravity(Gravity.CENTER);
-                commentBtnBox = circleAction(a, commentIcon);
+                commentIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "captions", 22, Color.WHITE);
+                commentBtnBox = circleActionView(a, commentIcon);
                 commentCount = shadowLabel(a, "Comment");
 
                 // TikTok-Style Ribbon Bookmark (Favorite) Icon + Favorite Count
@@ -1545,9 +1547,8 @@ public class ReelsFragment extends Fragment {
                 shareBtnBox.addView(shareIconIv, new FrameLayout.LayoutParams(shSz, shSz, Gravity.CENTER));
                 shareCount = shadowLabel(a, "Share");
 
-                TextView moreIcon = Ui.tvBold(a, "•••", 16, Color.WHITE);
-                moreIcon.setGravity(Gravity.CENTER);
-                moreBtnBox = circleAction(a, moreIcon);
+                ImageView moreIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "more", 20, Color.WHITE);
+                moreBtnBox = circleActionView(a, moreIcon);
 
                 // TikTok-Style Spinning Vinyl Sound Disc at bottom of right rail (tap to use this sound in your own video!)
                 soundBtnBox = new FrameLayout(a);
@@ -1557,8 +1558,7 @@ public class ReelsFragment extends Fragment {
                 soundDiscAvatarIv = new ImageView(a);
                 int innerAvSz = Ui.dp(a, 26);
                 soundBtnBox.addView(soundDiscAvatarIv, new FrameLayout.LayoutParams(innerAvSz, innerAvSz, Gravity.CENTER));
-                TextView musicBadge = Ui.tvBold(a, "♫", 10f, 0xFF25F4EE);
-                musicBadge.setShadowLayer(3f, 0f, 1f, 0xFF000000);
+                ImageView musicBadge = com.friendbook.social.core.StudioVectorIcons.iconView(a, "music", 12, 0xFF25F4EE);
                 soundBtnBox.addView(musicBadge, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
 
                 rail.addView(likeBtnBox);
@@ -1628,7 +1628,8 @@ public class ReelsFragment extends Fragment {
                 audioT.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 8));
                 bottomCol.addView(audioT);
 
-                quickCommentPill = Ui.tv(a, "💬  Add a comment…", 13, 0xEEFFFFFF);
+                quickCommentPill = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                        a, "captions", "Add a comment…", 13f, 0, 0xEEFFFFFF, 0xEEFFFFFF);
                 quickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
                 Ui.pad(quickCommentPill, 14, 7, 14, 7);
                 bottomCol.addView(quickCommentPill, new LinearLayout.LayoutParams(-1, -2));
@@ -1776,6 +1777,17 @@ public class ReelsFragment extends Fragment {
                 return box;
             }
 
+            /** Same circular rail button, but sized to wrap a fixed-size 2026 vector icon. */
+            private FrameLayout circleActionView(Context c, View iconView) {
+                FrameLayout box = new FrameLayout(c);
+                box.setBackground(Ui.roundStroke(c, 0x66000000, 22, 0x33FFFFFF, 1));
+                int sz = Ui.dp(c, 44);
+                box.setLayoutParams(new LinearLayout.LayoutParams(sz, sz));
+                int iconSz = Ui.dp(c, 23);
+                box.addView(iconView, new FrameLayout.LayoutParams(iconSz, iconSz, Gravity.CENTER));
+                return box;
+            }
+
             private TextView shadowLabel(Context c, String txt) {
                 TextView t = Ui.tvBold(c, txt, 11f, Color.WHITE);
                 t.setGravity(Gravity.CENTER);
@@ -1823,18 +1835,13 @@ public class ReelsFragment extends Fragment {
                         ? reel.soundAuthorPhoto.trim() : reel.authorPhoto;
                 Ui.avatar(c, soundDiscAvatarIv, discPhoto);
 
-                // Render creator Filter Tint or subtle iPhone 17 Pro Max Smart HDR warm clarity (0.0ms GPU)
-                if (reel.filterOverlayColor != 0) {
-                    filterTintView.setBackgroundColor(reel.filterOverlayColor);
-                    filterTintView.setVisibility(View.VISIBLE);
-                } else {
-                    android.graphics.drawable.GradientDrawable hdrTone =
-                            new android.graphics.drawable.GradientDrawable(
-                                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                                    new int[]{0x0CFFF8F0, 0x08FFEFE5});
-                    filterTintView.setBackground(hdrTone);
-                    filterTintView.setVisibility(View.VISIBLE);
-                }
+                // Real 4K UHD GPU grade ONLY when the creator actually picked a filter/effect, so
+                // unfiltered Reels stay on the fastest possible playback path (zero extra GPU pass).
+                String gradePreset = (reel.filterPreset != null && !reel.filterPreset.trim().isEmpty()
+                        && !"none".equalsIgnoreCase(reel.filterPreset.trim()))
+                        ? reel.filterPreset.trim() : "none";
+                com.friendbook.social.core.StudioVectorIcons.apply4kUhdGpuGrade(
+                        textureView, filterTintView, reel.beautyLevel, gradePreset, reel.filterOverlayColor);
 
                 if (reel.overlayText != null && !reel.overlayText.trim().isEmpty()) {
                     overlayTextPill.setText(reel.overlayText.trim());
@@ -2099,6 +2106,9 @@ public class ReelsFragment extends Fragment {
                     sx = videoRatio / viewRatio;
                     sy = 1f;
                 }
+                if (reel != null && reel.mirrorHorizontal) {
+                    sx = -sx;
+                }
                 matrix.setScale(sx, sy, viewW / 2f, viewH / 2f);
                 textureView.setTransform(matrix);
             }
@@ -2110,6 +2120,14 @@ public class ReelsFragment extends Fragment {
                     float vol = (muted || hasAttachedSound) ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
                     if (!activeMp.isPlaying()) activeMp.start();
+                    if (reel != null && reel.id != null && !reel.id.isEmpty()
+                            && !reel.id.startsWith("opt_") && sessionViewedReelIds.add(reel.id)) {
+                        reel.views = Math.max(0, reel.views) + 1;
+                        try {
+                            Fb.db().collection(reel.collectionName()).document(reel.id)
+                                    .update("views", FieldValue.increment(1));
+                        } catch (Throwable ignored) {}
+                    }
                     if (hasAttachedSound && !muted) {
                         ensureExternalSoundPlaying(itemView.getContext(), reel.audioUrl.trim());
                     }
