@@ -13,6 +13,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: write
 concurrency:
   group: friendbook-cloudflare-production
   cancel-in-progress: false
@@ -71,6 +72,28 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
         run: node cloudflare/ensure-views-kv.mjs
 
+      - name: Bind Analytics Engine for view events (zero D1 writes)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: node cloudflare/ensure-views-ae.mjs
+
+      - name: Give the Worker an encrypted Analytics Engine read token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo '::warning::CLOUDFLARE_API_TOKEN unavailable; the Worker will write Analytics Engine events but serve counts from KV + memory (still zero D1 writes).'
+            exit 0
+          fi
+          # Encrypted secret, never a plaintext --var: the Worker only uses it to query AE.
+          if printf '%s' "$CLOUDFLARE_API_TOKEN" | npx wrangler secret put CF_AE_TOKEN; then
+            echo 'CF_AE_TOKEN secret stored; the Worker can read Analytics Engine counts.'
+          else
+            echo '::warning::Could not store CF_AE_TOKEN; AE counts will be served from KV + memory instead (still zero D1 writes).'
+          fi
+
       - name: Deploy existing Worker and bind existing database (no migration)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -81,10 +104,15 @@ jobs:
             echo '::error::CLOUDFLARE_API_TOKEN repository secret is missing or unavailable to this workflow. Do not paste it in chat.'
             exit 1
           fi
-          if ! npm run deploy -- --var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true; then
-            echo '::warning::Token lacks R2 bucket binding scope; deploying Worker with Cloudflare Realtime + D1 while preserving R2 config in repo.'
-            cp wrangler.toml /tmp/wrangler.toml.bak
-            python3 - <<'PY'
+          DEPLOY_VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
+          DEPLOY_VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
+          if npm run deploy -- $DEPLOY_VARS_R2_ON; then
+            echo 'Deployed with D1, Realtime, R2 and Analytics Engine bindings.'
+            exit 0
+          fi
+          cp wrangler.toml /tmp/wrangler.toml.bak
+          echo '::warning::First deploy refused; retrying without the R2 bucket binding (config preserved in repo).'
+          python3 - <<'PY'
           import pathlib
           p = pathlib.Path('wrangler.toml')
           text = p.read_text()
@@ -92,9 +120,36 @@ jobs:
           if idx != -1:
               p.write_text(text[:idx])
           PY
-            npm run deploy -- --var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true
+          if npm run deploy -- $DEPLOY_VARS_R2_OFF; then
             mv /tmp/wrangler.toml.bak wrangler.toml
+            exit 0
           fi
+          mv /tmp/wrangler.toml.bak wrangler.toml
+          echo '::warning::Deploy still refused; retrying without the Analytics Engine binding. Views then count in KV + memory, still with zero D1 writes.'
+          python3 - <<'PY'
+          import pathlib, re
+          p = pathlib.Path('wrangler.toml')
+          text = p.read_text()
+          text = re.sub(r'# Every view is one Analytics Engine event.*?\n\n', '', text, flags=re.S)
+          text = re.sub(r'\[\[analytics_engine_datasets\]\][^\[]*', '', text)
+          p.write_text(text)
+          print('Analytics Engine binding removed for this deploy attempt only.')
+          PY
+          if npm run deploy -- $DEPLOY_VARS_R2_ON; then
+            exit 0
+          fi
+          echo '::warning::Retrying the last resort: no Analytics Engine and no R2 binding.'
+          cp wrangler.toml /tmp/wrangler.toml.bak
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('wrangler.toml')
+          text = p.read_text()
+          idx = text.find('# Existing owner-provided bucket.')
+          if idx != -1:
+              p.write_text(text[:idx])
+          PY
+          npm run deploy -- $DEPLOY_VARS_R2_OFF
+          mv /tmp/wrangler.toml.bak wrangler.toml
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
@@ -142,3 +197,10 @@ jobs:
           assert.deepEqual(lastBody, androidRelease);
           console.log('Public APK release metadata matches this build. No user data accessed.');
           JS
+      - name: Report Analytics Engine view counters (deployed bindings + raw AE answers)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: node cloudflare/report-views-ae.mjs

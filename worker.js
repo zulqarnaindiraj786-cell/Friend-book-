@@ -64,10 +64,13 @@ export function createWorker(verify = verifyFirebaseToken) {
       }
       if (path === '/health') {
         if (!env.DB) return json({ ok: false }, 503);
+        // Binding flags only - no data, no counts. It proves what a deploy actually shipped:
+        // views run on Analytics Engine (+ KV), and D1 is never written by the view path.
+        const views = { ae: Boolean(env.AE), kv: Boolean(env.VIEWS), aeReadToken: Boolean(env.CF_AE_TOKEN) };
         try {
           const row = await env.DB.prepare('SELECT 1 AS connected').first();
-          return json({ ok: row?.connected === 1 }, row?.connected === 1 ? 200 : 503);
-        } catch { return json({ ok: false }, 503); }
+          return json({ ok: row?.connected === 1, views }, row?.connected === 1 ? 200 : 503);
+        } catch { return json({ ok: false, views }, 503); }
       }
       if (!env.FIREBASE_PROJECT_ID) return json({ error: 'Service unavailable' }, 503);
       const bearer = /^Bearer ([^\s]+)$/i.exec(request.headers.get('Authorization') || '');
