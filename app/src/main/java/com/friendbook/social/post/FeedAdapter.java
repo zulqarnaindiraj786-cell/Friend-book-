@@ -259,53 +259,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    /**
+     * Sets the featured Reel pool for the Home Feed showcase card.
+     *
+     * The Home Feed performs ZERO view-counter work on purpose: no views request, no D1 read, no D1
+     * write, no KV read or write - not on load, not on scroll, not on re-bind. The card shows the
+     * Reel, its author and the watch prompt; it does not show a view number. Likes, comments, posts
+     * and Reel playback are untouched.
+     */
     public void setFeaturedReels(java.util.List<Models.Reel> reels) {
         if ((reels == null || reels.isEmpty()) && featuredReels.isEmpty()) return;
         featuredReels.clear();
         if (reels != null) featuredReels.addAll(reels);
-        refreshRealViewCounts();
         if (showHeader && !posts.isEmpty()) {
             notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
-        }
-    }
-
-    /**
-     * Reads the REAL view totals for the featured Reel pool from the Cloudflare Worker (`/v1/views`).
-     * Firebase is authentication only — no view counter is read from or written to Firestore. One
-     * batched request per collection, cached 60s inside `CloudflareViews`, callback on the main
-     * thread, and the card is re-bound only when a stored total actually differs.
-     */
-    private void refreshRealViewCounts() {
-        if (featuredReels.isEmpty()) return;
-        final java.util.Map<String, java.util.List<String>> byCollection = new java.util.HashMap<>();
-        for (Models.Reel r : featuredReels) {
-            if (r == null || r.id == null || r.id.isEmpty()) continue;
-            java.util.List<String> ids = byCollection.get(r.collectionName());
-            if (ids == null) {
-                ids = new ArrayList<>();
-                byCollection.put(r.collectionName(), ids);
-            }
-            ids.add(r.id);
-        }
-        for (java.util.Map.Entry<String, java.util.List<String>> entry : byCollection.entrySet()) {
-            final String collection = entry.getKey();
-            com.friendbook.social.core.CloudflareViews.fetchViews(collection, entry.getValue(), views -> {
-                if (views == null || views.isEmpty()) return;
-                boolean changed = false;
-                for (Models.Reel r : featuredReels) {
-                    if (r == null || r.id == null || !collection.equals(r.collectionName())) continue;
-                    Integer total = views.get(r.id);
-                    // Counts only grow: an id the Worker has not counted yet must never lower a
-                    // number the user already saw on screen.
-                    if (total != null && total.intValue() > r.views) {
-                        r.views = total.intValue();
-                        changed = true;
-                    }
-                }
-                if (changed && showHeader && !posts.isEmpty()) {
-                    notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
-                }
-            });
         }
     }
 
@@ -654,7 +621,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.firstPostPymkRow.addView(findCard, cp);
         }
 
-        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card (rotates viral & fresh Reels, 100% real views)
+        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card (rotates viral & fresh Reels; no view number, no counter read)
         final Models.Reel featured = pickFeaturedReel();
         String posterUrl = resolveFeaturedReelPosterUrl(featured);
         if (posterUrl != null && !posterUrl.isEmpty()) {
@@ -664,15 +631,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.firstPostReelThumbIv); } catch (Throwable ignored) {}
             vh.firstPostReelThumbIv.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
         }
-        int realViews = 0;
-        if (featured != null) {
-            // Cloudflare D1 holds the authoritative counter; the model value is only a fallback
-            // for a Reel whose total has not been read yet. Never a synthesized number.
-            Integer cloudViews = com.friendbook.social.core.CloudflareViews.cached(
-                    featured.collectionName(), featured.id);
-            realViews = Math.max(Math.max(0, featured.views), cloudViews != null ? cloudViews.intValue() : 0);
-        }
-        vh.firstPostReelViewsTv.setText(Format.count(realViews));
+        // No view number on the Home Feed card: showing one would need a counter read, and the Home
+        // Feed must cost nothing (no API call, no D1, no KV). The Reel still rotates to a fresh viral
+        // video - pickFeaturedReel() scores the stored model fields already in memory.
         if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
             vh.firstPostReelCaptionTv.setText(featured.authorName + "  ·  Watch Reels ›");
         } else {
@@ -1585,26 +1546,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("View post insights")) {
                 int rxCount = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 int cmCount = Math.max(p.comments, p.inlineComments != null ? p.inlineComments.size() : 0);
-                // 100% real counters only — never a fabricated/estimated reach number. The view
-                // counter is read from Cloudflare D1 (Worker /v1/views); Firebase is auth only.
-                com.friendbook.social.core.CloudflareViews.fetchViews(
-                        com.friendbook.social.core.CloudflareViews.POSTS,
-                        java.util.Collections.singletonList(p.id),
-                        cloudViews -> {
-                            Integer stored = cloudViews != null ? cloudViews.get(p.id) : null;
-                            int viewCount = Math.max(Math.max(0, p.views), stored != null ? stored.intValue() : 0);
-                            new android.app.AlertDialog.Builder(c)
-                                    .setTitle("Post Insights")
-                                    .setMessage("Views: " + Format.count(viewCount) + "\n\n"
-                                            + "Reactions: " + rxCount + "\n"
-                                            + "Comments: " + cmCount + "\n"
-                                            + "Shares: " + p.shares + "\n"
-                                            + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
-                                    .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
-                                    .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
-                                    .setNegativeButton("Close", null)
-                                    .show();
-                        });
+                // 100% real counters only - never a fabricated/estimated reach number, and no
+                // network call from the Home Feed: the views shown here are the post's own stored
+                // value, already in memory with the document.
+                int viewCount = Math.max(0, p.views);
+                new android.app.AlertDialog.Builder(c)
+                        .setTitle("Post Insights")
+                        .setMessage("Views: " + Format.count(viewCount) + "\n\n"
+                                + "Reactions: " + rxCount + "\n"
+                                + "Comments: " + cmCount + "\n"
+                                + "Shares: " + p.shares + "\n"
+                                + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
+                        .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
+                        .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
+                        .setNegativeButton("Close", null)
+                        .show();
             }
             else if (t.contains("View full profile picture")) {
                 Intent fullDp = new Intent(c, FullscreenMediaActivity.class);
@@ -2742,7 +2698,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         LinearLayout firstPostDiscoveryBox, firstPostPymkCard, firstPostPymkRow, firstPostReelCard;
         FrameLayout firstPostReelPreviewBox;
         ImageView firstPostReelThumbIv;
-        TextView firstPostReelViewsTv, firstPostReelCaptionTv;
+        TextView firstPostReelCaptionTv;
         String boundMyAvUrl;
         Models.Post boundPhotoPost;
         String boundPhotoUrl;
@@ -3108,16 +3064,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             int playSz = Ui.dp(c, 68);
             firstPostReelPreviewBox.addView(playCircle, new FrameLayout.LayoutParams(playSz, playSz, Gravity.CENTER));
 
-            // Bottom-left real view count badge + bottom-right watch prompt
+            // Bottom row: watch prompt only. The view-count chip is gone on purpose - the Home Feed
+            // shows no view number, so it never needs to read one.
             LinearLayout bottomMetaRow = Ui.row(c);
             bottomMetaRow.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(bottomMetaRow, 14, 10, 14, 12);
-            firstPostReelViewsTv = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                    c, "eye", "0", 14.5f, 0, 0xFFFFFFFF, 0xFFFFFFFF);
-            firstPostReelViewsTv.setTypeface(firstPostReelViewsTv.getTypeface(), android.graphics.Typeface.BOLD);
-            firstPostReelViewsTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
-            firstPostReelViewsTv.setPadding(0, 0, 0, 0);
-            bottomMetaRow.addView(firstPostReelViewsTv);
             bottomMetaRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
             firstPostReelCaptionTv = Ui.tvBold(c, "Tap to watch Reels ›", 12.5f, 0xEEFFFFFF);
             firstPostReelCaptionTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
