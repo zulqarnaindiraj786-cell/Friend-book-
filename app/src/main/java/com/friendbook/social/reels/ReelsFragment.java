@@ -81,7 +81,12 @@ public class ReelsFragment extends Fragment {
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
     private int videoGeneration;
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
-    private final java.util.Set<String> sessionViewedReelIds = new java.util.HashSet<>();
+    /**
+     * Real-view de-duplication: one counted view per Reel per app session. Static because the
+     * Reel ViewHolder is a static nested class, and a session outlives a single fragment instance.
+     */
+    private static final java.util.Set<String> sessionViewedReelIds =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private LinearLayout emptyState;
     private LinearLayout initialLoadingBox;
     private LinearLayout uploadStatusBanner;
