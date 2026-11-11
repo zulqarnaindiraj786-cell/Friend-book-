@@ -704,6 +704,7 @@ public final class TikTokReelStudioHelper {
         private int previewW = 1280;
         private int previewH = 720;
         private float currentZoom = 1.0f;
+        private boolean hwZoomActive = false;
         private float basePreviewScaleX = 1f;
         private float basePreviewScaleY = 1f;
         private ZoomChangeListener zoomListener;
@@ -737,42 +738,52 @@ public final class TikTokReelStudioHelper {
         }
 
         /**
-         * Smooth camera zoom (1.0x – 5.0x):
-         * 1. Uses the sensor's hardware zoom (`Camera.Parameters.setZoom`) when supported, so the
-         *    recorded video is really zoomed in — not just the on-screen preview.
-         * 2. Falls back to a smooth GPU TextureView scale for devices whose HAL has no zoom,
-         *    keeping 60 FPS with zero camera hang.
+         * Smooth camera zoom (1.0x – 5.0x) that works BEFORE and DURING recording:
+         * 1. Writes the zoom into the camera HAL (`setZoom` / `startSmoothZoom`) so the recorded
+         *    video file itself is really zoomed in — not just the on-screen preview.
+         * 2. Falls back to a smooth GPU TextureView scale only on devices whose HAL refuses the
+         *    write, keeping 60 FPS with zero camera hang.
          */
         public void setZoomFactor(float targetZoom) {
             float clamped = Math.max(1.0f, Math.min(5.0f, targetZoom));
             if (Math.abs(clamped - currentZoom) < 0.01f) return;
             currentZoom = clamped;
-
-            boolean hwZoomApplied = false;
-            if (camera != null && !isRecording) {
-                try {
-                    Camera.Parameters p = camera.getParameters();
-                    if (p != null && p.isZoomSupported()) {
-                        int maxZ = p.getMaxZoom();
-                        if (maxZ > 0) {
-                            float hwMax = Math.min(4.0f, p.isSmoothZoomSupported() ? 4.0f : 4.0f);
-                            int idx = Math.max(0, Math.min(maxZ,
-                                    Math.round(((currentZoom - 1.0f) / (hwMax - 1.0f)) * maxZ)));
-                            p.setZoom(idx);
-                            camera.setParameters(p);
-                            hwZoomApplied = true;
-                        }
-                    }
-                } catch (Throwable ignored) {}
-            }
-            // During recording the HAL cannot accept parameter changes on many devices, so the
-            // GPU preview scale keeps the zoom feeling instant and smooth; the recorded clip uses
-            // the hardware zoom that was already locked in before recording started.
-            float digitalExtra = hwZoomApplied ? 1.0f : currentZoom;
+            hwZoomActive = applyHardwareZoom();
             if (textureView != null) {
-                applyPreviewTransform(textureView.getWidth(), textureView.getHeight(), digitalExtra);
+                applyPreviewTransform(textureView.getWidth(), textureView.getHeight(),
+                        hwZoomActive ? 1.0f : currentZoom);
             }
             if (zoomListener != null) zoomListener.onZoomChanged(currentZoom);
+        }
+
+        /**
+         * Pushes the current zoom into the sensor. Zoom is one of the Camera1 parameters HALs
+         * accept while MediaRecorder is running (`startSmoothZoom` exists exactly for video), so
+         * this is attempted during recording too. Every HAL rejection is caught and reported as
+         * "not applied" so the caller can fall back to the GPU preview scale instead of hanging,
+         * crashing or silently recording an unzoomed clip.
+         */
+        private boolean applyHardwareZoom() {
+            if (camera == null) return false;
+            try {
+                Camera.Parameters p = camera.getParameters();
+                if (p == null || !p.isZoomSupported()) return false;
+                int maxZ = p.getMaxZoom();
+                if (maxZ <= 0) return false;
+                final float hwMax = 4.0f;
+                int idx = Math.max(0, Math.min(maxZ,
+                        Math.round(((currentZoom - 1.0f) / (hwMax - 1.0f)) * maxZ)));
+                if (currentZoom <= 1.01f) idx = 0;
+                if (isRecording && p.isSmoothZoomSupported()) {
+                    camera.startSmoothZoom(idx);
+                    return true;
+                }
+                p.setZoom(idx);
+                camera.setParameters(p);
+                return true;
+            } catch (Throwable ignored) {
+                return false;
+            }
         }
 
         public void startPreviewIfReady() {
@@ -786,6 +797,7 @@ public final class TikTokReelStudioHelper {
             isFront = !isFront;
             flashOn = false;
             currentZoom = 1.0f;
+            hwZoomActive = false;
             releaseCamera();
             startPreviewIfReady();
             if (zoomListener != null) zoomListener.onZoomChanged(1.0f);
@@ -868,15 +880,22 @@ public final class TikTokReelStudioHelper {
                 configureCenterCropTransform(viewW, viewH);
                 camera.setPreviewTexture(st);
                 camera.startPreview();
-                if (currentZoom > 1.01f) setZoomFactor(currentZoom);
+                if (currentZoom > 1.01f) {
+                    // setZoomFactor() early-returns on an unchanged value, so drive the HAL directly
+                    hwZoomActive = applyHardwareZoom();
+                    configureCenterCropTransform(viewW, viewH);
+                }
             } catch (Throwable ignored) {
                 releaseCamera();
             }
         }
 
-        /** Center-crop preview to the full-screen 9:16 stage, optionally with smooth digital zoom. */
+        /**
+         * Center-crop preview to the full-screen 9:16 stage. Digital zoom is only added when the
+         * HAL does not own the zoom, otherwise the preview would zoom twice.
+         */
         private void configureCenterCropTransform(int viewW, int viewH) {
-            applyPreviewTransform(viewW, viewH, currentZoom);
+            applyPreviewTransform(viewW, viewH, hwZoomActive ? 1f : currentZoom);
         }
 
         private void applyPreviewTransform(int viewW, int viewH, float extraZoom) {
@@ -944,6 +963,10 @@ public final class TikTokReelStudioHelper {
                 recorder.prepare();
                 recorder.start();
                 isRecording = true;
+                if (currentZoom > 1.01f) {
+                    // Lock the zoom into the capture pipeline for the whole clip
+                    hwZoomActive = applyHardwareZoom();
+                }
                 return true;
             } catch (Throwable t) {
                 releaseRecorder();
