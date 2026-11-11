@@ -180,6 +180,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # deploy attempt, the token's own scope answer, the KV namespace answer and the real GraphQL
         # field name of the dataset (discovered by introspection, never assumed).
         self.assertIn("/tmp/deploy-logs", report)
+        # The refusal wrangler prints is at the END of its output, so the log is clipped from the tail.
+        self.assertIn('const fenceTail = (text, max = 2500)', report)
+        self.assertIn('fenceTail(attempt.log)', report)
         self.assertIn('DEPLOY_ATTEMPT_USED', report)
         self.assertIn('/user/tokens/verify', report)
         self.assertIn('/storage/kv/namespaces', report)

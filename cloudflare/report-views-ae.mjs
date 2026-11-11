@@ -39,6 +39,15 @@ const clip = (value, max = 1200) => {
   return text.length > max ? `${text.slice(0, max)}\n... truncated ${text.length - max} chars` : text;
 };
 const fence = (text, max = 1200) => '```\n' + clip(text, max).replaceAll('```', "'''") + '\n```';
+/**
+ * Keeps the END of a deploy log, because that is where wrangler prints the refusal. Clipping the head
+ * instead published 2,000 characters of build output and cut the one line that mattered.
+ */
+const fenceTail = (text, max = 2500) => {
+  const body = typeof text === 'string' ? text : String(text);
+  const kept = body.length > max ? `... truncated ${body.length - max} leading chars\n${body.slice(-max)}` : body;
+  return '```\n' + kept.replaceAll('```', "'''") + '\n```';
+};
 const missingCredentials = () => (account && cfToken
   ? null
   : 'CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN unavailable to this step');
@@ -286,7 +295,7 @@ if (evidence.attempts.length === 0) {
 } else {
   for (const attempt of evidence.attempts) {
     const shipped = attempt.name === attemptUsed ? ' - SHIPPED' : ' - refused';
-    lines.push(`- **\`${attempt.name}\`**${shipped}`, fence(attempt.log, 2000), '');
+    lines.push(`- **\`${attempt.name}\`**${shipped}`, fenceTail(attempt.log), '');
   }
 }
 if (evidence.shippedBindings.length > 0) {
