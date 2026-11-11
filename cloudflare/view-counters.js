@@ -72,6 +72,13 @@ const AE_GRAPHQL_QUERY = `query ($tag: string!, $since: datetime!, $until: datet
 /** One KV write of the aggregate key at most every 5 minutes -> <= 288 writes/day per isolate. */
 const KV_FLUSH_MS = 300_000;
 const KV_KEY = 'views:live:v1';
+/**
+ * Snapshot fallback for an account where Workers KV could not be bound to the Worker: ONE small JSON
+ * object in the existing R2 bucket, under its own `views/` prefix. It never touches `videos/`, never
+ * deletes anything, and costs one Class A write per 5 minutes per isolate. Without some snapshot a
+ * fresh isolate would start from zero and the numbers users already saw would go backwards.
+ */
+const R2_SNAPSHOT_KEY = 'views/live/v1.json';
 /** Upper bound of the aggregate KV value; a bigger live set is served from AE + memory. */
 const KV_SNAPSHOT_LIMIT = 1000;
 /** Emergency, read-only D1 seed: only when KV and AE both have nothing. */
@@ -85,6 +92,7 @@ const state = {
   loaded: false,
   loading: null,
   kvUsable: false,
+  snapshotStore: null,    // 'kv' | 'r2' - which snapshot store this isolate could actually use
   aeUsable: false,
   aeVariant: null,        // the SQL/GraphQL shape that this account actually answers with
   lastAeRefreshAt: 0,
@@ -101,6 +109,7 @@ export function resetViewState() {
   state.loaded = false;
   state.loading = null;
   state.kvUsable = false;
+  state.snapshotStore = null;
   state.aeUsable = false;
   state.aeVariant = null;
   state.lastAeRefreshAt = 0;
@@ -122,6 +131,7 @@ export function viewCounterState() {
     aeUsable: state.aeUsable,
     aeVariant: state.aeVariant,
     kvUsable: state.kvUsable,
+    snapshotStore: state.snapshotStore,
     seedReads: state.seedReads,
     counted: state.counted.size,
   };
@@ -133,9 +143,15 @@ function validId(value) {
     && !/[\/,\x00-\x1f]/.test(value) && !['.', '..'].includes(value);
 }
 
-/** `memory` -> `kv+memory` -> `ae+kv+memory`, whatever this isolate can actually use. */
-const storageMode = () => [state.aeUsable ? 'ae' : null, state.kvUsable ? 'kv' : null, 'memory']
-  .filter(Boolean).join('+');
+/** `memory` -> `r2+memory` -> `kv+memory` -> `ae+kv+memory`: whatever this isolate really used. */
+const storageMode = () => [
+  state.aeUsable ? 'ae' : null,
+  state.kvUsable ? (state.snapshotStore === 'r2' ? 'r2' : 'kv') : null,
+  'memory',
+].filter(Boolean).join('+');
+
+/** Which snapshot store exists on this deployment: Workers KV first, the R2 object as a fallback. */
+const snapshotStore = (env) => (env?.VIEWS ? 'kv' : (env?.VIDEO_BUCKET ? 'r2' : null));
 
 /**
  * Keeps the dedupe cache bounded. It is only a cache: an evicted pair can add one extra view to the
@@ -345,13 +361,22 @@ function snapshotValue(resource) {
 }
 
 async function flushKv(env, now = Date.now(), force = false) {
-  if (!env?.VIEWS) return false;
+  if (!snapshotStore(env)) return false;
   if (!force && now - state.lastKvFlushAt < KV_FLUSH_MS) return false;
   try {
     const snapshot = {};
     const ranked = [...state.totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, KV_SNAPSHOT_LIMIT);
     for (const [resource] of ranked) snapshot[resource] = snapshotValue(resource);
-    await env.VIEWS.put(KV_KEY, JSON.stringify(snapshot));
+    if (snapshotStore(env) === 'kv') {
+      await env.VIEWS.put(KV_KEY, JSON.stringify(snapshot));
+      state.snapshotStore = 'kv';
+    } else {
+      // One small counters object under `views/`; the bucket keeps videos forever and this never
+      // reads, overwrites or deletes a video key.
+      await env.VIDEO_BUCKET.put(R2_SNAPSHOT_KEY, JSON.stringify(snapshot),
+        { httpMetadata: { contentType: 'application/json' } });
+      state.snapshotStore = 'r2';
+    }
     state.lastKvFlushAt = now;
     state.kvUsable = true;
     return true;
@@ -372,7 +397,7 @@ async function maybeFlush(env, resource, now, ctx) {
   const tasks = [];
   if (env?.AE && env?.CF_AE_TOKEN && now - state.lastAeRefreshAt >= AE_REFRESH_MS) {
     tasks.push(refreshFromAe(env, now));
-  } else if (env?.VIEWS && now - state.lastKvFlushAt >= KV_FLUSH_MS) {
+  } else if (snapshotStore(env) && now - state.lastKvFlushAt >= KV_FLUSH_MS) {
     tasks.push(flushKv(env, now));
   }
   if (tasks.length === 0) return;
@@ -389,16 +414,24 @@ async function ensureLoaded(env, nowMs = Date.now) {
   if (!state.loading) {
     state.loading = (async () => {
       const seededAt = Number(nowMs()) || Date.now();
-      if (env?.VIEWS) {
+      const store = snapshotStore(env);
+      if (store) {
         try {
-          const stored = await env.VIEWS.get(KV_KEY, { type: 'json', cacheTtl: 60 });
+          let stored = null;
+          if (store === 'kv') {
+            stored = await env.VIEWS.get(KV_KEY, { type: 'json', cacheTtl: 60 });
+          } else {
+            const object = await env.VIDEO_BUCKET.get(R2_SNAPSHOT_KEY);
+            stored = object ? JSON.parse(await object.text()) : null;
+          }
           if (stored && typeof stored === 'object') {
             for (const [resource, total] of Object.entries(stored)) {
               if (typeof resource !== 'string') continue;
               absorb(resource, total);
             }
             state.kvUsable = true;
-            // The snapshot was just read: start the KV write window here, so a busy isolate does not
+            state.snapshotStore = store;
+            // The snapshot was just read: start the write window here, so a busy isolate does not
             // rewrite the very value it just loaded.
             state.lastKvFlushAt = seededAt;
           }
@@ -422,7 +455,7 @@ async function ensureLoaded(env, nowMs = Date.now) {
           state.seedReads += 1;
           rebuildTotals(seeded);
         } catch { /* no D1 here: AE + KV + memory still count real views */ }
-        if (env?.VIEWS) await flushKv(env, seededAt, true);
+        if (snapshotStore(env)) await flushKv(env, seededAt, true);
       }
       state.loaded = true;
     })();

@@ -23,13 +23,19 @@ const T0 = 1_700_000_000_000;
  * statement and every AE event is recorded, and the AE query API is stubbed so a test decides what
  * Analytics Engine answers with - SQL TSV, GraphQL JSON, an error, or nothing at all.
  */
-function fixture({ withKv = true, kvSeed = null, withAe = true, aeToken = true, sql = null, graphql = null } = {}) {
+function fixture({
+  withKv = true, kvSeed = null, withR2 = false, r2Seed = null,
+  withAe = true, aeToken = true, sql = null, graphql = null,
+} = {}) {
   const d1 = new DatabaseSync(':memory:');
   const queries = { selects: 0, writes: 0 };
   const seenSql = [];
   const store = new Map();
   if (kvSeed) store.set('views:live:v1', JSON.stringify(kvSeed));
   const kv = { reads: 0, writes: 0 };
+  const r2Objects = new Map();
+  const r2 = { reads: 0, writes: 0, keys: [] };
+  if (r2Seed) r2Objects.set('views/live/v1.json', JSON.stringify(r2Seed));
   const ae = { events: [], sqlCalls: [], graphqlCalls: [] };
   const fetches = [];
 
@@ -79,6 +85,29 @@ function fixture({ withKv = true, kvSeed = null, withAe = true, aeToken = true, 
     };
   }
 
+  // The existing R2 bucket, used ONLY as the view snapshot when Workers KV is not bound. It has no
+  // delete method at all, and any key outside `views/` throws, so a test cannot pass by touching a
+  // video object.
+  if (withR2) {
+    env.VIDEO_BUCKET = {
+      async get(key) {
+        await null;
+        r2.reads += 1;
+        r2.keys.push(`get ${key}`);
+        const value = r2Objects.get(key);
+        return value === undefined ? null : { key, async text() { return value; } };
+      },
+      async put(key, value) {
+        await null;
+        r2.writes += 1;
+        r2.keys.push(`put ${key}`);
+        if (!key.startsWith('views/')) throw new Error(`the view snapshot must never touch ${key}`);
+        r2Objects.set(key, value);
+        return { etag: 'test-etag' };
+      },
+    };
+  }
+
   // The AE query API: `sql`/`graphql` may be a string body, { status, body }, null (refuse), or a
   // function of the call index, so a test can fail first and succeed on a later variant.
   const answer = (spec, callIndex) => {
@@ -108,7 +137,7 @@ function fixture({ withKv = true, kvSeed = null, withAe = true, aeToken = true, 
   };
 
   return {
-    env, d1, queries, seenSql, store, kv, ae, fetches,
+    env, d1, queries, seenSql, store, kv, r2, r2Objects, ae, fetches,
     close: () => { globalThis.fetch = realFetch; d1.close(); },
   };
 }
@@ -412,13 +441,63 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
 
   const health = await fetchWith('/health', 'GET', null);
   assert.equal(health.status, 200);
-  assert.deepEqual(health.body.views, { ae: true, kv: true, aeReadToken: true },
+  assert.deepEqual(health.body.views, { ae: true, kv: true, r2Snapshot: false, aeReadToken: true },
     '/health proves which view bindings a deploy actually shipped');
   assert.equal(f.queries.writes, 0);
 
   resetViewState();
   assert.equal((await fetchWith('/v1/views/reels/r1', 'POST', null)).status, 401, 'no token, no view');
   assert.equal(f.ae.events.length, 2, 'an unauthenticated request recorded nothing new');
+});
+
+test('when Workers KV is not bound, the R2 snapshot keeps the counts across isolates', async t => {
+  resetViewState();
+  const f = fixture({ withKv: false, withR2: true, r2Seed: { 'reels/r1': 30 }, withAe: false, aeToken: false });
+  t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  const first = await call(f.env, { method: 'POST', uid: 'user1' }, now);
+  assert.equal(first.body.counted, true);
+  assert.equal(first.body.views, 31, 'the snapshot supplied the history, memory supplied the new view');
+  assert.equal(first.body.storage, 'r2+memory');
+  assert.equal(first.body.event, 'none', 'no AE binding, so no event - and nothing invented');
+
+  clock += KV_WINDOW;
+  const second = await call(f.env, { method: 'POST', uid: 'user2' }, now);
+  assert.equal(second.body.views, 32);
+  assert.deepEqual(JSON.parse(f.r2Objects.get('views/live/v1.json')), { 'reels/r1': 32 },
+    'the live total is written back to the snapshot object');
+  assert.equal(f.r2.writes, 1, 'one snapshot write per 5 minute window');
+  assert.ok(f.r2.keys.every((key) => !key.includes('videos/')), 'no video key was ever touched');
+  assert.equal(typeof f.env.VIDEO_BUCKET.delete, 'undefined', 'the snapshot store cannot delete anything');
+
+  resetViewState(); // a cold isolate, exactly what a real Worker restart looks like
+  const afterRestart = await call(f.env, {}, () => clock + 1000);
+  assert.equal(afterRestart.body.views, 32, 'the count survived the isolate, it never went backwards');
+  assert.equal(viewCounterState().snapshotStore, 'r2');
+  assert.equal(f.queries.writes, 0, 'D1 is never written in any mode');
+  assert.equal(f.queries.selects, 0, 'and the snapshot meant no D1 seed read either');
+});
+
+test('Analytics Engine stays the truth over the R2 snapshot', async t => {
+  resetViewState();
+  const f = fixture({ withKv: false, withR2: true, r2Seed: { 'reels/r1': 5 }, sql: tsv([['reels/r1', 50]]) });
+  t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  const served = await call(f.env, {}, now);
+  assert.equal(served.body.views, 50, 'uniq(uid) from Analytics Engine wins over an older snapshot');
+  assert.equal(served.body.storage, 'ae+r2+memory');
+  assert.equal(viewCounterState().snapshotStore, 'r2');
+
+  clock = T0 + KV_WINDOW + 1000;
+  await call(f.env, { method: 'POST', uid: 'user9' }, () => clock);
+  const snapshot = JSON.parse(f.r2Objects.get('views/live/v1.json'));
+  assert.equal(snapshot['reels/r1'], 50,
+    'with AE answering, the snapshot stores the de-duplicated truth, not this isolate\'s bridge');
+  assert.equal(f.queries.writes, 0);
 });
 
 function readMigration(name) {
