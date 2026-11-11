@@ -28,7 +28,7 @@ const json = (body, status = 200) => Response.json(body, {
 });
 export function createWorker(verify = verifyFirebaseToken) {
   return {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
       const path = new URL(request.url).pathname;
       // API namespaces must never fall through to HTML, even for unknown endpoints.
       const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/');
@@ -78,7 +78,9 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
-      if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url));
+      // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
+      // KV aggregate write happen after the response is already sent.
+      if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
       try {
