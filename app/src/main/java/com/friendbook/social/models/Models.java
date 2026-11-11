@@ -499,7 +499,7 @@ public class Models {
 
     public static class Reel {
         public String id, authorId, authorName, authorPhoto, videoUrl, thumbUrl, caption;
-        public int likes, comments, shares, durationSec;
+        public int likes, comments, shares, favorites, durationSec;
         public long createdAt;
         public boolean isFromPost; // true when sourced from posts (mediaType == "video")
         public String overlayText = "";
@@ -513,6 +513,8 @@ public class Models {
         public float playbackSpeed = 1.0f;
         public boolean muteOriginalAudio = false;
         public String audioTitle = "";
+        public String audioUrl = "";
+        public String soundAuthorPhoto = "";
         public int trimStartMs = 0, trimEndMs = 0;
         public List<String> likedBy = new ArrayList<>();
         public List<String> savedBy = new ArrayList<>();
@@ -539,10 +541,12 @@ public class Models {
             r.likes = Format.intOf(m, "likes");
             r.comments = Format.intOf(m, "comments");
             r.shares = Format.intOf(m, "shares");
+            r.favorites = Format.intOf(m, "favorites");
             r.durationSec = Format.intOf(m, "durationSec");
             r.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             r.likedBy = Format.listOf(m, "likedBy");
             r.savedBy = Format.listOf(m, "savedBy");
+            if (r.savedBy.size() > r.favorites) r.favorites = r.savedBy.size();
             Object rx = m == null ? null : m.get("reactions");
             if (rx instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) rx).entrySet()) {
@@ -592,6 +596,8 @@ public class Models {
                 }
                 r.muteOriginalAudio = Boolean.TRUE.equals(m.get("muteOriginalAudio"));
                 r.audioTitle = Format.str(m, "audioTitle");
+                r.audioUrl = Format.str(m, "audioUrl");
+                r.soundAuthorPhoto = Format.str(m, "soundAuthorPhoto");
                 r.trimStartMs = Format.intOf(m, "trimStartMs");
                 r.trimEndMs = Format.intOf(m, "trimEndMs");
             }
@@ -612,6 +618,7 @@ public class Models {
             r.shares = p.shares;
             r.createdAt = p.createdAt;
             r.savedBy = p.savedBy != null ? new ArrayList<>(p.savedBy) : new ArrayList<>();
+            r.favorites = r.savedBy.size();
             r.inlineComments = p.inlineComments != null ? new ArrayList<>(p.inlineComments) : new ArrayList<>();
             if (p.reactionsMap != null) {
                 for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {

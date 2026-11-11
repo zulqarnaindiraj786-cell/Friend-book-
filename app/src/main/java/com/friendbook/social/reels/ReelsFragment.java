@@ -1396,15 +1396,16 @@ public class ReelsFragment extends Fragment {
             final ProgressBar bufferingSpinner;
             final ProgressBar scrubBar;
             final TextView pausedBadge;
-            final FrameLayout uploadRailBtnBox, likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
-            final ImageView likeOutlineIv;
-            final TextView likeIcon, likeCount, commentIcon, commentCount, shareIcon, shareCount;
-            final TextView saveIcon, soundIcon, heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
+            final FrameLayout likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
+            final ImageView likeOutlineIv, saveIconIv, shareIconIv, soundDiscAvatarIv;
+            final TextView likeIcon, likeCount, commentIcon, commentCount, saveCount, shareCount;
+            final TextView heartBurst, nameT, captionT, audioT, followT, quickCommentPill;
             final ImageView avatar, tick;
             final View filterTintView;
             final TextView overlayTextPill, overlayStickerTv;
 
             MediaPlayer activeMp;
+            MediaPlayer externalAudioMp;
             Surface videoSurface;
             boolean mpPrepared = false;
             boolean wantPlay = false;
@@ -1414,6 +1415,7 @@ public class ReelsFragment extends Fragment {
             String boundVideoUrl = "";
             boolean muted;
             float speed = 1.0f;
+            float soundDiscRotation = 0f;
             Models.Reel reel;
 
             private final Handler uiHandler = new Handler(Looper.getMainLooper());
@@ -1431,6 +1433,8 @@ public class ReelsFragment extends Fragment {
                             if (dur > 0) {
                                 scrubBar.setProgress((int) ((pos * 1000L) / dur));
                             }
+                            soundDiscRotation = (soundDiscRotation + 5.5f) % 360f;
+                            if (soundBtnBox != null) soundBtnBox.setRotation(soundDiscRotation);
                         } catch (Throwable ignored) { }
                         uiHandler.postDelayed(this, 120L);
                     }
@@ -1491,25 +1495,13 @@ public class ReelsFragment extends Fragment {
                 heartBurst.setElevation(Ui.dp(a, 30));
                 root.addView(heartBurst, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-                // Right-Side Action Rail (Upload · Like · Comment · Share · Save · Sound · •••)
+                // Right-Side TikTok Action Rail (Like · Comment · Favorite + Count · Share + Count · ••• · Spinning Sound Disc)
                 LinearLayout rail = Ui.col(a);
                 rail.setGravity(Gravity.CENTER_HORIZONTAL);
                 rail.setElevation(Ui.dp(a, 24));
                 FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-                rp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 58));
+                rp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 54));
                 rail.setLayoutParams(rp);
-
-                // Dedicated eye-catching "＋ Upload" circle button right on the thumb rail!
-                TextView upPlus = Ui.tvBold(a, "＋", 23, Color.WHITE);
-                upPlus.setGravity(Gravity.CENTER);
-                uploadRailBtnBox = new FrameLayout(a);
-                uploadRailBtnBox.setBackground(Ui.roundStroke(a, 0xFFE41E3F, 22, Color.WHITE, 1));
-                int upSz = Ui.dp(a, 44);
-                uploadRailBtnBox.setLayoutParams(new LinearLayout.LayoutParams(upSz, upSz));
-                uploadRailBtnBox.addView(upPlus, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-                uploadRailBtnBox.setOnClickListener(v -> a.startActivity(new Intent(a, AddReelActivity.class)));
-                TextView uploadRailLabel = shadowLabel(a, "Upload");
-                uploadRailLabel.setOnClickListener(v -> a.startActivity(new Intent(a, AddReelActivity.class)));
 
                 likeOutlineIv = new ImageView(a);
                 likeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
@@ -1531,40 +1523,59 @@ public class ReelsFragment extends Fragment {
                 commentBtnBox = circleAction(a, commentIcon);
                 commentCount = shadowLabel(a, "Comment");
 
-                shareIcon = Ui.tvBold(a, "↗", 22, Color.WHITE);
-                shareIcon.setGravity(Gravity.CENTER);
-                shareBtnBox = circleAction(a, shareIcon);
+                // TikTok-Style Ribbon Bookmark (Favorite) Icon + Favorite Count
+                saveIconIv = new ImageView(a);
+                saveIconIv.setImageResource(com.friendbook.social.R.drawable.ic_tiktok_bookmark_filled);
+                saveIconIv.setColorFilter(Color.WHITE);
+                saveBtnBox = new FrameLayout(a);
+                saveBtnBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
+                saveBtnBox.setLayoutParams(new LinearLayout.LayoutParams(lkSz, lkSz));
+                int bmSz = Ui.dp(a, 23);
+                saveBtnBox.addView(saveIconIv, new FrameLayout.LayoutParams(bmSz, bmSz, Gravity.CENTER));
+                saveCount = shadowLabel(a, "0");
+
+                // TikTok-Style Curved Share Arrow Icon + Share Count
+                shareIconIv = new ImageView(a);
+                shareIconIv.setImageResource(com.friendbook.social.R.drawable.ic_tiktok_share_filled);
+                shareIconIv.setColorFilter(Color.WHITE);
+                shareBtnBox = new FrameLayout(a);
+                shareBtnBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
+                shareBtnBox.setLayoutParams(new LinearLayout.LayoutParams(lkSz, lkSz));
+                int shSz = Ui.dp(a, 23);
+                shareBtnBox.addView(shareIconIv, new FrameLayout.LayoutParams(shSz, shSz, Gravity.CENTER));
                 shareCount = shadowLabel(a, "Share");
-
-                saveIcon = Ui.tv(a, "🔖", 19, Color.WHITE);
-                saveIcon.setGravity(Gravity.CENTER);
-                saveBtnBox = circleAction(a, saveIcon);
-
-                soundIcon = Ui.tv(a, muted ? "🔇" : "🔊", 19, Color.WHITE);
-                soundIcon.setGravity(Gravity.CENTER);
-                soundBtnBox = circleAction(a, soundIcon);
 
                 TextView moreIcon = Ui.tvBold(a, "•••", 16, Color.WHITE);
                 moreIcon.setGravity(Gravity.CENTER);
                 moreBtnBox = circleAction(a, moreIcon);
 
-                rail.addView(uploadRailBtnBox);
-                rail.addView(uploadRailLabel);
-                rail.addView(spacer(a, 10));
+                // TikTok-Style Spinning Vinyl Sound Disc at bottom of right rail (tap to use this sound in your own video!)
+                soundBtnBox = new FrameLayout(a);
+                soundBtnBox.setBackground(Ui.roundStroke(a, 0xFF161823, 24, 0xFF3E4042, 7));
+                int discSz = Ui.dp(a, 46);
+                soundBtnBox.setLayoutParams(new LinearLayout.LayoutParams(discSz, discSz));
+                soundDiscAvatarIv = new ImageView(a);
+                int innerAvSz = Ui.dp(a, 26);
+                soundBtnBox.addView(soundDiscAvatarIv, new FrameLayout.LayoutParams(innerAvSz, innerAvSz, Gravity.CENTER));
+                TextView musicBadge = Ui.tvBold(a, "♫", 10f, 0xFF25F4EE);
+                musicBadge.setShadowLayer(3f, 0f, 1f, 0xFF000000);
+                soundBtnBox.addView(musicBadge, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END));
+
                 rail.addView(likeBtnBox);
                 rail.addView(likeCount);
                 rail.addView(spacer(a, 10));
                 rail.addView(commentBtnBox);
                 rail.addView(commentCount);
                 rail.addView(spacer(a, 10));
+                rail.addView(saveBtnBox);
+                rail.addView(saveCount);
+                rail.addView(spacer(a, 10));
                 rail.addView(shareBtnBox);
                 rail.addView(shareCount);
-                rail.addView(spacer(a, 10));
-                rail.addView(saveBtnBox);
-                rail.addView(spacer(a, 8));
-                rail.addView(soundBtnBox);
                 rail.addView(spacer(a, 8));
                 rail.addView(moreBtnBox);
+                rail.addView(spacer(a, 10));
+                rail.addView(soundBtnBox);
                 root.addView(rail);
 
                 // Bottom Creator Info + Quick "Add a comment…" + Ultra-Thin Playback Scrub Bar
@@ -1724,15 +1735,13 @@ public class ReelsFragment extends Fragment {
                 shareBtnBox.setOnClickListener(openShareListener);
                 shareCount.setOnClickListener(openShareListener);
 
-                saveBtnBox.setOnClickListener(v -> toggleSaveReel(a));
+                View.OnClickListener toggleFavoriteListener = v -> toggleSaveReel(a);
+                saveBtnBox.setOnClickListener(toggleFavoriteListener);
+                saveCount.setOnClickListener(toggleFavoriteListener);
 
-                soundBtnBox.setOnClickListener(v -> {
-                    muted = !muted;
-                    soundIcon.setText(muted ? "🔇" : "🔊");
-                    if (activeMp != null) {
-                        try { activeMp.setVolume(muted ? 0f : 1f, muted ? 0f : 1f); } catch (Throwable ignored) {}
-                    }
-                });
+                View.OnClickListener openSoundSheetListener = v -> openTikTokSoundSheet(a);
+                soundBtnBox.setOnClickListener(openSoundSheetListener);
+                audioT.setOnClickListener(openSoundSheetListener);
 
                 moreBtnBox.setOnClickListener(v -> showMoreMenu(a, v));
 
@@ -1808,8 +1817,11 @@ public class ReelsFragment extends Fragment {
 
                 String customAudio = (reel.audioTitle != null && !reel.audioTitle.trim().isEmpty())
                         ? reel.audioTitle.trim()
-                        : ("Original audio · " + (reel.authorName == null ? "friendbook" : reel.authorName));
-                audioT.setText("♫ " + customAudio);
+                        : ("Original sound - " + (reel.authorName == null ? "friendbook" : reel.authorName));
+                audioT.setText("♫ " + customAudio + "   ·   Use sound ›");
+                String discPhoto = (reel.soundAuthorPhoto != null && !reel.soundAuthorPhoto.trim().isEmpty())
+                        ? reel.soundAuthorPhoto.trim() : reel.authorPhoto;
+                Ui.avatar(c, soundDiscAvatarIv, discPhoto);
 
                 // Render creator Filter Tint, Text Overlay, and Sticker Overlay
                 if (reel.filterOverlayColor != 0) {
@@ -1867,9 +1879,11 @@ public class ReelsFragment extends Fragment {
                 } else {
                     this.speed = 1.0f;
                 }
-                if (reel.muteOriginalAudio) {
+                boolean hasAttachedSound = reel.audioUrl != null && !reel.audioUrl.trim().isEmpty();
+                if (reel.muteOriginalAudio && !hasAttachedSound) {
                     this.muted = true;
-                    soundIcon.setText("🔇");
+                } else {
+                    this.muted = !Prefs.reelsStartWithSound(c);
                 }
 
                 String me = Fb.uid();
@@ -2087,9 +2101,13 @@ public class ReelsFragment extends Fragment {
             private void startPreparedPlayer() {
                 if (!wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || activeMp == null || !mpPrepared) return;
                 try {
-                    float vol = muted ? 0f : 1f;
+                    boolean hasAttachedSound = reel != null && reel.audioUrl != null && !reel.audioUrl.trim().isEmpty();
+                    float vol = (muted || hasAttachedSound) ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
                     if (!activeMp.isPlaying()) activeMp.start();
+                    if (hasAttachedSound && !muted) {
+                        ensureExternalSoundPlaying(itemView.getContext(), reel.audioUrl.trim());
+                    }
                     pausedBadge.setVisibility(View.GONE);
                     // Safety hide poster 90ms after start on devices that omit MEDIA_INFO_VIDEO_RENDERING_START
                     uiHandler.postDelayed(() -> {
@@ -2105,12 +2123,42 @@ public class ReelsFragment extends Fragment {
                 } catch (Throwable ignored) { }
             }
 
+            private void ensureExternalSoundPlaying(Context ctx, final String soundUrl) {
+                if (soundUrl == null || soundUrl.isEmpty()) return;
+                try {
+                    if (externalAudioMp != null) {
+                        if (!externalAudioMp.isPlaying()) externalAudioMp.start();
+                        return;
+                    }
+                    final MediaPlayer emp = new MediaPlayer();
+                    externalAudioMp = emp;
+                    emp.setLooping(true);
+                    File cached = ReelVideoCache.getCachedFile(ctx, soundUrl);
+                    if (cached != null) {
+                        try (FileInputStream fis = new FileInputStream(cached)) {
+                            emp.setDataSource(fis.getFD());
+                        }
+                    } else {
+                        emp.setDataSource(ctx, Uri.parse(soundUrl));
+                    }
+                    emp.setOnPreparedListener(player -> {
+                        if (player == externalAudioMp && wantPlay && !userPaused && !muted) {
+                            try { player.start(); } catch (Throwable ignored) {}
+                        }
+                    });
+                    emp.prepareAsync();
+                } catch (Throwable ignored) { }
+            }
+
             private void togglePlayPause() {
                 if (activeMp == null || !mpPrepared) { play(); return; }
                 try {
                     if (activeMp.isPlaying()) {
                         userPaused = true;
                         activeMp.pause();
+                        if (externalAudioMp != null && externalAudioMp.isPlaying()) {
+                            try { externalAudioMp.pause(); } catch (Throwable ignored) {}
+                        }
                         pausedBadge.setVisibility(View.VISIBLE);
                         uiHandler.removeCallbacks(progressTicker);
                     } else {
@@ -2148,11 +2196,24 @@ public class ReelsFragment extends Fragment {
                         if (activeMp.isPlaying()) activeMp.pause();
                     } catch (Throwable ignored) { }
                 }
+                if (externalAudioMp != null) {
+                    try {
+                        if (externalAudioMp.isPlaying()) externalAudioMp.pause();
+                    } catch (Throwable ignored) { }
+                }
             }
 
             private void releasePlayerOnly() {
                 uiHandler.removeCallbacks(progressTicker);
                 mpPrepared = false;
+                if (externalAudioMp != null) {
+                    final MediaPlayer toReleaseAudio = externalAudioMp;
+                    externalAudioMp = null;
+                    new Thread(() -> {
+                        try { toReleaseAudio.reset(); } catch (Throwable ignored) {}
+                        try { toReleaseAudio.release(); } catch (Throwable ignored) {}
+                    }, "reel-ext-audio-release").start();
+                }
                 if (activeMp != null) {
                     final MediaPlayer toRelease = activeMp;
                     activeMp = null;
@@ -2253,9 +2314,13 @@ public class ReelsFragment extends Fragment {
                 shareCount.setText(reel.shares > 0 ? Format.count(reel.shares) : "Share");
 
                 boolean saved = me != null && reel.savedBy != null && reel.savedBy.contains(me);
+                int favCount = Math.max(reel.favorites, reel.savedBy != null ? reel.savedBy.size() : 0);
+                if (saved && favCount < 1) favCount = 1;
+                saveCount.setText(Format.count(favCount));
+                saveIconIv.setColorFilter(saved ? 0xFFFACE15 : Color.WHITE);
                 saveBtnBox.setBackground(Ui.roundStroke(c,
-                        saved ? 0x881877F2 : 0x66000000, 22,
-                        saved ? 0xFF1877F2 : 0x33FFFFFF, 1));
+                        saved ? 0x55FACE15 : 0x66000000, 22,
+                        saved ? 0xFFFACE15 : 0x33FFFFFF, 1));
             }
 
             private void animateHeartBurst() {
@@ -2395,18 +2460,101 @@ public class ReelsFragment extends Fragment {
                 String me = Fb.uid();
                 if (reel == null || me == null) return;
                 if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
-                boolean already = reel.savedBy != null && reel.savedBy.contains(me);
-                if (already) reel.savedBy.remove(me);
-                else reel.savedBy.add(me);
+                Ui.haptic(saveBtnBox);
+                if (reel.savedBy == null) reel.savedBy = new ArrayList<>();
+                boolean already = reel.savedBy.contains(me);
+                if (already) {
+                    reel.savedBy.remove(me);
+                    if (reel.favorites > 0) reel.favorites--;
+                } else {
+                    reel.savedBy.add(me);
+                    reel.favorites++;
+                }
+                reel.favorites = Math.max(reel.savedBy.size(), Math.max(0, reel.favorites));
                 renderCounts();
+                saveBtnBox.animate().scaleX(1.25f).scaleY(1.25f).setDuration(110).withEndAction(() ->
+                        saveBtnBox.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                ).start();
+                Map<String, Object> favUp = new HashMap<>();
+                favUp.put("savedBy", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                favUp.put("favorites", reel.favorites);
                 Fb.db().collection(reel.collectionName()).document(reel.id)
-                        .set(Fb.map("savedBy", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)), SetOptions.merge());
+                        .set(favUp, SetOptions.merge());
                 Fb.db().collection("users").document(me)
                         .set(Fb.map("savedReelIds", already ? FieldValue.arrayRemove(reel.id) : FieldValue.arrayUnion(reel.id)), SetOptions.merge());
                 if (!already) {
                     FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
                 }
-                Ui.toast(a, already ? "Removed from Saved Reels" : "Saved Reel 🔖");
+                Ui.toast(a, already ? "Removed from Favorites" : "Added to Favorites ⭐");
+            }
+
+            /**
+             * 🎵 TikTok-Style Sound Sheet:
+             * Shows the spinning sound disc cover, sound title & creator, live sound preview,
+             * and "🎬 Use this sound" so any user can tap it and record/upload their own video with this sound!
+             */
+            private void openTikTokSoundSheet(Activity a) {
+                if (reel == null || a == null) return;
+                final String soundTitle = (reel.audioTitle != null && !reel.audioTitle.trim().isEmpty())
+                        ? reel.audioTitle.trim()
+                        : ("Original sound - " + (reel.authorName == null ? "friendbook" : reel.authorName));
+                final String soundUrl = (reel.audioUrl != null && !reel.audioUrl.trim().isEmpty())
+                        ? reel.audioUrl.trim()
+                        : (reel.videoUrl != null ? reel.videoUrl.trim() : "");
+                final String soundPhoto = (reel.soundAuthorPhoto != null && !reel.soundAuthorPhoto.trim().isEmpty())
+                        ? reel.soundAuthorPhoto.trim()
+                        : (reel.authorPhoto != null ? reel.authorPhoto : "");
+
+                LinearLayout sheet = Ui.col(a);
+                Ui.pad(sheet, 20, 18, 20, 14);
+
+                LinearLayout topRow = Ui.row(a);
+                topRow.setGravity(Gravity.CENTER_VERTICAL);
+                FrameLayout discWrap = new FrameLayout(a);
+                discWrap.setBackground(Ui.roundStroke(a, 0xFF161823, 34, 0xFF3E4042, 9));
+                int dSz = Ui.dp(a, 68);
+                ImageView coverIv = new ImageView(a);
+                Ui.avatar(a, coverIv, soundPhoto);
+                int cSz = Ui.dp(a, 40);
+                discWrap.addView(coverIv, new FrameLayout.LayoutParams(cSz, cSz, Gravity.CENTER));
+                topRow.addView(discWrap, new LinearLayout.LayoutParams(dSz, dSz));
+
+                LinearLayout metaCol = Ui.col(a);
+                metaCol.setPadding(Ui.dp(a, 14), 0, 0, 0);
+                TextView titleTv = Ui.tvBold(a, "♫ " + soundTitle, 16f, Ui.txt(a));
+                metaCol.addView(titleTv);
+                TextView creatorTv = Ui.tv(a, "Creator: @" + (reel.authorName == null ? "user" : reel.authorName), 13f, Ui.sub(a));
+                creatorTv.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 4));
+                metaCol.addView(creatorTv);
+                TextView hintTv = Ui.tvBold(a, "✨ Tap 'Use this sound' to add this sound to your video", 12f, Ui.BLUE);
+                metaCol.addView(hintTv);
+                topRow.addView(metaCol, new LinearLayout.LayoutParams(0, -2, 1f));
+                sheet.addView(topRow);
+
+                TextView useSoundBtn = Ui.tvBold(a, "🎬  Use this sound", 15f, Color.WHITE);
+                useSoundBtn.setGravity(Gravity.CENTER);
+                useSoundBtn.setBackground(Ui.round(a, 0xFFFE2C55, 24));
+                Ui.pad(useSoundBtn, 20, 13, 20, 13);
+                LinearLayout.LayoutParams ublp = new LinearLayout.LayoutParams(-1, -2);
+                ublp.topMargin = Ui.dp(a, 18);
+                sheet.addView(useSoundBtn, ublp);
+
+                final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(a)
+                        .setView(sheet)
+                        .setNegativeButton("Close", null)
+                        .create();
+
+                useSoundBtn.setOnClickListener(v -> {
+                    dlg.dismiss();
+                    pause();
+                    Intent i = new Intent(a, AddReelActivity.class);
+                    i.putExtra("use_sound_url", soundUrl);
+                    i.putExtra("use_sound_title", soundTitle);
+                    i.putExtra("use_sound_author_photo", soundPhoto);
+                    a.startActivity(i);
+                });
+
+                dlg.show();
             }
 
             private void follow() {

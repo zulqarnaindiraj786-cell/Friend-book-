@@ -84,6 +84,12 @@ public class AddReelActivity extends Activity {
     private TextView shareBtn;
     private TextView headerShareChip;
     private android.media.MediaPlayer previewMp;
+    private android.media.MediaPlayer attachedSoundMp;
+    private String initialSoundUrl = "";
+    private String initialSoundTitle = "";
+    private String initialSoundPhoto = "";
+    private LinearLayout attachedSoundBanner;
+    private TextView attachedSoundTitleTv;
 
     private final Handler trimLoopHandler = new Handler(Looper.getMainLooper());
     private final Runnable trimLoopRunnable = new Runnable() {
@@ -155,6 +161,66 @@ public class AddReelActivity extends Activity {
         sv.setFillViewport(true);
         LinearLayout body = Ui.col(this);
         Ui.pad(body, 14, 14, 14, 24);
+
+        if (getIntent() != null) {
+            String sUrl = getIntent().getStringExtra("use_sound_url");
+            String sTitle = getIntent().getStringExtra("use_sound_title");
+            String sPhoto = getIntent().getStringExtra("use_sound_author_photo");
+            if (sUrl != null && !sUrl.trim().isEmpty()) {
+                initialSoundUrl = sUrl.trim();
+                initialSoundTitle = (sTitle != null && !sTitle.trim().isEmpty())
+                        ? sTitle.trim() : "Original sound";
+                initialSoundPhoto = sPhoto != null ? sPhoto.trim() : "";
+                editOpts.audioUrl = initialSoundUrl;
+                editOpts.audioTitle = initialSoundTitle;
+                editOpts.soundAuthorPhoto = initialSoundPhoto;
+                editOpts.muteOriginalAudio = true;
+                previewMuted = true;
+            }
+        }
+
+        // TikTok-Style Attached Sound Banner (shown when user tapped a Reel's sound to use in their video)
+        attachedSoundBanner = Ui.row(this);
+        attachedSoundBanner.setGravity(Gravity.CENTER_VERTICAL);
+        attachedSoundBanner.setBackground(Ui.roundStroke(this, 0xFF161823, 12, 0xFFFE2C55, 1));
+        Ui.pad(attachedSoundBanner, 12, 10, 12, 10);
+        LinearLayout.LayoutParams sblpTop = new LinearLayout.LayoutParams(-1, -2);
+        sblpTop.bottomMargin = Ui.dp(this, 10);
+        attachedSoundBanner.setLayoutParams(sblpTop);
+        TextView musicIcon = Ui.tvBold(this, "🎵", 18, 0xFF25F4EE);
+        attachedSoundBanner.addView(musicIcon);
+        attachedSoundTitleTv = Ui.tvBold(this,
+                "Using Sound: " + (initialSoundTitle.isEmpty() ? "Original sound" : initialSoundTitle),
+                13f, Color.WHITE);
+        attachedSoundTitleTv.setSingleLine(true);
+        attachedSoundTitleTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        attachedSoundTitleTv.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 8), 0);
+        attachedSoundBanner.addView(attachedSoundTitleTv, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView clearSoundBtn = Ui.roundChip(this, "✕ Remove", 0x33FFFFFF, Color.WHITE, 11.5f);
+        Ui.pad(clearSoundBtn, 10, 5, 10, 5);
+        clearSoundBtn.setOnClickListener(v -> {
+            initialSoundUrl = "";
+            initialSoundTitle = "";
+            initialSoundPhoto = "";
+            editOpts.audioUrl = "";
+            editOpts.audioTitle = "";
+            editOpts.soundAuthorPhoto = "";
+            editOpts.muteOriginalAudio = false;
+            previewMuted = false;
+            stopAttachedSoundPreview();
+            attachedSoundBanner.setVisibility(View.GONE);
+            if (previewMp != null) {
+                try { previewMp.setVolume(1f, 1f); } catch (Throwable ignored) {}
+            }
+            if (soundBadge != null) soundBadge.setText("🔊 Sound On");
+            if (audioToolChip != null) {
+                audioToolChip.setText("♫ Audio");
+                audioToolChip.setTextColor(Ui.txt(this));
+            }
+        });
+        attachedSoundBanner.addView(clearSoundBtn);
+        attachedSoundBanner.setVisibility(initialSoundUrl.isEmpty() ? View.GONE : View.VISIBLE);
+        body.addView(attachedSoundBanner);
 
         // 2. Source Selector Row: [ 🖼️ Pick from Gallery ]  [ 📷 Record Video ]
         LinearLayout pickRow = Ui.row(this);
@@ -746,27 +812,76 @@ public class AddReelActivity extends Activity {
         editOpts.overlayX = 0.5f; editOpts.overlayY = 0.24f;
         editOpts.stickerText = ""; editOpts.stickerX = 0.78f; editOpts.stickerY = 0.32f; editOpts.stickerScale = 1.0f;
         editOpts.filterPreset = "none"; editOpts.filterOverlayColor = 0;
-        editOpts.playbackSpeed = 1.0f; editOpts.muteOriginalAudio = false; editOpts.audioTitle = "";
+        editOpts.playbackSpeed = 1.0f;
         editOpts.trimStartMs = 0; editOpts.trimEndMs = 0; editOpts.coverTimeMs = -1L;
-        previewMuted = false;
+        if (!initialSoundUrl.isEmpty()) {
+            editOpts.audioUrl = initialSoundUrl;
+            editOpts.audioTitle = initialSoundTitle;
+            editOpts.soundAuthorPhoto = initialSoundPhoto;
+            editOpts.muteOriginalAudio = true;
+            previewMuted = true;
+        } else {
+            editOpts.muteOriginalAudio = false;
+            editOpts.audioTitle = "";
+            editOpts.audioUrl = "";
+            editOpts.soundAuthorPhoto = "";
+            previewMuted = false;
+        }
         trimStartSeek.setProgress(0); trimEndSeek.setProgress(1000); coverSeek.setProgress(0);
         filterStripScroll.setVisibility(View.GONE); trimPanel.setVisibility(View.GONE); coverPanel.setVisibility(View.GONE);
-        soundBadge.setText("🔊 Sound On");
+        soundBadge.setText(!initialSoundUrl.isEmpty() ? "🎵 Sound Attached" : "🔊 Sound On");
         textToolChip.setText("Aa Text Overlay"); textToolChip.setTextColor(Ui.txt(this));
         stickerToolChip.setText("😀 Sticker"); stickerToolChip.setTextColor(Ui.txt(this));
         filterToolChip.setText("🎨 Filter"); filterToolChip.setTextColor(Ui.txt(this));
         trimToolChip.setText("✂️ Trim"); trimToolChip.setTextColor(Ui.txt(this));
         speedToolChip.setText("⚡ Speed 1x"); speedToolChip.setTextColor(Ui.txt(this));
-        audioToolChip.setText("♫ Audio"); audioToolChip.setTextColor(Ui.txt(this));
+        audioToolChip.setText(!initialSoundTitle.isEmpty() ? ("♫ " + initialSoundTitle) : "♫ Audio");
+        audioToolChip.setTextColor(!initialSoundTitle.isEmpty() ? Ui.BLUE : Ui.txt(this));
         coverToolChip.setText("🖼️ Cover"); coverToolChip.setTextColor(Ui.txt(this));
         if (previewMp != null) {
             try {
-                previewMp.setVolume(1f, 1f);
+                float vol = previewMuted ? 0f : 1f;
+                previewMp.setVolume(vol, vol);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) previewMp.setPlaybackParams(previewMp.getPlaybackParams().setSpeed(1.0f));
             } catch (Throwable ignored) {}
         }
         refreshStageOverlays();
         refreshMetaBadgeText();
+    }
+
+    private void startAttachedSoundPreview() {
+        stopAttachedSoundPreview();
+        if (editOpts.audioUrl == null || editOpts.audioUrl.isEmpty()) return;
+        try {
+            android.media.MediaPlayer mp = new android.media.MediaPlayer();
+            attachedSoundMp = mp;
+            mp.setLooping(true);
+            java.io.File cached = ReelVideoCache.getCachedFile(this, editOpts.audioUrl);
+            if (cached != null) {
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(cached)) {
+                    mp.setDataSource(fis.getFD());
+                }
+            } else {
+                mp.setDataSource(this, Uri.parse(editOpts.audioUrl));
+            }
+            mp.setOnPreparedListener(player -> {
+                if (player == attachedSoundMp && !isFinishing() && !isDestroyed()) {
+                    try { player.start(); } catch (Throwable ignored) {}
+                }
+            });
+            mp.prepareAsync();
+        } catch (Throwable ignored) { }
+    }
+
+    private void stopAttachedSoundPreview() {
+        if (attachedSoundMp != null) {
+            final android.media.MediaPlayer old = attachedSoundMp;
+            attachedSoundMp = null;
+            new Thread(() -> {
+                try { old.reset(); } catch (Throwable ignored) {}
+                try { old.release(); } catch (Throwable ignored) {}
+            }, "attached-sound-stop").start();
+        }
     }
 
     private void refreshStageOverlays() {
@@ -846,6 +961,7 @@ public class AddReelActivity extends Activity {
         super.onStop();
         ReelUploadManager.removeListener(uploadListener);
         trimLoopHandler.removeCallbacks(trimLoopRunnable);
+        stopAttachedSoundPreview();
         try { previewVideo.pause(); } catch (Throwable ignored) { }
     }
 
@@ -932,6 +1048,9 @@ public class AddReelActivity extends Activity {
             }
             previewPoster.setVisibility(View.GONE);
             previewVideo.start();
+            if (editOpts.audioUrl != null && !editOpts.audioUrl.isEmpty()) {
+                startAttachedSoundPreview();
+            }
             trimLoopHandler.removeCallbacks(trimLoopRunnable);
             trimLoopHandler.post(trimLoopRunnable);
         });

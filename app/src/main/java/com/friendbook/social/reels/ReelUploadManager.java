@@ -94,6 +94,8 @@ public final class ReelUploadManager {
         public float playbackSpeed = 1.0f;
         public boolean muteOriginalAudio = false;
         public String audioTitle = "";
+        public String audioUrl = "";
+        public String soundAuthorPhoto = "";
         public int trimStartMs = 0, trimEndMs = 0;
         public long coverTimeMs = -1L;
     }
@@ -214,6 +216,8 @@ public final class ReelUploadManager {
             opt.playbackSpeed = opts.playbackSpeed > 0f ? opts.playbackSpeed : 1.0f;
             opt.muteOriginalAudio = opts.muteOriginalAudio;
             opt.audioTitle = opts.audioTitle != null ? opts.audioTitle : "";
+            opt.audioUrl = opts.audioUrl != null ? opts.audioUrl : "";
+            opt.soundAuthorPhoto = opts.soundAuthorPhoto != null ? opts.soundAuthorPhoto : "";
             opt.trimStartMs = opts.trimStartMs;
             opt.trimEndMs = opts.trimEndMs;
             opt.likedBy = new ArrayList<>();
@@ -315,6 +319,12 @@ public final class ReelUploadManager {
                 }
                 if (opts.audioTitle != null && !opts.audioTitle.trim().isEmpty()) {
                     doc.put("audioTitle", opts.audioTitle.trim());
+                }
+                if (opts.audioUrl != null && !opts.audioUrl.trim().isEmpty()) {
+                    doc.put("audioUrl", opts.audioUrl.trim());
+                }
+                if (opts.soundAuthorPhoto != null && !opts.soundAuthorPhoto.trim().isEmpty()) {
+                    doc.put("soundAuthorPhoto", opts.soundAuthorPhoto.trim());
                 }
                 if (opts.trimStartMs > 0 || opts.trimEndMs > 0) {
                     doc.put("trimStartMs", opts.trimStartMs);
