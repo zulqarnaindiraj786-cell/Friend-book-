@@ -178,7 +178,7 @@ public class Models {
         public String pageId, pageName, pagePhoto;
         public boolean archived;
         public long trashedAt;
-        public int likes, comments, shares;
+        public int likes, comments, shares, views;
         public int bgColor; // 0 = none, or ARGB / Backgrounds index
         public long createdAt;
         public List<String> savedBy = new ArrayList<>();
@@ -254,6 +254,7 @@ public class Models {
             p.likes = Format.intOf(m, "likes");
             p.comments = Format.intOf(m, "comments");
             p.shares = Format.intOf(m, "shares");
+            p.views = Format.intOf(m, "views");
             p.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             p.authorVerified = Format.boolOf(m, "authorVerified");
             p.authorTickLevel = Format.strOr(m, "authorTickLevel", p.authorVerified ? "blue" : "none");
@@ -499,9 +500,10 @@ public class Models {
 
     public static class Reel {
         public String id, authorId, authorName, authorPhoto, videoUrl, thumbUrl, caption;
-        public int likes, comments, shares, favorites, durationSec;
+        public int likes, comments, shares, favorites, views, durationSec;
         public long createdAt;
         public boolean isFromPost; // true when sourced from posts (mediaType == "video")
+        public boolean mirrorHorizontal = false; // true when recorded with front camera so face stays on same side
         public String overlayText = "";
         public int overlayColor = 0xFFFFFFFF;
         public int overlayBgColor = 0xCC000000;
@@ -510,6 +512,7 @@ public class Models {
         public float stickerX = 0.78f, stickerY = 0.32f, stickerScale = 1.0f;
         public String filterPreset = "none";
         public int filterOverlayColor = 0;
+        public int beautyLevel = 0; // 4K UHD face grade the creator previewed while recording
         public float playbackSpeed = 1.0f;
         public boolean muteOriginalAudio = false;
         public String audioTitle = "";
@@ -542,7 +545,9 @@ public class Models {
             r.comments = Format.intOf(m, "comments");
             r.shares = Format.intOf(m, "shares");
             r.favorites = Format.intOf(m, "favorites");
+            r.views = Format.intOf(m, "views");
             r.durationSec = Format.intOf(m, "durationSec");
+            r.mirrorHorizontal = m != null && Boolean.TRUE.equals(m.get("mirrorHorizontal"));
             r.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             r.likedBy = Format.listOf(m, "likedBy");
             r.savedBy = Format.listOf(m, "savedBy");
@@ -590,6 +595,7 @@ public class Models {
                 if (m.get("stickerScale") instanceof Number) r.stickerScale = ((Number) m.get("stickerScale")).floatValue();
                 r.filterPreset = Format.strOr(m, "filterPreset", "none");
                 if (m.get("filterOverlayColor") instanceof Number) r.filterOverlayColor = ((Number) m.get("filterOverlayColor")).intValue();
+                r.beautyLevel = Format.intOf(m, "beautyLevel");
                 if (m.get("playbackSpeed") instanceof Number) {
                     float sp = ((Number) m.get("playbackSpeed")).floatValue();
                     if (sp >= 0.25f && sp <= 3.0f) r.playbackSpeed = sp;
@@ -616,6 +622,7 @@ public class Models {
             r.likes = Math.max(0, p.likes);
             r.comments = p.comments;
             r.shares = p.shares;
+            r.views = Math.max(0, p.views);
             r.createdAt = p.createdAt;
             r.savedBy = p.savedBy != null ? new ArrayList<>(p.savedBy) : new ArrayList<>();
             r.favorites = r.savedBy.size();

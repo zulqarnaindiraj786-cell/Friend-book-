@@ -91,6 +91,7 @@ public final class ReelUploadManager {
         public float stickerX = 0.78f, stickerY = 0.32f, stickerScale = 1.0f;
         public String filterPreset = "none";
         public int filterOverlayColor = 0;
+        public int beautyLevel = 0; // 4K UHD face grade previewed while recording
         public float playbackSpeed = 1.0f;
         public boolean muteOriginalAudio = false;
         public String audioTitle = "";
@@ -98,6 +99,7 @@ public final class ReelUploadManager {
         public String soundAuthorPhoto = "";
         public int trimStartMs = 0, trimEndMs = 0;
         public long coverTimeMs = -1L;
+        public boolean mirrorHorizontal = false;
     }
 
     public static void startUpload(final Context context,
@@ -213,6 +215,7 @@ public final class ReelUploadManager {
             opt.stickerScale = opts.stickerScale;
             opt.filterPreset = opts.filterPreset != null ? opts.filterPreset : "none";
             opt.filterOverlayColor = opts.filterOverlayColor;
+            opt.beautyLevel = opts.beautyLevel;
             opt.playbackSpeed = opts.playbackSpeed > 0f ? opts.playbackSpeed : 1.0f;
             opt.muteOriginalAudio = opts.muteOriginalAudio;
             opt.audioTitle = opts.audioTitle != null ? opts.audioTitle : "";
@@ -220,6 +223,7 @@ public final class ReelUploadManager {
             opt.soundAuthorPhoto = opts.soundAuthorPhoto != null ? opts.soundAuthorPhoto : "";
             opt.trimStartMs = opts.trimStartMs;
             opt.trimEndMs = opts.trimEndMs;
+            opt.mirrorHorizontal = opts.mirrorHorizontal;
             opt.likedBy = new ArrayList<>();
             opt.savedBy = new ArrayList<>();
             optimisticReel = opt;
@@ -311,6 +315,9 @@ public final class ReelUploadManager {
                     doc.put("filterPreset", opts.filterPreset);
                     doc.put("filterOverlayColor", opts.filterOverlayColor);
                 }
+                if (opts.beautyLevel > 0) {
+                    doc.put("beautyLevel", opts.beautyLevel);
+                }
                 if (Math.abs(opts.playbackSpeed - 1.0f) > 0.02f) {
                     doc.put("playbackSpeed", opts.playbackSpeed);
                 }
@@ -330,6 +337,10 @@ public final class ReelUploadManager {
                     doc.put("trimStartMs", opts.trimStartMs);
                     doc.put("trimEndMs", opts.trimEndMs);
                 }
+                if (opts.mirrorHorizontal) {
+                    doc.put("mirrorHorizontal", true);
+                }
+                doc.put("views", 0);
             }
 
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);
@@ -494,8 +505,25 @@ public final class ReelUploadManager {
             android.graphics.Bitmap out = android.graphics.Bitmap.createBitmap(
                     bw, bh, android.graphics.Bitmap.Config.ARGB_8888);
             android.graphics.Canvas canvas = new android.graphics.Canvas(out);
-            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            android.graphics.Paint p = new android.graphics.Paint(
+                    android.graphics.Paint.ANTI_ALIAS_FLAG | android.graphics.Paint.FILTER_BITMAP_FLAG);
+            // Bake the exact grade the creator previewed (beauty level + filter preset), and skip
+            // the color filter entirely when no grade was chosen so the cover matches the video.
+            String posterPreset = (opts.filterPreset != null && !opts.filterPreset.trim().isEmpty()
+                    && !"none".equalsIgnoreCase(opts.filterPreset.trim()))
+                    ? opts.filterPreset.trim() : "none";
+            if (opts.beautyLevel > 0 || !"none".equals(posterPreset)) {
+                p.setColorFilter(new android.graphics.ColorMatrixColorFilter(
+                        com.friendbook.social.core.StudioVectorIcons.build4kColorMatrix(
+                                opts.beautyLevel, posterPreset)));
+            }
+            canvas.save();
+            if (opts.mirrorHorizontal) {
+                canvas.scale(-1f, 1f, bw / 2f, bh / 2f);
+            }
             canvas.drawBitmap(base, null, new android.graphics.RectF(0, 0, bw, bh), p);
+            canvas.restore();
+            p.setColorFilter(null);
 
             // 1. Filter overlay tint
             if (opts.filterOverlayColor != 0) {
