@@ -1,5 +1,5 @@
 // Public release metadata only. No users, database, credentials or migration control.
 export const androidRelease = Object.freeze({
-  packageName: 'com.friendbook.social', versionCode: 104, versionName: '2.8.72',
+  packageName: 'com.friendbook.social', versionCode: 105, versionName: '2.8.73',
   apkUrl: 'https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk',
 });
