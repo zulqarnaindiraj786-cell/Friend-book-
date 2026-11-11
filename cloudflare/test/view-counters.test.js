@@ -13,74 +13,59 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { createWorker } = require(resolve(root, 'worker.js'));
 
 const MIGRATIONS = ['0012_additive_view_counters.sql', '0013_additive_view_last_seen.sql'];
-const HOUR = 3_600_000;
+const AE_MINUTE = 60_000;
 const KV_WINDOW = 300_000;
 const T0 = 1_700_000_000_000;
 
 /**
- * In-memory D1 + KV fixture that classifies every statement, so the tests can prove the two things
- * this design exists for: counting or serving a view performs ZERO D1 SELECTs, and the counting rule
- * is ONE view per user per resource forever (checked by a write-only insert, never by a read).
+ * Fixture: Analytics Engine (the event store + the real count), Workers KV (the live snapshot) and
+ * D1 (which the view path must NEVER write, and only ever reads as a last-resort seed). Every D1
+ * statement and every AE event is recorded, and the AE query API is stubbed so a test decides what
+ * Analytics Engine answers with - SQL TSV, GraphQL JSON, an error, or nothing at all.
  */
-function fixture({ withKv = true, kvSeed = null, gate = null } = {}) {
-  const sql = new DatabaseSync(':memory:');
-  const queries = { selects: 0, schema: 0, dedupe: 0, totals: 0 };
+function fixture({ withKv = true, kvSeed = null, withAe = true, aeToken = true, sql = null, graphql = null } = {}) {
+  const d1 = new DatabaseSync(':memory:');
+  const queries = { selects: 0, writes: 0 };
   const seenSql = [];
   const store = new Map();
   if (kvSeed) store.set('views:live:v1', JSON.stringify(kvSeed));
   const kv = { reads: 0, writes: 0 };
+  const ae = { events: [], sqlCalls: [], graphqlCalls: [] };
+  const fetches = [];
 
   function statement(text) {
     seenSql.push(text);
     const normalized = text.replace(/\s+/g, ' ').trim();
     const isSelect = /^SELECT/i.test(normalized);
-    const isSchema = /^CREATE/i.test(normalized);
-    const isDedupe = /friendbook_cf_view_last/i.test(normalized) && !isSelect && !isSchema;
-    const isTotals = /friendbook_cf_view_counters/i.test(normalized) && !isSelect && !isSchema;
-    const count = () => {
-      if (isSelect) queries.selects += 1;
-      else if (isSchema) queries.schema += 1;
-      else if (isDedupe) queries.dedupe += 1;
-      else if (isTotals) queries.totals += 1;
-    };
-    // `changes()` is what tells the Worker whether a (resource, uid) pair was new - the write is the
-    // de-dupe check, which is why no SELECT is ever needed.
-    const changes = () => sql.prepare('SELECT changes() AS n').get().n;
-    // `gate` holds the hourly totals write in flight so a test can prove it was deferred to
-    // ctx.waitUntil instead of delaying the response. The inline de-dupe insert is never gated.
     const bind = (...params) => ({
       async first() {
-        if (gate && isTotals) await gate;
-        await null; count();
-        const row = sql.prepare(normalized).get(...params);
+        await null;
+        if (isSelect) queries.selects += 1; else queries.writes += 1;
+        const row = d1.prepare(normalized).get(...params);
         return row === undefined ? null : row;
       },
-      async all() { await null; count(); return { results: sql.prepare(normalized).all(...params) }; },
+      async all() {
+        await null;
+        if (isSelect) queries.selects += 1; else queries.writes += 1;
+        return { results: d1.prepare(normalized).all(...params) };
+      },
       async run() {
-        if (gate && isTotals) await gate;
-        await null; count();
-        sql.prepare(normalized).run(...params);
-        return { success: true, meta: { changes: changes() } };
+        await null;
+        if (isSelect) queries.selects += 1; else queries.writes += 1;
+        d1.prepare(normalized).run(...params);
+        return { success: true, meta: { changes: d1.prepare('SELECT changes() AS n').get().n } };
       },
     });
-    return {
-      bind,
-      async first() { return bind().first(); },
-      async all() { return bind().all(); },
-      async run() { return bind().run(); },
-    };
+    return { bind, async first() { return bind().first(); }, async all() { return bind().all(); }, async run() { return bind().run(); } };
   }
 
-  const db = {
-    prepare: statement,
-    async batch(statements) {
-      for (const entry of statements) await entry.run();
-      return [];
-    },
+  const env = {
+    DB: { prepare: statement, async batch(entries) { for (const entry of entries) await entry.run(); return []; } },
+    FIREBASE_PROJECT_ID: 'friendbook-17551',
+    CF_ACCOUNT_ID: 'account-tag',
   };
-
-  // worker.js refuses every /v1 route without the project id, so the fixture carries it.
-  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-17551' };
+  if (withAe) env.AE = { writeDataPoint: (point) => { ae.events.push(point); } };
+  if (aeToken) env.CF_AE_TOKEN = 'ae-read-token';
   if (withKv) {
     env.VIEWS = {
       async get(key, options) {
@@ -90,12 +75,57 @@ function fixture({ withKv = true, kvSeed = null, gate = null } = {}) {
         if (value === undefined) return null;
         return options?.type === 'json' ? JSON.parse(value) : value;
       },
-      async put(key, value) { if (gate) await gate; await null; kv.writes += 1; store.set(key, value); },
+      async put(key, value) { await null; kv.writes += 1; store.set(key, value); },
     };
   }
 
-  return { env, sql, queries, seenSql, store, kv, close: () => sql.close() };
+  // The AE query API: `sql`/`graphql` may be a string body, { status, body }, null (refuse), or a
+  // function of the call index, so a test can fail first and succeed on a later variant.
+  const answer = (spec, callIndex) => {
+    if (spec === null || spec === undefined) return { status: 403, body: '{"errors":[{"message":"refused"}]}' };
+    if (typeof spec === 'function') return answer(spec(callIndex), 0);
+    if (typeof spec === 'string') return { status: 200, body: spec };
+    if (typeof spec === 'object' && !('status' in spec) && !('body' in spec)) return { status: 200, body: spec };
+    return spec;
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const target = String(url);
+    fetches.push(target);
+    if (target.includes('/analytics_engine/sql')) {
+      const response = answer(sql, ae.sqlCalls.length);
+      ae.sqlCalls.push({ url: target, init });
+      return new Response(response.body, { status: response.status });
+    }
+    if (target.includes('/client/v4/graphql')) {
+      const response = answer(graphql, ae.graphqlCalls.length);
+      ae.graphqlCalls.push({ url: target, init });
+      return new Response(typeof response.body === 'string' ? response.body : JSON.stringify(response.body), {
+        status: response.status, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return realFetch(url, init);
+  };
+
+  return {
+    env, d1, queries, seenSql, store, kv, ae, fetches,
+    close: () => { globalThis.fetch = realFetch; d1.close(); },
+  };
 }
+
+/** Analytics Engine SQL answers as TSV: a header row, then one row per resource. */
+const tsv = (rows) => 'resource\tviewers\tplays\n' + rows.map(([resource, viewers, plays]) => `${resource}\t${viewers}\t${plays ?? viewers}`).join('\n');
+const graphqlRows = (rows) => ({
+  data: {
+    viewer: {
+      accounts: [{
+        views: rows.map(([name, uniq, count]) => ({
+          dimensions: { name, count: count ?? uniq, uniq }, metrics: { count: count ?? uniq, sum: count ?? uniq },
+        })),
+      }],
+    },
+  },
+});
 
 async function call(env, { path = '/v1/views/reels/r1', method = 'GET', uid = 'user1', ids = null } = {}, now = Date.now, ctx) {
   const url = new URL(`https://worker.test${path}`);
@@ -106,304 +136,289 @@ async function call(env, { path = '/v1/views/reels/r1', method = 'GET', uid = 'u
   return { status: response.status, body: await response.json() };
 }
 
-/** One view POST from one distinct watcher: `viewer(3)` is the third different user. */
-const viewer = (n) => `user${n}`;
-
-test('counting and serving views issue zero D1 SELECTs, and totals wait for the hourly window', async t => {
+test('every view is one Analytics Engine event and D1 is never written', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 40 } }); t.after(f.close);
+  const f = fixture({ kvSeed: { 'reels/r1': 40 }, sql: tsv([['reels/r1', 40]]) }); t.after(f.close);
   let clock = T0;
   const now = () => clock;
 
-  for (let i = 1; i <= 6; i++) {
+  for (const uid of ['user1', 'user2', 'user3']) {
     clock += 1000;
-    const { status, body } = await call(f.env, { method: 'POST', uid: viewer(i) }, now);
+    const { status, body } = await call(f.env, { method: 'POST', uid }, now);
     assert.equal(status, 200);
-    assert.equal(body.counted, true, 'a first-time watcher counts');
+    assert.equal(body.counted, true);
+    assert.equal(body.event, 'analytics-engine');
     assert.equal(body.dedupe, 'once-per-user');
   }
-  const batch = await call(f.env, { path: '/v1/views?collection=reels', ids: 'r1,missing' }, now);
-  const single = await call(f.env, {}, now);
+  const served = await call(f.env, {}, now);
 
-  assert.equal(batch.body.views.r1, 46);
-  assert.equal(batch.body.views.missing, 0);
-  assert.equal(single.body.views, 46);
-  assert.equal(single.body.storage, 'kv+memory');
-  assert.equal(f.queries.selects, 0, 'the view path must never SELECT from D1');
-  assert.equal(f.queries.totals, 0, 'the KV seed counts as recently persisted, so the total waits out the hour');
-  assert.equal(f.queries.dedupe, 6, 'one write-only de-dupe insert per first-time watcher, never a read');
-  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_view_last').get().n, 6);
-  assert.deepEqual([...viewCounterState().dirty], ['reels/r1'], 'the six views are queued for the hourly D1 write');
-  assert.equal(f.kv.writes, 0, 'six seconds of counting did not need a KV write either');
+  assert.equal(f.ae.events.length, 3, 'one AE event per view');
+  assert.deepEqual(f.ae.events[0].indexes, ['reels/r1'], 'the resource is the AE index (its grouping key)');
+  assert.deepEqual(f.ae.events[0].dimensions, ['reels', 'r1', 'user1'], 'collection, id and uid travel as blobs');
+  assert.deepEqual(f.ae.events[0].metrics, [1]);
+  assert.equal(f.queries.writes, 0, 'the view path writes NOTHING to D1');
+  assert.equal(f.queries.selects, 0, 'and reads nothing either: KV + AE served everything');
+  assert.equal(f.seenSql.join(''), '', 'no D1 statement at all was prepared');
+  assert.equal(served.body.views, 43, 'AE said 40, this isolate counted 3 more');
+  assert.equal(served.body.storage, 'ae+kv+memory');
 });
 
-test('a repeat watcher is refused by the durable de-dupe without any D1 read', async t => {
+test('one user is one view forever, even when the same user watches ten times', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 40 } }); t.after(f.close);
+  const f = fixture({ kvSeed: { 'reels/r1': 0 }, sql: (index) => tsv([['reels/r1', index === 0 ? 0 : 1]]) });
+  t.after(f.close);
   let clock = T0;
   const now = () => clock;
 
   const first = await call(f.env, { method: 'POST' }, now);
   assert.equal(first.body.counted, true);
-  assert.equal(first.body.views, 41);
+  assert.equal(first.body.views, 1);
 
-  // Same user, same second: the memory cache settles it, no storage call at all.
-  const again = await call(f.env, { method: 'POST' }, now);
-  assert.equal(again.body.counted, false);
-  assert.equal(again.body.views, 41);
-  assert.equal(f.queries.dedupe, 1, 'the repeat cost nothing');
+  for (let i = 0; i < 9; i++) {
+    clock += 1000; // loops, rewatches, the whole video, coming back later
+    const again = await call(f.env, { method: 'POST' }, now);
+    assert.equal(again.body.counted, false, 'a repeat watcher never counts again');
+    assert.equal(again.body.views, 1);
+    assert.equal(f.queries.writes, 0, 'de-dupe costs no D1 write');
+    assert.equal(f.queries.selects, 0, 'and no D1 read');
+  }
+  assert.equal(f.ae.events.length, 10, 'every real play is still recorded as an AE event');
+  assert.equal(viewCounterState().counted, 1, 'the isolate settled this user once');
+});
 
-  // A second watcher, five minutes later, so the aggregate is durable in KV before the isolate dies.
+test('Analytics Engine uniq(uid) is the real count, and a fresh isolate re-bases on it', async t => {
+  resetViewState();
+  // AE ingestion: nothing at the very first load, then the two distinct users, then all three.
+  const f = fixture({
+    kvSeed: { 'reels/r1': 0, 'reels/r2': 0 },
+    sql: (index) => tsv(index === 0 ? [] : (index === 1 ? [['reels/r1', 2], ['reels/r2', 1]] : [['reels/r1', 3], ['reels/r2', 1]])),
+  });
+  t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  await call(f.env, { method: 'POST', uid: 'user1' }, now);
+  clock += 1000;
+  await call(f.env, { method: 'POST', uid: 'user2' }, now);
+  assert.equal((await call(f.env, {}, now)).body.views, 2, 'two distinct users, counted the moment they watched');
+
+  // A cold isolate that never saw them asks Analytics Engine - not D1 - for the true count.
+  resetViewState();
+  clock += 1000;
+  assert.equal((await call(f.env, { path: '/v1/views/reels/r2' }, now)).body.views, 1);
+  assert.equal((await call(f.env, {}, now)).body.views, 2);
+  assert.equal(f.queries.selects, 0, 'AE replaced the D1 seed entirely');
+  assert.equal(f.queries.writes, 0);
+  assert.ok(f.ae.sqlCalls.length >= 2, 'each isolate queried AE once on load');
+
+  // This isolate does not know user1, so it counts them once more: the live number may lead by one,
+  // but AE's answer - and everything persisted - stays at the true unique count.
+  clock += 1000;
+  const drifted = await call(f.env, { method: 'POST', uid: 'user1' }, now);
+  assert.equal(drifted.body.counted, true, 'memory alone cannot know a user this isolate never saw');
+  assert.equal(drifted.body.views, 3, 'the live layer leads by one until AE answers again');
+
+  clock += AE_MINUTE + KV_WINDOW;
+  const settled = await call(f.env, { method: 'POST', uid: 'user3' }, now);
+  assert.equal(settled.body.views, 4, 'AE absorbed one of the two bridged views; the truth is 3 users + this one');
+  assert.equal(viewCounterState().aeBase.get('reels/r1'), 3, 'AE uniq(uid) is the durable, de-duplicated count');
+  assert.equal(JSON.parse(f.store.get('views:live:v1'))['reels/r1'], 3,
+    'the persisted snapshot carries AE truth, never an isolate drift');
+});
+
+test('AE is queried at most once a minute per isolate and never blocks a response', async t => {
+  resetViewState();
+  const f = fixture({ kvSeed: { 'reels/r1': 5 }, sql: tsv([['reels/r1', 5]]) }); t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  await call(f.env, {}, now); // the load query
+  const before = f.ae.sqlCalls.length;
+  assert.equal(before, 1, 'loading an isolate costs exactly one AE query');
+
+  await call(f.env, { method: 'POST', uid: 'user1' }, now);
+  assert.equal(f.ae.sqlCalls.length, before, 'a view adds no AE query of its own');
+  for (let i = 0; i < 10; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: `u${i}` }, now); }
+  assert.equal(f.ae.sqlCalls.length, before, 'ten seconds of counting added no AE query');
+
+  clock += AE_MINUTE;
+  const pending = [];
+  await call(f.env, { method: 'POST', uid: 'late' }, now, { waitUntil: (promise) => pending.push(promise) });
+  assert.equal(pending.length, 1, 'the refresh was deferred to ctx.waitUntil, not awaited inline');
+  await Promise.allSettled(pending);
+  assert.equal(f.ae.sqlCalls.length, before + 1, 'one AE query per minute at most');
+  assert.equal(f.queries.writes, 0);
+});
+
+test('a GraphQL-only account is served too, and a remembered variant is reused', async t => {
+  resetViewState();
+  const f = fixture({ kvSeed: {}, sql: null, graphql: graphqlRows([['reels/r1', 7]]) }); t.after(f.close);
+  const now = () => T0;
+
+  const served = await call(f.env, {}, now);
+  assert.equal(served.body.views, 7, 'the GraphQL dataset query supplied the count');
+  assert.equal(viewCounterState().aeVariant, 'graphql');
+  assert.ok(f.ae.sqlCalls.length >= 1, 'the SQL variants were tried first');
+  assert.equal(f.ae.graphqlCalls.length, 1);
+
+  resetViewState();
+  const second = await call(f.env, {}, () => T0 + 1000);
+  assert.equal(second.body.views, 7, 'a later isolate is served by GraphQL too');
+  assert.equal(viewCounterState().aeVariant, 'graphql');
+  assert.equal(f.queries.selects, 0, 'AE answered, so the read-only D1 seed never ran');
+  assert.equal(f.queries.writes, 0, 'and D1 was never written');
+});
+
+test('without Analytics Engine the counters fall back to KV + memory, still with zero D1 writes', async t => {
+  resetViewState();
+  const f = fixture({ withAe: false, kvSeed: { 'reels/r1': 30 } }); t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  for (const uid of ['user1', 'user2']) {
+    clock += 1000;
+    const posted = await call(f.env, { method: 'POST', uid }, now);
+    assert.equal(posted.body.counted, true);
+    assert.equal(posted.body.event, 'none', 'no AE binding, so no event - and nothing invented');
+  }
+  const served = await call(f.env, {}, now);
+  assert.equal(served.body.views, 32);
+  assert.equal(served.body.storage, 'kv+memory');
+  assert.equal(f.queries.writes, 0, 'D1 is never written in any mode');
+  assert.equal(f.queries.selects, 0, 'KV already held the totals, so no seed read was needed');
+
   clock += KV_WINDOW;
-  const other = await call(f.env, { method: 'POST', uid: 'user2' }, now);
-  assert.equal(other.body.counted, true);
-  assert.equal(other.body.views, 42);
-  assert.equal(f.kv.writes, 1, 'the snapshot that survives an isolate restart was written');
-
-  // The first watcher comes back a month later, and this isolate has forgotten everything:
-  // still ONE view for them, restored total, and still no D1 read.
-  clock += 30 * 24 * HOUR;
-  resetViewState();
-  const muchLater = await call(f.env, { method: 'POST' }, now);
-  assert.equal(muchLater.body.counted, false, 'ONE view per user per Reel, forever');
-  assert.equal(muchLater.body.views, 42, 'the KV aggregate restored the total without touching D1');
-  assert.equal(f.queries.selects, 0, 'the durable de-dupe is checked by a write, never by a read');
-  assert.equal(f.queries.dedupe, 3, 'a cold isolate asks D1 once per watcher, and D1 answers "already counted"');
-  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_view_last').get().n, 2,
-    'no second row was ever written for the same user');
-
-  // A brand new watcher is a real new view.
-  const third = await call(f.env, { method: 'POST', uid: 'user3' }, now);
-  assert.equal(third.body.counted, true);
-  assert.equal(third.body.views, 43);
+  await call(f.env, { method: 'POST', uid: 'user3' }, now);
+  assert.deepEqual(JSON.parse(f.store.get('views:live:v1')), { 'reels/r1': 33 },
+    'with no AE the live total is the only record, so the snapshot keeps it');
 });
 
-test('D1 receives one totals write per resource per hour holding the full live total', async t => {
+test('the read-only D1 seed is a last resort and never writes', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 10 } }); t.after(f.close);
-  let clock = T0;
-  const now = () => clock;
-  let watchers = 0;
-  const post = () => call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
+  const f = fixture({ kvSeed: null, sql: tsv([]) }); t.after(f.close);
+  f.d1.exec(readMigration(MIGRATIONS[0]));
+  f.d1.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 25, 1)");
 
-  // A resource that was never persisted is written at once, so a brand new Reel cannot be lost.
-  await call(f.env, { path: '/v1/views/reels/new1', method: 'POST', uid: 'fresh-eyes' }, now);
-  assert.equal(f.queries.totals, 1, 'the first ever totals write of a resource happens at once');
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/new1'").get().views, 1);
-  assert.ok(f.queries.schema >= 4, 'the Worker created its own tables and index without a migration run');
-
-  // 54 minutes of watching by six different people: counted and served live, no totals write.
-  for (let i = 0; i < 6; i++) { clock += 9 * 60_000; await post(); }
-  assert.equal(f.queries.totals, 1, 'no totals write inside the hourly window');
-  assert.equal((await call(f.env, {}, now)).body.views, 16, 'the live total still grows');
-  assert.equal(viewCounterState().dirty.has('reels/r1'), true);
-
-  // Crossing the hour writes the FULL live total in ONE statement - still no SELECT.
-  clock += 10 * 60_000;
-  const flushed = (await post()).body;
-  assert.equal(f.queries.totals, 2);
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r1'").get().views, 17);
-  assert.equal(flushed.views, 17);
-  assert.equal(flushed.d1Pending, false, 'the hourly write cleared the pending flag');
-  assert.equal(viewCounterState().dirty.has('reels/r1'), false);
-  assert.equal(f.queries.selects, 0);
-  assert.ok(f.kv.writes <= 12, `the hourly writes added no unbudgeted KV writes (${f.kv.writes})`);
-});
-
-test('the hourly D1 write can never lower a stored total (MAX semantics)', async t => {
-  resetViewState();
-  const f = fixture({ kvSeed: {} }); t.after(f.close);
-  f.sql.exec(readMigration(MIGRATIONS[0]));
-  f.sql.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 500, 1), ('reels/r2', 70, 1)");
-  f.store.set('views:live:v1', JSON.stringify({ 'reels/r1': 500, 'reels/r2': 70 }));
-  resetViewState();
-  let clock = T0;
-  const now = () => clock;
-
-  // Only r1 is watched, by five different people over the next hour.
-  for (let i = 1; i <= 5; i++) { clock += 2000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
-  // The first watcher coming back changes nothing.
-  const repeat = await call(f.env, { method: 'POST', uid: viewer(1) }, now);
-  assert.equal(repeat.body.counted, false);
-  clock += HOUR;
-  const flushed = (await call(f.env, { method: 'POST', uid: 'viewer6' }, now)).body;
-
-  assert.equal(flushed.views, 506, 'the seeded total plus six real, distinct viewers');
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r1'").get().views, 506);
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/r2'").get().views, 70,
-    'a resource nobody watched is never rewritten');
-  assert.equal(f.queries.selects, 0);
-});
-
-test('a cold isolate re-seeds from KV and never from D1', async t => {
-  resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 100, 'reels/r2': 5 } }); t.after(f.close);
-  const first = await call(f.env, {}, () => T0);
-  assert.equal(first.body.views, 100);
-  assert.equal(f.queries.selects, 0, 'KV alone served a cold isolate');
-  assert.equal(f.kv.reads, 1, 'exactly one KV read per isolate, not per request');
-  resetViewState();
-  const cold = await call(f.env, {}, () => T0 + 1000);
-  assert.equal(cold.body.views, 100);
-  assert.equal(f.queries.selects, 0);
-  assert.equal(f.kv.reads, 2);
-});
-
-test('an empty KV seeds once from D1, bounded, and writes the seed straight back to KV', async t => {
-  resetViewState();
-  const f = fixture({ kvSeed: null }); t.after(f.close);
-  f.sql.exec(readMigration(MIGRATIONS[0]));
-  f.sql.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 25, 1)");
   const seeded = await call(f.env, {}, () => T0);
-  assert.equal(seeded.body.views, 25, 'the first isolate ever restores the historical total');
-  assert.equal(f.queries.selects, 1, 'one bounded SELECT, ever');
+  assert.equal(seeded.body.views, 25, 'history AE and KV do not have is restored once, read-only');
+  assert.equal(f.queries.selects, 1);
   assert.match(f.seenSql.join('\n'), /ORDER BY views DESC LIMIT \?/);
+  assert.equal(f.queries.writes, 0, 'no CREATE, no INSERT, no UPDATE: D1 writes stay at zero');
   assert.deepEqual(JSON.parse(f.store.get('views:live:v1')), { 'reels/r1': 25 }, 'the seed is cached in KV');
 
-  resetViewState(); // A later cold isolate must never touch D1 again.
+  resetViewState();
   const later = await call(f.env, {}, () => T0 + 5000);
   assert.equal(later.body.views, 25);
-  assert.equal(f.queries.selects, 1);
-  assert.equal(viewCounterState().seedReads, 0, 'this isolate was served purely from KV');
+  assert.equal(f.queries.selects, 1, 'a later isolate never touches D1 again');
+  assert.equal(f.queries.writes, 0);
 });
 
-test('without a KV binding the counters still work from memory and never read D1 per view', async t => {
+test('the KV snapshot is written at most once per five minutes', async t => {
   resetViewState();
-  const f = fixture({ withKv: false, kvSeed: null }); t.after(f.close);
-  f.sql.exec(readMigration(MIGRATIONS[0]));
-  f.sql.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 7, 1)");
-  let clock = T0;
-  const now = () => clock;
-  for (let i = 1; i <= 3; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
-  const served = await call(f.env, {}, now);
-  assert.equal(served.body.views, 10, 'the historical total was restored once, then counted in memory');
-  assert.equal(served.body.storage, 'memory');
-  assert.equal(f.queries.selects, 1, 'one bounded seed read for the whole isolate, not one per view');
-  assert.equal(f.kv.reads, 0);
-  for (let i = 4; i <= 13; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: viewer(i) }, now); }
-  assert.equal(f.queries.selects, 1, 'ten more viewers added zero D1 reads');
-  assert.equal((await call(f.env, {}, now)).body.views, 20);
-});
-
-test('the KV aggregate is written at most once per five minutes of counting', async t => {
-  resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 0 } }); t.after(f.close);
+  const f = fixture({ kvSeed: { 'reels/r1': 0 }, sql: tsv([['reels/r1', 0]]) }); t.after(f.close);
   let clock = T0;
   const now = () => clock;
   let watchers = 0;
 
-  for (let i = 0; i < 20; i++) {
-    clock += 1000;
-    await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
-  }
+  for (let i = 0; i < 20; i++) { clock += 1000; await call(f.env, { method: 'POST', uid: `u${++watchers}` }, now); }
   assert.equal(f.kv.writes, 0, 'twenty seconds of counting never rewrote KV');
-
   clock += KV_WINDOW;
-  await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
-  assert.equal(f.kv.writes, 1);
-  assert.deepEqual(JSON.parse(f.store.get('views:live:v1')), { 'reels/r1': 21 },
-    'the snapshot holds what was counted at flush time');
-
-  const before = f.kv.writes;
+  await call(f.env, { method: 'POST', uid: `u${++watchers}` }, now);
+  const writes = f.kv.writes;
+  assert.ok(writes >= 1, 'the AE refresh also refreshed the snapshot');
   clock += 1000;
-  await call(f.env, { method: 'POST', uid: viewer(++watchers) }, now);
-  assert.equal(f.kv.writes, before, 'inside the five minute window nothing is rewritten');
-  assert.equal(f.queries.selects, 0);
+  await call(f.env, { method: 'POST', uid: `u${++watchers}` }, now);
+  assert.equal(f.kv.writes, writes, 'inside the window nothing is rewritten');
+  assert.equal(f.queries.writes, 0);
 });
 
-test('waitUntil defers the totals write so the response is never blocked by storage', async t => {
+test('batched and top reads are served from memory with no storage call at all', async t => {
   resetViewState();
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const f = fixture({ kvSeed: { 'reels/r1': 0 }, gate }); t.after(f.close);
-  const pending = [];
-  const ctx = { waitUntil: (promise) => pending.push(promise) };
+  const f = fixture({ kvSeed: { 'reels/r1': 12, 'reels/r2': 9, 'posts/p1': 4 }, sql: tsv([]) }); t.after(f.close);
+  const now = () => T0;
 
-  // The hourly totals write and the KV snapshot are both stuck behind the gate, yet the response
-  // comes back at once (the inline de-dupe insert is not gated - it decides whether to count).
-  const response = await call(f.env, { path: '/v1/views/reels/fresh', method: 'POST', uid: 'new-eyes' }, () => T0, ctx);
-  assert.equal(response.status, 200);
-  assert.equal(response.body.views, 1, 'the live count is served without waiting for storage');
-  assert.equal(response.body.d1Pending, true, 'the totals write is still in flight, and the client is told so');
-  assert.equal(pending.length, 1, 'the flush was handed to the runtime, not awaited inline');
-  assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_view_counters").get().n, 0,
-    'nothing reached the counters table while the response was being served');
-
-  release();
-  await Promise.allSettled(pending);
-  assert.equal(f.sql.prepare("SELECT views FROM friendbook_cf_view_counters WHERE resource = 'reels/fresh'").get().views, 1);
+  const batch = await call(f.env, { path: '/v1/views?collection=reels', ids: 'r1,r2,missing' }, now);
+  assert.deepEqual(batch.body.views, { r1: 12, r2: 9, missing: 0 });
+  assert.equal(batch.body.storage, 'ae+kv+memory');
+  const top = await call(f.env, { path: '/v1/views?collection=reels&top=1' }, now);
+  assert.deepEqual(top.body.views, { r1: 12 });
+  const posts = await call(f.env, { path: '/v1/views?collection=posts', ids: 'p1' }, now);
+  assert.deepEqual(posts.body.views, { p1: 4 });
+  assert.equal(f.queries.writes, 0);
+  assert.equal(f.kv.reads, 1, 'one KV read for the whole isolate, not one per request');
 });
 
-test('input validation, methods and auth fail closed without writing data', async t => {
+test('input validation, methods and auth fail closed with no event and no storage write', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 0 } }); t.after(f.close);
+  const f = fixture({ kvSeed: { 'reels/r1': 0 }, sql: tsv([]) }); t.after(f.close);
   const now = () => T0;
 
   assert.equal((await call(f.env, { path: '/v1/views/stories/x', method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { path: '/v1/views/reels/..', method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { path: '/v1/views/reels/a,b', method: 'POST' }, now)).status, 400);
   assert.equal((await call(f.env, { path: '/v1/views/reels/' + 'x'.repeat(129), method: 'POST' }, now)).status, 400);
-  // A trailing slash is not a resource: worker.js 404s it, and the module itself refuses the POST.
   assert.equal((await call(f.env, { path: '/v1/views/reels/', method: 'POST' }, now)).status, 405);
   assert.equal((await call(f.env, { method: 'DELETE' }, now)).status, 405);
   assert.equal((await call(f.env, { path: '/v1/views', method: 'POST' }, now)).status, 405);
   assert.equal((await call(f.env, { path: '/v1/views', uid: 'user1' }, now)).status, 400, 'collection is required');
   assert.equal((await call(f.env, { method: 'POST', uid: '' }, now)).status, 401);
   assert.equal((await call(f.env, { method: 'POST', uid: 'x'.repeat(129) }, now)).status, 401);
-
   const many = Array.from({ length: 51 }, (_, i) => `r${i}`).join(',');
   assert.equal((await call(f.env, { path: '/v1/views?collection=reels', ids: many }, now)).status, 400);
-  assert.equal(f.queries.totals, 0, 'rejected requests never write a total');
-  assert.equal(f.queries.dedupe, 0, 'rejected requests never write a de-dupe row');
-  assert.equal(f.queries.selects, 0, 'rejected requests never read');
+
+  assert.equal(f.ae.events.length, 0, 'a rejected request records no view event');
+  assert.equal(f.queries.writes, 0);
+  assert.equal(f.queries.selects, 0);
 });
 
-test('migration is repeatable and keeps production view rows untouched', async t => {
+test('migration stays repeatable and the view path never needs it', async t => {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec('CREATE TABLE posts (id TEXT PRIMARY KEY, views INTEGER)');
   sql.exec("INSERT INTO posts VALUES ('p1', 900)");
   const text = MIGRATIONS.map((name) => ({ name, text: readMigration(name) }));
-  for (const pass of [1, 2]) {
-    for (const migration of text) {
-      sql.exec(migration.text);
-      assert.ok(migration.name.length > 0);
-    }
-  }
+  for (const pass of [1, 2]) for (const migration of text) sql.exec(migration.text);
   assert.equal(sql.prepare('SELECT views FROM posts WHERE id = ?').get('p1').views, 900);
-  const columns = sql.prepare('SELECT name FROM pragma_table_info(?)').all('friendbook_cf_view_counters');
-  assert.deepEqual(columns.map((row) => row.name), ['resource', 'views', 'updated_at']);
-  const dedupeColumns = sql.prepare('SELECT name FROM pragma_table_info(?)').all('friendbook_cf_view_last');
-  assert.deepEqual(dedupeColumns.map((row) => row.name), ['resource', 'uid', 'last_at']);
+
+  // The Worker no longer creates or writes these tables: a view works on a database that lacks them.
+  resetViewState();
+  const bare = fixture({ kvSeed: { 'reels/r1': 3 }, sql: tsv([['reels/r1', 3]]) }); t.after(bare.close);
+  const served = await call(bare.env, { method: 'POST', uid: 'user9' }, () => T0);
+  assert.equal(served.body.views, 4);
+  assert.equal(bare.queries.writes, 0);
+  assert.equal(bare.seenSql.length, 0, 'not one D1 statement was prepared for a counted view');
 });
 
-test('worker exposes /v1/views behind the Firebase token gate', async t => {
+test('worker exposes /v1/views behind the Firebase token gate and reports its bindings', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: { 'reels/r1': 12 } }); t.after(f.close);
+  const f = fixture({ kvSeed: { 'reels/r1': 12 }, sql: tsv([['reels/r1', 12]]) }); t.after(f.close);
   const worker = createWorker(async () => 'user1');
-  const fetchWith = (path, method, token = 'id-token') => worker.fetch(
-    new Request(`https://worker.test${path}`, { method, headers: token ? { Authorization: `Bearer ${token}` } : {} }),
-    f.env, { waitUntil: () => {}, passThroughOnException: () => {} },
-  );
+  const fetchWith = async (path, method, token = 'id-token') => {
+    const response = await worker.fetch(
+      new Request(`https://worker.test${path}`, { method, headers: token ? { Authorization: `Bearer ${token}` } : {} }),
+      f.env, { waitUntil: () => {}, passThroughOnException: () => {} },
+    );
+    return { status: response.status, body: response.headers.get('content-type')?.includes('json') ? await response.clone().json() : null };
+  };
 
-  const counted = await (await fetchWith('/v1/views/reels/r1', 'POST')).json();
-  assert.equal(counted.views, 13);
-  assert.equal(counted.counted, true);
-  assert.equal(counted.storage, 'kv+memory');
-  const repeat = await (await fetchWith('/v1/views/reels/r1', 'POST')).json();
-  assert.equal(repeat.counted, false, 'the same user watching again does not count again');
-  assert.equal(repeat.views, 13);
-  const served = await (await fetchWith('/v1/views/reels/r1', 'GET')).json();
-  assert.equal(served.views, 13);
+  const counted = await fetchWith('/v1/views/reels/r1', 'POST');
+  assert.equal(counted.body.views, 13);
+  assert.equal(counted.body.counted, true);
+  assert.equal(counted.body.storage, 'ae+kv+memory');
+  assert.equal(f.ae.events.length, 1);
+  const repeat = await fetchWith('/v1/views/reels/r1', 'POST');
+  assert.equal(repeat.body.counted, false, 'the same user watching again does not count again');
+  assert.equal(repeat.body.views, 13);
+
+  const health = await fetchWith('/health', 'GET', null);
+  assert.equal(health.status, 200);
+  assert.deepEqual(health.body.views, { ae: true, kv: true, aeReadToken: true },
+    '/health proves which view bindings a deploy actually shipped');
+  assert.equal(f.queries.writes, 0);
 
   resetViewState();
   assert.equal((await fetchWith('/v1/views/reels/r1', 'POST', null)).status, 401, 'no token, no view');
-  const rejecting = createWorker(async () => { throw new Error('bad token'); });
-  const rejected = await rejecting.fetch(
-    new Request('https://worker.test/v1/views/reels/r1', { method: 'POST', headers: { Authorization: 'Bearer nope' } }),
-    f.env, { waitUntil: () => {}, passThroughOnException: () => {} },
-  );
-  assert.equal(rejected.status, 401, 'an unverifiable token is refused before any counter runs');
+  assert.equal(f.ae.events.length, 2, 'an unauthenticated request recorded nothing new');
 });
 
 function readMigration(name) {

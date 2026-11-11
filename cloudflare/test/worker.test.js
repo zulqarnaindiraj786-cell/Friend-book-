@@ -8,13 +8,17 @@ test('health executes only a constant read and never exposes data', async () => 
   const response = await call('/health', { DB: { prepare(sql) {
     assert.equal(sql, 'SELECT 1 AS connected'); return { first: async () => ({ connected: 1 }) };
   } } });
-  assert.equal(response.status, 200); assert.deepEqual(await response.json(), { ok: true });
+  assert.equal(response.status, 200);
+  // Binding flags only: it proves which view-counter bindings a deploy actually shipped (Analytics
+  // Engine + KV), and exposes no counter, no id and no user data.
+  assert.deepEqual(await response.json(), { ok: true, views: { ae: false, kv: false, aeReadToken: false } });
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 test('missing binding and failed DB return no internal details', async () => {
   assert.equal((await call('/health')).status, 503);
   const response = await call('/health', { DB: { prepare() { throw Error('secret'); } } });
-  assert.equal(response.status, 503); assert.deepEqual(await response.json(), { ok: false });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { ok: false, views: { ae: false, kv: false, aeReadToken: false } });
 });
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);
