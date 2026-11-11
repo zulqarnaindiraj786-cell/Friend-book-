@@ -263,8 +263,47 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if ((reels == null || reels.isEmpty()) && featuredReels.isEmpty()) return;
         featuredReels.clear();
         if (reels != null) featuredReels.addAll(reels);
+        refreshRealViewCounts();
         if (showHeader && !posts.isEmpty()) {
             notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+        }
+    }
+
+    /**
+     * Reads the REAL view totals for the featured Reel pool from Cloudflare D1 (Worker `/v1/views`).
+     * Firebase is authentication only — no view counter is read from or written to Firestore. One
+     * batched request per collection, cached 60s inside `CloudflareViews`, callback on the main
+     * thread, and the card is re-bound only when a stored total actually differs.
+     */
+    private void refreshRealViewCounts() {
+        if (featuredReels.isEmpty()) return;
+        final java.util.Map<String, java.util.List<String>> byCollection = new java.util.HashMap<>();
+        for (Models.Reel r : featuredReels) {
+            if (r == null || r.id == null || r.id.isEmpty()) continue;
+            java.util.List<String> ids = byCollection.get(r.collectionName());
+            if (ids == null) {
+                ids = new ArrayList<>();
+                byCollection.put(r.collectionName(), ids);
+            }
+            ids.add(r.id);
+        }
+        for (java.util.Map.Entry<String, java.util.List<String>> entry : byCollection.entrySet()) {
+            final String collection = entry.getKey();
+            com.friendbook.social.core.CloudflareViews.fetchViews(collection, entry.getValue(), views -> {
+                if (views == null || views.isEmpty()) return;
+                boolean changed = false;
+                for (Models.Reel r : featuredReels) {
+                    if (r == null || r.id == null || !collection.equals(r.collectionName())) continue;
+                    Integer total = views.get(r.id);
+                    if (total != null && total.intValue() != r.views) {
+                        r.views = total.intValue();
+                        changed = true;
+                    }
+                }
+                if (changed && showHeader && !posts.isEmpty()) {
+                    notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+                }
+            });
         }
     }
 
@@ -623,7 +662,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.firstPostReelThumbIv); } catch (Throwable ignored) {}
             vh.firstPostReelThumbIv.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
         }
-        int realViews = featured != null ? Math.max(0, featured.views) : 0;
+        int realViews = 0;
+        if (featured != null) {
+            // Cloudflare D1 holds the authoritative counter; the model value is only a fallback
+            // for a Reel whose total has not been read yet. Never a synthesized number.
+            Integer cloudViews = com.friendbook.social.core.CloudflareViews.cached(
+                    featured.collectionName(), featured.id);
+            realViews = Math.max(0, cloudViews != null ? cloudViews.intValue() : featured.views);
+        }
         vh.firstPostReelViewsTv.setText(Format.count(realViews));
         if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
             vh.firstPostReelCaptionTv.setText(featured.authorName + "  ·  Watch Reels ›");
@@ -1537,18 +1583,26 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("View post insights")) {
                 int rxCount = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 int cmCount = Math.max(p.comments, p.inlineComments != null ? p.inlineComments.size() : 0);
-                // 100% real counters only — never a fabricated/estimated reach number
-                new android.app.AlertDialog.Builder(c)
-                        .setTitle("Post Insights")
-                        .setMessage("Views: " + Format.count(Math.max(0, p.views)) + "\n\n"
-                                + "Reactions: " + rxCount + "\n"
-                                + "Comments: " + cmCount + "\n"
-                                + "Shares: " + p.shares + "\n"
-                                + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
-                        .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
-                        .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
-                        .setNegativeButton("Close", null)
-                        .show();
+                // 100% real counters only — never a fabricated/estimated reach number. The view
+                // counter is read from Cloudflare D1 (Worker /v1/views); Firebase is auth only.
+                com.friendbook.social.core.CloudflareViews.fetchViews(
+                        com.friendbook.social.core.CloudflareViews.POSTS,
+                        java.util.Collections.singletonList(p.id),
+                        cloudViews -> {
+                            Integer stored = cloudViews != null ? cloudViews.get(p.id) : null;
+                            int viewCount = Math.max(0, stored != null ? stored.intValue() : p.views);
+                            new android.app.AlertDialog.Builder(c)
+                                    .setTitle("Post Insights")
+                                    .setMessage("Views: " + Format.count(viewCount) + "\n\n"
+                                            + "Reactions: " + rxCount + "\n"
+                                            + "Comments: " + cmCount + "\n"
+                                            + "Shares: " + p.shares + "\n"
+                                            + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
+                                    .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
+                                    .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
+                                    .setNegativeButton("Close", null)
+                                    .show();
+                        });
             }
             else if (t.contains("View full profile picture")) {
                 Intent fullDp = new Intent(c, FullscreenMediaActivity.class);

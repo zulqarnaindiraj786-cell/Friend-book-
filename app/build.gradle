@@ -12,6 +12,8 @@ android {
         applicationId 'com.friendbook.social'
         buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
         buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
+        // Real view counters live in Cloudflare D1 (Worker /v1/views); Firebase is auth only.
+        buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36

@@ -340,7 +340,8 @@ public final class ReelUploadManager {
                 if (opts.mirrorHorizontal) {
                     doc.put("mirrorHorizontal", true);
                 }
-                doc.put("views", 0);
+                // No `views` field: real view counters are stored in Cloudflare D1 by the Worker
+                // (/v1/views), never in Firestore. A brand new Reel simply starts with no count.
             }
 
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);

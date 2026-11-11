@@ -2127,10 +2127,14 @@ public class ReelsFragment extends Fragment {
                     if (!activeMp.isPlaying()) activeMp.start();
                     if (reel != null && reel.id != null && !reel.id.isEmpty()
                             && !reel.id.startsWith("opt_") && sessionViewedReelIds.add(reel.id)) {
-                        reel.views = Math.max(0, reel.views) + 1;
+                        // Real view counts live in Cloudflare D1 via the Worker (/v1/views).
+                        // Firebase is authentication only here: NOTHING is written to Firestore and
+                        // the total is never guessed locally — the Worker returns the stored count.
+                        final Models.Reel viewedReel = reel;
                         try {
-                            Fb.db().collection(reel.collectionName()).document(reel.id)
-                                    .update("views", FieldValue.increment(1));
+                            com.friendbook.social.core.CloudflareViews.recordView(
+                                    viewedReel.collectionName(), viewedReel.id,
+                                    total -> viewedReel.views = Math.max(0, total));
                         } catch (Throwable ignored) {}
                     }
                     if (hasAttachedSound && !muted) {
