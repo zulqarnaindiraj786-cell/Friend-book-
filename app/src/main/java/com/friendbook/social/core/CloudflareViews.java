@@ -30,15 +30,16 @@ import java.util.function.Consumer;
  * Firebase is used for AUTHENTICATION ONLY here: the Worker verifies the Firebase ID token and owns
  * the counter. A view count is never written to Firestore by this client.
  *
- * The Worker counts in its own memory plus one Workers KV aggregate key and writes D1 at most once
- * per hour per resource, so counting or reading a view costs ZERO D1 row reads. Nothing changes for
- * this client: it still POSTs one real play and reads real totals, and every number it shows comes
- * from the Worker — never a local guess, and never lower than one the user already saw.
+ * The Worker writes every view as ONE Cloudflare Analytics Engine event and counts it with AE's
+ * uniq(uid); Worker memory plus one KV aggregate key serve the number instantly. D1 receives ZERO
+ * writes and zero reads from the view path. Nothing changes for this client: it still POSTs one real
+ * play and reads real totals, and every number it shows comes from the Worker — never a local guess,
+ * and never lower than one the user already saw.
  *
  * Counting rule (product decision): ONE view per user per resource, forever. One second of real
  * watching is enough to count it; watching the whole video, looping it or coming back next month
- * adds nothing. The Worker de-dupes durably per (resource, uid) with a write-only check, so the rule
- * costs zero D1 row reads, and every stored number still comes from a real play event.
+ * adds nothing. Analytics Engine de-dupes by uid when it aggregates, so the rule needs no database
+ * row at all, and every stored number still comes from a real play event.
  *
  * The Home Feed calls none of this: it shows no view number and issues no views request, so loading
  * or scrolling the feed costs no D1 read, no D1 write, no KV read, no KV write and no HTTP call.
@@ -66,7 +67,7 @@ public final class CloudflareViews {
 
     /**
      * In-flight guard only: never POST the same resource twice at the very same moment. Re-watches
-     * are refused by the Worker itself — one view per user per resource, forever.
+     * are refused by the Worker and by Analytics Engine — one view per user per resource, forever.
      */
     private static final Set<String> POSTING = Collections.synchronizedSet(new HashSet<String>());
     private static final Set<String> IN_FLIGHT = Collections.synchronizedSet(new HashSet<String>());
@@ -158,19 +159,19 @@ public final class CloudflareViews {
         }
     }
 
-    /** Counts one real view in Cloudflare (one second of watching = one view). */
+    /** Counts one real view as an Analytics Engine event (one second of watching = one view). */
     public static void recordView(String collection, String id) {
         recordView(collection, id, null);
     }
 
     /**
-     * Counts one real view in Cloudflare and reports the authoritative total back on the main
+     * Counts one real view in Cloudflare and reports the live total back on the main
      * thread. The callback is skipped when the Worker is unreachable — the count is never guessed.
      *
-     * Calling this again for the same resource does NOT count again: the Worker keeps one view per
-     * user per resource, and `ReelsFragment` does not even re-send a Reel it already sent in this
-     * app session. Two calls racing on the same millisecond are collapsed by the in-flight guard, so
-     * no number can ever be invented or double counted.
+     * Calling this again for the same resource does NOT count again: Analytics Engine counts each
+     * user once per resource, and `ReelsFragment` does not even re-send a Reel it already sent in
+     * this app session. Two calls racing on the same millisecond are collapsed by the in-flight
+     * guard, so no number can ever be invented or double counted.
      */
     public static void recordView(final String collection, final String id, final Consumer<Integer> onCounted) {
         if (!enabled() || !validCollection(collection) || !validId(id)) return;
