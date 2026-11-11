@@ -108,12 +108,22 @@ jobs:
         id: rel
         run: |
           set +e
+          for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
+            DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
+            JAR="$DIR/android-all-instrumented-$VER.jar"
+            if [ ! -s "$JAR" ]; then
+              mkdir -p "$DIR"
+              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
+                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            fi
+          done
           gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
           RC=$?
           if [ "$RC" != "0" ]; then
             echo "Retrying Gradle build after transient artifact fetch..."
             sleep 5
-            gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+            gradle testReleaseUnitTest bundleRelease assembleRelease --rerun-tasks --console=plain > build-release.log 2>&1
             RC=$?
           fi
           echo "exit=$RC" >> "$GITHUB_OUTPUT"
