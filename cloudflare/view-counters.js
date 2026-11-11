@@ -2,18 +2,21 @@
 // Firebase is used for authentication ONLY — no view count is ever written to Firestore.
 //
 // Routes (all require a verified Firebase ID token, resolved to `uid` by worker.js):
-//   POST /v1/views/{posts|reels}/{id}            -> { resource, views, counted }
+//   POST /v1/views/{posts|reels}/{id}            -> { resource, views, counted, gapMs }
 //   GET  /v1/views/{posts|reels}/{id}            -> { resource, views }
 //   GET  /v1/views?collection=reels&ids=a,b,c    -> { collection, views: { id: n } }
 //   GET  /v1/views?collection=reels&top=25       -> { collection, views: { id: n } } (most viewed first)
 //
-// One view is counted per (resource, uid, UTC day). That keeps the number real: refreshing,
-// re-watching or replaying in a loop cannot inflate it, and writes stay inside the D1 free tier.
+// Counting rule: watching a resource for one second is ONE real view, and the same user watching
+// it again counts again. The only floor is one counted view per (resource, uid) per second, so a
+// double-fired client callback or a runaway loop can never write more than one row per second.
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
 
 const COLLECTIONS = new Set(['posts', 'reels']);
+/** Minimum gap between two counted views of the same resource by the same user. */
+const MIN_VIEW_GAP_MS = 1000;
 const MAX_BATCH_IDS = 50;
 const MAX_TOP = 50;
 const DEFAULT_TOP = 25;
@@ -44,6 +47,11 @@ async function ensureSchema(db) {
         uid TEXT NOT NULL,
         bucket TEXT NOT NULL,
         PRIMARY KEY (resource, uid, bucket))`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS friendbook_cf_view_last (
+        resource TEXT NOT NULL,
+        uid TEXT NOT NULL,
+        last_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (resource, uid))`),
   ]);
   // Prepared after the tables exist: an eagerly compiled statement cannot reference a table that
   // has not been created yet. Runs once per Worker isolate (guarded by ensuredSchemas).
@@ -59,7 +67,7 @@ async function readViews(db, resource) {
   return row ? Number(row.views) || 0 : 0;
 }
 
-export async function viewCounters(request, env, identity, match, url) {
+export async function viewCounters(request, env, identity, match, url, nowMs = Date.now) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const db = env.DB;
   try { await ensureSchema(db); } catch { return json({ error: 'Database unavailable' }, 503); }
@@ -120,27 +128,26 @@ export async function viewCounters(request, env, identity, match, url) {
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  const bucket = new Date().toISOString().slice(0, 10);
-  const now = Date.now();
+  const now = Number(nowMs()) || Date.now();
   let counted = false;
   try {
-    const dedupe = await db.prepare(
-      `INSERT INTO friendbook_cf_view_dedupe(resource, uid, bucket) VALUES (?, ?, ?)
-       ON CONFLICT(resource, uid, bucket) DO NOTHING`,
-    ).bind(resource, uid, bucket).run();
-    counted = changesOf(dedupe) > 0;
+    // Upsert the per-user stamp, but only when the previous counted view is at least one second
+    // old. `changes` is 0 when the WHERE filters the update out, so nothing is counted twice.
+    const stamp = await db.prepare(
+      `INSERT INTO friendbook_cf_view_last(resource, uid, last_at) VALUES (?, ?, ?)
+       ON CONFLICT(resource, uid) DO UPDATE SET last_at = excluded.last_at
+       WHERE last_at <= ?`,
+    ).bind(resource, uid, now, now - MIN_VIEW_GAP_MS).run();
+    counted = changesOf(stamp) > 0;
     if (counted) {
-      // Insert-then-increment keeps concurrent viewers race-free (views = views + 1 in SQL).
+      // One upsert = one row written: views = views + 1 stays race-free for concurrent viewers.
       await db.prepare(
-        `INSERT INTO friendbook_cf_view_counters(resource, views, updated_at) VALUES (?, 0, ?)
-         ON CONFLICT(resource) DO NOTHING`,
+        `INSERT INTO friendbook_cf_view_counters(resource, views, updated_at) VALUES (?, 1, ?)
+         ON CONFLICT(resource) DO UPDATE SET views = views + 1, updated_at = excluded.updated_at`,
       ).bind(resource, now).run();
-      await db.prepare(
-        'UPDATE friendbook_cf_view_counters SET views = views + 1, updated_at = ? WHERE resource = ?',
-      ).bind(now, resource).run();
     }
   } catch {
     return json({ error: 'Database unavailable; no view was counted' }, 503);
   }
-  return json({ resource, views: await readViews(db, resource), counted });
+  return json({ resource, views: await readViews(db, resource), counted, gapMs: MIN_VIEW_GAP_MS });
 }

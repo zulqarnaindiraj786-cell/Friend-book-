@@ -30,8 +30,9 @@ import java.util.function.Consumer;
  * Firebase is used for AUTHENTICATION ONLY here: the Worker verifies the Firebase ID token and
  * stores the counter in Cloudflare D1. A view count is never written to Firestore by this client.
  *
- * The Worker counts one view per (resource, uid, UTC day), so replays, pull-to-refresh, re-binding
- * or a reinstall cannot inflate a number — every count shown in the app is a real Cloudflare total.
+ * Counting rule (product decision): one second of real watching = one view, and the same user
+ * watching again counts again. The Worker keeps a one-second floor per (resource, uid) so a double
+ * fired callback can never write twice — every stored number still comes from a real play event.
  * Requests are fire-and-forget on a low-priority background thread: they never block scrolling and
  * a failure is silent (no toast, no retry loop, no synthesized fallback number).
  */
@@ -54,8 +55,11 @@ public final class CloudflareViews {
     });
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
-    /** Session de-dupe: one POST per resource per process (the Worker de-dupes per user per day). */
-    private static final Set<String> RECORDED = Collections.synchronizedSet(new HashSet<String>());
+    /**
+     * In-flight guard only: never POST the same resource twice at the very same moment. Every real
+     * re-watch counts — the Worker floors it to one counted view per user per second.
+     */
+    private static final Set<String> POSTING = Collections.synchronizedSet(new HashSet<String>());
     private static final Set<String> IN_FLIGHT = Collections.synchronizedSet(new HashSet<String>());
     private static final LruCache<String, Integer> COUNTS = new LruCache<>(512);
     private static final LruCache<String, Long> COUNTS_AT = new LruCache<>(512);
@@ -140,7 +144,7 @@ public final class CloudflareViews {
         }
     }
 
-    /** Counts one real view in Cloudflare D1 for this user (once per resource per session). */
+    /** Counts one real view in Cloudflare D1 (one second of watching = one view). */
     public static void recordView(String collection, String id) {
         recordView(collection, id, null);
     }
@@ -148,11 +152,15 @@ public final class CloudflareViews {
     /**
      * Counts one real view in Cloudflare D1 and reports the authoritative total back on the main
      * thread. The callback is skipped when the Worker is unreachable — the count is never guessed.
+     *
+     * Calling this again for the same resource counts again (re-watches are real views); only two
+     * calls racing on the same millisecond are collapsed, and the Worker keeps its own one-second
+     * per-user floor, so no number can ever be invented or double written.
      */
     public static void recordView(final String collection, final String id, final Consumer<Integer> onCounted) {
         if (!enabled() || !validCollection(collection) || !validId(id)) return;
         final String key = resource(collection, id);
-        if (!RECORDED.add(key)) {
+        if (!POSTING.add(key)) {
             final Integer known = COUNTS.get(key);
             if (known != null && onCounted != null) MAIN.post(() -> onCounted.accept(known));
             return;
@@ -168,11 +176,12 @@ public final class CloudflareViews {
                     MAIN.post(() -> onCounted.accept(total));
                 }
             } catch (Throwable ignored) {
-                // Offline / Worker busy: this view is simply not counted. Allow one later attempt
-                // in the same session instead of retrying in a loop right now.
-                RECORDED.remove(key);
+                // Offline / Worker busy: this view is simply not counted, never faked and never
+                // retried in a loop. The next real watch posts again.
+            } finally {
+                POSTING.remove(key);
             }
-        }, () -> RECORDED.remove(key));
+        }, () -> POSTING.remove(key));
     }
 
     /**

@@ -81,12 +81,6 @@ public class ReelsFragment extends Fragment {
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
     private int videoGeneration;
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
-    /**
-     * Real-view de-duplication: one counted view per Reel per app session. Static because the
-     * Reel ViewHolder is a static nested class, and a session outlives a single fragment instance.
-     */
-    private static final java.util.Set<String> sessionViewedReelIds =
-            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private LinearLayout emptyState;
     private LinearLayout initialLoadingBox;
     private LinearLayout uploadStatusBanner;
@@ -1423,6 +1417,10 @@ public class ReelsFragment extends Fragment {
             float speed = 1.0f;
             float soundDiscRotation = 0f;
             Models.Reel reel;
+            /** True once this play-through reached one second and its view was sent to Cloudflare. */
+            boolean viewCountedThisPlay = false;
+            /** Last observed playback position, used to detect a loop/rewind (= a new real watch). */
+            int lastTickPos = 0;
 
             private final Handler uiHandler = new Handler(Looper.getMainLooper());
             private final Runnable progressTicker = new Runnable() {
@@ -1438,6 +1436,17 @@ public class ReelsFragment extends Fragment {
                             }
                             if (dur > 0) {
                                 scrubBar.setProgress((int) ((pos * 1000L) / dur));
+                            }
+                            // A rewind means the Reel looped (setLooping(true)) or the trim window
+                            // restarted: the user is watching it again, so the next second counts
+                            // as another real view.
+                            if (pos + 400 < lastTickPos) {
+                                viewCountedThisPlay = false;
+                            }
+                            lastTickPos = pos;
+                            if (!viewCountedThisPlay && pos >= 1000) {
+                                viewCountedThisPlay = true;
+                                countRealView();
                             }
                             soundDiscRotation = (soundDiscRotation + 5.5f) % 360f;
                             if (soundBtnBox != null) soundBtnBox.setRotation(soundDiscRotation);
@@ -2126,18 +2135,14 @@ public class ReelsFragment extends Fragment {
                     float vol = (muted || hasAttachedSound) ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
                     if (!activeMp.isPlaying()) activeMp.start();
-                    if (reel != null && reel.id != null && !reel.id.isEmpty()
-                            && !reel.id.startsWith("opt_") && sessionViewedReelIds.add(reel.id)) {
-                        // Real view counts live in Cloudflare D1 via the Worker (/v1/views).
-                        // Firebase is authentication only here: NOTHING is written to Firestore and
-                        // the total is never guessed locally — the Worker returns the stored count.
-                        final Models.Reel viewedReel = reel;
-                        try {
-                            com.friendbook.social.core.CloudflareViews.recordView(
-                                    viewedReel.collectionName(), viewedReel.id,
-                                    total -> viewedReel.views = Math.max(0, total));
-                        } catch (Throwable ignored) {}
-                    }
+                    // Starting from (near) the beginning is a new watch: re-arm the one-second view
+                    // counter. Resuming after a pause keeps the already counted view as it is.
+                    try {
+                        if (activeMp.getCurrentPosition() < 600) {
+                            viewCountedThisPlay = false;
+                            lastTickPos = 0;
+                        }
+                    } catch (Throwable ignored) {}
                     if (hasAttachedSound && !muted) {
                         ensureExternalSoundPlaying(itemView.getContext(), reel.audioUrl.trim());
                     }
@@ -2181,6 +2186,22 @@ public class ReelsFragment extends Fragment {
                     });
                     emp.prepareAsync();
                 } catch (Throwable ignored) { }
+            }
+
+            /**
+             * Counts ONE real view in Cloudflare D1 (Worker `/v1/views`) after one second of actual
+             * watching. Firebase is authentication only: nothing is written to Firestore and the
+             * number is never guessed locally — the Worker returns the stored total. Re-watches and
+             * loops count again; the Worker floors it to one counted view per user per second.
+             */
+            private void countRealView() {
+                if (reel == null || reel.id == null || reel.id.isEmpty() || reel.id.startsWith("opt_")) return;
+                final Models.Reel viewedReel = reel;
+                try {
+                    com.friendbook.social.core.CloudflareViews.recordView(
+                            viewedReel.collectionName(), viewedReel.id,
+                            total -> viewedReel.views = Math.max(0, total));
+                } catch (Throwable ignored) {}
             }
 
             private void togglePlayPause() {
