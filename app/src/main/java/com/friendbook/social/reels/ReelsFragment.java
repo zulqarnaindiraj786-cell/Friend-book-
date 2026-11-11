@@ -1830,7 +1830,7 @@ public class ReelsFragment extends Fragment {
                 String customAudio = (reel.audioTitle != null && !reel.audioTitle.trim().isEmpty())
                         ? reel.audioTitle.trim()
                         : ("Original sound - " + (reel.authorName == null ? "friendbook" : reel.authorName));
-                audioT.setText("♫ " + customAudio + "   ·   Use sound ›");
+                audioT.setText(customAudio + "   ·   Use sound ›");
                 String discPhoto = (reel.soundAuthorPhoto != null && !reel.soundAuthorPhoto.trim().isEmpty())
                         ? reel.soundAuthorPhoto.trim() : reel.authorPhoto;
                 Ui.avatar(c, soundDiscAvatarIv, discPhoto);
@@ -1902,7 +1902,7 @@ public class ReelsFragment extends Fragment {
                 boolean isMe = me != null && me.equals(reel.authorId);
                 followT.setVisibility(isMe ? View.GONE : View.VISIBLE);
                 if (!isMe && Fb.me != null && Fb.me.following != null) {
-                    followT.setText(Fb.me.following.contains(reel.authorId) ? "Following ✓" : "Follow");
+                    followT.setText(Fb.me.following.contains(reel.authorId) ? "Following" : "Follow");
                 }
             }
 
@@ -2508,7 +2508,7 @@ public class ReelsFragment extends Fragment {
                 if (!already) {
                     FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
                 }
-                Ui.toast(a, already ? "Removed from Favorites" : "Added to Favorites ⭐");
+                Ui.toast(a, already ? "Removed from Favorites" : "Added to Favorites");
             }
 
             /**
@@ -2544,17 +2544,17 @@ public class ReelsFragment extends Fragment {
 
                 LinearLayout metaCol = Ui.col(a);
                 metaCol.setPadding(Ui.dp(a, 14), 0, 0, 0);
-                TextView titleTv = Ui.tvBold(a, "♫ " + soundTitle, 16f, Ui.txt(a));
+                TextView titleTv = Ui.tvBold(a, soundTitle, 16f, Ui.txt(a));
                 metaCol.addView(titleTv);
                 TextView creatorTv = Ui.tv(a, "Creator: @" + (reel.authorName == null ? "user" : reel.authorName), 13f, Ui.sub(a));
                 creatorTv.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 4));
                 metaCol.addView(creatorTv);
-                TextView hintTv = Ui.tvBold(a, "✨ Tap 'Use this sound' to add this sound to your video", 12f, Ui.BLUE);
+                TextView hintTv = Ui.tvBold(a, "Tap 'Use this sound' to add this sound to your video", 12f, Ui.BLUE);
                 metaCol.addView(hintTv);
                 topRow.addView(metaCol, new LinearLayout.LayoutParams(0, -2, 1f));
                 sheet.addView(topRow);
 
-                TextView useSoundBtn = Ui.tvBold(a, "🎬  Use this sound", 15f, Color.WHITE);
+                TextView useSoundBtn = Ui.tvBold(a, "Use this sound", 15f, Color.WHITE);
                 useSoundBtn.setGravity(Gravity.CENTER);
                 useSoundBtn.setBackground(Ui.round(a, 0xFFFE2C55, 24));
                 Ui.pad(useSoundBtn, 20, 13, 20, 13);
@@ -2585,21 +2585,21 @@ public class ReelsFragment extends Fragment {
                 String me = Fb.uid();
                 if (me == null) return;
                 Notify.follow(reel.authorId, true);
-                followT.setText("Following ✓");
-                Ui.toast(itemView.getContext(), "Following " + reel.authorName + " ✓");
+                followT.setText("Following");
+                Ui.toast(itemView.getContext(), "Following " + reel.authorName);
             }
 
             private void shareSheet(Activity a) {
                 if (reel == null) return;
                 if (reel.id != null && reel.id.startsWith("local_uploading_")) {
-                    Ui.toast(a, "⏳ Reel is finishing upload — ready to share in a moment!");
+                    Ui.toast(a, "Reel is finishing upload — ready to share in a moment!");
                     return;
                 }
                 Ui.choose(a, "Share Reel", new String[]{
-                        "📤 Share Reel to your News Feed",
-                        "📖 Add Reel to your Story",
-                        "📲 Send via WhatsApp / Other Apps",
-                        "🔗 Copy Reel Video Link"
+                        "Share Reel to your News Feed",
+                        "Add Reel to your Story",
+                        "Send via WhatsApp / Other Apps",
+                        "Copy Reel Video Link"
                 }, which -> {
                     reel.shares++;
                     renderCounts();
@@ -2614,8 +2614,8 @@ public class ReelsFragment extends Fragment {
                                 "authorVerified", Fb.me != null && Fb.me.isVerified,
                                 "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none",
                                 "content", reel.caption != null && !reel.caption.isEmpty()
-                                        ? ("🎬 Shared a Reel by " + reel.authorName + ": " + reel.caption)
-                                        : ("🎬 Shared a Reel by " + reel.authorName),
+                                        ? ("Shared a Reel by " + reel.authorName + ": " + reel.caption)
+                                        : ("Shared a Reel by " + reel.authorName),
                                 "mediaType", "video",
                                 "mediaUrl", reel.videoUrl,
                                 "privacy", "Public",
@@ -2623,7 +2623,7 @@ public class ReelsFragment extends Fragment {
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
                         Fb.db().collection("posts").add(postMap);
-                        Ui.toast(a, "Reel shared to your News Feed ✓");
+                        Ui.toast(a, "Reel shared to your News Feed");
                     } else if (which == 1) {
                         Map<String, Object> s = new HashMap<>();
                         s.put("authorId", Fb.uid());
@@ -2631,17 +2631,17 @@ public class ReelsFragment extends Fragment {
                         s.put("authorPhotoUrl", Fb.myPhoto());
                         s.put("mediaUrl", reel.videoUrl);
                         s.put("mediaType", "video");
-                        s.put("caption", "🎬 Reel by " + reel.authorName);
+                        s.put("caption", "Reel by " + reel.authorName);
                         s.put("viewedBy", new ArrayList<String>());
                         s.put("createdAt", FieldValue.serverTimestamp());
                         s.put("expiresAt", new com.google.firebase.Timestamp(
                                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
                         Fb.db().collection("stories").add(s);
-                        Ui.toast(a, "Added Reel to your Story 📖");
+                        Ui.toast(a, "Added Reel to your Story");
                     } else if (which == 2) {
                         Intent i = new Intent(Intent.ACTION_SEND);
                         i.setType("text/plain");
-                        i.putExtra(Intent.EXTRA_TEXT, "🎬 Watch " + reel.authorName + "'s Reel on friendbook:\n"
+                        i.putExtra(Intent.EXTRA_TEXT, "Watch " + reel.authorName + "'s Reel on friendbook:\n"
                                 + (reel.caption == null ? "" : reel.caption + "\n") + reel.videoUrl);
                         a.startActivity(Intent.createChooser(i, "Share Reel"));
                     } else {
@@ -2653,20 +2653,20 @@ public class ReelsFragment extends Fragment {
             private void showMoreMenu(Activity a, View anchor) {
                 if (reel == null) return;
                 PopupMenu m = new PopupMenu(a, anchor);
-                m.getMenu().add(0, 10, 0, "🎬 Upload Your Own Reel");
-                m.getMenu().add(0, 1, 0, "👍 See who reacted");
-                m.getMenu().add(0, 2, 0, "⏩ Playback speed (" + speed + "x)");
-                m.getMenu().add(0, 3, 0, "⬇ Download Reel video");
-                m.getMenu().add(0, 4, 0, "🔗 Copy video link");
+                m.getMenu().add(0, 10, 0, "Upload Your Own Reel");
+                m.getMenu().add(0, 1, 0, "See who reacted");
+                m.getMenu().add(0, 2, 0, "Playback speed (" + speed + "x)");
+                m.getMenu().add(0, 3, 0, "Download Reel video");
+                m.getMenu().add(0, 4, 0, "Copy video link");
                 if (reel.authorPhoto != null && !reel.authorPhoto.isEmpty()) {
-                    m.getMenu().add(0, 5, 0, "👁 View creator's full DP");
+                    m.getMenu().add(0, 5, 0, "View creator's full DP");
                 }
-                m.getMenu().add(0, 6, 0, "🚩 Report Reel");
+                m.getMenu().add(0, 6, 0, "Report Reel");
                 if (reel.authorId != null && !reel.authorId.equals(Fb.uid())) {
-                    m.getMenu().add(0, 7, 0, "🚫 Block " + (reel.authorName == null ? "creator" : reel.authorName));
+                    m.getMenu().add(0, 7, 0, "Block " + (reel.authorName == null ? "creator" : reel.authorName));
                     if (com.friendbook.social.core.Admin.canModerate()) {
                         m.getMenu().add(0, 8, 0, com.friendbook.social.core.Admin.isAdmin()
-                                ? "🛡 🗑 Delete Reel (Admin)" : "🛡 🗑 Delete Reel (Moderator)");
+                                ? "Delete Reel (Admin)" : "Delete Reel (Moderator)");
                     }
                 }
                 m.setOnMenuItemClickListener(it -> {
@@ -2683,7 +2683,7 @@ public class ReelsFragment extends Fragment {
                             }
                             Ui.confirm(a, "Delete Reel?", "Remove this reel permanently?", "Delete", () ->
                                     Fb.db().collection(reel.collectionName()).document(reel.id).delete()
-                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted 🗑")));
+                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted")));
                         });
                         return true;
                     }
@@ -2707,7 +2707,7 @@ public class ReelsFragment extends Fragment {
                                 req.setTitle(fn);
                                 req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fn);
                                 dm.enqueue(req);
-                                Ui.toast(a, "⬇ Downloading Reel to Downloads…");
+                                Ui.toast(a, "Downloading Reel to Downloads…");
                             }
                         } catch (Throwable t) {
                             Ui.openUrl(a, reel.videoUrl);
@@ -2722,13 +2722,13 @@ public class ReelsFragment extends Fragment {
                         a.startActivity(dp);
                     } else if (id == 6) {
                         final String[] reasons = {
-                                "🔞 Nudity or explicit sexual video",
-                                "🚨 Child safety / CSAE violation (Zero Tolerance)",
-                                "🩸 Graphic violence or dangerous acts",
-                                "😡 Harassment, hate speech or bullying",
-                                "🎭 Spam or misleading content"
+                                "Nudity or explicit sexual video",
+                                "Child safety / CSAE violation (Zero Tolerance)",
+                                "Graphic violence or dangerous acts",
+                                "Harassment, hate speech or bullying",
+                                "Spam or misleading content"
                         };
-                        Ui.choose(a, "🚩 Report Reel", reasons, w -> {
+                        Ui.choose(a, "Report Reel", reasons, w -> {
                             String reason = reasons[w];
                             Fb.db().collection("reports").add(Fb.map(
                                     "reelId", reel.id,
@@ -2743,9 +2743,9 @@ public class ReelsFragment extends Fragment {
                                         a, reel.collectionName(), reel.id, reel.authorId,
                                         w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
                                         reason, null);
-                                Ui.toast(a, "🛡 Violating Reel removed & reported ✓");
+                                Ui.toast(a, "Violating Reel removed & reported");
                             } else {
-                                Ui.toast(a, "Reel hidden & reported ✓");
+                                Ui.toast(a, "Reel hidden & reported");
                             }
                         });
                     } else if (id == 7) {
@@ -2759,7 +2759,7 @@ public class ReelsFragment extends Fragment {
                                         if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(reel.authorId)) {
                                             Fb.me.blocked.add(reel.authorId);
                                         }
-                                        Ui.toast(a, "Blocked " + reel.authorName + " 🚫");
+                                        Ui.toast(a, "Blocked " + reel.authorName);
                                     });
                         }
                     }

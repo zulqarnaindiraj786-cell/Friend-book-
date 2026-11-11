@@ -119,7 +119,7 @@ public final class ReelUploadManager {
         if (context == null || sourceUri == null) return;
         if (!com.friendbook.social.core.Admin.checkNotSuspended(context)) return;
         if (uploading) {
-            Ui.toast(context, "⏳ A Reel upload is already in progress (" + currentPercent + "%)");
+            Ui.toast(context, "A Reel upload is already in progress (" + currentPercent + "%)");
             return;
         }
         final Context appCtx = context.getApplicationContext();
@@ -353,8 +353,8 @@ public final class ReelUploadManager {
                             stagedFile.delete();
                         } catch (Throwable ignored) { }
                     }, 8000L);
-                    emit(false, 100, totalBytes, totalBytes, "✅ Your Reel is Live!", true, null);
-                    Ui.toast(appCtx, "🎬 Your Reel is Live!");
+                    emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
+                    Ui.toast(appCtx, "Your Reel is Live!");
                 });
                 return;
             }
@@ -366,8 +366,8 @@ public final class ReelUploadManager {
                         stagedFile.delete();
                     } catch (Throwable ignored) { }
                 }, 8000L);
-                emit(false, 100, totalBytes, totalBytes, "✅ Your Reel is Live!", true, null);
-                Ui.toast(appCtx, "🎬 Your Reel is Live!");
+                emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
+                Ui.toast(appCtx, "Your Reel is Live!");
             }).addOnFailureListener(e -> {
                 optimisticReel = null;
                 //noinspection ResultOfMethodCallIgnored

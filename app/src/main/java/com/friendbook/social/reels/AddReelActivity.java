@@ -496,7 +496,7 @@ public class AddReelActivity extends Activity {
         rightRail.setGravity(Gravity.CENTER_HORIZONTAL);
         Ui.pad(rightRail, 8, 8, 12, 8);
 
-        rightRail.addView(makeRailTool("🔄", "Flip", null, v -> {
+        rightRail.addView(makeRailTool("flip", "Flip", null, v -> {
             if (cameraController != null) {
                 cameraController.flipCamera();
                 camFrontFlashRing.setVisibility(View.GONE);
@@ -504,7 +504,7 @@ public class AddReelActivity extends Activity {
             }
         }));
 
-        LinearLayout flashItem = makeRailTool("⚡", "Flash Off", tv -> camFlashLabelTv = tv, v -> {
+        LinearLayout flashItem = makeRailTool("flash", "Flash Off", tv -> camFlashLabelTv = tv, v -> {
             if (cameraController == null) return;
             boolean on = cameraController.toggleFlash();
             if (camFlashLabelTv != null) camFlashLabelTv.setText(on ? "Flash On" : "Flash Off");
@@ -512,7 +512,7 @@ public class AddReelActivity extends Activity {
         });
         rightRail.addView(flashItem);
 
-        rightRail.addView(makeRailTool("⏱", "Timer", tv -> camTimerLabelTv = tv, v -> {
+        rightRail.addView(makeRailTool("timer", "Timer", tv -> camTimerLabelTv = tv, v -> {
             if (countdownTimerSec == 0) countdownTimerSec = 3;
             else if (countdownTimerSec == 3) countdownTimerSec = 10;
             else countdownTimerSec = 0;
@@ -530,9 +530,9 @@ public class AddReelActivity extends Activity {
             }
         }));
 
-        rightRail.addView(makeRailTool("🎨", "Filters", null, v -> cycleOrPickFilterDialog()));
+        rightRail.addView(makeRailTool("filter", "Filters", null, v -> cycleOrPickFilterDialog()));
 
-        rightRail.addView(makeRailTool("✨", "Beautify", tv -> camBeautyLabelTv = tv, v -> {
+        rightRail.addView(makeRailTool("beauty", "Beautify", tv -> camBeautyLabelTv = tv, v -> {
             activeBeautyLevel = (activeBeautyLevel + 1) % 4;
             refreshCameraGrade();
             refreshStageOverlays();
@@ -952,9 +952,9 @@ public class AddReelActivity extends Activity {
         rightRail.setGravity(Gravity.CENTER_HORIZONTAL);
         Ui.pad(rightRail, 6, 4, 12, 12);
 
-        rightRail.addView(makeRailTool("⚙️", "Settings", null, v -> showEditorSettingsDialog()));
-        rightRail.addView(makeRailTool("✂️", "Edit", null, v -> toggleTrimPanel()));
-        rightRail.addView(makeRailTool("🎞️", "Templates", null, v -> {
+        rightRail.addView(makeRailTool("settings", "Settings", null, v -> showEditorSettingsDialog()));
+        rightRail.addView(makeRailTool("scissors", "Edit", null, v -> toggleTrimPanel()));
+        rightRail.addView(makeRailTool("template", "Templates", null, v -> {
             activeBeautyLevel = 3;
             editOpts.filterPreset = "vivid";
             editOpts.filterOverlayColor = 0x18FFF3E8;
@@ -962,16 +962,16 @@ public class AddReelActivity extends Activity {
             Ui.toast(this, "4K UHD Cinema Template Applied");
         }));
         rightRail.addView(makeRailTool("Aa", "Text", null, v -> showTextOverlayDialog()));
-        rightRail.addView(makeRailTool("😊", "Stickers", null, v -> showStickerPickerDialog()));
-        rightRail.addView(makeRailTool("✨", "Effects", null, v -> openEffectsBottomSheet()));
-        rightRail.addView(makeRailTool("🎨", "Filters", null, v -> toggleFilterBar()));
+        rightRail.addView(makeRailTool("sticker", "Stickers", null, v -> showStickerPickerDialog()));
+        rightRail.addView(makeRailTool("beauty", "Effects", null, v -> openEffectsBottomSheet()));
+        rightRail.addView(makeRailTool("filter", "Filters", null, v -> toggleFilterBar()));
 
         // Collapsible Extra Items (Captions, Voice, Save — Screenshot_20261111-110932.jpg)
         extraRailItemsCol = Ui.col(this);
         extraRailItemsCol.setGravity(Gravity.CENTER_HORIZONTAL);
         extraRailItemsCol.setVisibility(View.GONE);
-        extraRailItemsCol.addView(makeRailTool("💬", "Captions", null, v -> showTextOverlayDialog()));
-        extraRailItemsCol.addView(makeRailTool("🎤", "Voice", null, v -> {
+        extraRailItemsCol.addView(makeRailTool("captions", "Captions", null, v -> showTextOverlayDialog()));
+        extraRailItemsCol.addView(makeRailTool("mic", "Voice", null, v -> {
             previewMuted = !previewMuted;
             editOpts.muteOriginalAudio = previewMuted;
             if (previewMp != null) {
@@ -982,7 +982,7 @@ public class AddReelActivity extends Activity {
             }
             Ui.toast(this, previewMuted ? "Original Camera Voice Muted" : "Original Camera Voice Active");
         }));
-        extraRailItemsCol.addView(makeRailTool("⬇️", "Save", null, v -> {
+        extraRailItemsCol.addView(makeRailTool("download", "Save", null, v -> {
             Ui.toast(this, "Video saved to device in 1080p HDR");
         }));
         rightRail.addView(extraRailItemsCol);
@@ -1467,9 +1467,9 @@ public class AddReelActivity extends Activity {
     }
 
     private void showStickerPickerDialog() {
-        final String[] stickers = {"🔥", "❤️", "😂", "✨", "👑", "🎉", "💯", "🌸", "🚀", "🦋", "💎", "🎵", "❌ Remove"};
+        final String[] stickers = {"FIRE", "LOVE", "HAHA", "SPARK", "CROWN", "PARTY", "100", "BLOOM", "ROCKET", "GEM", "MUSIC", "Remove Sticker"};
         new AlertDialog.Builder(this)
-                .setTitle("😊 Add Draggable Sticker")
+                .setTitle("Add Draggable Sticker")
                 .setItems(stickers, (d, which) -> {
                     if (which == stickers.length - 1) {
                         editOpts.stickerText = "";
@@ -1483,12 +1483,12 @@ public class AddReelActivity extends Activity {
 
     private void showEditorSettingsDialog() {
         String[] items = {
-                "1080p 4K UHD HDR Quality: " + (highQualityUpload ? "ON ✓" : "Standard"),
-                "🔇 Mute Original Camera Audio: " + (previewMuted ? "Muted" : "Active"),
-                "🔄 Reset All Video Edits"
+                "1080p 4K UHD HDR Quality: " + (highQualityUpload ? "ON" : "Standard"),
+                "Mute Original Camera Audio: " + (previewMuted ? "Muted" : "Active"),
+                "Reset All Video Edits"
         };
         new AlertDialog.Builder(this)
-                .setTitle("⚙️ Studio Settings")
+                .setTitle("Studio Settings")
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         highQualityUpload = !highQualityUpload;
@@ -1521,7 +1521,7 @@ public class AddReelActivity extends Activity {
         sb.setMax(1000);
         box.addView(sb, new LinearLayout.LayoutParams(-1, -2));
         new AlertDialog.Builder(this)
-                .setTitle("🖼️ Edit Cover")
+                .setTitle("Edit Cover")
                 .setView(box)
                 .setPositiveButton("Apply Cover", (d, w) -> {
                     long targetMs = totalDurationMs > 0
@@ -1545,7 +1545,7 @@ public class AddReelActivity extends Activity {
         final EditText input = Ui.input(this, "Enter city or place name...");
         input.setText(selectedLocation);
         new AlertDialog.Builder(this)
-                .setTitle("📍 Add Location")
+                .setTitle("Add Location")
                 .setView(input)
                 .setPositiveButton("Save", (d, w) -> {
                     selectedLocation = input.getText() == null ? "" : input.getText().toString().trim();
@@ -1559,7 +1559,7 @@ public class AddReelActivity extends Activity {
         final EditText input = Ui.input(this, "https://...");
         input.setText(attachedLink);
         new AlertDialog.Builder(this)
-                .setTitle("➕ Add Link")
+                .setTitle("Add Link")
                 .setView(input)
                 .setPositiveButton("Add", (d, w) -> {
                     attachedLink = input.getText() == null ? "" : input.getText().toString().trim();
@@ -1571,9 +1571,9 @@ public class AddReelActivity extends Activity {
 
     private void showMoreOptionsDialog() {
         String[] opts = {
-                "Upload in 1080p 4K UHD HDR (" + (highQualityUpload ? "ON ✓" : "OFF") + ")",
-                "💬 Allow comments (ON ✓)",
-                "♻️ Allow Reuse of Sound (ON ✓)"
+                "Upload in 1080p 4K UHD HDR (" + (highQualityUpload ? "ON" : "OFF") + ")",
+                "Allow comments (ON)",
+                "Allow Reuse of Sound (ON)"
         };
         new AlertDialog.Builder(this)
                 .setTitle("More options")
@@ -1596,7 +1596,7 @@ public class AddReelActivity extends Activity {
                 .putString("draft_uri", videoUri != null ? videoUri.toString() : "")
                 .putLong("draft_ts", System.currentTimeMillis())
                 .apply();
-        Ui.toast(this, "📥 Saved to Drafts!");
+        Ui.toast(this, "Saved to Drafts!");
         finish();
     }
 
@@ -1911,12 +1911,12 @@ public class AddReelActivity extends Activity {
     private void startReelUpload() {
         if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         if (videoUri == null) {
-            Ui.toast(this, "Pick or record a video first 🎬");
+            Ui.toast(this, "Pick or record a video first");
             switchStage(STAGE_CAMERA);
             return;
         }
         if (safetyScanning) {
-            Ui.toast(this, "⏳ Finishing 1-second safety check, tap again in a moment…");
+            Ui.toast(this, "Finishing 1-second safety check, tap again in a moment…");
             return;
         }
         StringBuilder capBuilder = new StringBuilder();
@@ -1925,7 +1925,7 @@ public class AddReelActivity extends Activity {
         }
         if (!selectedLocation.isEmpty() && !capBuilder.toString().contains(selectedLocation)) {
             if (capBuilder.length() > 0) capBuilder.append(" · ");
-            capBuilder.append("📍 ").append(selectedLocation);
+            capBuilder.append(selectedLocation);
         }
         if (!attachedLink.isEmpty() && !capBuilder.toString().contains(attachedLink)) {
             if (capBuilder.length() > 0) capBuilder.append(" ");

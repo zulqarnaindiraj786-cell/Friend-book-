@@ -541,7 +541,7 @@ public final class TikTokReelStudioHelper {
 
                 // Use Sound button (pink/red pill)
                 boolean isSelected = isPlaying || item.soundUrl.equals(currentSoundUrl);
-                TextView useBtn = Ui.tvBold(act, isSelected ? "Use ✓" : "Use", 12.5f, Color.WHITE);
+                TextView useBtn = Ui.tvBold(act, isSelected ? "Selected" : "Use", 12.5f, Color.WHITE);
                 useBtn.setGravity(Gravity.CENTER);
                 useBtn.setBackground(Ui.round(act, isSelected ? 0xFFFE2C55 : 0x33FFFFFF, 8));
                 Ui.pad(useBtn, 12, 7, 12, 7);
