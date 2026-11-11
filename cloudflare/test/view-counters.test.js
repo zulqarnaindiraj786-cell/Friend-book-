@@ -500,6 +500,36 @@ test('Analytics Engine stays the truth over the R2 snapshot', async t => {
   assert.equal(f.queries.writes, 0);
 });
 
+test('a degraded count() answer upgrades itself back to uniq(uid)', async t => {
+  resetViewState();
+  // While the dataset is still empty AE refuses the uniq variants, so only count() answers. Once
+  // events exist the isolate must go back to uniq(uid) by itself - otherwise it would count plays
+  // (every rewatch) instead of viewers (one per user) for the rest of its life.
+  const f = fixture({
+    kvSeed: { 'reels/r1': 0 },
+    sql: (call) => (call === 2 ? tsv([['reels/r1', 4]]) : (call === 3 ? tsv([['reels/r1', 9]]) : null)),
+  });
+  t.after(f.close);
+  let clock = T0;
+  const now = () => clock;
+
+  const loaded = await call(f.env, {}, now);
+  assert.equal(loaded.body.views, 4, 'count() answered while the dataset was empty');
+  assert.equal(viewCounterState().aeVariant, 2, 'the degraded variant is remembered for this minute');
+
+  clock += AE_MINUTE;
+  const pending = [];
+  await call(f.env, { method: 'POST', uid: 'user1' }, now, { waitUntil: (promise) => pending.push(promise) });
+  await Promise.allSettled(pending);
+  assert.equal(viewCounterState().aeVariant, 0, 'the next refresh retried uniq() from the top and it answered');
+  assert.equal(f.ae.sqlCalls.length, 4, 'two refused variants, then count(), then uniq() again');
+
+  const served = await call(f.env, {}, () => clock + 1000);
+  assert.equal(served.body.views, 9, 'uniq(blob3) is what users see once AE holds data');
+  assert.equal(served.body.storage, 'ae+kv+memory');
+  assert.equal(f.queries.writes, 0, 'none of this ever writes to D1');
+});
+
 function readMigration(name) {
   const { readFileSync } = require('node:fs');
   return readFileSync(resolve(root, 'cloudflare', 'migrations', name), 'utf8');

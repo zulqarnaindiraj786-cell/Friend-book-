@@ -30,7 +30,7 @@ const DEFAULT_TOP = 25;
 /** Reported to clients so the rule is visible in the API, not hidden in the code. */
 const DEDUPE_RULE = 'once-per-user';
 
-/** Analytics Engine dataset bound as `AE` in wrangler.toml. */
+/** Analytics Engine dataset `friendbook_views`, bound as `ANALYTICS_ENGINE` in wrangler.toml. */
 const AE_DATASET = 'friendbook_views';
 /** How far back the AE count looks. AE aggregates are cheap; retention decides the real horizon. */
 const AE_WINDOW_DAYS = 90;
@@ -42,18 +42,22 @@ const AE_QUERY_LIMIT = 500;
  * exposes SQL over REST and a GraphQL dataset query; which one an account can use depends on its
  * plan and rollout, so neither is assumed.
  */
+// Written against the answers the real dataset gave (published on the pull request by
+// cloudflare/report-views-ae.mjs): `INTERVAL 90 DAY` is refused with "sql parser error: Expected
+// literal string, found: 90", so the number is quoted; `uniqExact` is refused with "unknown function
+// call: UNIQEXACT", so it is gone. What stays is uniq(blob3) - one view per user - and, only if AE
+// ever refuses uniq itself, a degraded count() that is retried upwards on every refresh.
 const AE_SQL_VARIANTS = [
   `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM ${AE_DATASET}`
-    + ` WHERE timestamp >= now() - INTERVAL ${AE_WINDOW_DAYS} DAY GROUP BY index1`
+    + ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
-  `SELECT index1 AS resource, uniqExact(blob3) AS viewers FROM ${AE_DATASET} GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
-  `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${AE_DATASET}`
-    + ` WHERE timestamp >= now() - INTERVAL ${AE_WINDOW_DAYS} DAY GROUP BY index1`
+  `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${AE_DATASET} GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
   `SELECT index1 AS resource, count() AS viewers FROM ${AE_DATASET} GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
 ];
+/** Variants below this index count uniq(uid) - the rule. The rest count plays and must not stick. */
+const AE_EXACT_VARIANTS = 2;
 const AE_GRAPHQL_QUERY = `query ($tag: string!, $since: datetime!, $until: datetime!) {
   viewer {
     accounts(filter: { accountTag: $tag }) {
@@ -306,18 +310,20 @@ async function refreshFromAe(env, now) {
   try {
     let counts = null;
     let variant = state.aeVariant;
-    if (variant === 'graphql') {
-      counts = await queryAeGraphql(env);
-    } else {
-      const start = typeof variant === 'number' ? variant : 0;
-      for (let index = start; index < AE_SQL_VARIANTS.length; index++) {
+    if (variant === 'graphql') counts = await queryAeGraphql(env);
+    if (!counts) {
+      // An exact (uniq) variant is sticky, so a busy isolate asks the same question every minute. A
+      // degraded one is retried from the top each refresh: an isolate that started before the dataset
+      // held any data must upgrade itself to uniq(uid) instead of counting plays forever.
+      const exact = typeof variant === 'number' && variant < AE_EXACT_VARIANTS;
+      for (let index = exact ? variant : 0; index < AE_SQL_VARIANTS.length; index++) {
         counts = await queryAeSql(env, AE_SQL_VARIANTS[index]);
         if (counts) { variant = index; break; }
       }
-      if (!counts) {
-        counts = await queryAeGraphql(env);
-        if (counts) variant = 'graphql';
-      }
+    }
+    if (!counts && variant !== 'graphql') {
+      counts = await queryAeGraphql(env);
+      if (counts) variant = 'graphql';
     }
     if (!counts) { state.aeUsable = false; return false; }
     state.aeVariant = variant;

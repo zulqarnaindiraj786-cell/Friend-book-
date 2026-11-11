@@ -52,13 +52,21 @@ const missingCredentials = () => (account && cfToken
   ? null
   : 'CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN unavailable to this step');
 
+// Exactly the queries the Worker runs, in its own order, so this report proves which one the real
+// dataset accepts. AE answered these raw facts already: `INTERVAL 90 DAY` -> "sql parser error:
+// Expected literal string, found: 90", and `uniqExact` -> "unknown function call: UNIQEXACT".
 const SQL_PROBES = [
   `SELECT count() AS viewers FROM ${DATASET}`,
   `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM ${DATASET}`
-    + ` WHERE timestamp >= now() - INTERVAL ${WINDOW_DAYS} DAY GROUP BY index1`
+    + ` WHERE timestamp >= now() - INTERVAL '${WINDOW_DAYS}' DAY GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
-  `SELECT index1 AS resource, uniqExact(blob3) AS viewers FROM ${DATASET} GROUP BY index1 LIMIT ${LIMIT}`,
+  `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${DATASET} GROUP BY index1`
+    + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  `SELECT index1 AS resource, count() AS viewers FROM ${DATASET} GROUP BY index1`
+    + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
 ];
+/** The probes that count uniq(uid) - the "1 user = 1 view" rule - rather than raw plays. */
+const UNIQ_PROBE_INDEXES = [1, 2];
 // The field name Analytics Engine really exposes depends on the account's schema, so it is discovered
 // by introspection instead of assumed. The guessed alias form is kept as one more raw data point.
 const GRAPHQL_PROBE = `query ($tag: string!, $since: datetime!, $until: datetime!) {
@@ -258,7 +266,9 @@ const graphqlGuess = await postGraphql(GRAPHQL_PROBE, {
 
 let flags = {};
 try { flags = JSON.parse(health.body)?.views ?? {}; } catch { flags = {}; }
-const sqlOk = sqlResults.some((entry) => entry.result.status === 200 && !/Authorization error/i.test(entry.result.body));
+const answered = (entry) => entry.result.status === 200 && !/Authorization error/i.test(entry.result.body);
+const sqlOk = sqlResults.some(answered);
+const uniqOk = UNIQ_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
 const aeBound = flags.ae === true;
 
 const lines = [
@@ -274,11 +284,23 @@ const lines = [
   `- Deploy attempt that shipped: \`${attemptUsed || 'unknown'}\``,
   `- Analytics Engine binding live in production: **${aeBound ? 'YES' : 'NO'}**`,
   `- Analytics Engine queryable with this token: **${sqlOk ? 'YES' : 'NO'}**`,
+  `- \`uniq(blob3)\` accepted (the one-view-per-user count): **${uniqOk ? 'YES' : 'NO'}**`,
   `- Workers KV snapshot binding live: **${flags.kv === true ? 'YES' : 'NO'}**`
     + ` (R2 snapshot fallback: **${flags.r2Snapshot === true ? 'YES' : 'NO'}**)`,
   `- Analytics Engine read secret present: **${flags.aeReadToken === true ? 'YES' : 'NO'}**`,
   `- D1 writes from the view path: **0** (enforced by tests, no write statement exists in the module)`,
 ];
+if (!uniqOk) {
+  lines.push(
+    '',
+    uniqOk === false && !sqlOk
+      ? 'No Analytics Engine query is accepted yet, so the counters are served from the snapshot + memory.'
+      : 'Analytics Engine answers, but not with `uniq(blob3)` yet - the Worker would be counting plays',
+  );
+  if (sqlOk && !uniqOk) {
+    lines.push('(every rewatch) instead of viewers (one per user), so it retries the uniq query every minute.');
+  }
+}
 if (!aeBound || !sqlOk) {
   lines.push(
     '',
