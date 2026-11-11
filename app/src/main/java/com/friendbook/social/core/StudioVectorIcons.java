@@ -204,7 +204,9 @@ public final class StudioVectorIcons {
         if (s.contains("♪") || s.contains("♫") || s.contains("🎵") || "music".equalsIgnoreCase(s)) return "music";
         if (s.contains("📍") || "location".equalsIgnoreCase(s)) return "location";
         if (s.contains("➕") || "link".equalsIgnoreCase(s)) return "link";
-        if (s.contains("🔓") || "privacy".equalsIgnoreCase(s)) return "globe";
+        if (s.contains("🔓") || "unlock".equalsIgnoreCase(s)) return "unlock";
+        if (s.contains("🔒") || s.contains("🔐") || "lock".equalsIgnoreCase(s) || "locked".equalsIgnoreCase(s)) return "lock";
+        if (s.contains("🌍") || s.contains("🌐") || "privacy".equalsIgnoreCase(s) || "public".equalsIgnoreCase(s)) return "globe";
         if (s.contains("⭐") || "disclosure".equalsIgnoreCase(s)) return "star";
         if (s.contains("🖼") || "upload".equalsIgnoreCase(s)) return "gallery";
         if (s.contains("▶") || "play".equalsIgnoreCase(s)) return "play";
@@ -218,7 +220,35 @@ public final class StudioVectorIcons {
         if ("⌃".equals(s) || "chevron_up".equalsIgnoreCase(s)) return "chevron_up";
         if (s.contains("♻") || "reuse".equalsIgnoreCase(s)) return "flip";
         if (s.contains("🚪") || "leave".equalsIgnoreCase(s) || "exit".equalsIgnoreCase(s)) return "close";
-        if (s.contains("🏆") || "trophy".equalsIgnoreCase(s)) return "star";
+        if (s.contains("🏆") || "trophy".equalsIgnoreCase(s) || "winner".equalsIgnoreCase(s)) return "trophy";
+        if (s.contains("🔥") || "flame".equalsIgnoreCase(s) || "heat".equalsIgnoreCase(s)) return "flame";
+        if (s.contains("👑") || "crown".equalsIgnoreCase(s) || "host_badge".equalsIgnoreCase(s)) return "crown";
+        if (s.contains("🌹") || "rose".equalsIgnoreCase(s)) return "rose";
+        if (s.contains("🍩") || "donut".equalsIgnoreCase(s) || "doughnut".equalsIgnoreCase(s)) return "donut";
+        if (s.contains("🎉") || s.contains("🎊") || "confetti".equalsIgnoreCase(s) || "party".equalsIgnoreCase(s)) return "confetti";
+        if (s.contains("✈") || s.contains("🛩") || "jet".equalsIgnoreCase(s) || "airplane".equalsIgnoreCase(s) || "plane".equalsIgnoreCase(s)) return "jet";
+        if (s.contains("🦁") || "lion".equalsIgnoreCase(s)) return "lion";
+        if (s.contains("🚀") || "rocket".equalsIgnoreCase(s) || "universe".equalsIgnoreCase(s)) return "rocket";
+        if (s.contains("🛡") || "shield".equalsIgnoreCase(s) || "moderator".equalsIgnoreCase(s) || "mod".equalsIgnoreCase(s)) return "shield";
+        if (s.contains("📌") || "pin".equalsIgnoreCase(s) || "pinned".equalsIgnoreCase(s)) return "pin";
+        if (s.contains("🥇") || s.contains("🥈") || s.contains("🥉") || "medal".equalsIgnoreCase(s) || "rank".equalsIgnoreCase(s)) return "medal";
+        if (s.contains("🔴") || s.contains("🟢") || s.contains("🔵") || "dot".equalsIgnoreCase(s) || "live_dot".equalsIgnoreCase(s)) return "dot";
+        if (s.contains("🎲") || "dice".equalsIgnoreCase(s) || "random".equalsIgnoreCase(s)) return "dice";
+        if (s.contains("💌") || s.contains("📮") || "inbox".equalsIgnoreCase(s) || "mail".equalsIgnoreCase(s)) return "inbox";
+        if (s.contains("🚩") || "flag".equalsIgnoreCase(s) || "report".equalsIgnoreCase(s)) return "flag";
+        if (s.contains("🗑") || "trash".equalsIgnoreCase(s) || "delete".equalsIgnoreCase(s)) return "trash";
+        if (s.contains("✏") || "pencil".equalsIgnoreCase(s) || "rename".equalsIgnoreCase(s) || "write".equalsIgnoreCase(s)) return "pencil";
+        if (s.contains("🔔") || s.contains("📢") || "bell".equalsIgnoreCase(s) || "notify".equalsIgnoreCase(s)) return "bell";
+        if (s.contains("👢") || "kick".equalsIgnoreCase(s) || "remove_user".equalsIgnoreCase(s)) return "kick";
+        if (s.contains("💖") || s.contains("💗") || s.contains("💕") || "love".equalsIgnoreCase(s)) return "heart";
+        if (s.contains("🎬") || s.contains("📺") || "video".equalsIgnoreCase(s) || "reel".equalsIgnoreCase(s)) return "play";
+        if (s.contains("🎥") || "rec".equalsIgnoreCase(s)) return "camera";
+        if (s.contains("🔎") || "find".equalsIgnoreCase(s)) return "search";
+        if (s.contains("🔗") || "chain".equalsIgnoreCase(s)) return "link";
+        if (s.contains("😂") || s.contains("🤣") || "laugh".equalsIgnoreCase(s)) return "laugh";
+        if (s.contains("👏") || "applause".equalsIgnoreCase(s) || "clap".equalsIgnoreCase(s)) return "applause";
+        if (s.contains("😍") || s.contains("🥰") || "love_face".equalsIgnoreCase(s)) return "heart";
+        if (s.contains("🏁") || "finish".equalsIgnoreCase(s)) return "flag";
         return s.toLowerCase();
     }
 
@@ -615,10 +645,353 @@ public final class StudioVectorIcons {
                 c.drawCircle(cx, cy, r * 0.3f, fp);
                 break;
             }
+            case "flame": {
+                // PK heat / trending flame
+                Path f = new Path();
+                f.moveTo(cx, cy - r * 1.05f);
+                f.cubicTo(cx + r * 0.75f, cy - r * 0.35f, cx + r * 0.95f, cy + r * 0.25f,
+                        cx + r * 0.42f, cy + r * 0.95f);
+                f.cubicTo(cx + r * 0.18f, cy + r * 1.15f, cx - r * 0.28f, cy + r * 1.12f,
+                        cx - r * 0.5f, cy + r * 0.85f);
+                f.cubicTo(cx - r * 0.95f, cy + r * 0.3f, cx - r * 0.62f, cy - r * 0.35f,
+                        cx - r * 0.18f, cy - r * 0.62f);
+                f.cubicTo(cx - r * 0.28f, cy - r * 0.1f, cx + r * 0.05f, cy + r * 0.05f,
+                        cx + r * 0.08f, cy + r * 0.42f);
+                f.cubicTo(cx + r * 0.3f, cy + r * 0.05f, cx + r * 0.18f, cy - r * 0.55f, cx, cy - r * 1.05f);
+                f.close();
+                c.drawPath(f, fp);
+                break;
+            }
+            case "crown": {
+                // Winner / host crown
+                Path cr = new Path();
+                cr.moveTo(cx - r * 0.95f, cy + r * 0.62f);
+                cr.lineTo(cx - r * 0.78f, cy - r * 0.55f);
+                cr.lineTo(cx - r * 0.36f, cy + r * 0.02f);
+                cr.lineTo(cx, cy - r * 0.78f);
+                cr.lineTo(cx + r * 0.36f, cy + r * 0.02f);
+                cr.lineTo(cx + r * 0.78f, cy - r * 0.55f);
+                cr.lineTo(cx + r * 0.95f, cy + r * 0.62f);
+                cr.close();
+                c.drawPath(cr, fp);
+                c.drawRoundRect(new RectF(cx - r * 0.95f, cy + r * 0.72f,
+                        cx + r * 0.95f, cy + r * 1.02f), r * 0.14f, r * 0.14f, fp);
+                break;
+            }
+            case "rose": {
+                // Rose gift: spiral bloom + stem + leaf
+                c.drawCircle(cx - r * 0.18f, cy - r * 0.42f, r * 0.52f, sp);
+                c.drawCircle(cx - r * 0.18f, cy - r * 0.42f, r * 0.24f, sp);
+                c.drawLine(cx - r * 0.18f, cy + r * 0.1f, cx + r * 0.1f, cy + r * 1.05f, sp);
+                Path leaf = new Path();
+                leaf.moveTo(cx + r * 0.02f, cy + r * 0.55f);
+                leaf.quadTo(cx + r * 0.72f, cy + r * 0.42f, cx + r * 0.62f, cy + r * 0.95f);
+                leaf.quadTo(cx + r * 0.1f, cy + r * 0.92f, cx + r * 0.02f, cy + r * 0.55f);
+                leaf.close();
+                c.drawPath(leaf, fp);
+                break;
+            }
+            case "donut": {
+                // Doughnut gift: torus + sprinkles
+                c.drawCircle(cx, cy, r * 0.9f, sp);
+                c.drawCircle(cx, cy, r * 0.32f, sp);
+                c.drawLine(cx - r * 0.55f, cy - r * 0.42f, cx - r * 0.3f, cy - r * 0.55f, sp);
+                c.drawLine(cx + r * 0.28f, cy - r * 0.6f, cx + r * 0.55f, cy - r * 0.42f, sp);
+                c.drawLine(cx + r * 0.45f, cy + r * 0.3f, cx + r * 0.62f, cy + r * 0.55f, sp);
+                c.drawLine(cx - r * 0.5f, cy + r * 0.45f, cx - r * 0.28f, cy + r * 0.62f, sp);
+                break;
+            }
+            case "confetti": {
+                // Party pop gift: cone + burst
+                Path cone = new Path();
+                cone.moveTo(cx - r * 0.95f, cy + r * 1.0f);
+                cone.lineTo(cx - r * 0.05f, cy + r * 0.05f);
+                cone.lineTo(cx + r * 0.35f, cy + r * 0.62f);
+                cone.close();
+                c.drawPath(cone, fp);
+                c.drawLine(cx + r * 0.15f, cy - r * 0.25f, cx + r * 0.5f, cy - r * 0.62f, sp);
+                c.drawLine(cx + r * 0.5f, cy + r * 0.05f, cx + r * 0.98f, cy - r * 0.12f, sp);
+                drawFourPointStar(c, cx + r * 0.62f, cy - r * 0.85f, r * 0.24f, fp);
+                drawFourPointStar(c, cx - r * 0.42f, cy - r * 0.72f, r * 0.2f, fp);
+                break;
+            }
+            case "jet": {
+                // Private jet gift
+                Path plane = new Path();
+                plane.moveTo(cx + r * 1.0f, cy - r * 0.1f);
+                plane.lineTo(cx - r * 0.1f, cy - r * 0.42f);
+                plane.lineTo(cx - r * 0.72f, cy - r * 1.0f);
+                plane.lineTo(cx - r * 0.42f, cy - r * 0.05f);
+                plane.lineTo(cx - r * 0.95f, cy + r * 0.18f);
+                plane.lineTo(cx - r * 0.42f, cy + r * 0.42f);
+                plane.lineTo(cx - r * 0.5f, cy + r * 1.0f);
+                plane.lineTo(cx + r * 0.12f, cy + r * 0.5f);
+                plane.close();
+                c.drawPath(plane, fp);
+                break;
+            }
+            case "lion": {
+                // Golden lion gift: mane spikes + face
+                for (int i = 0; i < 12; i++) {
+                    double a = Math.toRadians(i * 30d);
+                    float x1 = cx + (float) Math.cos(a) * r * 0.72f;
+                    float y1 = cy + (float) Math.sin(a) * r * 0.72f;
+                    float x2 = cx + (float) Math.cos(a) * r * 1.05f;
+                    float y2 = cy + (float) Math.sin(a) * r * 1.05f;
+                    c.drawLine(x1, y1, x2, y2, sp);
+                }
+                c.drawCircle(cx, cy, r * 0.62f, sp);
+                c.drawCircle(cx - r * 0.22f, cy - r * 0.12f, r * 0.09f, fp);
+                c.drawCircle(cx + r * 0.22f, cy - r * 0.12f, r * 0.09f, fp);
+                Path nose = new Path();
+                nose.moveTo(cx - r * 0.14f, cy + r * 0.18f);
+                nose.lineTo(cx + r * 0.14f, cy + r * 0.18f);
+                nose.lineTo(cx, cy + r * 0.38f);
+                nose.close();
+                c.drawPath(nose, fp);
+                break;
+            }
+            case "rocket": {
+                // Universe / rocket gift
+                Path body = new Path();
+                body.moveTo(cx, cy - r * 1.05f);
+                body.cubicTo(cx + r * 0.55f, cy - r * 0.5f, cx + r * 0.5f, cy + r * 0.2f,
+                        cx + r * 0.22f, cy + r * 0.62f);
+                body.lineTo(cx - r * 0.22f, cy + r * 0.62f);
+                body.cubicTo(cx - r * 0.5f, cy + r * 0.2f, cx - r * 0.55f, cy - r * 0.5f,
+                        cx, cy - r * 1.05f);
+                body.close();
+                c.drawPath(body, fp);
+                c.drawCircle(cx, cy - r * 0.28f, r * 0.16f, sp);
+                c.drawLine(cx - r * 0.22f, cy + r * 0.62f, cx - r * 0.62f, cy + r * 1.0f, sp);
+                c.drawLine(cx + r * 0.22f, cy + r * 0.62f, cx + r * 0.62f, cy + r * 1.0f, sp);
+                c.drawLine(cx, cy + r * 0.68f, cx, cy + r * 1.05f, sp);
+                break;
+            }
+            case "shield": {
+                // Moderator shield
+                Path sh = new Path();
+                sh.moveTo(cx, cy - r * 1.0f);
+                sh.lineTo(cx + r * 0.82f, cy - r * 0.6f);
+                sh.lineTo(cx + r * 0.72f, cy + r * 0.35f);
+                sh.quadTo(cx + r * 0.4f, cy + r * 0.95f, cx, cy + r * 1.05f);
+                sh.quadTo(cx - r * 0.4f, cy + r * 0.95f, cx - r * 0.72f, cy + r * 0.35f);
+                sh.lineTo(cx - r * 0.82f, cy - r * 0.6f);
+                sh.close();
+                c.drawPath(sh, sp);
+                c.drawLine(cx - r * 0.32f, cy + r * 0.02f, cx - r * 0.05f, cy + r * 0.32f, sp);
+                c.drawLine(cx - r * 0.05f, cy + r * 0.32f, cx + r * 0.4f, cy - r * 0.35f, sp);
+                break;
+            }
+            case "pin": {
+                // Pinned comment thumbtack
+                c.drawLine(cx, cy - r * 1.0f, cx, cy + r * 1.0f, sp);
+                Path head = new Path();
+                head.moveTo(cx - r * 0.55f, cy - r * 0.35f);
+                head.lineTo(cx + r * 0.55f, cy - r * 0.35f);
+                head.lineTo(cx + r * 0.28f, cy + r * 0.12f);
+                head.lineTo(cx - r * 0.28f, cy + r * 0.12f);
+                head.close();
+                c.drawPath(head, fp);
+                c.drawRect(new RectF(cx - r * 0.42f, cy - r * 0.95f,
+                        cx + r * 0.42f, cy - r * 0.62f), fp);
+                break;
+            }
+            case "trophy": {
+                // Winner trophy
+                c.drawRoundRect(new RectF(cx - r * 0.55f, cy - r * 0.95f,
+                        cx + r * 0.55f, cy + r * 0.1f), r * 0.2f, r * 0.2f, sp);
+                RectF leftH = new RectF(cx - r * 1.0f, cy - r * 0.8f, cx - r * 0.4f, cy - r * 0.2f);
+                RectF rightH = new RectF(cx + r * 0.4f, cy - r * 0.8f, cx + r * 1.0f, cy - r * 0.2f);
+                c.drawArc(leftH, 90f, 180f, false, sp);
+                c.drawArc(rightH, -90f, 180f, false, sp);
+                c.drawLine(cx, cy + r * 0.1f, cx, cy + r * 0.55f, sp);
+                c.drawRect(new RectF(cx - r * 0.62f, cy + r * 0.62f,
+                        cx + r * 0.62f, cy + r * 0.95f), fp);
+                break;
+            }
+            case "medal": {
+                // Rank medal: ribbon + disc
+                c.drawLine(cx - r * 0.5f, cy - r * 1.0f, cx - r * 0.1f, cy - r * 0.2f, sp);
+                c.drawLine(cx + r * 0.5f, cy - r * 1.0f, cx + r * 0.1f, cy - r * 0.2f, sp);
+                c.drawCircle(cx, cy + r * 0.38f, r * 0.55f, sp);
+                drawFourPointStar(c, cx, cy + r * 0.38f, r * 0.3f, fp);
+                break;
+            }
+            case "dot": {
+                // Solid LIVE indicator dot
+                c.drawCircle(cx, cy, r * 0.62f, fp);
+                break;
+            }
+            case "lock": {
+                c.drawRoundRect(new RectF(cx - r * 0.68f, cy - r * 0.08f,
+                        cx + r * 0.68f, cy + r * 0.95f), r * 0.18f, r * 0.18f, fp);
+                RectF shackle = new RectF(cx - r * 0.45f, cy - r * 1.0f, cx + r * 0.45f, cy + r * 0.1f);
+                c.drawArc(shackle, 180f, 180f, false, sp);
+                break;
+            }
+            case "unlock": {
+                c.drawRoundRect(new RectF(cx - r * 0.68f, cy - r * 0.08f,
+                        cx + r * 0.68f, cy + r * 0.95f), r * 0.18f, r * 0.18f, fp);
+                RectF shackle = new RectF(cx - r * 0.45f, cy - r * 1.0f, cx + r * 0.45f, cy + r * 0.1f);
+                c.drawArc(shackle, 180f, 150f, false, sp);
+                break;
+            }
+            case "dice": {
+                // Random quick-match dice
+                c.drawRoundRect(new RectF(cx - r * 0.88f, cy - r * 0.88f,
+                        cx + r * 0.88f, cy + r * 0.88f), r * 0.24f, r * 0.24f, sp);
+                c.drawCircle(cx - r * 0.42f, cy - r * 0.42f, r * 0.13f, fp);
+                c.drawCircle(cx + r * 0.42f, cy + r * 0.42f, r * 0.13f, fp);
+                c.drawCircle(cx, cy, r * 0.13f, fp);
+                break;
+            }
+            case "inbox": {
+                // Inbox live-video invite
+                c.drawRoundRect(new RectF(cx - r * 0.95f, cy - r * 0.68f,
+                        cx + r * 0.95f, cy + r * 0.72f), r * 0.16f, r * 0.16f, sp);
+                Path flap = new Path();
+                flap.moveTo(cx - r * 0.95f, cy - r * 0.62f);
+                flap.lineTo(cx, cy + r * 0.12f);
+                flap.lineTo(cx + r * 0.95f, cy - r * 0.62f);
+                c.drawPath(flap, sp);
+                break;
+            }
+            case "flag": {
+                // Report flag
+                c.drawLine(cx - r * 0.62f, cy - r * 1.0f, cx - r * 0.62f, cy + r * 1.05f, sp);
+                Path fl = new Path();
+                fl.moveTo(cx - r * 0.62f, cy - r * 0.92f);
+                fl.lineTo(cx + r * 0.92f, cy - r * 0.5f);
+                fl.lineTo(cx - r * 0.62f, cy - r * 0.05f);
+                fl.close();
+                c.drawPath(fl, fp);
+                break;
+            }
+            case "trash": {
+                // Delete / hide
+                c.drawLine(cx - r * 0.72f, cy - r * 0.62f, cx + r * 0.72f, cy - r * 0.62f, sp);
+                c.drawLine(cx - r * 0.28f, cy - r * 0.62f, cx - r * 0.22f, cy - r * 0.98f, sp);
+                c.drawLine(cx + r * 0.28f, cy - r * 0.62f, cx + r * 0.22f, cy - r * 0.98f, sp);
+                c.drawLine(cx - r * 0.22f, cy - r * 0.98f, cx + r * 0.22f, cy - r * 0.98f, sp);
+                Path bin = new Path();
+                bin.moveTo(cx - r * 0.58f, cy - r * 0.5f);
+                bin.lineTo(cx - r * 0.42f, cy + r * 0.98f);
+                bin.lineTo(cx + r * 0.42f, cy + r * 0.98f);
+                bin.lineTo(cx + r * 0.58f, cy - r * 0.5f);
+                c.drawPath(bin, sp);
+                c.drawLine(cx - r * 0.16f, cy - r * 0.2f, cx - r * 0.12f, cy + r * 0.68f, sp);
+                c.drawLine(cx + r * 0.16f, cy - r * 0.2f, cx + r * 0.12f, cy + r * 0.68f, sp);
+                break;
+            }
+            case "pencil": {
+                // Edit / rename
+                Path pen = new Path();
+                pen.moveTo(cx - r * 0.85f, cy + r * 0.95f);
+                pen.lineTo(cx - r * 0.6f, cy + r * 0.28f);
+                pen.lineTo(cx + r * 0.55f, cy - r * 0.88f);
+                pen.lineTo(cx + r * 0.95f, cy - r * 0.48f);
+                pen.lineTo(cx - r * 0.2f, cy + r * 0.68f);
+                pen.close();
+                c.drawPath(pen, sp);
+                c.drawLine(cx - r * 0.95f, cy + r * 1.02f, cx - r * 0.5f, cy + r * 0.9f, sp);
+                break;
+            }
+            case "bell": {
+                // Notifications / invite broadcast
+                Path bell = new Path();
+                bell.moveTo(cx - r * 0.72f, cy + r * 0.55f);
+                bell.cubicTo(cx - r * 0.72f, cy - r * 0.15f, cx - r * 0.5f, cy - r * 0.9f,
+                        cx, cy - r * 0.9f);
+                bell.cubicTo(cx + r * 0.5f, cy - r * 0.9f, cx + r * 0.72f, cy - r * 0.15f,
+                        cx + r * 0.72f, cy + r * 0.55f);
+                bell.close();
+                c.drawPath(bell, sp);
+                c.drawLine(cx - r * 0.9f, cy + r * 0.6f, cx + r * 0.9f, cy + r * 0.6f, sp);
+                c.drawCircle(cx, cy + r * 0.9f, r * 0.16f, fp);
+                break;
+            }
+            case "laugh": {
+                // Laughing reaction face
+                c.drawCircle(cx, cy, r * 0.95f, sp);
+                c.drawArc(new RectF(cx - r * 0.62f, cy - r * 0.52f, cx - r * 0.1f, cy - r * 0.05f),
+                        200f, 140f, false, sp);
+                c.drawArc(new RectF(cx + r * 0.1f, cy - r * 0.52f, cx + r * 0.62f, cy - r * 0.05f),
+                        200f, 140f, false, sp);
+                Path mouth = new Path();
+                mouth.moveTo(cx - r * 0.5f, cy + r * 0.18f);
+                mouth.quadTo(cx, cy + r * 0.85f, cx + r * 0.5f, cy + r * 0.18f);
+                mouth.close();
+                c.drawPath(mouth, fp);
+                break;
+            }
+            case "applause": {
+                // Clapping hands reaction
+                Path h1 = new Path();
+                h1.moveTo(cx - r * 0.85f, cy + r * 0.9f);
+                h1.lineTo(cx - r * 0.3f, cy - r * 0.55f);
+                h1.quadTo(cx - r * 0.05f, cy - r * 0.95f, cx + r * 0.12f, cy - r * 0.45f);
+                h1.lineTo(cx - r * 0.1f, cy + r * 0.9f);
+                h1.close();
+                c.drawPath(h1, fp);
+                Path h2 = new Path();
+                h2.moveTo(cx + r * 0.85f, cy + r * 0.9f);
+                h2.lineTo(cx + r * 0.3f, cy - r * 0.55f);
+                h2.quadTo(cx + r * 0.05f, cy - r * 0.95f, cx - r * 0.12f, cy - r * 0.45f);
+                h2.lineTo(cx + r * 0.1f, cy + r * 0.9f);
+                h2.close();
+                c.drawPath(h2, sp);
+                c.drawLine(cx - r * 0.95f, cy - r * 0.75f, cx - r * 0.6f, cy - r * 0.95f, sp);
+                c.drawLine(cx + r * 0.95f, cy - r * 0.75f, cx + r * 0.6f, cy - r * 0.95f, sp);
+                break;
+            }
+            case "block": {
+                // Blocked / removed
+                c.drawCircle(cx, cy, r * 0.88f, sp);
+                c.drawLine(cx - r * 0.62f, cy + r * 0.62f, cx + r * 0.62f, cy - r * 0.62f, sp);
+                break;
+            }
+            case "kick": {
+                // Remove / kick from live
+                c.drawCircle(cx - r * 0.2f, cy - r * 0.45f, r * 0.32f, sp);
+                Path boot = new Path();
+                boot.moveTo(cx - r * 0.55f, cy + r * 0.05f);
+                boot.lineTo(cx + r * 0.35f, cy + r * 0.45f);
+                boot.lineTo(cx + r * 0.95f, cy + r * 0.1f);
+                boot.lineTo(cx + r * 0.95f, cy + r * 0.72f);
+                boot.lineTo(cx - r * 0.55f, cy + r * 0.72f);
+                boot.close();
+                c.drawPath(boot, fp);
+                break;
+            }
             default: {
                 drawFourPointStar(c, cx, cy, r * 0.88f, fp);
                 break;
             }
+        }
+    }
+
+    /** True when {@code rawToken} maps to a real drawn 2026 vector (false = plain text only). */
+    public static boolean isVectorToken(String rawToken) {
+        String k = normalizeToken(rawToken);
+        switch (k) {
+            case "flip": case "mirror": case "flash": case "light": case "timer": case "speed":
+            case "filter": case "beauty": case "settings": case "scissors": case "template":
+            case "text_aa": case "sticker": case "captions": case "mic": case "mute":
+            case "speaker": case "camera": case "download": case "pk_swords": case "users":
+            case "cohost": case "qa": case "poll": case "send": case "draft": case "heart":
+            case "gift": case "search": case "none": case "bookmark": case "music":
+            case "location": case "link": case "globe": case "star": case "gallery":
+            case "play": case "pause": case "close": case "back": case "more":
+            case "chevron_up": case "chevron_down": case "eye": case "view":
+            case "flame": case "crown": case "rose": case "donut": case "confetti":
+            case "jet": case "lion": case "rocket": case "shield": case "pin":
+            case "trophy": case "medal": case "dot": case "lock": case "unlock":
+            case "dice": case "inbox": case "flag": case "trash": case "pencil":
+            case "bell": case "block": case "kick": case "laugh": case "applause":
+                return true;
+            default:
+                return false;
         }
     }
 
