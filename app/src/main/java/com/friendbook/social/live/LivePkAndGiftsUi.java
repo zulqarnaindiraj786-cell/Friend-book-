@@ -61,27 +61,28 @@ public final class LivePkAndGiftsUi {
 
     public static final class GiftItem {
         public final String id;
-        public final String emoji;
+        /** 2026 vector icon key rendered by StudioVectorIcons (never a keyboard emoji). */
+        public final String icon;
         public final String name;
         public final int coins;
 
-        public GiftItem(String id, String emoji, String name, int coins) {
+        public GiftItem(String id, String icon, String name, int coins) {
             this.id = id;
-            this.emoji = emoji;
+            this.icon = icon;
             this.name = name;
             this.coins = coins;
         }
     }
 
     public static final GiftItem[] GIFTS = new GiftItem[]{
-            new GiftItem("rose",     "🌹", "Rose",         1),
-            new GiftItem("heart",    "💖", "Finger Heart", 5),
-            new GiftItem("donut",    "🍩", "Doughnut",     30),
-            new GiftItem("crown",    "👑", "Gold Crown",   99),
-            new GiftItem("confetti", "🎉", "Party Pop",    199),
-            new GiftItem("airplane", "✈️", "Private Jet",  299),
-            new GiftItem("lion",     "🦁", "Golden Lion",  500),
-            new GiftItem("universe", "🚀", "Universe",     1000)
+            new GiftItem("rose",     "rose",     "Rose",         1),
+            new GiftItem("heart",    "heart",    "Finger Heart", 5),
+            new GiftItem("donut",    "donut",    "Doughnut",     30),
+            new GiftItem("crown",    "crown",    "Gold Crown",   99),
+            new GiftItem("confetti", "confetti", "Party Pop",    199),
+            new GiftItem("airplane", "jet",      "Private Jet",  299),
+            new GiftItem("lion",     "lion",     "Golden Lion",  500),
+            new GiftItem("universe", "rocket",   "Universe",     1000)
     };
 
     public interface GiftSendCallback {
@@ -141,12 +142,12 @@ public final class LivePkAndGiftsUi {
         // Header Row
         LinearLayout head = Ui.row(a);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = Ui.tvBold(a, "🎁 Send TikTok Live Gift", 16, Color.WHITE);
+        TextView title = Ui.tvBold(a, "Send Live Gift", 16, Color.WHITE);
         head.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView closeTv = Ui.tvBold(a, "✕", 16, 0xAAFFFFFF);
-        closeTv.setPadding(Ui.dp(a, 8), Ui.dp(a, 4), Ui.dp(a, 4), Ui.dp(a, 4));
+        ImageView closeTv = com.friendbook.social.core.StudioVectorIcons.iconView(a, "close", 18, 0xAAFFFFFF);
+        closeTv.setPadding(Ui.dp(a, 8), Ui.dp(a, 8), Ui.dp(a, 8), Ui.dp(a, 8));
         closeTv.setOnClickListener(v -> dialog.dismiss());
-        head.addView(closeTv);
+        head.addView(closeTv, new LinearLayout.LayoutParams(Ui.dp(a, 34), Ui.dp(a, 34)));
         sheet.addView(head);
 
         // PK Battle Team Target Selector (Red Team A vs Blue Team B)
@@ -160,8 +161,8 @@ public final class LivePkAndGiftsUi {
             final TextView teamABtn = new TextView(a);
             final TextView teamBBtn = new TextView(a);
             Runnable refreshTeams = () -> {
-                styleTeamBtn(a, teamABtn, "🔴 Boost " + shortName(hostAName), !targetSideB[0], 0xFFFE2C55);
-                styleTeamBtn(a, teamBBtn, "🔵 Boost " + shortName(hostBName), targetSideB[0], 0xFF00B2FF);
+                styleTeamBtn(a, teamABtn, "Boost " + shortName(hostAName), !targetSideB[0], 0xFFFE2C55);
+                styleTeamBtn(a, teamBBtn, "Boost " + shortName(hostBName), targetSideB[0], 0xFF00B2FF);
             };
             teamABtn.setOnClickListener(v -> { targetSideB[0] = false; refreshTeams.run(); });
             teamBBtn.setOnClickListener(v -> { targetSideB[0] = true; refreshTeams.run(); });
@@ -193,7 +194,7 @@ public final class LivePkAndGiftsUi {
             GiftItem g = GIFTS[selectedIdx[0]];
             String who = (pkActive && targetSideB[0] && hostBName != null && !hostBName.isEmpty())
                     ? shortName(hostBName) : shortName(hostAName);
-            sendCta.setText("Send " + g.emoji + " " + g.name + " (" + g.coins + " ⭐) to " + who);
+            sendCta.setText("Send " + g.name + " (" + g.coins + " Stars) to " + who);
         };
 
         for (int rowIdx = 0; rowIdx < 2; rowIdx++) {
@@ -207,11 +208,9 @@ public final class LivePkAndGiftsUi {
                 cell.setGravity(Gravity.CENTER);
                 Ui.pad(cell, 4, 10, 4, 10);
 
-                TextView emTv = new TextView(a);
-                emTv.setText(g.emoji);
-                emTv.setTextSize(28f);
-                emTv.setGravity(Gravity.CENTER);
-                cell.addView(emTv);
+                ImageView emTv = com.friendbook.social.core.StudioVectorIcons.iconView(
+                        a, g.icon, 30, 0xFFFFD54F);
+                cell.addView(emTv, new LinearLayout.LayoutParams(Ui.dp(a, 30), Ui.dp(a, 30)));
 
                 TextView nmTv = Ui.tvBold(a, g.name, 10.5f, Color.WHITE);
                 nmTv.setSingleLine(true);
@@ -220,7 +219,8 @@ public final class LivePkAndGiftsUi {
                 nmTv.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 2));
                 cell.addView(nmTv);
 
-                TextView coinTv = Ui.tvBold(a, "⭐ " + g.coins, 10f, 0xFFFFD54F);
+                TextView coinTv = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                        a, "star", String.valueOf(g.coins), 10f, 0, 0xFFFFD54F, 0xFFFFD54F);
                 coinTv.setGravity(Gravity.CENTER);
                 cell.addView(coinTv);
 
@@ -309,10 +309,8 @@ public final class LivePkAndGiftsUi {
         txtCol.addView(gnTv);
         pill.addView(txtCol);
 
-        TextView bigEm = new TextView(a);
-        bigEm.setText(giftEmoji);
-        bigEm.setTextSize(26f);
-        pill.addView(bigEm);
+        ImageView bigEm = com.friendbook.social.core.StudioVectorIcons.iconView(a, giftEmoji, 28, 0xFFFFD54F);
+        pill.addView(bigEm, new LinearLayout.LayoutParams(Ui.dp(a, 28), Ui.dp(a, 28)));
 
         TextView combo = Ui.tvBold(a, " x1", 15f, 0xFFFFD54F);
         pill.addView(combo);
@@ -343,11 +341,11 @@ public final class LivePkAndGiftsUi {
 
         // 2. Big Center Stage Burst for Premium Gifts (>= 99 coins)
         if (coins >= 99) {
-            final TextView burst = new TextView(a);
-            burst.setText(giftEmoji);
-            burst.setTextSize(coins >= 500 ? 84f : 64f);
-            burst.setGravity(Gravity.CENTER);
-            FrameLayout.LayoutParams bLp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
+            final int burstDp = coins >= 500 ? 104 : 78;
+            final ImageView burst = com.friendbook.social.core.StudioVectorIcons.iconView(
+                    a, giftEmoji, burstDp, 0xFFFFD54F);
+            FrameLayout.LayoutParams bLp = new FrameLayout.LayoutParams(
+                    Ui.dp(a, burstDp), Ui.dp(a, burstDp), Gravity.CENTER);
             hostLayer.addView(burst, bLp);
 
             burst.setScaleX(0.2f);
@@ -386,14 +384,16 @@ public final class LivePkAndGiftsUi {
         }
     }
 
-    private static boolean isLionGift(String emoji, String name) {
+    private static boolean isLionGift(String icon, String name) {
         String n = name == null ? "" : name.toLowerCase(Locale.US);
-        return "🦁".equals(emoji) || n.contains("lion");
+        String k = icon == null ? "" : icon.toLowerCase(Locale.US);
+        return k.contains("lion") || n.contains("lion");
     }
 
-    private static boolean isJetGift(String emoji, String name) {
+    private static boolean isJetGift(String icon, String name) {
         String n = name == null ? "" : name.toLowerCase(Locale.US);
-        return "✈️".equals(emoji) || "🚀".equals(emoji) || "🏎️".equals(emoji)
+        String k = icon == null ? "" : icon.toLowerCase(Locale.US);
+        return k.contains("jet") || k.contains("rocket") || k.contains("plane")
                 || n.contains("jet") || n.contains("airplane") || n.contains("universe") || n.contains("car");
     }
 
@@ -600,7 +600,7 @@ public final class LivePkAndGiftsUi {
 
         LinearLayout head = Ui.row(a);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(Ui.tvBold(a, "✨ TikTok Beauty & Camera Effects", 16, Color.WHITE),
+        head.addView(Ui.tvBold(a, "4K UHD Beauty & Camera Filters", 16, Color.WHITE),
                 new LinearLayout.LayoutParams(0, -2, 1f));
         TextView done = Ui.tvBold(a, "Done", 14, 0xFFFE2C55);
         done.setOnClickListener(v -> dialog.dismiss());
@@ -608,11 +608,11 @@ public final class LivePkAndGiftsUi {
         sheet.addView(head);
 
         // Section 1: Beauty Smoothness & Acne Removal Levels
-        TextView bLbl = Ui.tvBold(a, "FACE SMOOTHING & ACNE / BLEMISH ERASER", 11, 0x99FFFFFF);
+        TextView bLbl = Ui.tvBold(a, "4K UHD FACE SMOOTHING & BLEMISH ERASER", 11, 0x99FFFFFF);
         bLbl.setPadding(0, Ui.dp(a, 14), 0, Ui.dp(a, 8));
         sheet.addView(bLbl);
 
-        final String[] beautyLabels = {"🚫 Off", "✨ Soft", "🌸 Acne Clear", "💖 Rosy", "🪄 Full Smooth"};
+        final String[] beautyLabels = {"Off", "Soft Glow", "Acne Clear", "Rosy 4K", "4K UHD Smooth"};
         final int[] selBeauty = {Math.max(0, Math.min(4, currentBeautyLevel))};
         final TextView[] bChips = new TextView[5];
         LinearLayout bRow = Ui.row(a);
@@ -681,25 +681,27 @@ public final class LivePkAndGiftsUi {
         trLp.topMargin = Ui.dp(a, 16);
 
         final boolean[] rlState = {ringLightOn};
-        final TextView rlBtn = Ui.tvBold(a, rlState[0] ? "💡 Ring Light: ON" : "💡 Ring Light: OFF", 12f, Color.WHITE);
+        final TextView rlBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "light", rlState[0] ? "Ring Light: ON" : "Ring Light: OFF", 12f, 0, Color.WHITE, Color.WHITE);
         rlBtn.setGravity(Gravity.CENTER);
         rlBtn.setBackground(Ui.round(a, rlState[0] ? 0xFFFF9800 : 0x22FFFFFF, 16));
         Ui.pad(rlBtn, 10, 10, 10, 10);
         rlBtn.setOnClickListener(v -> {
             rlState[0] = !rlState[0];
-            rlBtn.setText(rlState[0] ? "💡 Ring Light: ON" : "💡 Ring Light: OFF");
+            rlBtn.setText(rlState[0] ? "Ring Light: ON" : "Ring Light: OFF");
             rlBtn.setBackground(Ui.round(a, rlState[0] ? 0xFFFF9800 : 0x22FFFFFF, 16));
             cb.onToggleRingLight();
         });
 
         final boolean[] mirState = {mirrorOn};
-        final TextView mirBtn = Ui.tvBold(a, mirState[0] ? "🪞 Mirror: ON" : "🪞 Mirror: OFF", 12f, Color.WHITE);
+        final TextView mirBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "mirror", mirState[0] ? "Mirror: ON" : "Mirror: OFF", 12f, 0, Color.WHITE, Color.WHITE);
         mirBtn.setGravity(Gravity.CENTER);
         mirBtn.setBackground(Ui.round(a, mirState[0] ? 0xFF1877F2 : 0x22FFFFFF, 16));
         Ui.pad(mirBtn, 10, 10, 10, 10);
         mirBtn.setOnClickListener(v -> {
             mirState[0] = !mirState[0];
-            mirBtn.setText(mirState[0] ? "🪞 Mirror: ON" : "🪞 Mirror: OFF");
+            mirBtn.setText(mirState[0] ? "Mirror: ON" : "Mirror: OFF");
             mirBtn.setBackground(Ui.round(a, mirState[0] ? 0xFF1877F2 : 0x22FFFFFF, 16));
             cb.onToggleMirror();
         });
@@ -748,14 +750,16 @@ public final class LivePkAndGiftsUi {
 
         LinearLayout head = Ui.row(a);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(Ui.tvBold(a, "👥 Invite Friends to Live", 16, Color.WHITE),
+        head.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(
+                        a, "users", "Invite Friends to Live", 16f, 0, Color.WHITE, Color.WHITE),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView close = Ui.tvBold(a, "✕", 16, 0xAAFFFFFF);
+        ImageView close = com.friendbook.social.core.StudioVectorIcons.iconView(a, "close", 18, 0xAAFFFFFF);
         close.setOnClickListener(v -> dialog.dismiss());
-        head.addView(close);
+        head.addView(close, new LinearLayout.LayoutParams(Ui.dp(a, 30), Ui.dp(a, 30)));
         sheet.addView(head);
 
-        final TextView inviteAllBtn = Ui.tvBold(a, "🔔 Send Live Video Invite to All Friends", 13f, Color.WHITE);
+        final TextView inviteAllBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "bell", "Send Live Video Invite to All Friends", 13f, 0, Color.WHITE, Color.WHITE);
         inviteAllBtn.setGravity(Gravity.CENTER);
         inviteAllBtn.setBackground(Ui.round(a, 0xFFFE2C55, 20));
         Ui.pad(inviteAllBtn, 14, 10, 14, 10);
@@ -814,18 +818,18 @@ public final class LivePkAndGiftsUi {
                 LinearLayout info = Ui.col(a);
                 info.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 8), 0);
                 info.addView(Ui.tvBold(a, u.displayName, 13.5f, Color.WHITE));
-                info.addView(Ui.tv(a, u.isOnline ? "🟢 Active now · Sends Live Video to Inbox" : "Tap Invite · Sends Live Video to Inbox", 11f,
+                info.addView(Ui.tv(a, u.isOnline ? "Active now · Sends Live Video to Inbox" : "Tap Invite · Sends Live Video to Inbox", 11f,
                         u.isOnline ? 0xFF69F0AE : 0x99FFFFFF));
                 row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
 
-                final TextView invBtn = Ui.roundChip(a, "🔴 Invite", 0xFFFE2C55, Color.WHITE, 12);
+                final TextView invBtn = Ui.roundChip(a, "Invite", 0xFFFE2C55, Color.WHITE, 12);
                 Ui.pad(invBtn, 14, 7, 14, 7);
                 invBtn.setOnClickListener(v -> {
-                    invBtn.setText("Sent to Inbox ✓");
+                    invBtn.setText("Sent to Inbox");
                     invBtn.setEnabled(false);
                     invBtn.setBackground(Ui.round(a, 0x33FFFFFF, 16));
                     sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
-                    Ui.toast(a, "🔴 Live video invite sent to " + u.displayName + "'s inbox!");
+                    Ui.toast(a, "Live video invite sent to " + u.displayName + "'s inbox");
                 });
                 row.addView(invBtn);
                 listCol.addView(row);
@@ -838,10 +842,10 @@ public final class LivePkAndGiftsUi {
                 sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
                 if (++sent >= 25) break;
             }
-            inviteAllBtn.setText("✓ Sent Live Video to " + sent + " Inboxes!");
+            inviteAllBtn.setText("Sent Live Video to " + sent + " Inboxes");
             inviteAllBtn.setEnabled(false);
             inviteAllBtn.setBackground(Ui.round(a, 0xFF2E7D32, 20));
-            Ui.toast(a, "🔴 Live video invite sent to " + sent + " friends' inboxes!");
+            Ui.toast(a, "Live video invite sent to " + sent + " friends' inboxes");
         });
 
         presentBottomDialog(dialog, sheet);
@@ -870,11 +874,11 @@ public final class LivePkAndGiftsUi {
         String cleanTitle = liveTitle.isEmpty() ? (cleanHostName + " is Live!") : liveTitle;
 
         Notify.send(targetUid, "live_invite",
-                "🔴 invited you to join LIVE: " + cleanTitle, liveId);
+                "invited you to join LIVE: " + cleanTitle, liveId);
 
         // Deliver a TikTok-style clickable Live Video card directly into their 1:1 Inbox!
         String cid = Fb.chatId(me, targetUid);
-        String inviteText = "🔴 LIVE Video: " + cleanHostName + " invited you to join \"" + cleanTitle + "\" — Tap video to join Live!";
+        String inviteText = "LIVE Video: " + cleanHostName + " invited you to join \"" + cleanTitle + "\" — Tap video to join Live!";
         long now = System.currentTimeMillis();
         DocumentReference chatRef = Fb.db().collection("chats").document(cid);
         Map<String, Object> msg = new HashMap<>();
@@ -898,7 +902,7 @@ public final class LivePkAndGiftsUi {
 
         Map<String, Object> room = new HashMap<>();
         room.put("participants", Arrays.asList(me, targetUid));
-        room.put("lastMessage", "🔴 LIVE Video · Tap to join " + cleanHostName + "'s Live!");
+        room.put("lastMessage", "LIVE Video · Tap to join " + cleanHostName + "'s Live");
         room.put("lastMessageTime", FieldValue.serverTimestamp());
         room.put("lastMessageTimeMs", now);
         Map<String, Object> pNames = new HashMap<>();
@@ -943,11 +947,11 @@ public final class LivePkAndGiftsUi {
 
         LinearLayout head = Ui.row(a);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(Ui.tvBold(a, "⚔️ TikTok Live Match / PK Battle", 16, Color.WHITE),
+        head.addView(Ui.tvBold(a, "Live Match / PK Battle", 16, Color.WHITE),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView close = Ui.tvBold(a, "✕", 16, 0xAAFFFFFF);
+        ImageView close = com.friendbook.social.core.StudioVectorIcons.iconView(a, "close", 18, 0xAAFFFFFF);
         close.setOnClickListener(v -> dialog.dismiss());
-        head.addView(close);
+        head.addView(close, new LinearLayout.LayoutParams(Ui.dp(a, 30), Ui.dp(a, 30)));
         sheet.addView(head);
 
         TextView desc = Ui.tv(a,
@@ -957,7 +961,7 @@ public final class LivePkAndGiftsUi {
         sheet.addView(desc);
 
         if (pkCurrentlyActive) {
-            TextView endPkBtn = Ui.tvBold(a, "🚪 Leave Current Live Match (Return to Solo Live)", 13.5f, Color.WHITE);
+            TextView endPkBtn = Ui.tvBold(a, "Leave Current Live Match (Return to Solo Live)", 13.5f, Color.WHITE);
             endPkBtn.setGravity(Gravity.CENTER);
             endPkBtn.setBackground(Ui.round(a, 0xFFE53935, 20));
             Ui.pad(endPkBtn, 14, 11, 14, 11);
@@ -972,7 +976,7 @@ public final class LivePkAndGiftsUi {
 
         // Duration Selector: 1m / 3m / 5m
         final int[] durationsSec = {60, 180, 300};
-        final String[] durLabels = {"⚡ 1m Blitz", "🔥 3m Classic", "👑 5m Pro"};
+        final String[] durLabels = {"1 Minute Blitz", "3 Minute Classic", "5 Minute Pro"};
         final int[] selDurIdx = {1}; // Default 3 minutes
         final TextView[] durBtns = new TextView[3];
 
@@ -1002,7 +1006,8 @@ public final class LivePkAndGiftsUi {
 
         // Quick Random Match Button
         final List<Map<String, Object>> otherLiveRooms = new ArrayList<>();
-        final TextView quickMatchBtn = Ui.tvBold(a, "🎲 Random Quick Match (Auto-Pair)", 13.5f, Color.WHITE);
+        final TextView quickMatchBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "dice", "Random Quick Match (Auto-Pair)", 13.5f, 0, Color.WHITE, Color.WHITE);
         quickMatchBtn.setGravity(Gravity.CENTER);
         GradientDrawable qmBg = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
@@ -1047,7 +1052,7 @@ public final class LivePkAndGiftsUi {
                     }
 
                     // 1. Active Live Streamers Section
-                    TextView sec1 = Ui.tvBold(a, "🔴 CREATORS LIVE RIGHT NOW (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
+                    TextView sec1 = Ui.tvBold(a, "CREATORS LIVE RIGHT NOW (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
                     sec1.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 6));
                     listCol.addView(sec1);
 
@@ -1066,7 +1071,7 @@ public final class LivePkAndGiftsUi {
                             int vCount = Math.max(1, Format.intOf(rm, "viewers"));
 
                             LinearLayout row = buildOpponentRow(a, tPhoto, tName,
-                                    "🔴 Live now · 👁 " + vCount + " watching", "⚔️ PK Battle",
+                                    "Live now · " + vCount + " watching", "PK Battle",
                                     v -> {
                                         dialog.dismiss();
                                         cb.onChallengeLiveHost(tLiveId, tHostUid, tName, tPhoto,
@@ -1083,7 +1088,7 @@ public final class LivePkAndGiftsUi {
                             candidates.put(e.getKey(), e.getValue());
                         }
                     }
-                    TextView sec2 = Ui.tvBold(a, "👥 CHALLENGE VIEWER IN YOUR ROOM (" + candidates.size() + ")", 11f, 0xFF00B2FF);
+                    TextView sec2 = Ui.tvBold(a, "CHALLENGE VIEWER IN YOUR ROOM (" + candidates.size() + ")", 11f, 0xFF00B2FF);
                     sec2.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 6));
                     listCol.addView(sec2);
 
@@ -1095,7 +1100,7 @@ public final class LivePkAndGiftsUi {
                             final String vName = e.getValue();
                             final String vPhoto = roomViewerPhotos.getOrDefault(vUid, "");
                             LinearLayout row = buildOpponentRow(a, vPhoto, vName,
-                                    "Watching your Live · Ready for Split-Screen PK", "⚔️ Invite PK",
+                                    "Watching your Live · Ready for Split-Screen PK", "Invite PK",
                                     v -> {
                                         dialog.dismiss();
                                         cb.onChallengeViewerOrFriend(vUid, vName, vPhoto,
@@ -1121,13 +1126,13 @@ public final class LivePkAndGiftsUi {
                         }
                         if (fList.isEmpty()) return;
                         fList.sort((u1, u2) -> Boolean.compare(u2.isOnline, u1.isOnline));
-                        TextView sec3 = Ui.tvBold(a, "💌 INVITE FRIENDS VIA INBOX LIVE VIDEO (" + fList.size() + ")", 11f, 0xFF69F0AE);
+                        TextView sec3 = Ui.tvBold(a, "INVITE FRIENDS VIA INBOX LIVE VIDEO (" + fList.size() + ")", 11f, 0xFF69F0AE);
                         sec3.setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 6));
                         friendsSecCol.addView(sec3);
                         for (final Models.User fu : fList) {
                             LinearLayout row = buildOpponentRow(a, fu.photoUrl, fu.displayName,
-                                    (fu.isOnline ? "🟢 Online · " : "") + "Sends clickable Live Video to Inbox",
-                                    "🔴 Invite Match",
+                                    (fu.isOnline ? "Online · " : "") + "Sends clickable Live Video to Inbox",
+                                    "Invite Match",
                                     v -> {
                                         dialog.dismiss();
                                         cb.onChallengeViewerOrFriend(
@@ -1162,7 +1167,7 @@ public final class LivePkAndGiftsUi {
                         return;
                     }
                 }
-                Ui.toast(a, "No other creator or viewer online right now — tap 👥 Invite first!");
+                Ui.toast(a, "No other creator or viewer online right now — tap Invite first");
             }
         });
 
@@ -1210,7 +1215,7 @@ public final class LivePkAndGiftsUi {
                         Fb.me.blocked.add(targetUid);
                     }
                     if (afterBlocked != null) afterBlocked.run();
-                    Ui.toast(a, "🚫 Blocked " + targetName);
+                    Ui.toast(a, "Blocked " + targetName);
                 });
     }
 
@@ -1224,21 +1229,21 @@ public final class LivePkAndGiftsUi {
 
         for (final String uid : mutedIds) {
             String nm = namesMap.getOrDefault(uid, uid);
-            items.add("🔊 Unmute " + nm);
+            items.add("Unmute " + nm);
             actions.add(() -> cb.onUnmuteUser(uid));
         }
         for (final String uid : kickedIds) {
             String nm = namesMap.getOrDefault(uid, uid);
-            items.add("✅ Allow " + nm + " back into Live");
+            items.add("Allow " + nm + " back into Live");
             actions.add(() -> cb.onUnkickUser(uid));
         }
 
         if (items.isEmpty()) {
-            Ui.info(a, "🛡 Mute & Block List",
+            Ui.info(a, "Mute & Block List",
                     "No viewers are currently muted or removed in this Live.\n\nTip: Tap any viewer's comment in Live Chat to Mute, Kick, or Permanently Block them.");
             return;
         }
-        Ui.choose(a, "🛡 Muted & Removed Viewers", items.toArray(new String[0]), w -> actions.get(w).run());
+        Ui.choose(a, "Muted & Removed Viewers", items.toArray(new String[0]), w -> actions.get(w).run());
     }
 
     // ==================== 7. TIKTOK FULL-SCREEN POST-LIVE ANALYTICS SCREEN ====================
@@ -1318,7 +1323,7 @@ public final class LivePkAndGiftsUi {
         LinearLayout row1 = Ui.row(a);
         row1.addView(statBox(a, Format.count(totalViewers), "Total Viewers\n(Peak " + peakViewers + ")"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        row1.addView(statBox(a, "⭐ " + Format.count(totalGiftCoins), "Gifts Earned\n(" + totalGiftsCount + " gifts)"),
+        row1.addView(statBox(a, Format.count(totalGiftCoins), "Gift Stars Earned\n(" + totalGiftsCount + " gifts)"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
         row1.addView(statBox(a, durFormatted, "LIVE\nDuration"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
@@ -1332,11 +1337,11 @@ public final class LivePkAndGiftsUi {
         gridCard.addView(div, dLp);
 
         LinearLayout row2 = Ui.row(a);
-        row2.addView(statBox(a, "❤️ " + Format.count(totalLikes), "Hearts &\nLikes"),
+        row2.addView(statBox(a, Format.count(totalLikes), "Hearts &\nLikes"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        row2.addView(statBox(a, "💬 " + Format.count(totalComments), "Live\nComments"),
+        row2.addView(statBox(a, Format.count(totalComments), "Live\nComments"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
-        row2.addView(statBox(a, "⚔️ " + pkWins + "/" + pkPlayed, "PK Battles\nWon"),
+        row2.addView(statBox(a, pkWins + "/" + pkPlayed, "PK Battles\nWon"),
                 new LinearLayout.LayoutParams(0, -2, 1f));
         gridCard.addView(row2);
 
@@ -1350,14 +1355,15 @@ public final class LivePkAndGiftsUi {
             LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(-1, -2);
             pLp.topMargin = Ui.dp(a, 14);
 
-            podium.addView(Ui.tvBold(a, "🏆 Top Gift Supporters", 13.5f, 0xFFFFD54F));
+            podium.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(
+                    a, "trophy", "Top Gift Supporters", 13.5f, 0, 0xFFFFD54F, 0xFFFFD54F));
             List<Map.Entry<String, Integer>> sorted = new ArrayList<>(supporterStars.entrySet());
             Collections.sort(sorted, (x, y) -> Integer.compare(y.getValue(), x.getValue()));
-            String[] medals = {"🥇 ", "🥈 ", "🥉 "};
+            String[] medals = {"1. ", "2. ", "3. "};
             for (int i = 0; i < Math.min(3, sorted.size()); i++) {
                 Map.Entry<String, Integer> e = sorted.get(i);
                 String sName = supporterNames.getOrDefault(e.getKey(), "Supporter");
-                TextView line = Ui.tv(a, medals[i] + sName + "  —  ⭐ " + e.getValue() + " Coins", 12.5f, Color.WHITE);
+                TextView line = Ui.tv(a, medals[i] + sName + "  —  " + e.getValue() + " Stars", 12.5f, Color.WHITE);
                 line.setPadding(0, Ui.dp(a, 4), 0, 0);
                 podium.addView(line);
             }
@@ -1366,7 +1372,8 @@ public final class LivePkAndGiftsUi {
 
         // Action Buttons
         if (isHost && onShareRecap != null) {
-            TextView shareBtn = Ui.tvBold(a, "📤 Share LIVE Summary to Feed", 14.5f, Color.WHITE);
+            TextView shareBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "send", "Share LIVE Summary to Feed", 14.5f, 0, Color.WHITE, Color.WHITE);
             shareBtn.setGravity(Gravity.CENTER);
             shareBtn.setBackground(Ui.round(a, 0xFFFE2C55, 24));
             Ui.pad(shareBtn, 18, 13, 18, 13);

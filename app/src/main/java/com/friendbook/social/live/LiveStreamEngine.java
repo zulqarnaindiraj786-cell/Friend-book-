@@ -255,6 +255,11 @@ public class LiveStreamEngine {
             overlayView.setFocusable(false);
             applyHardwareBeautyTint(overlayView, beautyLevel, cameraPaused);
         }
+        if (previewView != null) {
+            com.friendbook.social.core.StudioVectorIcons.apply4kUhdGpuGrade(
+                    previewView, beautyOverlayView, beautyLevel,
+                    beautyLevel == BEAUTY_ROSY ? "rose" : "vivid", 0);
+        }
     }
 
     private static void applyHardwareBeautyTint(@Nullable android.widget.ImageView overlayView, int level, boolean paused) {
@@ -265,32 +270,8 @@ public class LiveStreamEngine {
             overlayView.setVisibility(android.view.View.GONE);
             return;
         }
-        // Zero-lag 60 FPS GPU Beauty & iPhone 17 Pro Max warm portrait tone overlay (0.0ms CPU cost!)
-        int topColor;
-        int bottomColor;
-        switch (level) {
-            case BEAUTY_SOFT_GLOW:
-                topColor = 0x12FFF3EA;
-                bottomColor = 0x0EFFE4D6;
-                break;
-            case BEAUTY_PORCELAIN:
-                topColor = 0x18FFF8F4;
-                bottomColor = 0x14FFEAE0;
-                break;
-            case BEAUTY_ROSY:
-                topColor = 0x1AFFECF2;
-                bottomColor = 0x14FFDCE8;
-                break;
-            default:
-                topColor = 0x1EFFF6EE;
-                bottomColor = 0x16FFE6DC;
-                break;
-        }
-        android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{topColor, bottomColor});
-        overlayView.setBackground(gd);
-        overlayView.setVisibility(android.view.View.VISIBLE);
+        com.friendbook.social.core.StudioVectorIcons.apply4kUhdGpuGrade(
+                null, overlayView, level, level == BEAUTY_ROSY ? "rose" : "vivid", 0);
     }
 
     public boolean toggleBeautyBoost() {
@@ -302,9 +283,15 @@ public class LiveStreamEngine {
     public void setBeautyLevel(int level) {
         this.beautyLevel = Math.max(BEAUTY_OFF, Math.min(BEAUTY_FULL_SMOOTH, level));
         this.beautyBoost = (this.beautyLevel > 0);
-        if (beautyOverlayView != null) {
-            mainHandler.post(() -> applyHardwareBeautyTint(beautyOverlayView, beautyLevel, cameraPaused));
-        }
+        mainHandler.post(() -> {
+            if (cameraPaused) {
+                applyHardwareBeautyTint(beautyOverlayView, 0, true);
+            } else {
+                com.friendbook.social.core.StudioVectorIcons.apply4kUhdGpuGrade(
+                        previewView, beautyOverlayView, beautyLevel,
+                        beautyLevel == BEAUTY_ROSY ? "rose" : "vivid", 0);
+            }
+        });
         applyCaptureParams();
     }
 
@@ -314,10 +301,10 @@ public class LiveStreamEngine {
 
     public String getBeautyLabel() {
         switch (beautyLevel) {
-            case BEAUTY_SOFT_GLOW:   return "✨ Soft Smooth";
-            case BEAUTY_PORCELAIN:   return "🌸 Acne Clear";
-            case BEAUTY_ROSY:        return "💖 Rosy Smooth";
-            case BEAUTY_FULL_SMOOTH: return "🪄 Full Face Smooth";
+            case BEAUTY_SOFT_GLOW:   return "Soft Glow";
+            case BEAUTY_PORCELAIN:   return "Porcelain 4K";
+            case BEAUTY_ROSY:        return "Rosy Face";
+            case BEAUTY_FULL_SMOOTH: return "4K UHD Smooth";
             default:                 return "Off";
         }
     }
