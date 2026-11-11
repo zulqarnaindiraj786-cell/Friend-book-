@@ -138,10 +138,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Optional friendbook "Data mode / Buy data" top strip
-        root.addView(Ui.dataModeStrip(this, null));
-
-        // 2. Crisp White friendbook Profile Header: [ ← ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
+        // Crisp White friendbook Profile Header: [ ← ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);

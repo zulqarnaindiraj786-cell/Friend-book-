@@ -169,11 +169,6 @@ public class SettingsActivity extends Activity {
                 "Photo: " + Prefs.photoQualityLabel(this).split(" ")[0]
                         + " · Autoplay: " + Prefs.autoplayModeLabel(this),
                 this::mediaAndDataDialog));
-        body.addView(switchRowI(Icons.DATA_SAVER, "Show top 'Data mode' strip",
-                Prefs.dataModeBar(this), (btn, on) -> {
-                    Prefs.setDataModeBar(this, on);
-                    Ui.toast(this, on ? "Top Data mode strip enabled ✓" : "Top Data mode strip hidden");
-                }));
         body.addView(rowI(Icons.MESSAGES, "Default comments filter",
                 "Current: " + Prefs.commentSort(this).toUpperCase() + " (All comments / Newest / Relevant)",
                 () -> Ui.choose(this, "Default comments filter", new String[]{

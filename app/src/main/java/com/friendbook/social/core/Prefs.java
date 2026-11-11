@@ -504,9 +504,9 @@ public class Prefs {
     public static String commentSort(Context c) { return p(c).getString("commentSort", "all"); }
     public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "all" : v).apply(); }
 
-    /** Top friendbook "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
-    public static boolean dataModeBar(Context c) { return p(c).getBoolean("dataModeBar", true); }
-    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", v).apply(); }
+    /** Top "Data mode / Buy data" strip permanently disabled so it never shows at the top of any screen. */
+    public static boolean dataModeBar(Context c) { return false; }
+    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", false).apply(); }
 
     /** Undo hiding a post via the ✕ button on post cards. */
     public static void unhidePost(Context c, String postId) {

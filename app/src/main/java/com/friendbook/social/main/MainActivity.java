@@ -96,11 +96,7 @@ public class MainActivity extends Activity {
         LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Authentic friendbook Top "Data mode" + "[ 📡 Buy data ]" Strip
-        dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
-        root.addView(dataStripWrap);
-
-        // 2. Crisp White Brand & Circular Action Header: friendbook   [ ＋ ] [ 🔍 ] [ ☰ ]
+        // 1. Crisp White Brand & Circular Action Header: friendbook   [ ＋ ] [ 🔍 ] [ ☰ ]
         brandBar = Ui.row(this);
         brandBar.setBackgroundColor(Ui.card(this));
         brandBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -341,7 +337,7 @@ public class MainActivity extends Activity {
     public void refreshLiteUi() {
         Ui.statusBarLight(this);
         if (dataStripWrap != null) {
-            dataStripWrap.setVisibility(Prefs.dataModeBar(this) ? View.VISIBLE : View.GONE);
+            dataStripWrap.setVisibility(View.GONE);
         }
         if (modeStrip != null) {
             if (FastCache.isOffline(this)) {
