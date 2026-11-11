@@ -65,6 +65,12 @@ jobs:
           python3 -m pip install 'requests==2.32.5'
           python3 scripts/admin/configure_video_r2.py
 
+      - name: Ensure Workers KV namespace for live view counters (zero D1 row reads)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: node cloudflare/ensure-views-kv.mjs
+
       - name: Deploy existing Worker and bind existing database (no migration)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
