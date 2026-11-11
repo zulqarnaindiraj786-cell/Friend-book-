@@ -7,14 +7,16 @@
 // counter even if an isolate or KV snapshot is lost.
 //
 // Routes (all require a verified Firebase ID token, resolved to `uid` by worker.js):
-//   POST /v1/views/{posts|reels}/{id}          -> { resource, views, counted, gapMs, storage }
+//   POST /v1/views/{posts|reels}/{id}          -> { resource, views, counted, dedupe, storage }
 //   GET  /v1/views/{posts|reels}/{id}          -> { resource, views, storage }
 //   GET  /v1/views?collection=reels&ids=a,b,c  -> { collection, views: { id: n }, storage }
 //   GET  /v1/views?collection=reels&top=25     -> { collection, views: { id: n }, storage }
 //
-// Counting rule (product decision): one second of watching = one view, and the same user watching
-// again counts again. The only floor is one counted view per (resource, uid) per second, kept in
-// memory, so a double-fired client callback can never count twice.
+// Counting rule (product decision): ONE view per user per resource, forever. Watching for one
+// second is enough; watching the whole video, looping it or coming back tomorrow adds nothing. The
+// dedupe is durable (one row per (resource, uid) in D1) but is checked with a write-only statement,
+// `INSERT ... ON CONFLICT DO NOTHING`, whose `meta.changes` says whether the pair was new - so the
+// rule costs ZERO D1 row reads, and a row is only written for a genuinely first-time viewer.
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -23,8 +25,8 @@ const COLLECTIONS = new Set(['posts', 'reels']);
 const MAX_BATCH_IDS = 50;
 const MAX_TOP = 50;
 const DEFAULT_TOP = 25;
-/** Minimum gap between two counted views of the same resource by the same user. */
-const MIN_VIEW_GAP_MS = 1000;
+/** Reported to clients so the rule is visible in the API, not hidden in the code. */
+const DEDUPE_RULE = 'once-per-user';
 /**
  * One KV write of the aggregate key at most every 5 minutes -> <= 288 writes/day per isolate, so
  * even three concurrent isolates stay inside the Workers Free limit of 1,000 KV writes/day. The
@@ -38,7 +40,9 @@ const KV_KEY = 'views:live:v1';
 const KV_SNAPSHOT_LIMIT = 1000;
 /** A cold isolate with no KV data reads D1 exactly once, bounded, and never again. */
 const SEED_LIMIT = 500;
-const MAX_SEEN_ENTRIES = 8000;
+/** Cache size for "this uid already counted for this resource", so repeats need no D1 statement. */
+const MAX_COUNTED_ENTRIES = 8000;
+const COUNTED_EVICT_BATCH = 1600;
 
 const ensuredSchemas = new WeakSet();
 
@@ -53,7 +57,7 @@ const state = {
   totals: new Map(),      // resource -> live total (what every read is served from)
   dirty: new Set(),       // resources counted since their last D1 write
   lastD1Flush: new Map(), // resource -> ms of the last D1 write (or of the seed load)
-  lastSeen: new Map(),    // `${resource}|${uid}` -> ms of the last counted view
+  counted: new Map(),     // `${resource}|${uid}` -> ms when this pair was settled (counted or refused)
 };
 
 export function resetViewState() {
@@ -65,7 +69,7 @@ export function resetViewState() {
   state.totals.clear();
   state.dirty.clear();
   state.lastD1Flush.clear();
-  state.lastSeen.clear();
+  state.counted.clear();
 }
 
 /** Live counter state, exposed for tests and diagnostics. */
@@ -98,6 +102,8 @@ async function ensureSchema(db) {
         uid TEXT NOT NULL,
         bucket TEXT NOT NULL,
         PRIMARY KEY (resource, uid, bucket))`),
+    // One row per (resource, uid) = this user's ONE view. Inserted with ON CONFLICT DO NOTHING, so
+    // the write itself proves whether the view was new: no SELECT is ever needed to de-dupe.
     db.prepare(`CREATE TABLE IF NOT EXISTS friendbook_cf_view_last (
         resource TEXT NOT NULL,
         uid TEXT NOT NULL,
@@ -113,12 +119,35 @@ async function ensureSchema(db) {
 
 const storageMode = () => (state.kvUsable ? 'kv+memory' : 'memory');
 
-function trimSeen(now) {
-  if (state.lastSeen.size <= MAX_SEEN_ENTRIES) return;
-  for (const [key, at] of state.lastSeen) {
-    if (now - at > 60_000) state.lastSeen.delete(key);
+/**
+ * Keeps the dedupe cache bounded. It is only a cache: an evicted pair costs one no-op D1 insert the
+ * next time that user watches, and D1 still answers "already counted" - the total never inflates.
+ */
+function trimCounted() {
+  if (state.counted.size <= MAX_COUNTED_ENTRIES) return;
+  let drop = COUNTED_EVICT_BATCH;
+  for (const key of state.counted.keys()) {
+    if (drop-- <= 0) break;
+    state.counted.delete(key); // Map keeps insertion order, so this drops the oldest pairs
   }
-  if (state.lastSeen.size > MAX_SEEN_ENTRIES) state.lastSeen.clear();
+}
+
+/**
+ * Durable one-view-per-user check with NO read: the insert itself is the answer. `meta.changes` is 1
+ * only when this (resource, uid) pair did not exist yet, i.e. this user's first ever view of it. A
+ * repeat watcher writes 0 rows and counts nothing.
+ */
+async function firstViewEver(env, resource, uid, now) {
+  try {
+    const result = await env.DB.prepare(
+      `INSERT INTO friendbook_cf_view_last(resource, uid, last_at) VALUES (?, ?, ?)
+       ON CONFLICT(resource, uid) DO NOTHING`,
+    ).bind(resource, uid, now).run();
+    return Number(result?.meta?.changes ?? 0) === 1;
+  } catch {
+    // Storage refused: never invent a view, and do not cache the pair so a later watch can retry.
+    return null;
+  }
 }
 
 function absorb(resource, value) {
@@ -288,10 +317,25 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
 
   const now = Number(nowMs()) || Date.now();
   const seenKey = `${resource}|${uid}`;
-  const counted = now - (state.lastSeen.get(seenKey) ?? 0) >= MIN_VIEW_GAP_MS;
+  let counted = false;
+  if (state.counted.has(seenKey)) {
+    counted = false; // this isolate already settled this user: no storage call at all
+  } else if (env?.DB) {
+    const first = await firstViewEver(env, resource, uid, now);
+    if (first === null) {
+      return json({ resource, views: state.totals.get(resource) ?? 0, counted: false,
+        dedupe: DEDUPE_RULE, storage: storageMode(), error: 'Counter busy' }, 503);
+    }
+    counted = first;
+    state.counted.set(seenKey, now);
+    trimCounted();
+  } else {
+    // No database bound (local dev): memory dedupe only, still one view per user per isolate.
+    counted = true;
+    state.counted.set(seenKey, now);
+    trimCounted();
+  }
   if (counted) {
-    state.lastSeen.set(seenKey, now);
-    trimSeen(now);
     state.totals.set(resource, (state.totals.get(resource) ?? 0) + 1);
     state.dirty.add(resource);
   }
@@ -300,7 +344,7 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
     resource,
     views: state.totals.get(resource) ?? 0,
     counted,
-    gapMs: MIN_VIEW_GAP_MS,
+    dedupe: DEDUPE_RULE,
     storage: storageMode(),
     // True while this resource has counted views that D1 has not received yet (hourly window).
     d1Pending: state.dirty.has(resource),
