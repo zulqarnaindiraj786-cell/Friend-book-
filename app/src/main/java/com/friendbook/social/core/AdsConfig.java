@@ -278,7 +278,16 @@ public class AdsConfig {
     private static final int BATCH_PRELOAD_COUNT = AD_POOL_SIZE;
     private static final int REPLENISH_THRESHOLD = 4;
     private static final int MAX_ROTATING_ADS = 16;
-    private static final long FAIL_COOLDOWN_MS = 20_000L;
+    /**
+     * No-fill cooldown. 8s (was 20s) so the next natural trigger — a scroll, a slot bind or a
+     * replenish — can ask again soon after a failure instead of leaving the feed ad-less for 20s.
+     * Still a cooldown, never a retry loop.
+     */
+    private static final long FAIL_COOLDOWN_MS = 8_000L;
+    /** ONE bounded automatic retry per pool per process after a cold-start no-fill. */
+    private static final long FIRST_FILL_RETRY_DELAY_MS = 3_000L;
+    private static boolean feedFirstFillRetryUsed = false;
+    private static boolean reelsFirstFillRetryUsed = false;
 
     public interface SlotAdReadyCallback {
         void onAdReady(com.google.android.gms.ads.nativead.NativeAd ad);
@@ -687,7 +696,12 @@ public class AdsConfig {
                 int missing = AD_POOL_SIZE - FEED_POOL.size();
                 if (missing > 0 && feedInFlight <= 0) {
                     feedInFlight = 1;
-                    int reqCount = Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
+                    // Fast first fill: with an empty pool ask for ONE ad — a single request lands
+                    // noticeably sooner than a 5-ad batch — then the pool is topped back up to 5
+                    // straight after that ad arrives (see the forNativeAd callback).
+                    int reqCount = FEED_POOL.isEmpty()
+                            ? 1
+                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
                     preloadBatchIntoPool(appCtx, feedNativeId(), true, reqCount);
                 }
             }
@@ -709,7 +723,10 @@ public class AdsConfig {
                 int missing = AD_POOL_SIZE - REELS_POOL.size();
                 if (missing > 0 && reelsInFlight <= 0) {
                     reelsInFlight = 1;
-                    int reqCount = Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
+                    // Fast first fill for Reels too: one ad first, the remaining four right after.
+                    int reqCount = REELS_POOL.isEmpty()
+                            ? 1
+                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
                     preloadBatchIntoPool(appCtx, reelsNativeId(), false, reqCount);
                 }
             }
@@ -1077,6 +1094,15 @@ public class AdsConfig {
             final String unitId,
             final boolean isFeedPool,
             final int batchCount) {
+        if (!ConsentManager.isAdsSdkInitialized()) {
+            // Never fire the first request into a half-booted SDK: it queues (or returns a
+            // cold-start no-fill) and the pool then sits in the failure cooldown — the main reason
+            // ads used to appear late. ConsentManager guarantees this deferred call runs, either on
+            // the real `MobileAds.initialize` callback or on its 4s boot fallback.
+            ConsentManager.runWhenSdkInitialized(appCtx,
+                    () -> preloadBatchIntoPool(appCtx, unitId, isFeedPool, batchCount));
+            return;
+        }
         try {
             recordAdRequest(appCtx);
             boolean startMuted = isFeedPool || !Prefs.reelsStartWithSound(appCtx);
@@ -1116,6 +1142,11 @@ public class AdsConfig {
                                 } else {
                                     dispatchNextReelsWaiterIfPossible(nativeAd);
                                 }
+                                // Fast first fill follow-up: top the pool back up to AD_POOL_SIZE (5)
+                                // as soon as the first ad lands. A no-op while a batch is still in
+                                // flight, so no duplicate request is ever issued.
+                                if (isFeedPool) ensureFeedPoolReplenished(appCtx);
+                                else ensureReelsPoolReplenished(appCtx);
                                 if (done) notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
@@ -1132,16 +1163,35 @@ public class AdsConfig {
                                     int code = adError != null ? adError.getCode() : -1;
                                     onNativeAdFailed(appCtx, code);
                                     // If ad fails, do NOT retry in a loop — record cooldown and let feed/reels show content without ad.
+                                    boolean scheduleFirstFillRetry;
                                     synchronized (AdsConfig.class) {
                                         if (isFeedPool) {
                                             feedInFlight = Math.max(0, feedInFlight - 1);
                                             lastFeedFailAtMs = System.currentTimeMillis();
+                                            scheduleFirstFillRetry = !feedFirstFillRetryUsed;
+                                            feedFirstFillRetryUsed = true;
                                         } else {
                                             reelsInFlight = Math.max(0, reelsInFlight - 1);
                                             lastReelsFailAtMs = System.currentTimeMillis();
+                                            scheduleFirstFillRetry = !reelsFirstFillRetryUsed;
+                                            reelsFirstFillRetryUsed = true;
                                         }
                                     }
                                     failPendingWaiters(isFeedPool);
+                                    // Cold-start no-fill is usually transient (SDK still warming up),
+                                    // so allow exactly ONE automatic retry per pool per process after
+                                    // 3s. The flag makes a second automatic retry impossible: this is
+                                    // a bounded single retry, never a loop.
+                                    if (scheduleFirstFillRetry) {
+                                        MAIN_UI_HANDLER.postDelayed(() -> {
+                                            synchronized (AdsConfig.class) {
+                                                if (isFeedPool) lastFeedFailAtMs = 0L;
+                                                else lastReelsFailAtMs = 0L;
+                                            }
+                                            if (isFeedPool) preloadFeedBatchNow(appCtx, 1);
+                                            else preloadReelsBatchNow(appCtx, 1);
+                                        }, FIRST_FILL_RETRY_DELAY_MS);
+                                    }
                                 }
                             })
                             .withNativeAdOptions(adOptions)
