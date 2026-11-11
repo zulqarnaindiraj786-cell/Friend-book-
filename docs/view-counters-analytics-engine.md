@@ -64,8 +64,17 @@ remembers what worked for the life of the isolate:
 
 1. `GET /client/v4/accounts/{id}/analytics_engine/sql?query=…` with
    `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM friendbook_views WHERE
-   timestamp >= now() - INTERVAL 90 DAY GROUP BY index1 ORDER BY viewers DESC LIMIT 500`
-   (then `uniqExact`, then without the time window, then `count()`), parsed from TSV *or* JSON.
+   timestamp >= now() - INTERVAL '90' DAY GROUP BY index1 ORDER BY viewers DESC LIMIT 500`
+   (then the same without the time window, then a degraded `count()`), parsed from TSV *or* JSON.
+
+   The real dataset dictated that syntax, and the answers are published on the pull request:
+   `INTERVAL 90 DAY` → `HTTP 422 Input was invalid: sql parser error: Expected literal string, found:
+   90` (so the number is quoted), and `uniqExact(blob3)` → `HTTP 422 unknown function call:
+   UNIQEXACT` (so it is gone). `SELECT count() AS viewers FROM friendbook_views` → `HTTP 200`.
+
+   Only `uniq(blob3)` counts viewers, so the degraded `count()` variant is **never sticky**: an
+   isolate that fell back to it retries the uniq queries at the top of every refresh and upgrades
+   itself as soon as the dataset holds data (`AE_EXACT_VARIANTS`).
 2. `POST /client/v4/graphql` — the `viewer.accounts.<dataset>` query with
    `dimensions { name count uniq }`.
 
@@ -86,7 +95,11 @@ Two facts it already established, and what they changed here:
   the binding. The events would have landed in a dataset called `AE`, and GraphQL answered
   `unknown field "friendbook_views"`. The correct key is **`dataset = "friendbook_views"`**;
   `ensure-views-ae.mjs` also repairs an older config that still says `dataset_name`.
-* What production answered on the deploy that shipped (`no-ae`), verbatim from wrangler:
+* Analytics Engine was then enabled on the account and the dataset `friendbook_views` created in the
+  dashboard with the binding name `ANALYTICS_ENGINE`, so the next deploy shipped attempt `full`:
+  bindings `DB, ASSETS, ANALYTICS_ENGINE, VIDEO_BUCKET` and `/health` →
+  `{"ok":true,"views":{"ae":true,"kv":false,"r2Snapshot":true,"aeReadToken":true}}`.
+* What production answered before that, on the deploy that shipped (`no-ae`), verbatim from wrangler:
   `A request to the Cloudflare API (/accounts/92f3d04598822de2e49e14561218d090/workers/scripts/
   rough-firefly-dd7b/versions) failed. You need to enable Analytics Engine. Head to the Cloudflare
   Dashboard to enable: https://dash.cloudflare.com/92f3d04598822de2e49e14561218d090/workers/
@@ -98,10 +111,12 @@ Two facts it already established, and what they changed here:
   not be created or bound. That needs `Account > Workers KV Storage > Edit` on the token. It is no
   longer urgent, because the R2 snapshot fallback is live in production
   (`/health` → `{"ae":false,"kv":false,"r2Snapshot":true,"aeReadToken":true}`).
-* Reads are refused for the same reason as the binding: every AE SQL probe answers
-  `HTTP 403 Authorization error`, and GraphQL answers `HTTP 200` with
-  `unknown field "friendbook_views"` because no dataset exists yet. Once Analytics Engine is enabled,
-  the report comment shows both answers turn real — that is the only proof accepted here.
+* Reads were refused while the feature was off (`HTTP 403 Authorization error`), and GraphQL still
+  answers `HTTP 200 {"data":{"__type":null},"errors":null}` for `__type(name: "Viewer")` plus
+  `unknown field "friendbook_views"` for the guessed alias form — so this account's AE counts come
+  from the **SQL** endpoint, which is what the Worker tries first anyway.
+* Workers KV is still a token-scope question (`HTTP 401 Authentication error` when listing
+  namespaces), which is why the R2 snapshot fallback exists and is live.
 
 ## Fallbacks — a refused binding must never break a release
 

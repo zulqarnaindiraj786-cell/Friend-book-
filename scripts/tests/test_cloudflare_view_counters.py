@@ -128,6 +128,30 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         absent(self, 'MIN_VIEW_GAP_MS', worker, 'view-counters.js')
         absent(self, 'gapMs', worker, 'view-counters.js')
         absent(self, "toISOString().slice(0, 10)", worker, 'view-counters.js')
+    def test_the_ae_queries_use_the_syntax_the_real_dataset_accepted(self):
+        worker = (CLOUDFLARE / 'view-counters.js').read_text()
+        report = (CLOUDFLARE / 'report-views-ae.mjs').read_text()
+        # Raw answers from the live dataset, published on the pull request:
+        #   `INTERVAL 90 DAY`  -> HTTP 422 "sql parser error: Expected literal string, found: 90"
+        #   `uniqExact(blob3)` -> HTTP 422 "unknown function call: UNIQEXACT"
+        self.assertIn("+ ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`", worker)
+        self.assertNotIn('INTERVAL ${AE_WINDOW_DAYS} DAY', worker)
+        # Banned in the QUERIES. Full-line comments are excluded on purpose: they quote the raw
+        # refusal AE answered with, and that sentence is the reason the syntax looks the way it does.
+        code = '\n'.join(line for line in worker.splitlines() if not line.lstrip().startswith('//'))
+        absent(self, 'uniqExact', code, 'view-counters.js queries')
+        absent(self, 'uniqExact', '\n'.join(
+            line for line in report.splitlines() if not line.lstrip().startswith('//')), 'report queries')
+        # uniq(blob3) IS the "1 user = 1 view" rule, so a count() answer must never become permanent.
+        self.assertEqual(worker.count('uniq(blob3) AS viewers'), 2)
+        self.assertIn('const AE_EXACT_VARIANTS = 2;', worker)
+        self.assertIn("const exact = typeof variant === 'number' && variant < AE_EXACT_VARIANTS;", worker)
+        self.assertIn('for (let index = exact ? variant : 0; index < AE_SQL_VARIANTS.length; index++) {', worker)
+        # The report probes the same queries the Worker runs, and says plainly whether uniq was accepted.
+        self.assertIn("INTERVAL '${WINDOW_DAYS}' DAY", report)
+        self.assertIn('const UNIQ_PROBE_INDEXES = [1, 2];', report)
+        self.assertIn('accepted (the one-view-per-user count)', report)
+
     def test_kv_namespace_is_provisioned_by_ci_before_deploy(self):
         script = (CLOUDFLARE / 'ensure-views-kv.mjs').read_text()
         self.assertIn('friendbook-views', script)
