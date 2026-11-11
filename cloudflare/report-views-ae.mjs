@@ -200,12 +200,21 @@ async function publish(body) {
   if (!pull) { warn('No open pull request found for this branch; printing the report to the log instead.'); console.log(body); return; }
   const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'friendbook-ae-report' };
   const base = `https://api.github.com/repos/${pull.owner}/${pull.name}/issues/${pull.number}/comments`;
+  // Editing a comment is a DIFFERENT endpoint: /repos/{o}/{r}/issues/comments/{id}. Addressing it as
+  // /issues/{n}/comments/{id} answers HTTP 404, which twice looked like a permissions problem.
+  const commentUrl = (id) => `https://api.github.com/repos/${pull.owner}/${pull.name}/issues/comments/${id}`;
   try {
     const existing = await fetch(`${base}?per_page=100`, { headers });
     const comments = existing.ok ? await existing.json() : [];
-    const match = Array.isArray(comments) ? comments.find((entry) => String(entry?.body || '').includes(MARKER)) : null;
+    const marked = Array.isArray(comments) ? comments.filter((entry) => String(entry?.body || '').includes(MARKER)) : [];
+    // One report, one comment: the newest marked one is refreshed, any older duplicates are removed.
+    const match = marked.length > 0 ? marked[marked.length - 1] : null;
+    for (const stale of marked.slice(0, Math.max(0, marked.length - 1))) {
+      const removed = await fetch(commentUrl(stale.id), { method: 'DELETE', headers });
+      if (!removed.ok) warn(`Could not delete the duplicate report comment ${stale.id} (HTTP ${removed.status}).`);
+    }
     if (match) {
-      const updated = await fetch(`${base}/${match.id}`, { method: 'PATCH', headers, body: JSON.stringify({ body }) });
+      const updated = await fetch(commentUrl(match.id), { method: 'PATCH', headers, body: JSON.stringify({ body }) });
       if (updated.ok) { console.log(`Updated PR #${pull.number} comment ${match.id} with the Analytics Engine report.`); return; }
       warn(`Could not update comment ${match.id} (HTTP ${updated.status}): ${clip(await updated.text(), 300)}`);
       // Stale evidence is worse than a second comment, so post a fresh one and say so.

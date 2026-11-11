@@ -185,6 +185,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('/storage/kv/namespaces', report)
         self.assertIn('__type(name: \"Viewer\")', report)
         self.assertIn('Analytics Engine > Edit', report)
+        # Editing a comment is /repos/{o}/{r}/issues/comments/{id}; addressing it under the issue
+        # number answers HTTP 404 and the pull request silently keeps the previous run's evidence.
+        self.assertIn('${pull.owner}/${pull.name}/issues/comments/${id}', report)
+        self.assertNotIn('${base}/${match.id}', report)
         self.assertIn('process.exit(0)', report)
         workflow = (ROOT / '.github/workflows/deploy-cloudflare.yml').read_text()
         self.assertIn('pull-requests: write', workflow)
