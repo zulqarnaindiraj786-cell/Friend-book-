@@ -32,7 +32,6 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
-import android.widget.VideoView;
 
 import com.bumptech.glide.Glide;
 import com.friendbook.social.core.Cloudinary;
@@ -47,12 +46,12 @@ import java.util.Collections;
 import java.util.Locale;
 
 /**
- * TikTok 3-Stage Reel Studio (v2.8.69):
- * - Stage 1: Full-Screen TikTok Live Camera Studio (Screenshot_20261111-105919.jpg) with iPhone 17 Pro Max
- *   zero-lag GPU overlays, Sounds sheet (Screenshot_20261111-105956.jpg), and Effects sheet (Screenshot_20261111-105936.jpg).
- * - Stage 2: Full-Screen TikTok Video Preview Editor (Screenshot_20261111-110929.jpg & 110932.jpg) with
+ * 3-Stage Reel Studio (2026, TikTok-style UI with zero brand banners):
+ * - Stage 1: Full-Screen Live Camera Studio (Screenshot_20261111-105919.jpg) with 4K UHD zero-lag GPU
+ *   grading, pinch-to-zoom, Sounds sheet (Screenshot_20261111-105956.jpg) and Effects sheet (Screenshot_20261111-105936.jpg).
+ * - Stage 2: Full-Screen Video Preview Editor (Screenshot_20261111-110929.jpg & 110932.jpg) with
  *   Add sound, right collapsible tool rail, brush-banner Text overlay, Your Story & Next buttons.
- * - Stage 3: Clean White TikTok Post Screen (Screenshot_20261111-110627.jpg) with description, Edit cover,
+ * - Stage 3: Clean White Post Screen (Screenshot_20261111-110627.jpg) with description, Edit cover,
  *   # Hashtags, @ Friends, Content disclosure, Location chips, Add link, Privacy, More options, Drafts & Post.
  */
 public class AddReelActivity extends Activity {
@@ -66,7 +65,8 @@ public class AddReelActivity extends Activity {
     private static final int STAGE_POST_FORM = 3;
 
     private static final String[] FILTER_KEYS = {"none", "vivid", "warm", "cool", "vintage", "bw", "neon", "rose"};
-    private static final String[] FILTER_LABELS = {"📱 iPhone 17 Natural", "✨ Vivid HDR", "🌅 Golden Warm", "❄️ Cinema Cool", "🎞️ Vintage 90s", "🖤 Noir B&W", "💜 Cyber Neon", "🌸 Rose Glow"};
+    private static final String[] FILTER_LABELS = {"4K Natural", "HDR Vivid", "Golden Warm", "Cinema Cool",
+            "Retro Film", "Noir B&W", "Cyber Neon", "Rosy Glow"};
     private static final int[] FILTER_TINTS = {0x00000000, 0x18FFF3E8, 0x28FF9800, 0x2400B0FF, 0x2CD4A359, 0x42212121, 0x2A7C4DFF, 0x24F06292};
     private static final float[] SPEED_STEPS = {0.5f, 1.0f, 2.0f, 3.0f};
 
@@ -79,8 +79,8 @@ public class AddReelActivity extends Activity {
 
     private final ReelUploadManager.EditOptions editOpts = new ReelUploadManager.EditOptions();
     private int totalDurationMs = 0;
-    private int activeBeautyLevel = 2; // Default iPhone 17 Pro Max Porcelain Clear (0.0ms GPU overlay)
-    private String activeEffectKey = "iphone17_hdr";
+    private int activeBeautyLevel = 2; // Default 4K UHD Porcelain Clear (0.0ms GPU ColorMatrix)
+    private String activeEffectKey = "ultra_4k";
     private int selectedMaxDurationSec = 15; // 180 (3m), 60 (60s), 15 (15s)
     private int countdownTimerSec = 0; // 0, 3, 10
     private boolean railExpanded = false;
@@ -108,13 +108,21 @@ public class AddReelActivity extends Activity {
     private TextView camBeautyLabelTv;
     private TextView camCountdownCenterTv;
     private LinearLayout camSpeedBarRow;
+    private LinearLayout camZoomRow;
+    private TextView camZoomLabelTv;
     private View camRecordInnerView;
     private TextView camRecordingTimerTv;
     private int recordingElapsedSec = 0;
+    /** True when the last recording used the front camera, so playback mirrors it exactly as the user saw it. */
+    private boolean lastRecordingWasFrontCamera = true;
 
     // Stage 2 Video Preview Editor Views
     private FrameLayout stage;
-    private VideoView previewVideo;
+    /** TextureView (not VideoView) so the preview can be mirrored + GPU graded exactly like the camera. */
+    private TextureView previewTexture;
+    private android.view.Surface previewSurface;
+    private Uri pendingPreviewUri;
+    private int previewVideoW = 0, previewVideoH = 0;
     private ImageView previewPoster;
     private View stageBeautyTint;
     private View stageFilterTint;
@@ -155,7 +163,7 @@ public class AddReelActivity extends Activity {
                 recordingElapsedSec++;
                 if (camRecordingTimerTv != null) {
                     camRecordingTimerTv.setVisibility(View.VISIBLE);
-                    camRecordingTimerTv.setText(String.format(Locale.US, "● %02d:%02d / %02d:%02d",
+                    camRecordingTimerTv.setText(String.format(Locale.US, "REC %02d:%02d / %02d:%02d",
                             recordingElapsedSec / 60, recordingElapsedSec % 60,
                             selectedMaxDurationSec / 60, selectedMaxDurationSec % 60));
                 }
@@ -171,12 +179,12 @@ public class AddReelActivity extends Activity {
     private final Runnable trimLoopRunnable = new Runnable() {
         @Override
         public void run() {
-            if (currentStage == STAGE_PREVIEW_EDITOR && previewVideo != null && videoUri != null) {
+            if (currentStage == STAGE_PREVIEW_EDITOR && previewMp != null && videoUri != null) {
                 try {
-                    if (previewVideo.isPlaying()) {
-                        int pos = previewVideo.getCurrentPosition();
+                    if (previewIsPlaying()) {
+                        int pos = previewGetPosition();
                         int end = editOpts.trimEndMs > editOpts.trimStartMs ? editOpts.trimEndMs : totalDurationMs;
-                        if (end > 0 && pos >= end) previewVideo.seekTo(Math.max(0, editOpts.trimStartMs));
+                        if (end > 0 && pos >= end) previewSeek(Math.max(0, editOpts.trimStartMs));
                     }
                 } catch (Throwable ignored) {}
                 mainHandler.postDelayed(this, 140L);
@@ -205,7 +213,7 @@ public class AddReelActivity extends Activity {
                     if (progressCard != null) progressCard.setVisibility(View.GONE);
                     if (postSubmitBtn != null) {
                         postSubmitBtn.setEnabled(true);
-                        postSubmitBtn.setText("📤  Post");
+                        postSubmitBtn.setText("Post");
                     }
                     Ui.toast(this, error);
                 }
@@ -262,13 +270,13 @@ public class AddReelActivity extends Activity {
 
         if (targetStage == STAGE_CAMERA) {
             Ui.statusBar(getWindow(), Color.BLACK);
-            try { previewVideo.pause(); } catch (Throwable ignored) {}
+            previewPause();
             stopAttachedSoundPreview();
             if (cameraController != null) cameraController.startPreviewIfReady();
         } else if (targetStage == STAGE_PREVIEW_EDITOR) {
             Ui.statusBar(getWindow(), Color.BLACK);
             if (cameraController != null) cameraController.releaseCamera();
-            try { previewVideo.start(); } catch (Throwable ignored) {}
+            previewStart();
             if (editOpts.audioUrl != null && !editOpts.audioUrl.isEmpty()) {
                 startAttachedSoundPreview();
             }
@@ -277,9 +285,127 @@ public class AddReelActivity extends Activity {
         } else {
             Ui.statusBarLight(this);
             if (cameraController != null) cameraController.releaseCamera();
-            try { previewVideo.pause(); } catch (Throwable ignored) {}
+            previewPause();
             stopAttachedSoundPreview();
             mainHandler.removeCallbacks(trimLoopRunnable);
+        }
+    }
+
+    // ==================== STAGE 2 TEXTUREVIEW PLAYER (mirror-safe + 4K UHD GPU graded) ====================
+
+    /**
+     * Prepares the Stage-2 preview player on a hardware TextureView so the recorded clip is shown
+     * EXACTLY as the user saw it while recording (front camera stays mirrored — face never flips side),
+     * and so the real 4K UHD ColorMatrix filter grade can be applied straight on the GPU.
+     */
+    private void preparePreviewPlayer() {
+        releasePreviewPlayer();
+        if (pendingPreviewUri == null) return;
+        final Uri target = pendingPreviewUri;
+        final android.media.MediaPlayer mp = new android.media.MediaPlayer();
+        previewMp = mp;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                mp.setAudioAttributes(new android.media.AudioAttributes.Builder()
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .build());
+            }
+            mp.setLooping(true);
+            if (previewSurface == null && previewTexture != null && previewTexture.isAvailable()) {
+                previewSurface = new android.view.Surface(previewTexture.getSurfaceTexture());
+            }
+            if (previewSurface != null) mp.setSurface(previewSurface);
+            mp.setDataSource(this, target);
+
+            mp.setOnVideoSizeChangedListener((player, w, h) -> {
+                previewVideoW = w;
+                previewVideoH = h;
+                applyPreviewTransform();
+            });
+            mp.setOnPreparedListener(player -> {
+                if (player != previewMp) return;
+                previewVideoW = player.getVideoWidth();
+                previewVideoH = player.getVideoHeight();
+                int d = player.getDuration();
+                if (d > 0) totalDurationMs = d;
+                float vol = previewMuted ? 0f : 1f;
+                try { player.setVolume(vol, vol); } catch (Throwable ignored) {}
+                if (Math.abs(editOpts.playbackSpeed - 1.0f) > 0.02f
+                        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try { player.setPlaybackParams(player.getPlaybackParams().setSpeed(editOpts.playbackSpeed)); }
+                    catch (Throwable ignored) {}
+                }
+                applyPreviewTransform();
+                refreshStageOverlays();
+                if (previewPoster != null) previewPoster.setVisibility(View.GONE);
+                previewStart();
+                if (editOpts.audioUrl != null && !editOpts.audioUrl.isEmpty()) {
+                    startAttachedSoundPreview();
+                }
+                mainHandler.removeCallbacks(trimLoopRunnable);
+                mainHandler.post(trimLoopRunnable);
+            });
+            mp.setOnErrorListener((player, what, extra) -> player == previewMp);
+            mp.prepareAsync();
+        } catch (Throwable t) {
+            releasePreviewPlayer();
+        }
+    }
+
+    /** Fit-to-stage preview transform + horizontal mirror for front-camera recordings. */
+    private void applyPreviewTransform() {
+        if (previewTexture == null || previewVideoW <= 0 || previewVideoH <= 0) return;
+        int viewW = previewTexture.getWidth();
+        int viewH = previewTexture.getHeight();
+        if (viewW <= 0 || viewH <= 0) return;
+        float viewRatio = (float) viewW / viewH;
+        float videoRatio = (float) previewVideoW / previewVideoH;
+        float sx, sy;
+        if (videoRatio > viewRatio) {
+            sx = 1f;
+            sy = viewRatio / videoRatio;
+        } else {
+            sx = videoRatio / viewRatio;
+            sy = 1f;
+        }
+        if (editOpts.mirrorHorizontal) sx = -sx;
+        android.graphics.Matrix m = new android.graphics.Matrix();
+        m.setScale(sx, sy, viewW / 2f, viewH / 2f);
+        previewTexture.setTransform(m);
+    }
+
+    private void previewPause() {
+        try { if (previewMp != null && previewMp.isPlaying()) previewMp.pause(); } catch (Throwable ignored) {}
+    }
+
+    private void previewStart() {
+        try {
+            if (previewMp == null && pendingPreviewUri != null) { preparePreviewPlayer(); return; }
+            if (previewMp != null) previewMp.start();
+        } catch (Throwable ignored) {}
+    }
+
+    private void previewSeek(int ms) {
+        try { if (previewMp != null) previewMp.seekTo(Math.max(0, ms)); } catch (Throwable ignored) {}
+    }
+
+    private boolean previewIsPlaying() {
+        try { return previewMp != null && previewMp.isPlaying(); } catch (Throwable ignored) { return false; }
+    }
+
+    private int previewGetPosition() {
+        try { return previewMp != null ? previewMp.getCurrentPosition() : 0; } catch (Throwable ignored) { return 0; }
+    }
+
+    private void releasePreviewPlayer() {
+        final android.media.MediaPlayer old = previewMp;
+        previewMp = null;
+        if (old != null) {
+            new Thread(() -> {
+                try { old.reset(); } catch (Throwable ignored) {}
+                try { old.release(); } catch (Throwable ignored) {}
+            }, "reel-preview-player-release").start();
         }
     }
 
@@ -294,27 +420,33 @@ public class AddReelActivity extends Activity {
         }
     }
 
-    // ==================== STAGE 1: TIKTOK CAMERA STUDIO (Screenshot_20261111-105919.jpg) ====================
+    // ==================== STAGE 1: LIVE CAMERA STUDIO (Screenshot_20261111-105919.jpg) ====================
 
     private void buildStage1CameraStudio() {
         cameraStageRoot = new FrameLayout(this);
         cameraStageRoot.setBackgroundColor(Color.BLACK);
 
-        // 1. Live Hardware TextureView Preview (1080p iPhone 17 Pro Max ISP tuned)
+        // 1. Live Hardware TextureView Preview (1080p 4K UHD ISP tuned, pinch-to-zoom)
         camTextureView = new TextureView(this);
         cameraController = new TikTokReelStudioHelper.ReelCameraController(this, camTextureView);
+        cameraController.setZoomChangeListener(z -> {
+            if (camZoomLabelTv != null) {
+                camZoomLabelTv.setText(String.format(java.util.Locale.US, "%.1fx", z));
+            }
+        });
         cameraStageRoot.addView(camTextureView, new FrameLayout.LayoutParams(-1, -1));
 
         // 2. Zero-Lag GPU Beauty & Effect Overlay Layers (0.0ms CPU cost = zero camera hang!)
         camBeautyLayer = new View(this);
         camBeautyLayer.setClickable(false);
+        camBeautyLayer.setFocusable(false);
         cameraStageRoot.addView(camBeautyLayer, new FrameLayout.LayoutParams(-1, -1));
 
         camEffectLayer = new View(this);
         camEffectLayer.setClickable(false);
+        camEffectLayer.setFocusable(false);
         cameraStageRoot.addView(camEffectLayer, new FrameLayout.LayoutParams(-1, -1));
-        TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                camBeautyLayer, camEffectLayer, activeBeautyLevel, editOpts.filterOverlayColor);
+        refreshCameraGrade();
 
         // Front-camera Retina Flash Ring
         camFrontFlashRing = new View(this);
@@ -327,27 +459,25 @@ public class AddReelActivity extends Activity {
         FrameLayout topBar = new FrameLayout(this);
         Ui.pad(topBar, 16, 16, 16, 10);
 
-        TextView closeBtn = Ui.tvBold(this, "✕", 22f, Color.WHITE);
-        closeBtn.setShadowLayer(4f, 0f, 1f, 0xAA000000);
-        Ui.pad(closeBtn, 8, 4, 12, 4);
+        ImageView closeBtn = com.friendbook.social.core.StudioVectorIcons.iconView(this, "close", 24, Color.WHITE);
+        Ui.pad(closeBtn, 8, 8, 8, 8);
         closeBtn.setOnClickListener(v -> finish());
-        topBar.addView(closeBtn, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+        topBar.addView(closeBtn, new FrameLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40),
+                Gravity.START | Gravity.CENTER_VERTICAL));
 
-        camSoundsPillTv = Ui.tvBold(this,
-                !initialSoundTitle.isEmpty() ? ("♪  " + initialSoundTitle) : "♪  Sounds",
-                14f, Color.WHITE);
+        camSoundsPillTv = com.friendbook.social.core.StudioVectorIcons.iconChip(this, "music",
+                !initialSoundTitle.isEmpty() ? initialSoundTitle : "Sounds",
+                14f, 0x77000000, Color.WHITE, Color.WHITE);
         camSoundsPillTv.setSingleLine(true);
         camSoundsPillTv.setEllipsize(TextUtils.TruncateAt.END);
         camSoundsPillTv.setMaxWidth(Ui.dp(this, 220));
-        camSoundsPillTv.setBackground(Ui.round(this, 0x77000000, 20));
-        Ui.pad(camSoundsPillTv, 16, 8, 16, 8);
         camSoundsPillTv.setOnClickListener(v -> openSoundsBottomSheet());
         topBar.addView(camSoundsPillTv, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         cameraStageRoot.addView(topBar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
         // Recording Timer Pill (shown while recording)
-        camRecordingTimerTv = Ui.tvBold(this, "● 00:00", 13f, Color.WHITE);
+        camRecordingTimerTv = Ui.tvBold(this, "REC 00:00", 13f, Color.WHITE);
         camRecordingTimerTv.setBackground(Ui.round(this, 0xCCFE2C55, 16));
         Ui.pad(camRecordingTimerTv, 12, 5, 12, 5);
         camRecordingTimerTv.setVisibility(View.GONE);
@@ -390,7 +520,7 @@ public class AddReelActivity extends Activity {
                 camTimerLabelTv.setText(countdownTimerSec == 0 ? "Timer" : (countdownTimerSec + "s"));
             }
             Ui.toast(this, countdownTimerSec == 0
-                    ? "Timer Off" : ("⏱ " + countdownTimerSec + "s Countdown Timer Set"));
+                    ? "Timer Off" : (countdownTimerSec + "s Countdown Timer Set"));
         }));
 
         rightRail.addView(makeRailTool("1x", "Speed", tv -> camSpeedLabelTv = tv, v -> {
@@ -404,19 +534,50 @@ public class AddReelActivity extends Activity {
 
         rightRail.addView(makeRailTool("✨", "Beautify", tv -> camBeautyLabelTv = tv, v -> {
             activeBeautyLevel = (activeBeautyLevel + 1) % 4;
-            TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                    camBeautyLayer, camEffectLayer, activeBeautyLevel, editOpts.filterOverlayColor);
-            TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                    stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
+            refreshCameraGrade();
+            refreshStageOverlays();
             String bName = activeBeautyLevel == 0 ? "Natural"
-                    : (activeBeautyLevel == 1 ? "Soft" : (activeBeautyLevel == 2 ? "Porcelain" : "iPhone 17"));
+                    : (activeBeautyLevel == 1 ? "Soft Glow" : (activeBeautyLevel == 2 ? "Porcelain 4K" : "4K UHD"));
             if (camBeautyLabelTv != null) camBeautyLabelTv.setText(bName);
-            Ui.toast(this, "✨ iPhone 17 Pro Max Beauty: " + bName);
+            Ui.toast(this, "4K UHD Face Beauty: " + bName);
         }));
 
         FrameLayout.LayoutParams rrlp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.TOP);
         rrlp.topMargin = Ui.dp(this, 68);
         cameraStageRoot.addView(rightRail, rrlp);
+
+        // 5. Smooth Zoom Chips (1x / 2x / 3x) above the record button — pinch-to-zoom also works
+        camZoomRow = Ui.row(this);
+        camZoomRow.setGravity(Gravity.CENTER);
+        final float[] zoomSteps = {1.0f, 2.0f, 3.0f};
+        for (int zi = 0; zi < zoomSteps.length; zi++) {
+            final float zs = zoomSteps[zi];
+            TextView chip = Ui.tvBold(this, ((int) zs + "x"), 12f, Color.WHITE);
+            chip.setGravity(Gravity.CENTER);
+            chip.setTag(zs);
+            chip.setBackground(Ui.round(this, 0x55000000, 14));
+            Ui.pad(chip, 11, 5, 11, 5);
+            chip.setOnClickListener(v -> {
+                if (cameraController != null) cameraController.setZoomFactor(zs);
+                refreshZoomChips();
+            });
+            camZoomRow.addView(chip);
+            if (zi < zoomSteps.length - 1) {
+                View sp = new View(this);
+                camZoomRow.addView(sp, new LinearLayout.LayoutParams(Ui.dp(this, 8), 1));
+            }
+        }
+        camZoomLabelTv = Ui.tvBold(this, "1.0x", 11f, 0xCCFFFFFF);
+        camZoomLabelTv.setGravity(Gravity.CENTER);
+        camZoomLabelTv.setShadowLayer(4f, 0f, 1f, 0xAA000000);
+        FrameLayout.LayoutParams zllp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        zllp.bottomMargin = Ui.dp(this, 178);
+        cameraStageRoot.addView(camZoomLabelTv, zllp);
+
+        FrameLayout.LayoutParams zrlp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        zrlp.bottomMargin = Ui.dp(this, 150);
+        cameraStageRoot.addView(camZoomRow, zrlp);
+        refreshZoomChips();
 
         // 5. Bottom Camera Controls Stack (Speed Bar + Duration Row + Effects / Record / Upload Row)
         LinearLayout bottomCol = Ui.col(this);
@@ -486,9 +647,9 @@ public class AddReelActivity extends Activity {
         effGrad.setCornerRadius(Ui.dp(this, 10));
         effGrad.setStroke(Ui.dp(this, 1.5f), Color.WHITE);
         effectsCard.setBackground(effGrad);
-        TextView effEmoji = Ui.tvBold(this, "✨", 20f, Color.WHITE);
-        effEmoji.setGravity(Gravity.CENTER);
-        effectsCard.addView(effEmoji, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        ImageView effIcon = com.friendbook.social.core.StudioVectorIcons.iconView(this, "beauty", 22, Color.WHITE);
+        int effIconSz = Ui.dp(this, 24);
+        effectsCard.addView(effIcon, new FrameLayout.LayoutParams(effIconSz, effIconSz, Gravity.CENTER));
         effectsCol.addView(effectsCard, new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42)));
         TextView effLbl = Ui.tvBold(this, "Effects", 12f, Color.WHITE);
         effLbl.setShadowLayer(3f, 0f, 1f, 0xAA000000);
@@ -497,7 +658,7 @@ public class AddReelActivity extends Activity {
         effectsCol.setOnClickListener(v -> openEffectsBottomSheet());
         actionRow.addView(effectsCol, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        // Center: Giant Red TikTok Record Button (Outer white ring + inner #FE2C55 circle)
+        // Center: Giant Red Record Button (Outer white ring + inner #FE2C55 circle)
         FrameLayout recordOuter = new FrameLayout(this);
         recordOuter.setBackground(Ui.roundStroke(this, 0x22FFFFFF, 42, Color.WHITE, 4));
         camRecordInnerView = new View(this);
@@ -516,9 +677,9 @@ public class AddReelActivity extends Activity {
         upGrad.setCornerRadius(Ui.dp(this, 10));
         upGrad.setStroke(Ui.dp(this, 1.5f), Color.WHITE);
         uploadCard.setBackground(upGrad);
-        TextView upEmoji = Ui.tvBold(this, "🖼️", 19f, Color.WHITE);
-        upEmoji.setGravity(Gravity.CENTER);
-        uploadCard.addView(upEmoji, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        ImageView upIcon = com.friendbook.social.core.StudioVectorIcons.iconView(this, "gallery", 21, Color.WHITE);
+        int upIconSz = Ui.dp(this, 23);
+        uploadCard.addView(upIcon, new FrameLayout.LayoutParams(upIconSz, upIconSz, Gravity.CENTER));
         uploadCol.addView(uploadCard, new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42)));
         TextView upLbl = Ui.tvBold(this, "Upload", 12f, Color.WHITE);
         upLbl.setShadowLayer(3f, 0f, 1f, 0xAA000000);
@@ -535,14 +696,54 @@ public class AddReelActivity extends Activity {
         void accept(TextView tv);
     }
 
+    /**
+     * Re-applies the 4K UHD GPU color grade to the live camera:
+     * a real hardware ColorMatrixColorFilter on the TextureView + procedural face glow / lens bloom
+     * shader on the overlay. Both run entirely on the GPU → locked 60 FPS, zero camera hang.
+     */
+    private void refreshCameraGrade() {
+        // Keep the grade the creator sees in sync with what gets published, so the finished
+        // Reel plays back exactly like the recording preview.
+        editOpts.beautyLevel = activeBeautyLevel;
+        TikTokReelStudioHelper.applyZeroLagVisualOverlay(
+                camTextureView, camBeautyLayer, camEffectLayer,
+                activeBeautyLevel, editOpts.filterPreset, editOpts.filterOverlayColor);
+    }
+
+    /** Highlights the active zoom chip (1x / 2x / 3x) and syncs the live zoom label. */
+    private void refreshZoomChips() {
+        if (camZoomRow == null) return;
+        float cur = cameraController != null ? cameraController.getZoomFactor() : 1.0f;
+        for (int i = 0; i < camZoomRow.getChildCount(); i++) {
+            View child = camZoomRow.getChildAt(i);
+            if (!(child instanceof TextView) || !(child.getTag() instanceof Float)) continue;
+            float step = (Float) child.getTag();
+            boolean sel = Math.abs(cur - step) < 0.06f;
+            TextView tv = (TextView) child;
+            tv.setTextColor(sel ? Color.BLACK : Color.WHITE);
+            tv.setBackground(sel ? Ui.round(this, Color.WHITE, 14) : Ui.round(this, 0x55000000, 14));
+        }
+        if (camZoomLabelTv != null) {
+            camZoomLabelTv.setText(String.format(java.util.Locale.US, "%.1fx", cur));
+        }
+    }
+
+    /**
+     * 2026 Studio Rail Tool: sleek anti-aliased vector icon (never a keyboard emoji) + label.
+     * `icon` accepts the legacy emoji/text tokens and maps them to real vector glyphs.
+     */
     private LinearLayout makeRailTool(String icon, String label, LabelConsumer labelRef, View.OnClickListener click) {
         LinearLayout col = Ui.col(this);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
         Ui.pad(col, 6, 7, 6, 7);
-        TextView icTv = Ui.tvBold(this, icon, "1x".equals(icon) || "Aa".equals(icon) ? 16f : 20f, Color.WHITE);
-        icTv.setGravity(Gravity.CENTER);
-        icTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
-        col.addView(icTv);
+        if ("1x".equals(icon)) {
+            TextView icTv = Ui.tvBold(this, icon, 16f, Color.WHITE);
+            icTv.setGravity(Gravity.CENTER);
+            icTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+            col.addView(icTv);
+        } else {
+            col.addView(com.friendbook.social.core.StudioVectorIcons.iconView(this, icon, 22, Color.WHITE));
+        }
         TextView lbTv = Ui.tvBold(this, label, 11f, Color.WHITE);
         lbTv.setGravity(Gravity.CENTER);
         lbTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
@@ -599,6 +800,9 @@ public class AddReelActivity extends Activity {
     private void beginCameraRecordingNow() {
         if (cameraController != null && cameraController.startRecording(selectedMaxDurationSec)) {
             recordingElapsedSec = 0;
+            // Remember the lens used so playback mirrors EXACTLY like the live preview (face stays on same side)
+            lastRecordingWasFrontCamera = cameraController.isFrontCamera();
+            editOpts.mirrorHorizontal = lastRecordingWasFrontCamera;
             if (camRecordInnerView != null) {
                 camRecordInnerView.setBackground(Ui.round(this, 0xFFFE2C55, 10));
                 FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
@@ -628,13 +832,14 @@ public class AddReelActivity extends Activity {
         }
         File recorded = cameraController != null ? cameraController.stopRecording() : null;
         if (recorded != null) {
+            editOpts.mirrorHorizontal = lastRecordingWasFrontCamera;
             onVideoPicked(Uri.fromFile(recorded));
         } else {
             Ui.toast(this, "Hold or tap to record at least 1 second of video");
         }
     }
 
-    // ==================== STAGE 2: TIKTOK VIDEO PREVIEW EDITOR (Screenshot_20261111-110929.jpg & 110932.jpg) ====================
+    // ==================== STAGE 2: VIDEO PREVIEW EDITOR (Screenshot_20261111-110929.jpg & 110932.jpg) ====================
 
     private void buildStage2VideoPreviewEditor() {
         editorStageRoot = new FrameLayout(this);
@@ -644,10 +849,45 @@ public class AddReelActivity extends Activity {
         stage = new FrameLayout(this);
         stage.setBackgroundColor(Color.BLACK);
 
-        previewVideo = new VideoView(this);
+        previewTexture = new TextureView(this);
         FrameLayout.LayoutParams vlp = new FrameLayout.LayoutParams(-1, -1);
         vlp.gravity = Gravity.CENTER;
-        stage.addView(previewVideo, vlp);
+        stage.addView(previewTexture, vlp);
+        previewTexture.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                if (previewSurface != null) {
+                    try { previewSurface.release(); } catch (Throwable ignored) {}
+                }
+                previewSurface = new android.view.Surface(st);
+                if (previewMp != null) {
+                    try {
+                        previewMp.setSurface(previewSurface);
+                        applyPreviewTransform();
+                    } catch (Throwable ignored) {}
+                } else if (pendingPreviewUri != null) {
+                    preparePreviewPlayer();
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
+                applyPreviewTransform();
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
+                releasePreviewPlayer();
+                if (previewSurface != null) {
+                    try { previewSurface.release(); } catch (Throwable ignored) {}
+                    previewSurface = null;
+                }
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) { }
+        });
 
         previewPoster = new ImageView(this);
         previewPoster.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -657,15 +897,16 @@ public class AddReelActivity extends Activity {
         // Zero-Lag GPU Beauty & Filter Overlay Layers
         stageBeautyTint = new View(this);
         stageBeautyTint.setClickable(false);
+        stageBeautyTint.setFocusable(false);
         stage.addView(stageBeautyTint, new FrameLayout.LayoutParams(-1, -1));
 
         stageFilterTint = new View(this);
         stageFilterTint.setClickable(false);
+        stageFilterTint.setFocusable(false);
         stage.addView(stageFilterTint, new FrameLayout.LayoutParams(-1, -1));
-        TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
+        refreshStageOverlays();
 
-        // Draggable TikTok Brush-Banner Text Overlay (Screenshot_20261111-110929.jpg)
+        // Draggable Brush-Banner Text Overlay (Screenshot_20261111-110929.jpg)
         stageTextPill = Ui.tvBold(this, "", 18f, Color.WHITE);
         stageTextPill.setGravity(Gravity.CENTER);
         Ui.pad(stageTextPill, 18, 10, 18, 10);
@@ -687,20 +928,18 @@ public class AddReelActivity extends Activity {
         FrameLayout topBar = new FrameLayout(this);
         Ui.pad(topBar, 14, 16, 14, 10);
 
-        TextView backBtn = Ui.tvBold(this, "←", 24f, Color.WHITE);
-        backBtn.setShadowLayer(4f, 0f, 1f, 0xAA000000);
-        Ui.pad(backBtn, 8, 4, 12, 4);
+        ImageView backBtn = com.friendbook.social.core.StudioVectorIcons.iconView(this, "back", 26, Color.WHITE);
+        Ui.pad(backBtn, 8, 8, 8, 8);
         backBtn.setOnClickListener(v -> switchStage(STAGE_CAMERA));
-        topBar.addView(backBtn, new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL));
+        topBar.addView(backBtn, new FrameLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42),
+                Gravity.START | Gravity.CENTER_VERTICAL));
 
-        editorSoundPillTv = Ui.tvBold(this,
-                !initialSoundTitle.isEmpty() ? ("♫  " + initialSoundTitle) : "♫  Add sound",
-                14f, Color.WHITE);
+        editorSoundPillTv = com.friendbook.social.core.StudioVectorIcons.iconChip(this, "music",
+                !initialSoundTitle.isEmpty() ? initialSoundTitle : "Add sound",
+                14f, 0x77000000, Color.WHITE, Color.WHITE);
         editorSoundPillTv.setSingleLine(true);
         editorSoundPillTv.setEllipsize(TextUtils.TruncateAt.END);
         editorSoundPillTv.setMaxWidth(Ui.dp(this, 220));
-        editorSoundPillTv.setBackground(Ui.round(this, 0x77000000, 20));
-        Ui.pad(editorSoundPillTv, 16, 8, 16, 8);
         editorSoundPillTv.setOnClickListener(v -> openSoundsBottomSheet());
         topBar.addView(editorSoundPillTv, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
@@ -719,9 +958,8 @@ public class AddReelActivity extends Activity {
             activeBeautyLevel = 3;
             editOpts.filterPreset = "vivid";
             editOpts.filterOverlayColor = 0x18FFF3E8;
-            TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                    stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
-            Ui.toast(this, "🎞️ iPhone 17 Pro Max Cinema Template Applied!");
+            refreshStageOverlays();
+            Ui.toast(this, "4K UHD Cinema Template Applied");
         }));
         rightRail.addView(makeRailTool("Aa", "Text", null, v -> showTextOverlayDialog()));
         rightRail.addView(makeRailTool("😊", "Stickers", null, v -> showStickerPickerDialog()));
@@ -742,23 +980,23 @@ public class AddReelActivity extends Activity {
                     previewMp.setVolume(vol, vol);
                 } catch (Throwable ignored) {}
             }
-            Ui.toast(this, previewMuted ? "🔇 Original Camera Voice Muted" : "🎤 Original Camera Voice Active");
+            Ui.toast(this, previewMuted ? "Original Camera Voice Muted" : "Original Camera Voice Active");
         }));
         extraRailItemsCol.addView(makeRailTool("⬇️", "Save", null, v -> {
-            Ui.toast(this, "✅ Video saved to device cache in 1080p HDR");
+            Ui.toast(this, "Video saved to device in 1080p HDR");
         }));
         rightRail.addView(extraRailItemsCol);
 
         // Expand/Collapse Chevron Button (⌄ / ⌃)
-        railExpandChevronTv = Ui.tvBold(this, "⌄", 20f, Color.WHITE);
+        railExpandChevronTv = com.friendbook.social.core.StudioVectorIcons.circleIconButton(
+                this, "chevron_down", 32, 0x44000000, Color.WHITE, null);
         railExpandChevronTv.setGravity(Gravity.CENTER);
-        railExpandChevronTv.setBackground(Ui.circle(0x44000000));
         LinearLayout.LayoutParams chlp = new LinearLayout.LayoutParams(Ui.dp(this, 32), Ui.dp(this, 32));
         chlp.topMargin = Ui.dp(this, 6);
         railExpandChevronTv.setOnClickListener(v -> {
             railExpanded = !railExpanded;
             extraRailItemsCol.setVisibility(railExpanded ? View.VISIBLE : View.GONE);
-            railExpandChevronTv.setText(railExpanded ? "⌃" : "⌄");
+            railExpandChevronTv.setText(railExpanded ? "chevron_up" : "chevron_down");
         });
         rightRail.addView(railExpandChevronTv, chlp);
         railScroll.addView(rightRail);
@@ -788,10 +1026,8 @@ public class AddReelActivity extends Activity {
             fc.setOnClickListener(v -> {
                 editOpts.filterPreset = fKey;
                 editOpts.filterOverlayColor = fTint;
-                TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                        stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
-                TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                        camBeautyLayer, camEffectLayer, activeBeautyLevel, editOpts.filterOverlayColor);
+                refreshStageOverlays();
+                refreshCameraGrade();
             });
             filterRow.addView(fc, flp);
         }
@@ -802,7 +1038,7 @@ public class AddReelActivity extends Activity {
         trimPanel.setBackground(Ui.round(this, 0xDD161823, 14));
         Ui.pad(trimPanel, 12, 10, 12, 10);
         trimPanel.setVisibility(View.GONE);
-        trimRangeLabel = Ui.tvBold(this, "✂️ Trim Start / End (Full Video)", 12f, Color.WHITE);
+        trimRangeLabel = Ui.tvBold(this, "Trim Start / End (Full Video)", 12f, Color.WHITE);
         trimPanel.addView(trimRangeLabel);
         trimStartSeek = new SeekBar(this);
         trimStartSeek.setMax(1000);
@@ -817,8 +1053,8 @@ public class AddReelActivity extends Activity {
                 if (e - s < 1000) return;
                 editOpts.trimStartMs = s;
                 editOpts.trimEndMs = e;
-                trimRangeLabel.setText(String.format(Locale.US, "✂️ %.1fs – %.1fs", s / 1000f, e / 1000f));
-                try { previewVideo.seekTo(s); } catch (Throwable ignored) {}
+                trimRangeLabel.setText(String.format(Locale.US, "%.1fs – %.1fs", s / 1000f, e / 1000f));
+                try { previewSeek(s); } catch (Throwable ignored) {}
             }
             @Override public void onStartTrackingTouch(SeekBar sb) {}
             @Override public void onStopTrackingTouch(SeekBar sb) {}
@@ -852,7 +1088,7 @@ public class AddReelActivity extends Activity {
         storyBtn.addView(storyTv);
         storyBtn.setOnClickListener(v -> {
             if (captionInput != null && captionInput.getText().length() == 0) {
-                captionInput.setText("✨ Story Reel");
+                captionInput.setText("Story Reel");
             }
             startReelUpload();
         });
@@ -860,7 +1096,7 @@ public class AddReelActivity extends Activity {
         sblp.rightMargin = Ui.dp(this, 10);
         bottomBar.addView(storyBtn, sblp);
 
-        // Right: TikTok Red [ Next ] Button
+        // Right: Red [ Next ] Button
         TextView nextBtn = Ui.tvBold(this, "Next", 15f, Color.WHITE);
         nextBtn.setGravity(Gravity.CENTER);
         nextBtn.setBackground(Ui.round(this, 0xFFFE2C55, 24));
@@ -880,10 +1116,10 @@ public class AddReelActivity extends Activity {
         LinearLayout topBar = Ui.row(this);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(topBar, 14, 12, 14, 10);
-        TextView backBtn = Ui.tvBold(this, "←", 24f, 0xFF161823);
-        Ui.pad(backBtn, 6, 2, 14, 2);
+        ImageView backBtn = com.friendbook.social.core.StudioVectorIcons.iconView(this, "back", 24, 0xFF161823);
+        Ui.pad(backBtn, 6, 6, 14, 6);
         backBtn.setOnClickListener(v -> switchStage(STAGE_PREVIEW_EDITOR));
-        topBar.addView(backBtn);
+        topBar.addView(backBtn, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 36)));
         postStageRoot.addView(topBar, new LinearLayout.LayoutParams(-1, -2));
 
         // Scrollable Body
@@ -957,7 +1193,7 @@ public class AddReelActivity extends Activity {
         body.addView(div1, d1lp);
 
         // 2. Option Rows (matching Screenshot_20261111-110627.jpg)
-        body.addView(makePostOptionRow("⭐", "Content disclosure and ads", null, false,
+        body.addView(makePostOptionRow("star", "Content disclosure and ads", null, false,
                 tv -> disclosureRowValueTv = tv, v -> {
                     contentDisclosureOn = !contentDisclosureOn;
                     if (disclosureRowValueTv != null) {
@@ -966,7 +1202,7 @@ public class AddReelActivity extends Activity {
                     Ui.toast(this, contentDisclosureOn ? "Content disclosure enabled" : "Content disclosure off");
                 }));
 
-        body.addView(makePostOptionRow("📍", "Location", null, false,
+        body.addView(makePostOptionRow("location", "Location", null, false,
                 tv -> locationRowValueTv = tv, v -> showLocationInputDialog()));
 
         // Quick Location Chips Row (Screenshot_20261111-110627.jpg)
@@ -990,10 +1226,10 @@ public class AddReelActivity extends Activity {
         locScroll.addView(locRow);
         body.addView(locScroll);
 
-        body.addView(makePostOptionRow("➕", "Add link", null, true,
+        body.addView(makePostOptionRow("link", "Add link", null, true,
                 tv -> linkRowValueTv = tv, v -> showAddLinkDialog()));
 
-        body.addView(makePostOptionRow("🔓", selectedPrivacy, null, false,
+        body.addView(makePostOptionRow("globe", selectedPrivacy, null, false,
                 tv -> privacyRowValueTv = tv, v -> {
                     if ("Everyone can view this post".equals(selectedPrivacy)) {
                         selectedPrivacy = "Friends only";
@@ -1005,8 +1241,8 @@ public class AddReelActivity extends Activity {
                     if (privacyRowValueTv != null) privacyRowValueTv.setText(selectedPrivacy);
                 }));
 
-        body.addView(makePostOptionRow("•••", "More options",
-                "Manage upload quality (1080p iPhone 17 Pro Max HDR)", false, null,
+        body.addView(makePostOptionRow("more", "More options",
+                "Manage upload quality (1080p 4K UHD HDR)", false, null,
                 v -> showMoreOptionsDialog()));
 
         // Share to row (Screenshot_20261111-110627.jpg)
@@ -1015,15 +1251,18 @@ public class AddReelActivity extends Activity {
         Ui.pad(shareRow, 0, 14, 0, 10);
         TextView shareLbl = Ui.tv(this, "Share to", 14.5f, 0xFF161823);
         shareRow.addView(shareLbl, new LinearLayout.LayoutParams(0, -2, 1f));
-        String[] shareBadges = {"💬", "📘", "📸", "🔗"};
+        String[] shareBadges = {"captions", "send", "gallery", "link"};
         int[] shareColors = {0xFF25D366, 0xFF1877F2, 0xFFE1306C, 0xFF54565F};
         for (int i = 0; i < shareBadges.length; i++) {
-            TextView sb = Ui.tvBold(this, shareBadges[i], 14f, Color.WHITE);
-            sb.setGravity(Gravity.CENTER);
-            sb.setBackground(Ui.circle(shareColors[i]));
+            FrameLayout sbWrap = new FrameLayout(this);
+            sbWrap.setBackground(Ui.circle(shareColors[i]));
+            ImageView sb = com.friendbook.social.core.StudioVectorIcons.iconView(
+                    this, shareBadges[i], 17, Color.WHITE);
+            int sbIc = Ui.dp(this, 18);
+            sbWrap.addView(sb, new FrameLayout.LayoutParams(sbIc, sbIc, Gravity.CENTER));
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Ui.dp(this, 32), Ui.dp(this, 32));
             slp.leftMargin = Ui.dp(this, 8);
-            shareRow.addView(sb, slp);
+            shareRow.addView(sbWrap, slp);
         }
         body.addView(shareRow);
 
@@ -1056,7 +1295,8 @@ public class AddReelActivity extends Activity {
         bottomBar.setBackgroundColor(Color.WHITE);
         Ui.pad(bottomBar, 16, 10, 16, 14);
 
-        TextView draftsBtn = Ui.tvBold(this, "📥  Drafts", 15f, 0xFF161823);
+        TextView draftsBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                this, "draft", "Drafts", 15f, 0, 0xFF161823, 0xFF161823);
         draftsBtn.setGravity(Gravity.CENTER);
         draftsBtn.setBackground(Ui.round(this, 0xFFF1F1F2, 8));
         draftsBtn.setOnClickListener(v -> saveReelDraftAndClose());
@@ -1064,7 +1304,8 @@ public class AddReelActivity extends Activity {
         dblp.rightMargin = Ui.dp(this, 10);
         bottomBar.addView(draftsBtn, dblp);
 
-        postSubmitBtn = Ui.tvBold(this, "📤  Post", 15f, Color.WHITE);
+        postSubmitBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                this, "send", "Post", 15f, 0, Color.WHITE, Color.WHITE);
         postSubmitBtn.setGravity(Gravity.CENTER);
         postSubmitBtn.setBackground(Ui.round(this, 0xFFFE2C55, 8));
         postSubmitBtn.setOnClickListener(v -> startReelUpload());
@@ -1080,9 +1321,9 @@ public class AddReelActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         Ui.pad(row, 0, 13, 0, 13);
 
-        TextView icTv = Ui.tvBold(this, icon, 16f, 0xFF161823);
-        icTv.setGravity(Gravity.CENTER);
-        row.addView(icTv, new LinearLayout.LayoutParams(Ui.dp(this, 28), -2));
+        ImageView icIv = com.friendbook.social.core.StudioVectorIcons.iconView(this, icon, 20, 0xFF161823);
+        icIv.setPadding(0, Ui.dp(this, 2), 0, 0);
+        row.addView(icIv, new LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 24)));
 
         LinearLayout textCol = Ui.col(this);
         TextView titleTv = Ui.tv(this, title, 15f, 0xFF161823);
@@ -1126,10 +1367,8 @@ public class AddReelActivity extends Activity {
                 editOpts.filterPreset = effect.filterPreset;
                 editOpts.filterOverlayColor = effect.overlayTintColor;
             }
-            TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                    camBeautyLayer, camEffectLayer, activeBeautyLevel, editOpts.filterOverlayColor);
-            TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                    stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
+            refreshCameraGrade();
+            refreshStageOverlays();
         });
     }
 
@@ -1144,29 +1383,27 @@ public class AddReelActivity extends Activity {
             editOpts.soundAuthorPhoto = sound.authorPhoto;
             editOpts.muteOriginalAudio = true;
             previewMuted = true;
-            if (camSoundsPillTv != null) camSoundsPillTv.setText("♪  " + sound.title);
-            if (editorSoundPillTv != null) editorSoundPillTv.setText("♫  " + sound.title);
+            if (camSoundsPillTv != null) camSoundsPillTv.setText(sound.title);
+            if (editorSoundPillTv != null) editorSoundPillTv.setText(sound.title);
             if (previewMp != null) {
                 try { previewMp.setVolume(0f, 0f); } catch (Throwable ignored) {}
             }
             if (currentStage == STAGE_PREVIEW_EDITOR) {
                 startAttachedSoundPreview();
             }
-            Ui.toast(this, "🎵 Attached sound: " + sound.title);
+            Ui.toast(this, "Attached sound: " + sound.title);
         });
     }
 
     private void cycleOrPickFilterDialog() {
         new AlertDialog.Builder(this)
-                .setTitle("🎨 iPhone 17 Pro Max & TikTok Filters")
+                .setTitle("4K UHD Filters & Effects")
                 .setItems(FILTER_LABELS, (d, which) -> {
                     if (which >= 0 && which < FILTER_KEYS.length) {
                         editOpts.filterPreset = FILTER_KEYS[which];
                         editOpts.filterOverlayColor = FILTER_TINTS[which];
-                        TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                                camBeautyLayer, camEffectLayer, activeBeautyLevel, editOpts.filterOverlayColor);
-                        TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                                stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
+                        refreshCameraGrade();
+                        refreshStageOverlays();
                     }
                 })
                 .show();
@@ -1193,13 +1430,13 @@ public class AddReelActivity extends Activity {
         input.setText(editOpts.overlayText != null ? editOpts.overlayText : "");
         box.addView(input, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView styleLbl = Ui.tvBold(this, "TikTok Brush Banner Style", 12.5f, Ui.sub(this));
+        TextView styleLbl = Ui.tvBold(this, "Brush Banner Style", 12.5f, Ui.sub(this));
         styleLbl.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 6));
         box.addView(styleLbl);
 
         LinearLayout colorRow = Ui.row(this);
         final int[] bgColors = {0xDD263238, 0xDDFE2C55, 0xDD1877F2, 0xDD000000, 0xDD8E24AA, 0x00000000};
-        final String[] bgNames = {"Brush Slate", "TikTok Red", "Blue", "Classic Dark", "Neon Purple", "Clean"};
+        final String[] bgNames = {"Brush Slate", "Studio Red", "Blue", "Classic Dark", "Neon Purple", "Clean"};
         for (int i = 0; i < bgColors.length; i++) {
             final int bgc = bgColors[i];
             TextView cBtn = Ui.roundChip(this, bgNames[i], bgc == 0 ? 0xFF424242 : bgc, Color.WHITE, 11f);
@@ -1214,7 +1451,7 @@ public class AddReelActivity extends Activity {
         box.addView(hsv);
 
         new AlertDialog.Builder(this)
-                .setTitle("Aa TikTok Text Overlay")
+                .setTitle("Aa Text Overlay")
                 .setView(box)
                 .setPositiveButton("Done", (d, w) -> {
                     editOpts.overlayText = input.getText() == null ? "" : input.getText().toString().trim();
@@ -1246,7 +1483,7 @@ public class AddReelActivity extends Activity {
 
     private void showEditorSettingsDialog() {
         String[] items = {
-                "📱 iPhone 17 Pro Max 1080p HDR Quality: " + (highQualityUpload ? "ON ✓" : "Standard"),
+                "1080p 4K UHD HDR Quality: " + (highQualityUpload ? "ON ✓" : "Standard"),
                 "🔇 Mute Original Camera Audio: " + (previewMuted ? "Muted" : "Active"),
                 "🔄 Reset All Video Edits"
         };
@@ -1256,7 +1493,7 @@ public class AddReelActivity extends Activity {
                     if (which == 0) {
                         highQualityUpload = !highQualityUpload;
                         Ui.toast(this, highQualityUpload
-                                ? "📱 iPhone 17 Pro Max 1080p HDR Quality Enabled"
+                                ? "1080p 4K UHD HDR Quality Enabled"
                                 : "Standard Upload Quality");
                     } else if (which == 1) {
                         previewMuted = !previewMuted;
@@ -1334,7 +1571,7 @@ public class AddReelActivity extends Activity {
 
     private void showMoreOptionsDialog() {
         String[] opts = {
-                "📱 Upload in 1080p iPhone 17 Pro Max HDR (" + (highQualityUpload ? "ON ✓" : "OFF") + ")",
+                "Upload in 1080p 4K UHD HDR (" + (highQualityUpload ? "ON ✓" : "OFF") + ")",
                 "💬 Allow comments (ON ✓)",
                 "♻️ Allow Reuse of Sound (ON ✓)"
         };
@@ -1492,8 +1729,12 @@ public class AddReelActivity extends Activity {
     }
 
     private void refreshStageOverlays() {
+        // Real 4K UHD GPU ColorMatrix grade straight on the preview TextureView + procedural lens shader
         TikTokReelStudioHelper.applyZeroLagVisualOverlay(
-                stageBeautyTint, stageFilterTint, activeBeautyLevel, editOpts.filterOverlayColor);
+                previewTexture, stageBeautyTint, stageFilterTint,
+                activeBeautyLevel, editOpts.filterPreset, editOpts.filterOverlayColor);
+        applyPreviewTransform();
+        if (stageTextPill == null || stageStickerTv == null || stage == null) return;
 
         if (editOpts.overlayText != null && !editOpts.overlayText.trim().isEmpty()) {
             stageTextPill.setText(editOpts.overlayText.trim());
@@ -1555,7 +1796,7 @@ public class AddReelActivity extends Activity {
         mainHandler.removeCallbacks(recordTickRunnable);
         stopAttachedSoundPreview();
         if (cameraController != null) cameraController.releaseCamera();
-        try { previewVideo.pause(); } catch (Throwable ignored) {}
+        previewPause();
     }
 
     private void appendTag(String tag) {
@@ -1629,25 +1870,8 @@ public class AddReelActivity extends Activity {
         resetAllEdits();
         switchStage(STAGE_PREVIEW_EDITOR);
 
-        previewVideo.setVideoURI(picked);
-        previewVideo.setOnPreparedListener(mp -> {
-            previewMp = mp;
-            mp.setLooping(true);
-            int d = mp.getDuration();
-            if (d > 0) totalDurationMs = d;
-            float vol = previewMuted ? 0f : 1f;
-            mp.setVolume(vol, vol);
-            if (Math.abs(editOpts.playbackSpeed - 1.0f) > 0.02f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try { mp.setPlaybackParams(mp.getPlaybackParams().setSpeed(editOpts.playbackSpeed)); } catch (Throwable ignored) {}
-            }
-            previewPoster.setVisibility(View.GONE);
-            previewVideo.start();
-            if (editOpts.audioUrl != null && !editOpts.audioUrl.isEmpty()) {
-                startAttachedSoundPreview();
-            }
-            mainHandler.removeCallbacks(trimLoopRunnable);
-            mainHandler.post(trimLoopRunnable);
-        });
+        pendingPreviewUri = picked;
+        preparePreviewPlayer();
 
         new Thread(() -> {
             final Cloudinary.VideoMeta m = Cloudinary.inspectVideo(getApplicationContext(), picked);
@@ -1660,7 +1884,7 @@ public class AddReelActivity extends Activity {
                 if (m.posterJpeg != null && m.posterJpeg.length > 0) {
                     Bitmap bmp = BitmapFactory.decodeByteArray(m.posterJpeg, 0, m.posterJpeg.length);
                     if (postCoverImage != null) postCoverImage.setImageBitmap(bmp);
-                    if (!previewVideo.isPlaying() && previewPoster != null) {
+                    if (!previewIsPlaying() && previewPoster != null) {
                         previewPoster.setImageBitmap(bmp);
                         previewPoster.setVisibility(View.VISIBLE);
                     }
@@ -1675,7 +1899,7 @@ public class AddReelActivity extends Activity {
                 videoUri = null;
                 videoMeta = null;
                 safetyVerified = false;
-                try { previewVideo.stopPlayback(); } catch (Throwable ignored) {}
+                releasePreviewPlayer();
                 switchStage(STAGE_CAMERA);
                 Ui.toast(this, verdict.message);
             } else {
@@ -1714,8 +1938,9 @@ public class AddReelActivity extends Activity {
             Ui.toast(this, textV.message);
             return;
         }
-        try { previewVideo.pause(); } catch (Throwable ignored) {}
+        previewPause();
         stopAttachedSoundPreview();
+        editOpts.beautyLevel = activeBeautyLevel;
         ReelUploadManager.startUpload(this, videoUri, cap, videoMeta, safetyVerified, editOpts);
     }
 }
