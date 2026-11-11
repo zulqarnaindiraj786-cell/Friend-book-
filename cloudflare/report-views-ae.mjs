@@ -208,6 +208,10 @@ async function publish(body) {
       const updated = await fetch(`${base}/${match.id}`, { method: 'PATCH', headers, body: JSON.stringify({ body }) });
       if (updated.ok) { console.log(`Updated PR #${pull.number} comment ${match.id} with the Analytics Engine report.`); return; }
       warn(`Could not update comment ${match.id} (HTTP ${updated.status}): ${clip(await updated.text(), 300)}`);
+      // Stale evidence is worse than a second comment, so post a fresh one and say so.
+      const retry = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ body }) });
+      if (retry.ok) { console.log(`Posted a new Analytics Engine report to PR #${pull.number} because the update was refused.`); return; }
+      warn(`Posting a replacement comment also failed (HTTP ${retry.status}): ${clip(await retry.text(), 300)}`);
     } else {
       const created = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ body }) });
       if (created.ok) { console.log(`Posted the Analytics Engine report to PR #${pull.number}.`); return; }

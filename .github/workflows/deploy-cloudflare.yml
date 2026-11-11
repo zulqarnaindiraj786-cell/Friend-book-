@@ -13,6 +13,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  # `pull-requests: write` lets the Analytics Engine report POST a comment on the pull request, but
+  # refreshing that comment is an ISSUE comment edit, which answers HTTP 404 without `issues: write`.
+  # An explicit permissions block sets every other scope to none, so it has to be named here.
+  issues: write
   pull-requests: write
 concurrency:
   group: friendbook-cloudflare-production

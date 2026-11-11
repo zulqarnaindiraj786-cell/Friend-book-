@@ -188,6 +188,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('process.exit(0)', report)
         workflow = (ROOT / '.github/workflows/deploy-cloudflare.yml').read_text()
         self.assertIn('pull-requests: write', workflow)
+        # Refreshing the report is an issue-comment edit: without this scope the API answers 404 and
+        # the pull request keeps showing the PREVIOUS run's evidence as if nothing had changed.
+        self.assertIn('issues: write', workflow)
         self.assertIn('node cloudflare/ensure-views-ae.mjs', workflow)
         self.assertIn('npx wrangler secret put CF_AE_TOKEN', workflow, 'the AE token is a secret, never a --var')
         self.assertIn('node cloudflare/report-views-ae.mjs', workflow)
