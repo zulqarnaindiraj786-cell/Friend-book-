@@ -1,8 +1,9 @@
 """Source contract guards: real view counters, counted in Worker memory + KV, never in Firestore.
 
 Firebase is authentication only for views — the Worker verifies the ID token and owns the counter.
-Counting rule (product decision): one second of real watching = one view, and the same user watching
-again counts again; the Worker floors it to one counted view per (resource, uid) per second, in memory.
+Counting rule (product decision): ONE view per user per resource, forever. One second of watching is
+enough; watching the whole video, looping it or coming back next month adds nothing. The Home Feed
+does no view-counter work at all - no request, no D1, no KV - so loading the feed costs nothing.
 
 Storage budget (the reason this design exists): counting or serving a view must cost ZERO D1 row
 reads. Live totals sit in Worker memory and in one Workers KV aggregate key; D1 receives at most one
@@ -56,7 +57,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         absent(self, 'SELECT views FROM friendbook_cf_view_counters WHERE resource', worker, 'view-counters.js')
         absent(self, 'withSession(', worker, 'view-counters.js')
 
-    def test_d1_is_written_at_most_once_per_resource_per_hour(self):
+    def test_totals_are_written_at_most_once_per_resource_per_hour(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
         self.assertIn('const D1_FLUSH_MS = 3_600_000;', worker)
         self.assertIn('state.dirty.has(resource)', worker)
@@ -67,10 +68,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('RETURNING views', worker)
         absent(self, 'views = views + 1', worker, 'view-counters.js')
         absent(self, 'views + ?', worker, 'view-counters.js')
-        # The per-user D1 stamp of the previous design cost a read and a write on every single view.
-        absent(self, 'ON CONFLICT(resource, uid)', worker, 'view-counters.js')
+        # The previous design UPDATED the per-user stamp on every view and then read it back; the
+        # de-dupe row may only ever be inserted, never updated or selected.
+        absent(self, 'ON CONFLICT(resource, uid) DO UPDATE', worker, 'view-counters.js')
         absent(self, 'WHERE last_at <= ?', worker, 'view-counters.js')
-
     def test_kv_writes_stay_inside_the_free_tier_budget(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
         # One aggregate key, rewritten at most every five minutes: <= 288 writes/day per isolate vs
@@ -89,18 +90,26 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn("if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(all);", worker)
         self.assertIn('Promise.allSettled(tasks)', worker)
 
-    def test_worker_counts_every_rewatch_with_a_one_second_floor(self):
+    def test_worker_counts_one_view_per_user_forever(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
-        self.assertIn('const MIN_VIEW_GAP_MS = 1000;', worker)
+        self.assertIn("const DEDUPE_RULE = 'once-per-user';", worker)
+        self.assertIn('dedupe: DEDUPE_RULE', worker)
         self.assertIn('const seenKey = `${resource}|${uid}`;', worker)
-        self.assertIn('now - (state.lastSeen.get(seenKey) ?? 0) >= MIN_VIEW_GAP_MS', worker)
-        self.assertIn('gapMs: MIN_VIEW_GAP_MS', worker)
-        self.assertIn('const MAX_SEEN_ENTRIES = 8000;', worker)
-        # The floor lives in memory; a per-day bucket would silently swallow re-watches.
+        # Memory settles a repeat with no storage call at all.
+        self.assertIn('if (state.counted.has(seenKey)) {', worker)
+        # Durable de-dupe, checked by a WRITE: the insert itself reports whether the pair was new.
+        self.assertIn('INSERT INTO friendbook_cf_view_last(resource, uid, last_at) VALUES (?, ?, ?)', worker)
+        self.assertIn('ON CONFLICT(resource, uid) DO NOTHING', worker)
+        self.assertIn('Number(result?.meta?.changes ?? 0) === 1', worker)
+        self.assertIn('const MAX_COUNTED_ENTRIES = 8000;', worker)
+        # A refused de-dupe write must never invent a view.
+        self.assertIn('return null;', worker)
+        self.assertIn("'Counter busy'", worker)
+        # The one-second floor and a per-day bucket are both gone: neither is "one view per user".
+        absent(self, 'MIN_VIEW_GAP_MS', worker, 'view-counters.js')
+        absent(self, 'gapMs', worker, 'view-counters.js')
+        absent(self, 'state.lastSeen', worker, 'view-counters.js')
         absent(self, "toISOString().slice(0, 10)", worker, 'view-counters.js')
-        absent(self, 'friendbook_cf_view_dedupe', worker.replace(
-            'CREATE TABLE IF NOT EXISTS friendbook_cf_view_dedupe', ''), 'view-counters.js')
-
     def test_kv_namespace_is_provisioned_by_ci_before_deploy(self):
         script = (CLOUDFLARE / 'ensure-views-kv.mjs').read_text()
         self.assertIn('friendbook-views', script)
@@ -118,18 +127,18 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertLess(workflow.index('node cloudflare/ensure-views-kv.mjs'),
                         workflow.index('npm run deploy'), 'KV must be bound before the deploy')
 
-    def test_displayed_view_counts_never_go_down(self):
-        # Views must be seen growing: a resource the Worker has not counted yet reports 0, and that
-        # zero must never replace a higher number the user already saw.
+    def test_reels_count_one_view_and_never_show_a_lower_number(self):
         client = (JAVA / 'core/CloudflareViews.java').read_text()
         self.assertIn('COUNTS.put(key, known != null ? Math.max(known.intValue(), views) : views);', client)
-        feed = (JAVA / 'post/FeedAdapter.java').read_text()
-        self.assertIn('if (total != null && total.intValue() > r.views) {', feed)
-        self.assertIn('Math.max(Math.max(0, featured.views), cloudViews != null ? cloudViews.intValue() : 0)', feed)
-        self.assertIn('Math.max(Math.max(0, p.views), stored != null ? stored.intValue() : 0)', feed)
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
+        # One second of real watching is enough to count this user's one view.
+        self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', reels)
+        self.assertIn('countRealView();', reels)
+        # ... and a loop, a re-watch or a restart never posts (or counts) a second one.
+        self.assertIn('private static final java.util.Set<String> SESSION_COUNTED_VIEWS =', reels)
+        self.assertIn('if (!SESSION_COUNTED_VIEWS.add(key)) return;', reels)
+        # The displayed number only ever grows.
         self.assertIn('total -> viewedReel.views = Math.max(viewedReel.views, Math.max(0, total))', reels)
-
     def test_reels_count_a_view_after_one_second_and_on_every_loop(self):
         source = (JAVA / 'reels/ReelsFragment.java').read_text()
         self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', source)
@@ -142,13 +151,22 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # The old "one view per Reel per app session" de-dupe is gone on purpose.
         absent(self, 'sessionViewedReelIds', source, 'ReelsFragment')
 
-    def test_feed_reads_real_totals_from_cloudflare(self):
-        source = (JAVA / 'post/FeedAdapter.java').read_text()
-        self.assertIn('private void refreshRealViewCounts()', source)
-        self.assertIn('CloudflareViews.fetchViews(collection, entry.getValue()', source)
-        self.assertIn('CloudflareViews.cached(', source)
-        self.assertIn('CloudflareViews.POSTS', source)
-
+    def test_home_feed_does_zero_views_work(self):
+        feed = (JAVA / 'post/FeedAdapter.java').read_text()
+        home = (JAVA / 'main/HomeFragment.java').read_text()
+        for name, source in (('FeedAdapter', feed), ('HomeFragment', home)):
+            # No views client, no views endpoint: loading or scrolling the Home Feed must not cost a
+            # D1 read, a D1 write, a KV read, a KV write or even an HTTP request.
+            absent(self, 'CloudflareViews', source, name)
+            absent(self, '/v1/views', source, name)
+        # The eye/view chip is gone from the featured Reels card, not merely hidden.
+        absent(self, 'firstPostReelViewsTv', feed, 'FeedAdapter')
+        absent(self, 'refreshRealViewCounts', feed, 'FeedAdapter')
+        # Post Insights still shows a real number: the post's own stored value, with no API call.
+        self.assertIn('int viewCount = Math.max(0, p.views);', feed)
+        # Everything else on the card is untouched - it still rotates to a fresh viral Reel.
+        self.assertIn('private Models.Reel pickFeaturedReel()', feed)
+        self.assertIn('public void setFeaturedReels(java.util.List<Models.Reel> reels)', feed)
     def test_views_client_counts_repeats_and_never_touches_firestore(self):
         gradle = (ROOT / 'app/build.gradle').read_text()
         self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'", gradle)
