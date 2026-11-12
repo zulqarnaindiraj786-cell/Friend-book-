@@ -212,6 +212,9 @@ test('one user is one view forever, even when the same user watches ten times', 
     assert.equal(f.queries.selects, 0, 'and no D1 read');
   }
   assert.equal(f.ae.events.length, 10, 'every real play is still recorded as an AE event');
+  assert.equal(f.ae.events.filter((event) => event.metrics[0] === 1).length, 1,
+    'but only the first play carries metric 1, so sum(double1) is viewers and count() is plays');
+  assert.equal(f.ae.events.filter((event) => event.metrics[0] === 0).length, 9);
   assert.equal(viewCounterState().counted, 1, 'the isolate settled this user once');
 });
 
@@ -500,33 +503,44 @@ test('Analytics Engine stays the truth over the R2 snapshot', async t => {
   assert.equal(f.queries.writes, 0);
 });
 
-test('a degraded count() answer upgrades itself back to uniq(uid)', async t => {
+test('a refused viewer query is never replaced by a plays count', async t => {
   resetViewState();
-  // While the dataset is still empty AE refuses the uniq variants, so only count() answers. Once
-  // events exist the isolate must go back to uniq(uid) by itself - otherwise it would count plays
-  // (every rewatch) instead of viewers (one per user) for the rest of its life.
+  // This AE API answered `unknown function call: UNIQ`, so while every viewer query is refused the
+  // counters must be served from the snapshot + memory - never from count(), which counts plays
+  // (every rewatch) and would break "1 user = 1 view". The events keep being written either way, and
+  // the moment a viewer query answers, AE becomes the source of truth.
   const f = fixture({
-    kvSeed: { 'reels/r1': 0 },
-    sql: (call) => (call === 2 ? tsv([['reels/r1', 4]]) : (call === 3 ? tsv([['reels/r1', 9]]) : null)),
+    kvSeed: { 'reels/r1': 4 },
+    sql: (call) => (call < 4 ? null : tsv([['reels/r1', 9]])),
   });
   t.after(f.close);
   let clock = T0;
   const now = () => clock;
 
-  const loaded = await call(f.env, {}, now);
-  assert.equal(loaded.body.views, 4, 'count() answered while the dataset was empty');
-  assert.equal(viewCounterState().aeVariant, 2, 'the degraded variant is remembered for this minute');
+  const refused = await call(f.env, {}, now);
+  assert.equal(refused.body.views, 4, 'the snapshot served the count, not a plays total');
+  assert.equal(refused.body.storage, 'kv+memory', 'AE refused, so AE is not claimed as the source');
+  assert.equal(viewCounterState().aeUsable, false);
+  assert.equal(f.ae.sqlCalls.length, 4, 'every viewer variant was tried, and none was a plain count()');
+  assert.ok(f.ae.sqlCalls.every((entry) => !/SELECT index1 AS resource, count\(\)/.test(decodeURIComponent(entry.url))),
+    'a plays-only query is never used as the viewer count');
+
+  const posted = await call(f.env, { method: 'POST', uid: 'user1' }, now);
+  assert.equal(posted.body.counted, true);
+  assert.equal(posted.body.views, 5, 'the live layer still counted the view while AE was refusing');
+  assert.equal(posted.body.event, 'analytics-engine', 'the event was written regardless');
+  assert.deepEqual(f.ae.events[0].metrics, [1], 'a counted view carries metric 1');
 
   clock += AE_MINUTE;
   const pending = [];
   await call(f.env, { method: 'POST', uid: 'user1' }, now, { waitUntil: (promise) => pending.push(promise) });
   await Promise.allSettled(pending);
-  assert.equal(viewCounterState().aeVariant, 0, 'the next refresh retried uniq() from the top and it answered');
-  assert.equal(f.ae.sqlCalls.length, 4, 'two refused variants, then count(), then uniq() again');
-
+  assert.equal(viewCounterState().aeUsable, true, 'the next refresh found a viewer query that answers');
+  assert.equal(viewCounterState().aeVariant, 0);
   const served = await call(f.env, {}, () => clock + 1000);
-  assert.equal(served.body.views, 9, 'uniq(blob3) is what users see once AE holds data');
+  assert.equal(served.body.views, 9, 'sum(double1) - viewers, not plays - is what users see');
   assert.equal(served.body.storage, 'ae+kv+memory');
+  assert.deepEqual(f.ae.events[1].metrics, [0], 'the same user watching again carries metric 0');
   assert.equal(f.queries.writes, 0, 'none of this ever writes to D1');
 });
 

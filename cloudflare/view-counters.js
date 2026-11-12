@@ -42,22 +42,29 @@ const AE_QUERY_LIMIT = 500;
  * exposes SQL over REST and a GraphQL dataset query; which one an account can use depends on its
  * plan and rollout, so neither is assumed.
  */
-// Written against the answers the real dataset gave (published on the pull request by
-// cloudflare/report-views-ae.mjs): `INTERVAL 90 DAY` is refused with "sql parser error: Expected
-// literal string, found: 90", so the number is quoted; `uniqExact` is refused with "unknown function
-// call: UNIQEXACT", so it is gone. What stays is uniq(blob3) - one view per user - and, only if AE
-// ever refuses uniq itself, a degraded count() that is retried upwards on every refresh.
+// Written from the answers the REAL dataset gave (published on the pull request by
+// cloudflare/report-views-ae.mjs), not from documentation:
+//   `INTERVAL 90 DAY`   -> HTTP 422 "sql parser error: Expected literal string, found: 90"
+//   `uniq(blob3)`       -> HTTP 422 "unknown function call: UNIQ"
+//   `uniqExact(blob3)`  -> HTTP 422 "unknown function call: UNIQEXACT"
+//   `count()` GROUP BY  -> HTTP 200
+// This API has no distinct-count aggregate, so "1 user = 1 view" is carried by the event itself: a
+// counted view writes metric 1 and a repeat writes metric 0, which makes `sum(double1)` the number of
+// viewers and `count()` the number of plays. A plain `count()` is therefore NEVER used as the viewer
+// count - if AE refuses every viewer query, the counters are served from the snapshot + memory
+// instead of showing an inflated number.
 const AE_SQL_VARIANTS = [
+  `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${AE_DATASET}`
+    + ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`
+    + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
+  `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${AE_DATASET}`
+    + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
   `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM ${AE_DATASET}`
     + ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
   `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${AE_DATASET} GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
-  `SELECT index1 AS resource, count() AS viewers FROM ${AE_DATASET} GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
 ];
-/** Variants below this index count uniq(uid) - the rule. The rest count plays and must not stick. */
-const AE_EXACT_VARIANTS = 2;
 const AE_GRAPHQL_QUERY = `query ($tag: string!, $since: datetime!, $until: datetime!) {
   viewer {
     accounts(filter: { accountTag: $tag }) {
@@ -199,17 +206,19 @@ function rebuildTotals(resources) {
 /** ---- Analytics Engine: one event per view ---- */
 
 /**
- * Writes ONE event for ONE view. The uid travels as a blob so AE's `uniq()` can enforce "one view
- * per user" at aggregation time; the resource is the index (AE's grouping key). Never throws, and
- * never writes to D1.
+ * Writes ONE event for ONE view - a repeat view is a real play, so it is recorded too. The uid
+ * travels as a blob (the durable record of who watched), the resource is the index (AE's grouping
+ * key), and the metric is 1 when this view COUNTED as that user's first one and 0 when it did not.
+ * That metric is what enforces "1 user = 1 view" in a query API that has no distinct-count aggregate:
+ * `sum(double1)` is viewers, `count()` is plays. Never throws, never writes to D1.
  */
-function writeViewEvent(env, collection, id, resource, uid, now) {
+function writeViewEvent(env, collection, id, resource, uid, now, counted) {
   if (!env?.ANALYTICS_ENGINE || typeof env.ANALYTICS_ENGINE.writeDataPoint !== 'function') return false;
   try {
     env.ANALYTICS_ENGINE.writeDataPoint({
       indexes: [resource.slice(0, 128)],
       dimensions: [collection, id.slice(0, 128), String(uid).slice(0, 128)],
-      metrics: [1],
+      metrics: [counted ? 1 : 0],
     });
     return true;
   } catch {
@@ -230,7 +239,8 @@ function parseAeSql(text) {
       for (const row of rows) {
         const resource = row?.resource ?? row?.index1;
         const viewers = Number(row?.viewers ?? row?.uniq ?? row?.count);
-        if (typeof resource === 'string' && Number.isFinite(viewers)) out.set(resource, viewers);
+        // sum(double1) answers as a float; a viewer count is a whole number.
+        if (typeof resource === 'string' && Number.isFinite(viewers)) out.set(resource, Math.round(viewers));
       }
       return out.size > 0 || rows.length === 0 ? out : null;
     } catch { return null; }
@@ -246,7 +256,7 @@ function parseAeSql(text) {
     const cells = line.split('\t');
     const resource = (cells[resourceColumn] ?? '').trim();
     const viewers = Number((cells[viewerColumn] ?? '').trim());
-    if (resource && Number.isFinite(viewers)) out.set(resource, viewers);
+    if (resource && Number.isFinite(viewers)) out.set(resource, Math.round(viewers));
   }
   return out;
 }
@@ -312,11 +322,11 @@ async function refreshFromAe(env, now) {
     let variant = state.aeVariant;
     if (variant === 'graphql') counts = await queryAeGraphql(env);
     if (!counts) {
-      // An exact (uniq) variant is sticky, so a busy isolate asks the same question every minute. A
-      // degraded one is retried from the top each refresh: an isolate that started before the dataset
-      // held any data must upgrade itself to uniq(uid) instead of counting plays forever.
-      const exact = typeof variant === 'number' && variant < AE_EXACT_VARIANTS;
-      for (let index = exact ? variant : 0; index < AE_SQL_VARIANTS.length; index++) {
+      // Every variant counts viewers, so the one that answered is sticky for this isolate: one AE
+      // query per minute. While the dataset is still empty a variant may be refused, and then the
+      // next refresh simply tries from the top again.
+      const start = typeof variant === 'number' ? variant : 0;
+      for (let index = start; index < AE_SQL_VARIANTS.length; index++) {
         counts = await queryAeSql(env, AE_SQL_VARIANTS[index]);
         if (counts) { variant = index; break; }
       }
@@ -523,9 +533,9 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
   const counted = !settled;
 
   // ONE Analytics Engine event per view request that reaches the Worker: this is the whole record of
-  // the view. Repeats are still written (a play really happened) but AE's uniq(uid) counts the user
-  // once, and the live total only moves for a user this isolate has not settled yet.
-  const eventWritten = writeViewEvent(env, collection, id, resource, uid, now);
+  // the view. A repeat is still written (a play really happened) but with metric 0, so the viewer
+  // count - sum(double1) - only moves for a user this isolate has not settled yet.
+  const eventWritten = writeViewEvent(env, collection, id, resource, uid, now, counted);
   if (counted) {
     state.counted.set(seenKey, now);
     trimCounted();

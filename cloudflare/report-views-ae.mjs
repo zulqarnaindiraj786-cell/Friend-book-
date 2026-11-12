@@ -52,21 +52,32 @@ const missingCredentials = () => (account && cfToken
   ? null
   : 'CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN unavailable to this step');
 
-// Exactly the queries the Worker runs, in its own order, so this report proves which one the real
-// dataset accepts. AE answered these raw facts already: `INTERVAL 90 DAY` -> "sql parser error:
-// Expected literal string, found: 90", and `uniqExact` -> "unknown function call: UNIQEXACT".
+// Exactly the queries the Worker runs, plus the alternatives it has to choose between, so this report
+// decides the syntax instead of a guess. Raw answers so far: `INTERVAL 90 DAY` -> HTTP 422 "Expected
+// literal string, found: 90"; `uniq(blob3)` -> HTTP 422 "unknown function call: UNIQ";
+// `uniqExact(blob3)` -> HTTP 422 "unknown function call: UNIQEXACT"; `count()` GROUP BY -> HTTP 200.
 const SQL_PROBES = [
-  `SELECT count() AS viewers FROM ${DATASET}`,
-  `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM ${DATASET}`
-    + ` WHERE timestamp >= now() - INTERVAL '${WINDOW_DAYS}' DAY GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
-  `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${DATASET} GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
-  `SELECT index1 AS resource, count() AS viewers FROM ${DATASET} GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  { label: 'baseline count', sql: `SELECT count() AS viewers FROM ${DATASET}` },
+  {
+    label: 'WORKER variant 0 - sum(double1), with the window',
+    sql: `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${DATASET}`
+      + ` WHERE timestamp >= now() - INTERVAL '${WINDOW_DAYS}' DAY GROUP BY index1`
+      + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  },
+  {
+    label: 'WORKER variant 1 - sum(double1), no window',
+    sql: `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${DATASET}`
+      + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  },
+  { label: 'does blob3 (the uid) resolve', sql: `SELECT blob3 AS uid, count() AS plays FROM ${DATASET} GROUP BY blob3 ORDER BY plays DESC LIMIT ${LIMIT}` },
+  { label: 'does double1 (the metric) resolve', sql: `SELECT sum(double1) AS viewers FROM ${DATASET}` },
+  { label: 'uniq(blob3) - refused before, kept as the record', sql: `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
+  { label: 'uniqHLL12(blob3)', sql: `SELECT index1 AS resource, uniqHLL12(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
+  { label: 'count(DISTINCT blob3)', sql: `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
 ];
-/** The probes that count uniq(uid) - the "1 user = 1 view" rule - rather than raw plays. */
-const UNIQ_PROBE_INDEXES = [1, 2];
+/** sum(double1) is how the Worker counts viewers; a distinct aggregate would be even better. */
+const SUM_PROBE_INDEXES = [1, 2];
+const DISTINCT_PROBE_INDEXES = [5, 6, 7];
 // The field name Analytics Engine really exposes depends on the account's schema, so it is discovered
 // by introspection instead of assumed. The guessed alias form is kept as one more raw data point.
 const GRAPHQL_PROBE = `query ($tag: string!, $since: datetime!, $until: datetime!) {
@@ -83,7 +94,8 @@ const GRAPHQL_PROBE = `query ($tag: string!, $since: datetime!, $until: datetime
     }
   }
 }`;
-const VIEWER_INTROSPECTION = '{ __type(name: "Viewer") { fields { name type { name kind ofType { name kind } } } } }';
+/** A GraphQL field's type name, looking through LIST/NON_NULL wrappers. */
+const unwrap = (field) => field?.type?.ofType?.name || field?.type?.name || null;
 
 async function get(url, label) {
   const blocked = missingCredentials();
@@ -130,35 +142,54 @@ const probeKv = () => get(
   'KV namespaces',
 );
 
-/** Walks the GraphQL schema to the account object and returns every Analytics Engine field it has. */
-async function discoverGraphqlFields() {
-  const viewer = await postGraphql(VIEWER_INTROSPECTION, {}, 'viewer introspection');
-  let accountsType = null;
-  const discovered = { viewer, accountsType: null, fields: [], probe: null };
-  try {
-    const fields = JSON.parse(viewer.body)?.data?.__type?.fields ?? [];
-    const accounts = fields.find((entry) => entry.name === 'accounts');
-    accountsType = accounts?.type?.ofType?.name || accounts?.type?.name || null;
-  } catch { /* the raw answer is published either way */ }
-  discovered.accountsType = accountsType;
-  if (!accountsType) return discovered;
-  const accountFields = await postGraphql(
-    `{ __type(name: "${accountsType}") { fields { name } } }`, {}, 'account introspection',
+async function typeFields(typeName) {
+  const answer = await postGraphql(
+    `{ __type(name: "${typeName}") { name fields { name type { name kind ofType { name kind } } } } }`,
+    {}, `introspect ${typeName}`,
   );
-  discovered.viewer = { status: viewer.status, body: `${clip(viewer.body, 400)}\n\n--- ${accountsType} ---\n${clip(accountFields.body, 1600)}` };
-  let names = [];
-  try {
-    names = (JSON.parse(accountFields.body)?.data?.__type?.fields ?? []).map((entry) => entry.name);
-  } catch { /* published raw */ }
-  discovered.fields = names.filter((name) => /analytic|adapter|dataset/i.test(name));
+  let fields = [];
+  try { fields = JSON.parse(answer.body)?.data?.__type?.fields ?? []; } catch { /* published raw */ }
+  return { answer, fields };
+}
+
+/**
+ * Walks the GraphQL schema instead of guessing at it: __schema.queryType -> viewer -> accounts ->
+ * the Analytics Engine fields on that account object. Every hop is published with its raw answer.
+ */
+async function discoverGraphqlFields() {
+  const trail = [];
+  const discovered = { trail, accountsType: null, fields: [], probe: null };
+  const root = await postGraphql('{ __schema { queryType { name } } }', {}, 'schema root');
+  trail.push({ step: '__schema { queryType }', answer: root, names: [] });
+  let queryType = null;
+  try { queryType = JSON.parse(root.body)?.data?.__schema?.queryType?.name ?? null; } catch { /* raw */ }
+  if (!queryType) return discovered;
+  // Introspect the query root looking for `viewer`, then the viewer looking for `accounts`, then the
+  // account object itself - whose fields carry the Analytics Engine dataset.
+  let typeName = queryType;
+  for (const wanted of ['viewer', 'accounts', null]) {
+    if (!typeName) break;
+    const found = await typeFields(typeName);
+    trail.push({
+      step: `__type(${typeName})${wanted ? ` -> looking for '${wanted}'` : ' -> the account object'}`,
+      answer: found.answer,
+      names: found.fields.map((entry) => entry.name),
+    });
+    if (wanted === null) {
+      discovered.accountsType = typeName;
+      discovered.fields = found.fields.map((entry) => entry.name)
+        .filter((name) => /analytic|adapter|dataset/i.test(name));
+      break;
+    }
+    typeName = unwrap(found.fields.find((entry) => entry.name === wanted));
+  }
   const match = discovered.fields.find((name) => name.toLowerCase().includes(DATASET.toLowerCase()))
-    || discovered.fields.find((name) => /analyticsEngineAdapter/i.test(name));
+    || discovered.fields.find((name) => /analyticsengine/i.test(name));
   if (match) {
     discovered.probe = await postGraphql(
       `query ($tag: string!) { viewer { accounts(filter: { accountTag: $tag }) { ${match}(limit: ${LIMIT})`
       + ' { dimensions { name count uniq } } } } }',
-      { tag: account },
-      'AE GraphQL dataset',
+      { tag: account }, `AE GraphQL ${match}`,
     );
     discovered.probe.field = match;
   }
@@ -256,7 +287,7 @@ const health = await probeHealth();
 const tokenVerify = await probeTokenVerify();
 const kv = await probeKv();
 const sqlResults = [];
-for (const sql of SQL_PROBES) sqlResults.push({ sql, result: await probeSql(sql) });
+for (const probe of SQL_PROBES) sqlResults.push({ ...probe, result: await probeSql(probe.sql) });
 const graphql = await discoverGraphqlFields();
 const graphqlGuess = await postGraphql(GRAPHQL_PROBE, {
   tag: account,
@@ -268,7 +299,8 @@ let flags = {};
 try { flags = JSON.parse(health.body)?.views ?? {}; } catch { flags = {}; }
 const answered = (entry) => entry.result.status === 200 && !/Authorization error/i.test(entry.result.body);
 const sqlOk = sqlResults.some(answered);
-const uniqOk = UNIQ_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
+const sumOk = SUM_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
+const distinctOk = DISTINCT_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
 const aeBound = flags.ae === true;
 
 const lines = [
@@ -278,28 +310,30 @@ const lines = [
   `Run: \`${process.env.GITHUB_RUN_ID || 'unknown'}\` on \`${branch || 'unknown'}\` (${new Date().toISOString()}).`,
   'Every view is one Analytics Engine event and the count is AE `uniq(uid)`, so D1 receives **zero**',
   'writes from the view path. Nothing below is interpreted: these are the raw answers.',
+  'A counted view carries metric 1 and a repeat carries metric 0, so `sum(double1)` is viewers and',
+  '`count()` is plays - this AE SQL API has no distinct-count aggregate.',
   '',
   '#### Verdict',
   '',
   `- Deploy attempt that shipped: \`${attemptUsed || 'unknown'}\``,
   `- Analytics Engine binding live in production: **${aeBound ? 'YES' : 'NO'}**`,
   `- Analytics Engine queryable with this token: **${sqlOk ? 'YES' : 'NO'}**`,
-  `- \`uniq(blob3)\` accepted (the one-view-per-user count): **${uniqOk ? 'YES' : 'NO'}**`,
+  `- \`sum(double1)\` accepted (the Worker's viewer count): **${sumOk ? 'YES' : 'NO'}**`,
+  `- a distinct-count aggregate accepted: **${distinctOk ? 'YES' : 'NO'}** (informational)`,
+  `- GraphQL dataset field discovered: **${graphql.fields.length > 0 ? graphql.fields.join(', ') : 'NO'}**`,
   `- Workers KV snapshot binding live: **${flags.kv === true ? 'YES' : 'NO'}**`
     + ` (R2 snapshot fallback: **${flags.r2Snapshot === true ? 'YES' : 'NO'}**)`,
   `- Analytics Engine read secret present: **${flags.aeReadToken === true ? 'YES' : 'NO'}**`,
   `- D1 writes from the view path: **0** (enforced by tests, no write statement exists in the module)`,
 ];
-if (!uniqOk) {
+if (!sumOk && !distinctOk) {
   lines.push(
     '',
-    uniqOk === false && !sqlOk
-      ? 'No Analytics Engine query is accepted yet, so the counters are served from the snapshot + memory.'
-      : 'Analytics Engine answers, but not with `uniq(blob3)` yet - the Worker would be counting plays',
+    'No viewer query is accepted yet, so the Worker serves counts from the live snapshot (KV, else the',
+    'R2 object) plus isolate memory. It still writes every view as an Analytics Engine event, and it',
+    'deliberately does NOT fall back to a plain `count()`, because that counts plays (every rewatch)',
+    'instead of viewers and would break the one-view-per-user rule.',
   );
-  if (sqlOk && !uniqOk) {
-    lines.push('(every rewatch) instead of viewers (one per user), so it retries the uniq query every minute.');
-  }
 }
 if (!aeBound || !sqlOk) {
   lines.push(
@@ -339,16 +373,20 @@ lines.push(
   '#### Analytics Engine SQL probes (`GET /accounts/{id}/analytics_engine/sql`)',
 );
 for (const entry of sqlResults) {
-  lines.push('', `- \`HTTP ${entry.result.status}\` for:`, '```sql', entry.sql, '```', fence(entry.result.body));
+  lines.push('', `- **${entry.label}** -> \`HTTP ${entry.result.status}\``, '```sql', entry.sql, '```',
+    fence(entry.result.body, 900));
 }
 lines.push(
   '',
-  '#### Analytics Engine GraphQL field discovery',
+  '#### Analytics Engine GraphQL schema walk',
   `Account object type: \`${graphql.accountsType || 'not discovered'}\``,
   `Analytics fields on it: ${graphql.fields.length > 0 ? graphql.fields.map((name) => `\`${name}\``).join(', ') : 'none found'}`,
-  `HTTP ${graphql.viewer.status}`,
-  fence(graphql.viewer.body, 1600),
 );
+for (const step of graphql.trail) {
+  lines.push('', `- \`${step.step}\` -> \`HTTP ${step.answer.status}\``
+    + (step.names.length > 0 ? `, ${step.names.length} fields` : ''));
+  lines.push(step.names.length > 0 ? fence(step.names.slice(0, 80).join(', '), 900) : fence(step.answer.body, 600));
+}
 if (graphql.probe) {
   lines.push('', `Discovered field query (\`${graphql.probe.field}\`)`, `HTTP ${graphql.probe.status}`, fence(graphql.probe.body));
 }
