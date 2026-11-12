@@ -11,6 +11,7 @@ bounded read-only seed when both AE and KV are empty). Worker memory + one KV ag
 requests so nothing waits on a query.
 """
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -543,7 +544,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('const cacheable = !listParent && isPublicRead(leaf) && !filtered;', documents)
         self.assertIn('await canReadNested(db, listParent, listParentId, collection, {}, uid, admin)', documents)
         self.assertIn('async function canWriteNested(db, parentCollection, parentId, collection, uid, admin)', documents)
-        self.assertIn("const NESTED_PUBLIC = new Set(['lives/viewers', 'posts/reactions', 'reels/reactions', 'events/going']);", documents)
+        # Reading a public parent never means writing into it: only named children are writable.
+        self.assertIn("'lives/chat', 'posts/reactions', 'reels/reactions', 'events/going',", documents)
+        self.assertIn('const NESTED_WRITABLE = new Set([', documents)
+        self.assertIn("if (leaf === 'sessions') return parentCollection === 'users' && parentId === uid;", documents)
         self.assertIn('async function isChatParticipant(db, chatId, uid, admin)', documents)
         # Admin comes from the token email or a stored user document, never from the request.
         self.assertIn('export async function resolveAdmin(db, uid, email, env)', documents)
@@ -604,6 +608,51 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # Collaborative counters stay open on lives/events/pages, exactly like the old rules allowed.
         self.assertIn("lives: ['viewers', 'stars'", access)
         self.assertIn("const guarded = ['isAdmin', 'banned', 'isModerator', 'deactivated', 'tickLevel'];", access)
+
+    def test_every_query_the_app_runs_is_allowed_by_the_worker(self):
+        """The allowlist is derived from the app, not from taste: a missing field is a broken screen.
+
+        The Android sources are scanned for every clause that follows a collection() call in the same
+        statement, and each field it names must be declared for that collection in doc-access.js. This
+        is the guard that stops the data layer from being migrated one screen at a time and silently
+        losing a filter along the way.
+        """
+        access = (CLOUDFLARE / 'doc-access.js').read_text()
+        block = access[access.index('export const QUERYABLE = {'):]
+        block = block[:block.index('};')]
+        allowed = {}
+        for line in block.split('\n'):
+            entry = re.match(r"\s*([a-zA-Z_]+):\s*\{\s*eq:\s*\[([^\]]*)\],\s*has:\s*\[([^\]]*)\],\s*order:\s*\[([^\]]*)\]", line)
+            if not entry:
+                continue
+            name = entry.group(1)
+            allowed[name] = set()
+            for group in (2, 3, 4):
+                for field in re.findall(r"'([A-Za-z_]+)'", entry.group(group)):
+                    allowed[name].add(field)
+        self.assertTrue(allowed, 'QUERYABLE allowlist could not be parsed')
+
+        starts = re.compile(r'collection\("([a-zA-Z_]+)"\)')
+        clauses = re.compile(
+            r'\.(?:whereEqualTo|whereIn|whereArrayContains|whereGreaterThan|whereGreaterThanOrEqualTo'
+            r'|whereLessThan|whereLessThanOrEqualTo|orderBy)\("([a-zA-Z_]+)"')
+        missing = []
+        for path in sorted((ROOT / 'app' / 'src' / 'main' / 'java').rglob('*.java')):
+            if path.name in ('CloudStore.java', 'CloudMigration.java'):
+                continue
+            source = path.read_text()
+            for match in starts.finditer(source):
+                collection = match.group(1)
+                end = source.find(';', match.end())
+                statement = source[match.end():end if end > 0 else match.end() + 400]
+                for field in clauses.findall(statement[:400]):
+                    if collection not in allowed:
+                        missing.append('%s: collection %s is not queryable' % (path.name, collection))
+                    elif field not in allowed[collection]:
+                        missing.append('%s: %s.%s' % (path.name, collection, field))
+        self.assertEqual([], sorted(set(missing)),
+                         'the Worker would refuse these queries, so a screen would show nothing')
+
 
 
 if __name__ == '__main__':

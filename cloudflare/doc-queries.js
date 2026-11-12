@@ -16,8 +16,9 @@ export const COUNT_CAP = 5_000;
 /** Fields that hold numbers (or booleans, which SQLite extracts as 1/0). Everything else is text. */
 const NUMERIC = new Set([
   'createdAt', 'updatedAt', 'likes', 'comments', 'shares', 'stars', 'views', 'expiresAt',
-  'lastMessageAt', 'startsAt', 'followers', 'following', 'friendsCount', 'members', 'viewers',
-  'isRead', 'banned', 'isAdmin', 'isModerator', 'deactivated', 'archived', 'count', 'amount',
+  'lastMessageAt', 'startsAt', 'startedAt', 'followers', 'following', 'friendsCount', 'members',
+  'viewers', 'isRead', 'banned', 'isAdmin', 'isModerator', 'deactivated', 'archived', 'count',
+  'amount', 'date', 'dateMs', 'at', 'expiry', 'membersCount', 'viewCount', 'starTotal',
 ]);
 
 export class QueryError extends Error {
