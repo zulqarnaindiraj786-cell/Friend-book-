@@ -1,204 +1,268 @@
 package com.example.frienbook.core;
 
-import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-
-import com.google.firebase.database.DataSnapshot;
-import com.google.firebase.database.DatabaseError;
-import com.google.firebase.database.DatabaseReference;
-import com.google.firebase.database.ServerValue;
-import com.google.firebase.database.ValueEventListener;
-import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
+import org.json.JSONObject;
+
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
- * Online/offline presence + typing indicators backed by the Firebase Realtime
- * Database (with onDisconnect) and dual-written to Firestore user docs so the
- * Flutter app sees the same state.
+ * Online/offline presence and typing indicators on Cloudflare - the Firebase Realtime Database is
+ * not part of this product any more.
+ *
+ * The Worker keeps the state in D1 (`friendbook_cf_presence`, `friendbook_cf_typing`) so every
+ * isolate and every colo answers the same fact, and it expires on its own: online goes stale after
+ * 5 minutes without a heartbeat and typing after 8 seconds, which is what RTDB's `onDisconnect`
+ * used to guarantee. A killed app can therefore never leave a user "online" forever.
+ *
+ * The app speaks plain HTTPS with its Firebase ID token (Firebase is authentication only):
+ *   PUT /v1/presence/me            heartbeat {online, visible}
+ *   GET /v1/presence/contact/{uid} a contact's online + lastSeen
+ *   PUT /v1/presence/typing/{chat} {typing}
+ *   GET /v1/presence/typing/{chat} is the PEER typing (the Worker never reports the caller)
+ *
+ * Watchers poll only while their screen is alive (10s presence, 3s typing) and always deliver on the
+ * main thread. The `isOnline`/`lastSeen` copy on the user document is still written - profile cards
+ * read the document, not the presence socket - and it is mirrored to D1 like every other field.
  */
 public class Presence {
 
     public interface Callback { void onPresence(boolean online, long lastSeen); }
 
-    private static final Handler H = new Handler(Looper.getMainLooper());
-    private static DatabaseReference statusRef;
-    private static ValueEventListener connListener;
+    private static final String BASE = CloudTransport.BASE + "/v1/presence";
+    private static final long HEARTBEAT_MS = 60_000L;
+    private static final long PRESENCE_POLL_MS = 10_000L;
+    private static final long TYPING_POLL_MS = 3_000L;
+    private static final long TYPING_CLEAR_MS = 4_000L;
+    private static final long TYPING_THROTTLE_MS = 1_000L;
 
+    private static final Handler H = new Handler(Looper.getMainLooper());
+    private static final ExecutorService IO = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "cf-presence");
+        t.setPriority(Thread.NORM_PRIORITY - 1);
+        return t;
+    });
+
+    private static boolean beating;
+    private static final Runnable heartbeat = new Runnable() {
+        @Override public void run() {
+            if (!beating) return;
+            if (Fb.uid() == null) { beating = false; return; }
+            beat(true);
+            H.postDelayed(this, HEARTBEAT_MS);
+        }
+    };
+
+    /** Starts (or keeps alive) the online heartbeat for the signed-in user. */
     public static void init() {
-        String uid = Fb.uid();
-        if (uid == null) return;
-        if (Fb.rtdb() == null) { writeFirestore(true); return; }
-        statusRef = Fb.rtdb().getReference("status").child(uid);
-        DatabaseReference connected = Fb.rtdb().getReference(".info/connected");
-        if (connListener != null) connected.removeEventListener(connListener);
-        connListener = new ValueEventListener() {
-            @Override public void onDataChange(@NonNull DataSnapshot snap) {
-                Boolean ok = snap.getValue(Boolean.class);
-                if (ok == null || !ok || Fb.uid() == null) return;
-                Map<String, Object> online = new HashMap<>();
-                online.put("state", "online");
-                online.put("lastChanged", ServerValue.TIMESTAMP);
-                Map<String, Object> offline = new HashMap<>();
-                offline.put("state", "offline");
-                offline.put("lastChanged", ServerValue.TIMESTAMP);
-                statusRef.onDisconnect().setValue(offline);
-                if (Prefs.activeStatus(com.example.frienbook.App.instance)) {
-                    statusRef.setValue(online);
-                    writeFirestore(true);
-                }
-            }
-            @Override public void onCancelled(@NonNull DatabaseError error) { }
-        };
-        connected.addValueEventListener(connListener);
+        if (Fb.uid() == null) return;
+        beat(true);
+        if (!beating) {
+            beating = true;
+            H.removeCallbacks(heartbeat);
+            H.postDelayed(heartbeat, HEARTBEAT_MS);
+        }
     }
 
-    private static void writeFirestore(boolean online) {
+    private static boolean visible() {
+        try {
+            return Prefs.activeStatus(com.example.frienbook.App.instance);
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private static void beat(boolean online) {
+        String uid = Fb.uid();
+        if (uid == null) return;
+        boolean show = online && visible();
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("online", show);
+            body.put("visible", visible());
+        } catch (Throwable ignored) { return; }
+        CloudTransport.withToken(IO, H, token -> {
+            try {
+                CloudTransport.send(new URL(BASE + "/me"), "PUT", token, body);
+            } catch (Throwable ignored) {
+                // Best effort: the next heartbeat carries the same fact, and the Worker's TTL means a
+                // missed beat can only ever show us offline - never online by mistake.
+            }
+        }, null);
+        writeUserDocument(show);
+    }
+
+    /** Profile cards read the user document, so the same fact is kept there (and mirrored to D1). */
+    private static void writeUserDocument(boolean online) {
         String uid = Fb.uid();
         if (uid == null) return;
         Map<String, Object> m = new HashMap<>();
-        m.put("isOnline", online && Prefs.activeStatus(com.example.frienbook.App.instance));
+        m.put("isOnline", online);
         if (!online) m.put("lastSeen", com.google.firebase.firestore.FieldValue.serverTimestamp());
-        Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
+        try {
+            Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
+        } catch (Throwable ignored) { }
+        CloudflareDocs.mirror("users", uid, m);
     }
 
     public static void goOffline() {
-        writeFirestore(false);
-        if (statusRef != null && Fb.uid() != null) {
-            Map<String, Object> offline = new HashMap<>();
-            offline.put("state", "offline");
-            offline.put("lastChanged", ServerValue.TIMESTAMP);
-            statusRef.setValue(offline);
-        }
+        beating = false;
+        H.removeCallbacks(heartbeat);
+        writeUserDocument(false);
+        if (Fb.uid() == null) return;
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("online", false);
+            body.put("visible", visible());
+        } catch (Throwable ignored) { return; }
+        CloudTransport.withToken(IO, H, token -> {
+            try {
+                CloudTransport.send(new URL(BASE + "/me"), "PUT", token, body);
+            } catch (Throwable ignored) { }
+        }, null);
     }
 
-    /** Handle to a live presence watcher; close() to detach. */
+    /** Handle to a live watcher; close() stops the polling for good. */
     public static class Handle {
-        private ValueEventListener rtdbL;
-        private DatabaseReference ref;
-        private ListenerRegistration fsL;
+        private Runnable poll;
+        private boolean closed;
+        private boolean inFlight;
         public void close() {
-            if (ref != null && rtdbL != null) ref.removeEventListener(rtdbL);
-            if (fsL != null) fsL.remove();
+            closed = true;
+            if (poll != null) H.removeCallbacks(poll);
         }
     }
 
-    /** Watch a user's presence: RTDB first, Firestore fallback. */
+    /** Watches one user's presence on Cloudflare. Emits on the main thread whenever it changes. */
     public static Handle watch(String uid, Callback cb) {
         Handle h = new Handle();
-        final boolean[] rtdbSeen = {false};
-        final boolean[] online = {false};
+        if (uid == null || uid.isEmpty() || cb == null) return h;
+        final boolean[] emitted = {false};
+        final boolean[] lastOnline = {false};
         final long[] lastSeen = {0};
-        Runnable emit = () -> cb.onPresence(online[0], lastSeen[0]);
-
-        if (Fb.rtdb() != null) {
-            h.ref = Fb.rtdb().getReference("status").child(uid);
-            h.rtdbL = new ValueEventListener() {
-                @Override public void onDataChange(@NonNull DataSnapshot s) {
-                    if (s.exists()) {
-                        rtdbSeen[0] = true;
-                        online[0] = "online".equals(s.child("state").getValue(String.class));
-                        Long lc = s.child("lastChanged").getValue(Long.class);
-                        if (lc != null) lastSeen[0] = lc;
-                        emit.run();
-                    }
-                }
-                @Override public void onCancelled(@NonNull DatabaseError e) { }
-            };
-            h.ref.addValueEventListener(h.rtdbL);
-        }
-        h.fsL = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists() || rtdbSeen[0]) return;
-                    Boolean o = d.getBoolean("isOnline");
-                    online[0] = o != null && o;
-                    lastSeen[0] = Format.ts(d.get("lastSeen"));
-                    emit.run();
-                });
+        h.poll = new Runnable() {
+            @Override public void run() {
+                if (h.closed || h.inFlight) return;
+                if (Fb.uid() == null) { h.closed = true; return; }
+                h.inFlight = true;
+                CloudTransport.withToken(IO, H, token -> {
+                    boolean online = false;
+                    long seen = 0;
+                    boolean ok = false;
+                    try {
+                        JSONObject data = CloudTransport.send(new URL(BASE + "/contact/" + enc(uid)), "GET", token, null);
+                        if (data != null) {
+                            online = data.optBoolean("online", false);
+                            seen = data.optLong("lastSeen", 0);
+                            ok = true;
+                        }
+                    } catch (Throwable ignored) { }
+                    final boolean fOk = ok, fOnline = online;
+                    final long fSeen = seen;
+                    H.post(() -> {
+                        h.inFlight = false;
+                        if (h.closed) return;
+                        // An unreachable Worker is not a presence change: keep the last known state.
+                        if (!fOk) return;
+                        if (!emitted[0] || fOnline != lastOnline[0] || fSeen != lastSeen[0]) {
+                            emitted[0] = true;
+                            lastOnline[0] = fOnline;
+                            lastSeen[0] = fSeen;
+                            cb.onPresence(fOnline, fSeen);
+                        }
+                    });
+                }, () -> H.post(() -> h.inFlight = false));
+                if (!h.closed) H.postDelayed(this, PRESENCE_POLL_MS);
+            }
+        };
+        H.post(h.poll);
         return h;
     }
 
     // ---- typing ----
     private static final Map<String, Runnable> typingClear = new HashMap<>();
+    private static final Map<String, Long> typingSent = new HashMap<>();
 
     public static void setTyping(String chatId, boolean typing) {
         String uid = Fb.uid();
-        if (uid == null || chatId == null) return;
-        Map<String, Object> inner = new HashMap<>();
-        inner.put(uid, typing);
-        Map<String, Object> m = new HashMap<>();
-        m.put("typing", inner);
-        Fb.db().collection("chats").document(chatId).set(m, SetOptions.merge());
+        if (uid == null || chatId == null || chatId.isEmpty()) return;
 
-        // Fast path through RTDB too (auto-expires after 4s unless refreshed).
-        if (Fb.rtdb() != null) {
-            DatabaseReference ref = Fb.rtdb().getReference("typing").child(chatId).child(uid);
-            ref.setValue(typing);
-            Runnable old = typingClear.remove(chatId);
-            if (old != null) H.removeCallbacks(old);
-            if (typing) {
-                Runnable clear = () -> {
-                    ref.setValue(false);
-                    Map<String, Object> off = new HashMap<>();
-                    off.put(uid, false);
-                    Map<String, Object> wrap = new HashMap<>();
-                    wrap.put("typing", off);
-                    Fb.db().collection("chats").document(chatId).set(wrap, SetOptions.merge());
-                };
-                typingClear.put(chatId, clear);
-                H.postDelayed(clear, 4000);
-            }
+        // Throttle repeats: a keystroke storm must not become a request storm.
+        Long last = typingSent.get(chatId);
+        long now = System.currentTimeMillis();
+        if (typing && last != null && now - last < TYPING_THROTTLE_MS) return;
+        typingSent.put(chatId, now);
+
+        final JSONObject body = new JSONObject();
+        try { body.put("typing", typing); } catch (Throwable ignored) { return; }
+        CloudTransport.withToken(IO, H, token -> {
+            try {
+                CloudTransport.send(new URL(BASE + "/typing/" + enc(chatId)), "PUT", token, body);
+            } catch (Throwable ignored) { }
+        }, null);
+
+        Runnable old = typingClear.remove(chatId);
+        if (old != null) H.removeCallbacks(old);
+        if (typing) {
+            Runnable clear = () -> setTyping(chatId, false);
+            typingClear.put(chatId, clear);
+            H.postDelayed(clear, TYPING_CLEAR_MS);
         }
     }
 
-    /** Watch whether the OTHER participant of a 1:1 chat is typing. Firestore is the
-     *  interoperable source; RTDB is a low-latency bonus. Callback gets "peer typing". */
-    public static Handle watchTyping(String chatId, String myUid, java.util.function.Consumer<Boolean> cb) {
+    /**
+     * Watches whether the OTHER participant of a chat is typing. The Worker already excludes the
+     * caller from its own answer, so no client-side uid comparison is needed.
+     */
+    public static Handle watchTyping(String chatId, String myUid, Consumer<Boolean> cb) {
         Handle h = new Handle();
-        final boolean[] fsTyping = {false};
-        final boolean[] rtdbTyping = {false};
-        Runnable emit = () -> cb.accept(fsTyping[0] || rtdbTyping[0]);
-
-        h.fsL = Fb.db().collection("chats").document(chatId)
-                .addSnapshotListener((d, err) -> {
-                    fsTyping[0] = false;
-                    if (d != null && d.exists()) {
-                        Object t = d.get("typing");
-                        if (t instanceof Map) {
-                            for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
-                                if (!String.valueOf(e.getKey()).equals(myUid)
-                                        && Boolean.TRUE.equals(e.getValue())) {
-                                    fsTyping[0] = true;
-                                    break;
-                                }
-                            }
+        if (chatId == null || chatId.isEmpty() || cb == null) return h;
+        final Boolean[] last = {null};
+        h.poll = new Runnable() {
+            @Override public void run() {
+                if (h.closed || h.inFlight) return;
+                if (Fb.uid() == null) { h.closed = true; return; }
+                h.inFlight = true;
+                CloudTransport.withToken(IO, H, token -> {
+                    boolean typing = false;
+                    boolean ok = false;
+                    try {
+                        JSONObject data = CloudTransport.send(new URL(BASE + "/typing/" + enc(chatId)), "GET", token, null);
+                        if (data != null) {
+                            typing = data.optBoolean("typing", false);
+                            ok = true;
                         }
-                    }
-                    emit.run();
-                });
-        if (Fb.rtdb() != null) {
-            h.ref = Fb.rtdb().getReference("typing").child(chatId);
-            h.rtdbL = new ValueEventListener() {
-                @Override public void onDataChange(@NonNull DataSnapshot s) {
-                    rtdbTyping[0] = false;
-                    for (DataSnapshot c : s.getChildren()) {
-                        if (!myUid.equals(c.getKey()) && Boolean.TRUE.equals(c.getValue(Boolean.class))) {
-                            rtdbTyping[0] = true;
-                            break;
+                    } catch (Throwable ignored) { }
+                    final boolean fOk = ok, fTyping = typing;
+                    H.post(() -> {
+                        h.inFlight = false;
+                        if (h.closed || !fOk) return;
+                        if (last[0] == null || last[0] != fTyping) {
+                            last[0] = fTyping;
+                            cb.accept(fTyping);
                         }
-                    }
-                    emit.run();
-                }
-                @Override public void onCancelled(@NonNull DatabaseError e) { }
-            };
-            h.ref.addValueEventListener(h.rtdbL);
-        }
+                    });
+                }, () -> H.post(() -> h.inFlight = false));
+                if (!h.closed) H.postDelayed(this, TYPING_POLL_MS);
+            }
+        };
+        H.post(h.poll);
         return h;
+    }
+
+    private static String enc(String value) {
+        try {
+            return java.net.URLEncoder.encode(value, "UTF-8");
+        } catch (Throwable ignored) {
+            return value;
+        }
     }
 }

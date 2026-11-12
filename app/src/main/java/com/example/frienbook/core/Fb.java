@@ -9,7 +9,6 @@ import com.example.frienbook.models.Models;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
@@ -21,39 +20,18 @@ import java.util.Map;
 /** Central Firebase access point. Auth is the product here; app data lives on Cloudflare. */
 public class Fb {
 
-    public static final String RTDB_URL = "https://friendbook-17551-default-rtdb.firebaseio.com";
-
-    private static FirebaseDatabase rtdb;
-    private static boolean rtdbTried;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
     private static long meLastRefresh;
 
     public static void init(Context appContext) {
-        // Nothing special needed: google-services.json wires everything through
-        // the google-services Gradle plugin. Persistence is ON by default.
+        // Firebase is sign-in only: google-services.json wires FirebaseAuth. Every other byte of app
+        // state lives on Cloudflare (D1 documents, R2 media, Analytics Engine views, presence).
     }
 
     public static FirebaseAuth auth() { return FirebaseAuth.getInstance(); }
 
     public static FirebaseFirestore db() { return FirebaseFirestore.getInstance(); }
-
-    /** Realtime Database (presence + typing). Returns null if the instance does not exist yet. */
-    @Nullable
-    public static FirebaseDatabase rtdb() {
-        if (rtdb != null) return rtdb;
-        if (rtdbTried) return null;
-        rtdbTried = true;
-        try {
-            rtdb = FirebaseDatabase.getInstance(RTDB_URL);
-            rtdb.setPersistenceEnabled(true);
-            // touch to validate
-            rtdb.getReference(".info/connected");
-        } catch (Throwable t) {
-            rtdb = null;
-        }
-        return rtdb;
-    }
 
 
     @Nullable
@@ -67,8 +45,6 @@ public class Fb {
     public static String chatId(String a, String b) {
         return a.compareTo(b) < 0 ? a + "_" + b : b + "_" + a;
     }
-
-    /** Upload a local file and resolve its download URL. */
 
     /** Start (or restart) the live listener that keeps {@link #me} fresh.
      *  Also enforces admin bans: banned accounts are signed out immediately. */

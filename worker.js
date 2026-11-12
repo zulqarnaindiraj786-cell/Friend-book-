@@ -1,6 +1,7 @@
 import { uploadVideo, uploadPhoto, retryVideoCleanup } from './cloudflare/video-r2.js';
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
+import { appConfig } from './cloudflare/app-config.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { viewCounters } from './cloudflare/view-counters.js';
@@ -41,6 +42,9 @@ export function createWorker(verify = verifyFirebaseToken) {
         catch { return json({ error: 'Frontend unavailable' }, 503); }
       }
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
+      // Public runtime switches (ads kill switch, presence flag). No identity, no data, no secrets:
+      // this is what replaced Firebase Remote Config, so it must answer before the auth gate.
+      if (path === '/v1/config') return appConfig(request, env);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);

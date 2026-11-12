@@ -61,20 +61,12 @@ public class MainActivity extends Activity {
         Fb.ensureMeFresh();
         Presence.init();
 
-        // 📢 AdMob init (once per process) + live banner config + Remote Config kill switch
+        // 📢 AdMob init (once per process) + live banner config + Cloudflare kill switch
         try {
             com.google.android.gms.ads.MobileAds.initialize(this, status -> { });
         } catch (Throwable ignored) { }
         com.example.frienbook.core.AdsConfig.startWatching();
-        try {
-            com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
-                    com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
-            rc.setConfigSettingsAsync(new com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings.Builder()
-                    .setMinimumFetchIntervalInSeconds(3600).build());
-            rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled", true));
-            rc.fetchAndActivate().addOnCompleteListener(t ->
-                    com.example.frienbook.core.AdsConfig.setRemoteAllowed(rc.getBoolean("ads_enabled")));
-        } catch (Throwable ignored) { }
+        com.example.frienbook.core.CloudConfig.refresh();
 
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));

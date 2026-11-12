@@ -44,10 +44,10 @@ android {
 
 dependencies {
     implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    // Firebase is AUTHENTICATION ONLY. Data: Cloudflare D1. Media: Cloudflare R2. Views: Cloudflare
+    // Analytics Engine. Presence/typing: Cloudflare Worker. Runtime switches: Worker /v1/config.
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-firestore'
-    implementation 'com.google.firebase:firebase-database'
-    implementation 'com.google.firebase:firebase-config'
 
     // 📢 Google AdMob (banner in home feed)
     implementation 'com.google.android.gms:play-services-ads:22.6.0'

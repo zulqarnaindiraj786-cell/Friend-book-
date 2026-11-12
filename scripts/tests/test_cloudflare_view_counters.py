@@ -412,6 +412,83 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('FRIENDBOOK_CF_VIEW_LAST',
                       (CLOUDFLARE / 'migrations/0013_additive_view_last_seen.sql').read_text().upper())
 
+    # ---------------- Firebase is authentication only: media, presence, switches ----------------
+
+    def test_media_lives_on_cloudflare_r2_and_never_on_firebase_storage(self):
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        absent(self, 'firebase-storage', gradle, 'app/build.gradle')
+        media = (JAVA / 'core/CloudflareMedia.java').read_text()
+        # The upload only counts when the Worker itself confirms R2 and the bucket's own origin.
+        self.assertIn('"/v1/videos"', media)
+        self.assertIn('"/v1/photos"', media)
+        self.assertIn('if (!"r2".equals(provider) || !url.startsWith(ORIGIN + "/"))', media)
+        self.assertIn('https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev', media)
+        # Content-addressed ids: the same bytes can never be stored twice.
+        self.assertIn('MessageDigest.getInstance("SHA-256")', media)
+        self.assertIn('connection.setFixedLengthStreamingMode(bytes.length)', media)
+        # Every media call site goes through it - no Cloudinary client and no Firebase Storage helper.
+        self.assertFalse((JAVA / 'core/Cloudinary.java').exists(), 'the Cloudinary client must be gone')
+        fb = (JAVA / 'core/Fb.java').read_text()
+        absent(self, 'FirebaseStorage', fb, 'Fb.java')
+        absent(self, 'public static Task<String> upload(', fb, 'Fb.java')
+        for name in ['reels/AddReelActivity.java', 'post/CreatePostActivity.java', 'story/AddStoryActivity.java',
+                     'chat/ChatActivity.java', 'pay/PayRequestActivity.java', 'post/PostDetailActivity.java',
+                     'profile/EditProfileActivity.java']:
+            source = (JAVA / name).read_text()
+            self.assertIn('CloudflareMedia.upload', source, '%s must upload through CloudflareMedia' % name)
+            for forbidden in ['uploadOrFirebase', 'Cloudinary.upload']:
+                absent(self, forbidden, source, name)
+
+    def test_presence_and_typing_run_on_cloudflare_d1_with_no_realtime_database(self):
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        absent(self, 'firebase-database', gradle, 'app/build.gradle')
+        presence_worker = (CLOUDFLARE / 'presence-realtime.js').read_text()
+        # D1 is the source of truth, so a contact on another isolate sees the same fact.
+        self.assertIn('INSERT INTO friendbook_cf_presence(uid, online, visible, last_seen, updated_at)', presence_worker)
+        self.assertIn('ON CONFLICT(uid) DO UPDATE SET', presence_worker)
+        self.assertIn('INSERT INTO friendbook_cf_typing(chat_id, uid, typing, updated_at)', presence_worker)
+        self.assertIn('SELECT uid FROM friendbook_cf_typing WHERE chat_id = ? AND typing = 1 AND updated_at > ?',
+                      presence_worker)
+        # Staleness is enforced by the Worker, never by a client that forgot to sign off.
+        self.assertIn('PRESENCE_TTL_MS = 300_000', presence_worker)
+        self.assertIn('TYPING_TTL_MS = 8_000', presence_worker)
+        # A heartbeat over plain HTTPS exists for clients without a WebSocket.
+        self.assertIn("if (path === '/v1/presence/me')", presence_worker)
+        self.assertIn("typeof body.online !== 'boolean'", presence_worker)
+        client = (JAVA / 'core/Presence.java').read_text()
+        absent(self, 'com.google.firebase.database', client, 'Presence.java')
+        absent(self, 'Fb.rtdb()', client, 'Presence.java')
+        self.assertIn('CloudTransport.BASE + "/v1/presence"', client)
+        self.assertIn('body.put("online", show)', client)
+        self.assertIn('"/contact/" + enc(uid)', client)
+        self.assertIn('"/typing/" + enc(chatId)', client)
+        for path in sorted(JAVA.rglob('*.java')):
+            source = path.read_text()
+            for forbidden in ['FirebaseDatabase', 'Fb.rtdb()', 'ServerValue.TIMESTAMP', 'ValueEventListener']:
+                absent(self, forbidden, source, path.name)
+
+    def test_runtime_switches_come_from_the_worker_not_from_firebase(self):
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        absent(self, 'firebase-config', gradle, 'app/build.gradle')
+        for path in sorted(JAVA.rglob('*.java')):
+            source = path.read_text()
+            for forbidden in ['FirebaseRemoteConfig', 'remoteconfig', 'FirebaseAnalytics', 'firebase.analytics']:
+                absent(self, forbidden, source, path.name)
+        worker = (ROOT / 'worker.js').read_text()
+        config = (CLOUDFLARE / 'app-config.js').read_text()
+        # The switch answers before the auth gate: it is public booleans, so an anonymous client and a
+        # signed-in client see the same kill-switch state.
+        self.assertIn("if (path === '/v1/config') return appConfig(request, env);", worker)
+        self.assertLess(worker.index("if (path === '/v1/config')"), worker.index('if (!env.FIREBASE_PROJECT_ID)'))
+        self.assertIn("adsEnabled: env.ADS_ENABLED !== 'false'", config)
+        self.assertIn("'Cache-Control': 'public, max-age=300'", config)
+        client = (JAVA / 'core/CloudConfig.java').read_text()
+        self.assertIn('CloudTransport.BASE + "/v1/config"', client)
+        self.assertIn('AdsConfig.setRemoteAllowed(ads)', client)
+        self.assertIn('REFRESH_MS = 60_000L', client)
+        main = (JAVA / 'main/MainActivity.java').read_text()
+        self.assertIn('com.example.frienbook.core.CloudConfig.refresh();', main)
+
 
 if __name__ == '__main__':
     unittest.main()

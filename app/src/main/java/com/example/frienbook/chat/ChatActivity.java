@@ -232,7 +232,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     adapter.setPeerPhoto(u.photoUrl);
                 });
 
-        // presence (RTDB + Firestore fallback)
+        // presence + typing on Cloudflare (Worker D1 - no Realtime Database)
         presence = Presence.watch(peerId, (online, lastSeen) -> {
             if (typingOn) return;
             if (online) {

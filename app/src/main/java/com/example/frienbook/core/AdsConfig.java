@@ -5,9 +5,9 @@ import com.google.firebase.firestore.ListenerRegistration;
 
 /**
  * 📢 AdMob config — real production IDs, live-editable from the admin panel.
- * Firestore `config/ads` { bannerId, enabled } overrides defaults at runtime
- * (admin edits apply instantly, no app update needed).
- * Remote Config key `ads_enabled` (console-side) acts as an emergency kill switch.
+ * `config/ads` { bannerId, enabled } overrides defaults at runtime (admin edits apply instantly, no
+ * app update needed). The emergency kill switch is Cloudflare's: Worker `/v1/config` answers
+ * `adsEnabled` from a Worker variable, so flipping it needs no app update and no Firebase console.
  */
 public class AdsConfig {
 
@@ -16,7 +16,7 @@ public class AdsConfig {
 
     private static String bannerId = DEFAULT_BANNER_ID;
     private static boolean enabled = true;
-    private static boolean remoteAllowed = true; // Remote Config ads_enabled
+    private static boolean remoteAllowed = true; // Cloudflare /v1/config adsEnabled
     private static ListenerRegistration reg;
 
     public static String bannerId() { return bannerId == null || bannerId.isEmpty() ? DEFAULT_BANNER_ID : bannerId; }
@@ -41,7 +41,7 @@ public class AdsConfig {
                 });
     }
 
-    /** Remote Config kill switch (key ads_enabled, console-managed). */
+    /** Cloudflare kill switch (`/v1/config` → adsEnabled), refreshed by {@link CloudConfig}. */
     public static void setRemoteAllowed(boolean allowed) {
         remoteAllowed = allowed;
         notifyChange();
