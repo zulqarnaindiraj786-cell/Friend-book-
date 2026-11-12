@@ -59,25 +59,36 @@ const missingCredentials = () => (account && cfToken
 const SQL_PROBES = [
   { label: 'baseline count', sql: `SELECT count() AS viewers FROM ${DATASET}` },
   {
-    label: 'WORKER variant 0 - sum(double1), with the window',
-    sql: `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${DATASET}`
+    label: 'WORKER variant 0 - count(DISTINCT blob3), all time',
+    sql: `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers, count() AS plays FROM ${DATASET}`
+      + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  },
+  {
+    label: 'WORKER variant 1 - count(DISTINCT blob3), with the window',
+    sql: `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers, count() AS plays FROM ${DATASET}`
       + ` WHERE timestamp >= now() - INTERVAL '${WINDOW_DAYS}' DAY GROUP BY index1`
       + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
   },
   {
-    label: 'WORKER variant 1 - sum(double1), no window',
+    label: 'WORKER variant 2 - sum(double1), all time',
     sql: `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${DATASET}`
       + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}`,
   },
+  {
+    label: 'WORKER variant 3 - sum(double1), with the window',
+    sql: `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${DATASET}`
+      + ` WHERE timestamp >= now() - INTERVAL '${WINDOW_DAYS}' DAY GROUP BY index1`
+      + ` ORDER BY viewers DESC LIMIT ${LIMIT}`,
+  },
   { label: 'does blob3 (the uid) resolve', sql: `SELECT blob3 AS uid, count() AS plays FROM ${DATASET} GROUP BY blob3 ORDER BY plays DESC LIMIT ${LIMIT}` },
   { label: 'does double1 (the metric) resolve', sql: `SELECT sum(double1) AS viewers FROM ${DATASET}` },
-  { label: 'uniq(blob3) - refused before, kept as the record', sql: `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
-  { label: 'uniqHLL12(blob3)', sql: `SELECT index1 AS resource, uniqHLL12(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
-  { label: 'count(DISTINCT blob3)', sql: `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
+  { label: 'uniq(blob3) - refused, kept as the record', sql: `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
+  { label: 'uniqHLL12(blob3) - refused, kept as the record', sql: `SELECT index1 AS resource, uniqHLL12(blob3) AS viewers FROM ${DATASET} GROUP BY index1 ORDER BY viewers DESC LIMIT ${LIMIT}` },
 ];
-/** sum(double1) is how the Worker counts viewers; a distinct aggregate would be even better. */
-const SUM_PROBE_INDEXES = [1, 2];
-const DISTINCT_PROBE_INDEXES = [5, 6, 7];
+/** count(DISTINCT blob3) is exact dedupe by AE itself; sum(double1) is the fallback viewer count. */
+const DISTINCT_PROBE_INDEXES = [1, 2];
+const SUM_PROBE_INDEXES = [3, 4];
+
 // The field name Analytics Engine really exposes depends on the account's schema, so it is discovered
 // by introspection instead of assumed. The guessed alias form is kept as one more raw data point.
 const GRAPHQL_PROBE = `query ($tag: string!, $since: datetime!, $until: datetime!) {
@@ -94,8 +105,16 @@ const GRAPHQL_PROBE = `query ($tag: string!, $since: datetime!, $until: datetime
     }
   }
 }`;
-/** A GraphQL field's type name, looking through LIST/NON_NULL wrappers. */
-const unwrap = (field) => field?.type?.ofType?.name || field?.type?.name || null;
+/** GraphQL field types are wrapped ([Type!] is LIST -> NON_NULL -> OBJECT), so unwrap every layer. */
+const TYPE_SELECTION = 'type { name kind ofType { name kind ofType { name kind ofType { name kind } } } }';
+const unwrap = (type) => {
+  let node = type ?? null;
+  for (let depth = 0; depth < 4 && node; depth++) {
+    if (node.name) return node.name;
+    node = node.ofType ?? null;
+  }
+  return null;
+};
 
 async function get(url, label) {
   const blocked = missingCredentials();
@@ -144,7 +163,7 @@ const probeKv = () => get(
 
 async function typeFields(typeName) {
   const answer = await postGraphql(
-    `{ __type(name: "${typeName}") { name fields { name type { name kind ofType { name kind } } } } }`,
+    `{ __type(name: "${typeName}") { name fields { name ${TYPE_SELECTION} } } }`,
     {}, `introspect ${typeName}`,
   );
   let fields = [];
@@ -181,7 +200,7 @@ async function discoverGraphqlFields() {
         .filter((name) => /analytic|adapter|dataset/i.test(name));
       break;
     }
-    typeName = unwrap(found.fields.find((entry) => entry.name === wanted));
+    typeName = unwrap(found.fields.find((entry) => entry.name === wanted)?.type);
   }
   const match = discovered.fields.find((name) => name.toLowerCase().includes(DATASET.toLowerCase()))
     || discovered.fields.find((name) => /analyticsengine/i.test(name));
@@ -299,8 +318,8 @@ let flags = {};
 try { flags = JSON.parse(health.body)?.views ?? {}; } catch { flags = {}; }
 const answered = (entry) => entry.result.status === 200 && !/Authorization error/i.test(entry.result.body);
 const sqlOk = sqlResults.some(answered);
-const sumOk = SUM_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
 const distinctOk = DISTINCT_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
+const sumOk = SUM_PROBE_INDEXES.some((index) => answered(sqlResults[index]));
 const aeBound = flags.ae === true;
 
 const lines = [
@@ -310,16 +329,17 @@ const lines = [
   `Run: \`${process.env.GITHUB_RUN_ID || 'unknown'}\` on \`${branch || 'unknown'}\` (${new Date().toISOString()}).`,
   'Every view is one Analytics Engine event and the count is AE `uniq(uid)`, so D1 receives **zero**',
   'writes from the view path. Nothing below is interpreted: these are the raw answers.',
-  'A counted view carries metric 1 and a repeat carries metric 0, so `sum(double1)` is viewers and',
-  '`count()` is plays - this AE SQL API has no distinct-count aggregate.',
+  '`count(DISTINCT blob3)` is the viewer count, so Analytics Engine itself counts each uid once per',
+  'video. A counted view carries metric 1 and a repeat metric 0, so `sum(double1)` is a second viewer',
+  'query and `count()` is plays - this AE SQL API has no `uniq()` family at all.',
   '',
   '#### Verdict',
   '',
   `- Deploy attempt that shipped: \`${attemptUsed || 'unknown'}\``,
   `- Analytics Engine binding live in production: **${aeBound ? 'YES' : 'NO'}**`,
   `- Analytics Engine queryable with this token: **${sqlOk ? 'YES' : 'NO'}**`,
-  `- \`sum(double1)\` accepted (the Worker's viewer count): **${sumOk ? 'YES' : 'NO'}**`,
-  `- a distinct-count aggregate accepted: **${distinctOk ? 'YES' : 'NO'}** (informational)`,
+  `- \`count(DISTINCT blob3)\` accepted (AE de-duplicates each uid itself): **${distinctOk ? 'YES' : 'NO'}**`,
+  `- \`sum(double1)\` accepted (the fallback viewer count): **${sumOk ? 'YES' : 'NO'}**`,
   `- GraphQL dataset field discovered: **${graphql.fields.length > 0 ? graphql.fields.join(', ') : 'NO'}**`,
   `- Workers KV snapshot binding live: **${flags.kv === true ? 'YES' : 'NO'}**`
     + ` (R2 snapshot fallback: **${flags.r2Snapshot === true ? 'YES' : 'NO'}**)`,

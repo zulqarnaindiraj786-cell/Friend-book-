@@ -44,27 +44,32 @@ const AE_QUERY_LIMIT = 500;
  */
 // Written from the answers the REAL dataset gave (published on the pull request by
 // cloudflare/report-views-ae.mjs), not from documentation:
-//   `INTERVAL 90 DAY`   -> HTTP 422 "sql parser error: Expected literal string, found: 90"
-//   `uniq(blob3)`       -> HTTP 422 "unknown function call: UNIQ"
-//   `uniqExact(blob3)`  -> HTTP 422 "unknown function call: UNIQEXACT"
-//   `count()` GROUP BY  -> HTTP 200
-// This API has no distinct-count aggregate, so "1 user = 1 view" is carried by the event itself: a
-// counted view writes metric 1 and a repeat writes metric 0, which makes `sum(double1)` the number of
-// viewers and `count()` the number of plays. A plain `count()` is therefore NEVER used as the viewer
-// count - if AE refuses every viewer query, the counters are served from the snapshot + memory
-// instead of showing an inflated number.
+//   `count(DISTINCT blob3)` -> HTTP 200 (resource String, viewers UInt64)   <- exact, so it is first
+//   `sum(double1)`          -> HTTP 200 (viewers Float64, plays UInt64)
+//   `uniq(blob3)`           -> HTTP 422 "unknown function call: UNIQ"
+//   `uniqExact(blob3)`      -> HTTP 422 "unknown function call: UNIQEXACT"
+//   `uniqHLL12(blob3)`      -> HTTP 422 "unknown function call: UNIQHLL12"
+//   `INTERVAL 90 DAY`       -> HTTP 422 "Expected literal string, found: 90" (so the number is quoted)
+//
+// `count(DISTINCT blob3)` is the rule itself: Analytics Engine counts each uid once per resource no
+// matter which isolate wrote the event, when it was written, or how often the user rewatched. The
+// event metric (1 when this view counted, 0 for a repeat) keeps `sum(double1)` available as a second
+// viewer query and makes `count()` the number of plays. A plain `count()` is NEVER a viewer count: if
+// AE refused every variant the counters are served from the snapshot + memory instead of an inflated
+// number.
 const AE_SQL_VARIANTS = [
-  `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${AE_DATASET}`
+  `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers, count() AS plays FROM ${AE_DATASET}`
+    + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
+  `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers, count() AS plays FROM ${AE_DATASET}`
     + ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
   `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${AE_DATASET}`
     + ` GROUP BY index1 ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
-  `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM ${AE_DATASET}`
+  `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM ${AE_DATASET}`
     + ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`
     + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
-  `SELECT index1 AS resource, uniq(blob3) AS viewers FROM ${AE_DATASET} GROUP BY index1`
-    + ` ORDER BY viewers DESC LIMIT ${AE_QUERY_LIMIT}`,
 ];
+
 const AE_GRAPHQL_QUERY = `query ($tag: string!, $since: datetime!, $until: datetime!) {
   viewer {
     accounts(filter: { accountTag: $tag }) {

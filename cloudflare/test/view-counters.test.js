@@ -182,6 +182,8 @@ test('every view is one Analytics Engine event and D1 is never written', async t
   const served = await call(f.env, {}, now);
 
   assert.equal(f.ae.events.length, 3, 'one AE event per view');
+  assert.ok(decodeURIComponent(f.ae.sqlCalls[0].url).includes('count(DISTINCT blob3) AS viewers'),
+    'the exact de-dupe query is the first one asked');
   assert.deepEqual(f.ae.events[0].indexes, ['reels/r1'], 'the resource is the AE index (its grouping key)');
   assert.deepEqual(f.ae.events[0].dimensions, ['reels', 'r1', 'user1'], 'collection, id and uid travel as blobs');
   assert.deepEqual(f.ae.events[0].metrics, [1]);
@@ -214,7 +216,8 @@ test('one user is one view forever, even when the same user watches ten times', 
   assert.equal(f.ae.events.length, 10, 'every real play is still recorded as an AE event');
   assert.equal(f.ae.events.filter((event) => event.metrics[0] === 1).length, 1,
     'but only the first play carries metric 1, so sum(double1) is viewers and count() is plays');
-  assert.equal(f.ae.events.filter((event) => event.metrics[0] === 0).length, 9);
+  assert.equal(f.ae.events.filter((event) => event.metrics[0] === 0).length, 9,
+    'a repeat is still one event, but it carries metric 0 so plays never become viewers');
   assert.equal(viewCounterState().counted, 1, 'the isolate settled this user once');
 });
 
