@@ -22,9 +22,9 @@ import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -321,12 +321,12 @@ public class StoryViewerActivity extends Activity {
                 "isSeen", false,
                 "isDelivered", false,
                 "createdAt", FieldValue.serverTimestamp());
-        com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+        com.example.frienbook.core.cloud.WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", java.util.Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,
-                "lastMessageTime", FieldValue.serverTimestamp()), com.google.firebase.firestore.SetOptions.merge());
+                "lastMessageTime", FieldValue.serverTimestamp()), com.example.frienbook.core.cloud.SetOptions.merge());
         batch.commit().addOnSuccessListener(x -> {
             replyInput.setText("");
             Ui.hideKeyboard(this);

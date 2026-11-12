@@ -62,7 +62,7 @@ public class App extends Application implements SensorEventListener {
                         + " · Android " + android.os.Build.VERSION.RELEASE);
                 c.put("appVersion", 3);
                 c.put("createdAt",
-                        com.google.firebase.firestore.FieldValue.serverTimestamp());
+                        com.example.frienbook.core.cloud.FieldValue.serverTimestamp());
                 Fb.db().collection("crashReports").add(c);
                 Thread.sleep(500); // give the write a moment to hit the offline queue
             } catch (Throwable ignored) { }

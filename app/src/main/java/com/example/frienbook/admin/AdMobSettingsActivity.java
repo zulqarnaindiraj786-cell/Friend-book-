@@ -12,7 +12,7 @@ import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.AdsConfig;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 /**
  * 📢 AdMob Settings — ONLY zulqarnaindiraj786@gmail.com (or promoted admins).

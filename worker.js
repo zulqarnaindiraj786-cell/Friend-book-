@@ -4,6 +4,7 @@ import { androidRelease } from './cloudflare/android-release.js';
 import { appConfig } from './cloudflare/app-config.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
+import { legacyMigration } from './cloudflare/legacy-migration.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
@@ -51,6 +52,9 @@ export function createWorker(verify = verifyFirebaseIdentity) {
       if (path === '/v1/config') return appConfig(request, env);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
+      // The one-time carry-over of a user's own legacy documents, run here because the phone no longer
+      // ships that store's SDK. Reads with the caller's own token, writes into D1, never deletes.
+      const migrate = path === '/v1/migrate/legacy';
       // Two segments address a document, four address a document inside a nested collection
       // (chats/<chatId>/messages/<messageId>); anything else is not a document path at all.
       const docs = path === '/v1/docs' || path === '/v1/docs/batch'
@@ -62,7 +66,7 @@ export function createWorker(verify = verifyFirebaseIdentity) {
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !migrate) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -97,6 +101,9 @@ export function createWorker(verify = verifyFirebaseIdentity) {
       if (typeof uid !== 'string' || !uid.length || uid.length > 128) return json({ error: 'Unauthorized' }, 401);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
+      // `LEGACY_FETCH` is the seam the tests use to answer for the legacy store; production leaves it
+      // unset and the Worker's own fetch runs.
+      if (migrate) return legacyMigration(request, env, { uid, email, token: bearer[1] }, env.LEGACY_FETCH || fetch);
       if (docs) return appDocuments(request, env, { uid, email, token: bearer[1] });
       // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
       // KV aggregate write happen after the response is already sent.

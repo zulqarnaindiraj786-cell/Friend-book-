@@ -13,9 +13,9 @@ import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -36,8 +36,8 @@ public class PokesActivity extends Activity {
                     long now = System.currentTimeMillis();
                     for (DocumentSnapshot d : snap) {
                         Object at = d.get("at");
-                        long t = at instanceof com.google.firebase.Timestamp
-                                ? ((com.google.firebase.Timestamp) at).toDate().getTime()
+                        long t = at instanceof com.example.frienbook.core.cloud.Timestamp
+                                ? ((com.example.frienbook.core.cloud.Timestamp) at).toDate().getTime()
                                 : at instanceof Number ? ((Number) at).longValue() : 0;
                         if (now - t < 24L * 3600_000L) {
                             Ui.toast(a, "You already poked " + toName + " — wait a bit 😄");
@@ -109,8 +109,8 @@ public class PokesActivity extends Activity {
         String photo = Format.str(d.getData(), "fromPhotoUrl");
         String fromUid = Format.str(d.getData(), "from");
         Object at = d.get("at");
-        long when = at instanceof com.google.firebase.Timestamp
-                ? ((com.google.firebase.Timestamp) at).toDate().getTime() : 0;
+        long when = at instanceof com.example.frienbook.core.cloud.Timestamp
+                ? ((com.example.frienbook.core.cloud.Timestamp) at).toDate().getTime() : 0;
 
         LinearLayout r = Ui.row(this);
         r.setBackground(Ui.round(this, Ui.card(this), 12));

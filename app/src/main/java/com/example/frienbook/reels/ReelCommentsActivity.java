@@ -18,10 +18,10 @@ import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.post.CommentsAdapter;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.ArrayList;
 import java.util.List;

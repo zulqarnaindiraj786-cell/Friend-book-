@@ -21,9 +21,9 @@ import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.List;

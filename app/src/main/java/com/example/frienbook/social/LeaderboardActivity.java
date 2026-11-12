@@ -16,8 +16,8 @@ import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.Query;
 
 import java.util.ArrayList;
 import java.util.List;

@@ -13,9 +13,9 @@ import android.widget.TextView;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
+import com.example.frienbook.core.cloud.DocumentReference;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
 
 /** Facebook-style reactions: 👍 ❤️ 😂 😮 😢 😡 with long-press picker. */
 public class Reactions {
@@ -90,7 +90,9 @@ public class Reactions {
                 String oldType = existing.getString("type");
                 if (type == null || type.equals(oldType)) {
                     tx.delete(reactRef);
-                    tx.update(postRef, "likes", Math.max(0, likes - 1));
+                    // Incremented by the Worker on the stored row, so two people reacting at the same
+                    // moment cannot cost one of them a like.
+                    tx.update(postRef, "likes", FieldValue.increment(-1));
                 } else {
                     tx.update(reactRef, "type", type, "createdAt", FieldValue.serverTimestamp());
                 }
@@ -100,7 +102,7 @@ public class Reactions {
                 data.put("type", type);
                 data.put("createdAt", FieldValue.serverTimestamp());
                 tx.set(reactRef, data);
-                tx.update(postRef, "likes", likes + 1);
+                tx.update(postRef, "likes", FieldValue.increment(1));
             }
             return null;
         }).addOnSuccessListener(x -> {

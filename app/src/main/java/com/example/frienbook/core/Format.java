@@ -1,6 +1,6 @@
 package com.example.frienbook.core;
 
-import com.google.firebase.Timestamp;
+import com.example.frienbook.core.cloud.Timestamp;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;

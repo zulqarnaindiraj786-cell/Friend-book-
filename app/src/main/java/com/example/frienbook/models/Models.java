@@ -1,7 +1,7 @@
 package com.example.frienbook.models;
 
 import com.example.frienbook.core.Format;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.HashMap;

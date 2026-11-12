@@ -13,9 +13,9 @@ import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.friends.UsersAdapter;
 import com.example.frienbook.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -115,7 +115,7 @@ public class FeedPreferencesActivity extends Activity {
         }
         for (List<String> chunk : Ui.chunks(ids, 10)) {
             Fb.db().collection("users").whereIn(
-                    com.google.firebase.firestore.FieldPath.documentId(), chunk)
+                    com.example.frienbook.core.cloud.FieldPath.documentId(), chunk)
                     .get().addOnSuccessListener(snap -> {
                         for (DocumentSnapshot d : snap) friends.add(Models.User.fromDoc(d));
                         render();

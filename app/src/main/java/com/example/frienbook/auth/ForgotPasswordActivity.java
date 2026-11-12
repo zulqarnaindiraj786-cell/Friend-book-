@@ -11,8 +11,8 @@ import android.widget.TextView;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.security.MessageDigest;
 import java.util.HashMap;

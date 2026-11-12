@@ -21,9 +21,9 @@ import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Presence;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -128,7 +128,7 @@ public class ConversationsActivity extends Activity {
                 Map<String, Object> inner = new HashMap<>();
                 inner.put(Fb.uid(), 0);
                 Fb.db().collection("chats").document(r.room.id)
-                        .set(Fb.map("unreadCount", inner), com.google.firebase.firestore.SetOptions.merge());
+                        .set(Fb.map("unreadCount", inner), com.example.frienbook.core.cloud.SetOptions.merge());
             } else if (w == 2) {
                 Ui.confirm(this, "Delete this conversation?", "It will be hidden from your chat list.", "Delete", () -> {
                     Set<String> hidden = getSharedPreferences("fb_prefs", MODE_PRIVATE)
@@ -144,7 +144,7 @@ public class ConversationsActivity extends Activity {
                 Ui.confirm(this, "Block this user?", "", "Block", () -> {
                     Fb.db().collection("users").document(Fb.uid())
                             .set(Fb.map("blockedUsers", FieldValue.arrayUnion(r.other)),
-                                    com.google.firebase.firestore.SetOptions.merge());
+                                    com.example.frienbook.core.cloud.SetOptions.merge());
                     Ui.toast(this, "Blocked");
                 });
             }

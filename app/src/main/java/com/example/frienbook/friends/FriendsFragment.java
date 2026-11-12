@@ -19,11 +19,11 @@ import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -325,7 +325,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         WriteBatch batch = Fb.db().batch();
         batch.update(Fb.db().collection("friend_requests").document(r.requestId),
                 "status", "accepted");
-        com.google.firebase.firestore.DocumentReference friendRef = Fb.db().collection("friends").document();
+        com.example.frienbook.core.cloud.DocumentReference friendRef = Fb.db().collection("friends").document();
         batch.set(friendRef, Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
                 "createdAt", FieldValue.serverTimestamp()));

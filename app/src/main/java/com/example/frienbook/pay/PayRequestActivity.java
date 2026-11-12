@@ -14,11 +14,11 @@ import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.DocumentReference;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.Database;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -209,7 +209,7 @@ public class PayRequestActivity extends Activity {
     }
 
     private void writeDocs(String screenshotUrl) {
-        FirebaseFirestore db = Fb.db();
+        Database db = Fb.db();
         String uid = Fb.uid();
         String email = Fb.me != null ? Fb.me.email : "";
         String month = Admin.monthKey();

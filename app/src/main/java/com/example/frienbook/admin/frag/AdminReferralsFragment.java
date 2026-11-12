@@ -21,9 +21,9 @@ import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
 
 import java.util.ArrayList;
 import java.util.HashMap;

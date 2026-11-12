@@ -19,7 +19,7 @@ import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.FieldValue;
+import com.example.frienbook.core.cloud.FieldValue;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -251,7 +251,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<CommentsAdapter.VH> {
             String id = counterId != null ? counterId : c.postId;
             Fb.db().collection(col).document(id)
                     .set(com.example.frienbook.core.Fb.map("comments", FieldValue.increment(-1)),
-                            com.google.firebase.firestore.SetOptions.merge());
+                            com.example.frienbook.core.cloud.SetOptions.merge());
             host.changed();
         });
     }

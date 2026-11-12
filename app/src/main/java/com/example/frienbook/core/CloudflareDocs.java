@@ -16,11 +16,11 @@ import java.util.function.Consumer;
 /**
  * The Cloudflare copy of app documents (`/v1/docs` on the Worker, table `friendbook_cf_documents`).
  *
- * Firebase stays the authentication source only. Every document this app creates or edits is also
- * mirrored to Cloudflare D1 through the Worker, so the social data has a home outside Firestore and
- * read paths can move over collection by collection without ever losing a document: the mirror is
- * additive (merge on conflict, never deletes), bounded (95 KiB per document on the Worker) and
- * fire-and-forget (a failed mirror is silent - the next edit carries the full document again).
+ * Firebase stays the authentication source only. Since core/cloud became the app's database, every
+ * document this app creates or edits is written to Cloudflare D1 directly - so the mirror below is a
+ * documented no-op kept only so the create sites still read the same. What is still live here is the
+ * extra read path ({@link #list}), which a couple of screens use to union Cloudflare ids into the list
+ * they are already showing.
  *
  * The Worker accepts exactly the collections the app owns (users, posts, reels, stories, chats,
  * messages, friends, friend_requests, follows, groups, pages, notifications, official_broadcasts,
@@ -50,17 +50,9 @@ public final class CloudflareDocs {
      * never block posting, and the mirror simply catches up on the next edit.
      */
     public static void mirror(String collection, String id, Map<String, Object> fields) {
-        if (!enabled() || collection == null || collection.isEmpty() || id == null || id.isEmpty()) return;
-        if (fields == null) return;
-        final JSONObject body = new JSONObject(sanitize(fields));
-        CloudTransport.withToken(IO, MAIN, token -> {
-            try {
-                URL url = new URL(BASE + "/" + collection + "/" + id);
-                CloudTransport.send(url, "PUT", token, body);
-            } catch (Throwable ignored) {
-                // Silent by design: the Firestore write already succeeded and the next edit re-mirrors.
-            }
-        }, null);
+        // Nothing to mirror any more: the write that used to sit beside this call now goes straight to
+        // Cloudflare D1 (see core/cloud), so a second copy of the same document would only cost a
+        // request. The method stays so every create site reads the same as it always did.
     }
 
     /**
@@ -72,7 +64,7 @@ public final class CloudflareDocs {
         Map<String, Object> out = new java.util.HashMap<>();
         for (Map.Entry<String, Object> e : fields.entrySet()) {
             Object v = e.getValue();
-            if (v instanceof com.google.firebase.firestore.FieldValue) {
+            if (v instanceof com.example.frienbook.core.cloud.FieldValue) {
                 String s = String.valueOf(v);
                 if (s.contains("serverTimestamp")) v = System.currentTimeMillis();
                 else continue;

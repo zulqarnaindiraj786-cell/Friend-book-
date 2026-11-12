@@ -25,12 +25,12 @@ import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
+import com.example.frienbook.core.cloud.SetOptions;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.example.frienbook.core.cloud.Database;
 
 /** 1:1 chat: realtime messages, typing, presence, seen/delivered, images, deletes. */
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
@@ -375,7 +376,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "lastMessageTime", FieldValue.serverTimestamp(),
                 "unreadCount", unread);
         WriteBatch batch = Fb.db().batch();
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.example.frienbook.core.cloud.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
@@ -471,7 +472,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "typing", typingOff,
                 "unreadCount", unread);
         WriteBatch batch = Fb.db().batch();
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.example.frienbook.core.cloud.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
@@ -523,7 +524,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "unreadCount", unread);
 
         WriteBatch batch = Fb.db().batch();
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.example.frienbook.core.cloud.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());

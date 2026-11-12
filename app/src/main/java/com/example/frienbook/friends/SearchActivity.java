@@ -23,8 +23,8 @@ import com.example.frienbook.post.FeedAdapter;
 import com.example.frienbook.post.CreatePostActivity;
 import com.example.frienbook.post.PostDetailActivity;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.Query;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

@@ -22,9 +22,9 @@ import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.Calendar;
 import java.util.LinkedHashMap;
@@ -246,7 +246,7 @@ public class AdminEarningsFragment extends Fragment {
                         .set(Fb.map("jazzcash", j.getText().toString().trim(),
                                         "easypaisa", e.getText().toString().trim(),
                                         "updatedAt", FieldValue.serverTimestamp()),
-                                com.google.firebase.firestore.SetOptions.merge())
+                                com.example.frienbook.core.cloud.SetOptions.merge())
                         .addOnSuccessListener(x -> Ui.toast(a, "Numbers updated ✓")))
                 .setNegativeButton("Cancel", null)
                 .show();

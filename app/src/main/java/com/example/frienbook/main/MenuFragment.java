@@ -25,7 +25,7 @@ import com.example.frienbook.models.Models;
 import com.example.frienbook.post.SavedPostsActivity;
 import com.example.frienbook.profile.ProfileActivity;
 import com.example.frienbook.settings.SettingsActivity;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 /** Menu tab: profile shortcut, shortcuts, preferences, help, log out. */
 public class MenuFragment extends Fragment {
@@ -299,8 +299,8 @@ public class MenuFragment extends Fragment {
 
                     Object lb = d.get("lastBonusAt");
                     long last = lb instanceof Number ? ((Number) lb).longValue()
-                            : lb instanceof com.google.firebase.Timestamp
-                            ? ((com.google.firebase.Timestamp) lb).toDate().getTime() : 0;
+                            : lb instanceof com.example.frienbook.core.cloud.Timestamp
+                            ? ((com.example.frienbook.core.cloud.Timestamp) lb).toDate().getTime() : 0;
                     Object st = d.get("dailyStreak");
                     int streak = st instanceof Number ? ((Number) st).intValue() : 0;
 
@@ -318,7 +318,7 @@ public class MenuFragment extends Fragment {
                     if (verified) bonus *= 2; // ✓ verified perk: double daily bonus
                     final int bonusF = bonus;
                     java.util.Map<String, Object> upd = new java.util.HashMap<>();
-                    upd.put("stars", com.google.firebase.firestore.FieldValue.increment(bonus));
+                    upd.put("stars", com.example.frienbook.core.cloud.FieldValue.increment(bonus));
                     upd.put("dailyStreak", newStreak);
                     upd.put("lastBonusAt", now);
                     com.example.frienbook.core.Fb.db().collection("users").document(me).update(upd)

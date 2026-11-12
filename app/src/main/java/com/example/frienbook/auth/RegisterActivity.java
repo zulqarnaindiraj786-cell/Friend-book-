@@ -15,7 +15,7 @@ import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Presence;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.main.MainActivity;
-import com.google.firebase.firestore.FieldValue;
+import com.example.frienbook.core.cloud.FieldValue;
 
 import java.util.ArrayList;
 import java.util.HashMap;

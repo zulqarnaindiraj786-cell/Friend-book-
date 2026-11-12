@@ -23,8 +23,8 @@ import com.example.frienbook.core.Admin;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.List;
 
@@ -134,13 +134,13 @@ public class AdminPanelActivity extends Activity {
     private void sendBroadcast(String text) {
         Ui.toast(this, "Sending broadcast…");
         Fb.db().collection("users").limit(400).get().addOnSuccessListener(snap -> {
-            List<com.google.firebase.firestore.DocumentSnapshot> docs = snap.getDocuments();
+            List<com.example.frienbook.core.cloud.QueryDocumentSnapshot> docs = snap.getDocuments();
             int total = docs.size();
-            java.util.List<java.util.List<com.google.firebase.firestore.DocumentSnapshot>> chunks =
+            java.util.List<java.util.List<com.example.frienbook.core.cloud.QueryDocumentSnapshot>> chunks =
                     Ui.chunks(docs, 400);
-            for (java.util.List<com.google.firebase.firestore.DocumentSnapshot> chunk : chunks) {
+            for (java.util.List<com.example.frienbook.core.cloud.QueryDocumentSnapshot> chunk : chunks) {
                 WriteBatch batch = Fb.db().batch();
-                for (com.google.firebase.firestore.DocumentSnapshot u : chunk) {
+                for (com.example.frienbook.core.cloud.QueryDocumentSnapshot u : chunk) {
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", u.getId(),
                             "fromUserId", Fb.uid(),

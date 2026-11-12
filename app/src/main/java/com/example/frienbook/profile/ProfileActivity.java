@@ -29,11 +29,11 @@ import com.example.frienbook.post.CreatePostActivity;
 import com.example.frienbook.post.FeedAdapter;
 import com.example.frienbook.post.FullscreenMediaActivity;
 import com.example.frienbook.post.PostDetailActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -54,7 +54,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private android.widget.ImageView nameTick;
     private android.widget.LinearLayout moneyRow;
     private android.widget.TextView boostBtn, subscribeBtn, tickBtn;
-    private com.google.firebase.firestore.ListenerRegistration subReg;
+    private com.example.frienbook.core.cloud.ListenerRegistration subReg;
     private boolean subscribedActive;
     private ImageView cover, avatar;
     private TextView postsTab, aboutTab, friendsTab, photosTab;
@@ -539,7 +539,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 .addSnapshotListener((snap, err) -> {
                     subscribedActive = false;
                     if (snap != null && !snap.isEmpty()) {
-                        com.google.firebase.firestore.DocumentSnapshot d = snap.getDocuments().get(0);
+                        com.example.frienbook.core.cloud.DocumentSnapshot d = snap.getDocuments().get(0);
                         java.util.Map<String, Object> m = d.getData();
                         boolean active = "active".equals(Format.str(m, "status"));
                         long exp = Format.ts(m == null ? null : m.get("expiry"));
@@ -731,7 +731,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         unban ? "Unban" : "Ban", () -> {
                             Fb.db().collection("users").document(uid)
                                     .set(Fb.map("banned", !unban),
-                                            com.google.firebase.firestore.SetOptions.merge())
+                                            com.example.frienbook.core.cloud.SetOptions.merge())
                                     .addOnSuccessListener(x -> {
                                         Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");
                                         if (!unban) com.example.frienbook.core.Notify.send(
@@ -766,8 +766,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         boolean removing = Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(uid);
         Fb.db().collection("users").document(Fb.uid())
                 .update("favoriteUids", removing
-                        ? com.google.firebase.firestore.FieldValue.arrayRemove(uid)
-                        : com.google.firebase.firestore.FieldValue.arrayUnion(uid))
+                        ? com.example.frienbook.core.cloud.FieldValue.arrayRemove(uid)
+                        : com.example.frienbook.core.cloud.FieldValue.arrayUnion(uid))
                 .addOnSuccessListener(x -> {
                     if (removing) Fb.me.favoriteUids.remove(uid);
                     else Fb.me.favoriteUids.add(uid);
@@ -800,7 +800,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     }
                     if (delta == 0) return;
                     Fb.db().collection("users").document(uid)
-                            .update("stars", com.google.firebase.firestore.FieldValue.increment(delta))
+                            .update("stars", com.example.frienbook.core.cloud.FieldValue.increment(delta))
                             .addOnSuccessListener(x -> {
                                 if (user != null) user.stars += delta;
                                 com.example.frienbook.core.Notify.send(uid, "stars",

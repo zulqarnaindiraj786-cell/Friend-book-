@@ -23,8 +23,8 @@ import com.example.frienbook.core.Ui;
 import com.example.frienbook.chat.ConversationsActivity;
 import com.example.frienbook.friends.SearchActivity;
 import com.example.frienbook.post.CreatePostActivity;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -227,7 +227,7 @@ public class MainActivity extends Activity {
                 .addSnapshotListener((snap, err) -> {
                     int total = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap) {
                             Object u = d.get("unreadCount");
                             if (u instanceof Map) {
                                 Object n = ((Map<?, ?>) u).get(me);

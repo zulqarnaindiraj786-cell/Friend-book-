@@ -7,6 +7,8 @@ compatibility_date = "2024-01-01"
 [vars]
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
+# One-time carry-over of a user's own legacy documents into D1: additive only, never a delete.
+LEGACY_MIGRATION_ENABLED = "true"
 D1_INTERACTIONS_ENABLED = "true"
 VIDEO_R2_ENABLED = "true"
 VIDEO_R2_RETENTION_VERIFIED = "true"

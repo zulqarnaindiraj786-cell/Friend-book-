@@ -18,8 +18,8 @@ import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -36,7 +36,7 @@ public class MonetizationActivity extends Activity {
     private ProgressBar adsBar;
     private Switch subsSwitch;
     private TextView subsCountT;
-    private com.google.firebase.firestore.ListenerRegistration subsCountReg;
+    private com.example.frienbook.core.cloud.ListenerRegistration subsCountReg;
     private ListenerRegistration meReg;
     private int followersCount = 0;
 

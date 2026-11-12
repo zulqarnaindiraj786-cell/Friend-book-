@@ -15,11 +15,11 @@ import androidx.annotation.Nullable;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.example.frienbook.core.cloud.Timestamp;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
 
 import java.util.Date;
 import java.util.Map;

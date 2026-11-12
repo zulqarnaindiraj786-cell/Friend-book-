@@ -20,13 +20,13 @@ import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.DocumentReference;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
+import com.example.frienbook.core.cloud.SetOptions;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.Date;
 
@@ -195,7 +195,7 @@ public class AdminPaymentsFragment extends Fragment {
             if (!boostId.isEmpty()) {
                 DocumentReference bo = Fb.db().collection("boosts").document(boostId);
                 batch.update(bo, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
+                        "expiry", new com.example.frienbook.core.cloud.Timestamp(
                                 new Date(System.currentTimeMillis() + 24L * 3600 * 1000)));
             }
         } else if ("subscription".equals(type)) {
@@ -203,7 +203,7 @@ public class AdminPaymentsFragment extends Fragment {
             if (!subId.isEmpty()) {
                 DocumentReference su = Fb.db().collection("subscriptions").document(subId);
                 batch.update(su, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
+                        "expiry", new com.example.frienbook.core.cloud.Timestamp(
                                 new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
             }
         }

@@ -26,11 +26,11 @@ import com.example.frienbook.profile.ProfileActivity;
 import com.example.frienbook.story.AddStoryActivity;
 import com.example.frienbook.story.StoriesAdapter;
 import com.example.frienbook.story.StoryViewerActivity;
-import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.example.frienbook.core.cloud.Timestamp;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
+import com.example.frienbook.core.cloud.QueryDocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.Collections;

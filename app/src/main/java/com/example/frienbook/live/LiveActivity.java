@@ -18,13 +18,13 @@ import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.DocumentReference;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.Database;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.Query;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -213,7 +213,7 @@ public class LiveActivity extends Activity {
 
     // ============================================================ DATA
     private void listen() {
-        FirebaseFirestore db = Fb.db();
+        Database db = Fb.db();
         liveReg = db.collection("lives").document(liveId)
                 .addSnapshotListener((d, err) -> {
                     if (d == null || !d.exists()) { finish(); return; }
@@ -272,7 +272,7 @@ public class LiveActivity extends Activity {
 
     private void sendGift(int stars) {
         String hostId = getIntent().getStringExtra("host_id");
-        FirebaseFirestore db = Fb.db();
+        Database db = Fb.db();
         WriteBatch batch = db.batch();
         Map<String, Object> gift = new HashMap<>();
         gift.put("senderId", Fb.uid());

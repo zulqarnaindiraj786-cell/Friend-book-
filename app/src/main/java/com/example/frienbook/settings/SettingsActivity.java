@@ -21,7 +21,7 @@ import com.example.frienbook.core.Icons;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Presence;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.FieldValue;
+import com.example.frienbook.core.cloud.FieldValue;
 
 /** Settings & privacy: account, preferences, privacy, notifications, security, about. */
 public class SettingsActivity extends Activity {
@@ -99,7 +99,7 @@ public class SettingsActivity extends Activity {
                     btn.setChecked(on);
                     Fb.db().collection("users").document(Fb.uid())
                             .set(Fb.map("profileLocked", on),
-                                    com.google.firebase.firestore.SetOptions.merge())
+                                    com.example.frienbook.core.cloud.SetOptions.merge())
                             .addOnSuccessListener(x -> {
                                 if (Fb.me != null) Fb.me.profileLocked = on;
                                 Ui.toast(SettingsActivity.this,
@@ -276,7 +276,7 @@ public class SettingsActivity extends Activity {
                 .addOnSuccessListener(snap -> {
                     int posts = snap.size();
                     int likes = 0;
-                    for (com.google.firebase.firestore.DocumentSnapshot d : snap.getDocuments()) {
+                    for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap.getDocuments()) {
                         Long l = d.getLong("likes");
                         if (l != null) likes += l;
                     }
@@ -347,7 +347,7 @@ public class SettingsActivity extends Activity {
                         boolean on = !locked;
                         Fb.db().collection("users").document(Fb.uid())
                                 .set(Fb.map("profileLocked", on),
-                                        com.google.firebase.firestore.SetOptions.merge());
+                                        com.example.frienbook.core.cloud.SetOptions.merge());
                         if (Fb.me != null) Fb.me.profileLocked = on;
                         Ui.toast(this, on ? "🔒 Profile locked" : "Profile unlocked");
                     }

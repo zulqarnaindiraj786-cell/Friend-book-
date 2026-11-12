@@ -1,7 +1,7 @@
 package com.example.frienbook.core;
 
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.ListenerRegistration;
 
 /**
  * 📢 AdMob config — real production IDs, live-editable from the admin panel.
@@ -55,8 +55,8 @@ public class AdsConfig {
     public static void save(String newBannerId, boolean on, android.content.Context c) {
         Fb.db().collection("config").document("ads")
                 .set(Fb.map("bannerId", newBannerId, "enabled", on,
-                                "updatedAt", com.google.firebase.firestore.FieldValue.serverTimestamp()),
-                        com.google.firebase.firestore.SetOptions.merge())
+                                "updatedAt", com.example.frienbook.core.cloud.FieldValue.serverTimestamp()),
+                        com.example.frienbook.core.cloud.SetOptions.merge())
                 .addOnSuccessListener(x -> Ui.toast(c, "AdMob settings saved ✓"))
                 .addOnFailureListener(e -> Ui.toast(c, "Save failed: " + e.getMessage()));
     }

@@ -14,8 +14,8 @@ import android.widget.TextView;
 
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;

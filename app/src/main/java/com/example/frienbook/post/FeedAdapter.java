@@ -31,10 +31,10 @@ import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
 import com.example.frienbook.story.StoriesAdapter;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.QuerySnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.QuerySnapshot;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -544,7 +544,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     String mine = null;
                     java.util.Set<String> kinds = new java.util.HashSet<>();
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap) {
                             String t = d.getString("type");
                             if (t == null) t = "like";
                             kinds.add(t);
@@ -648,8 +648,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         s.put("caption", "📌 " + p.authorName + (cap.isEmpty() ? "" : ": " + cap));
         s.put("sharedPostId", p.id);
         s.put("viewedBy", new ArrayList<String>());
-        s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-        s.put("expiresAt", new com.google.firebase.Timestamp(
+        s.put("createdAt", com.example.frienbook.core.cloud.FieldValue.serverTimestamp());
+        s.put("expiresAt", new com.example.frienbook.core.cloud.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
         Fb.db().collection("stories").add(s)
                 .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("stories", ref.getId(), s))
@@ -693,7 +693,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 boolean unpin = t.contains("Unpin");
                 java.util.Map<String, Object> upd = new HashMap<>();
                 upd.put("pinnedPostId", unpin
-                        ? com.google.firebase.firestore.FieldValue.delete() : p.id);
+                        ? com.example.frienbook.core.cloud.FieldValue.delete() : p.id);
                 Fb.db().collection("users").document(Fb.uid()).update(upd)
                         .addOnSuccessListener(x -> Ui.toast(activity,
                                 unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
@@ -776,11 +776,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Fb.db().collection("posts").document(p.id).delete();
             Fb.db().collection("comments").whereEqualTo("postId", p.id).get()
                     .addOnSuccessListener((QuerySnapshot snap) -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
+                        for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap) d.getReference().delete();
                     });
             Fb.db().collection("posts").document(p.id).collection("reactions").get()
                     .addOnSuccessListener(snap -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) d.getReference().delete();
+                        for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap) d.getReference().delete();
                     });
             Ui.toast(activity, "Post deleted");
         });

@@ -3,7 +3,7 @@ package com.example.frienbook.core;
 import android.os.Handler;
 import android.os.Looper;
 
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import org.json.JSONObject;
 
@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import com.example.frienbook.core.cloud.Database;
 
 /**
  * Online/offline presence and typing indicators on Cloudflare - the Firebase Realtime Database is
@@ -106,7 +107,7 @@ public class Presence {
         if (uid == null) return;
         Map<String, Object> m = new HashMap<>();
         m.put("isOnline", online);
-        if (!online) m.put("lastSeen", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        if (!online) m.put("lastSeen", com.example.frienbook.core.cloud.FieldValue.serverTimestamp());
         try {
             Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
         } catch (Throwable ignored) { }

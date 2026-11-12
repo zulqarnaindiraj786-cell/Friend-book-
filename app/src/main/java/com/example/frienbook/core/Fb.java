@@ -9,10 +9,10 @@ import com.example.frienbook.models.Models;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.Database;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -31,7 +31,7 @@ public class Fb {
 
     public static FirebaseAuth auth() { return FirebaseAuth.getInstance(); }
 
-    public static FirebaseFirestore db() { return FirebaseFirestore.getInstance(); }
+    public static Database db() { return Database.getInstance(); }
 
 
     @Nullable

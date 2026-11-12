@@ -24,7 +24,7 @@ import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
 import com.example.frienbook.core.Prefs;
 import com.example.frienbook.core.Ui;
-import com.google.firebase.firestore.FieldValue;
+import com.example.frienbook.core.cloud.FieldValue;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -232,7 +232,7 @@ public class CreatePostActivity extends Activity {
         Fb.db().collection("friends").whereArrayContains("participants", me).get()
                 .addOnSuccessListener(snap -> {
                     java.util.List<String> ids = new ArrayList<>();
-                    for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                    for (com.example.frienbook.core.cloud.DocumentSnapshot d : snap) {
                         List<String> parts = com.example.frienbook.models.Models.ChatRoom.fromDoc(d).participants;
                         for (String p : parts) if (!p.equals(me)) ids.add(p);
                     }
@@ -244,9 +244,9 @@ public class CreatePostActivity extends Activity {
                     final int[] left = {chunks.size()};
                     for (java.util.List<String> chunk : chunks) {
                         Fb.db().collection("users").whereIn(
-                                com.google.firebase.firestore.FieldPath.documentId(), chunk).get()
+                                com.example.frienbook.core.cloud.FieldPath.documentId(), chunk).get()
                                 .addOnSuccessListener(s -> {
-                                    for (com.google.firebase.firestore.DocumentSnapshot d2 : s) {
+                                    for (com.example.frienbook.core.cloud.DocumentSnapshot d2 : s) {
                                         uids.add(d2.getId());
                                         names.add(Format.strOr(d2.getData(), "displayName", "User"));
                                     }

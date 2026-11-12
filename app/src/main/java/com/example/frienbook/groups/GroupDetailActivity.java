@@ -17,10 +17,10 @@ import com.example.frienbook.post.CreatePostActivity;
 import com.example.frienbook.post.FeedAdapter;
 import com.example.frienbook.post.PostDetailActivity;
 import com.example.frienbook.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.example.frienbook.core.cloud.DocumentSnapshot;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.ListenerRegistration;
+import com.example.frienbook.core.cloud.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;

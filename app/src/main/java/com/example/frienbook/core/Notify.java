@@ -2,8 +2,8 @@ package com.example.frienbook.core;
 
 import androidx.annotation.Nullable;
 
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.WriteBatch;
+import com.example.frienbook.core.cloud.FieldValue;
+import com.example.frienbook.core.cloud.WriteBatch;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -42,9 +42,9 @@ public class Notify {
         if (Prefs.notifComments(c)) send(toUid, "comment", "commented on your post", postId);
     }
 
-    public static void markAllRead(java.util.List<com.google.firebase.firestore.DocumentSnapshot> docs) {
+    public static void markAllRead(java.util.List<com.example.frienbook.core.cloud.DocumentSnapshot> docs) {
         WriteBatch b = Fb.db().batch();
-        for (com.google.firebase.firestore.DocumentSnapshot d : docs)
+        for (com.example.frienbook.core.cloud.DocumentSnapshot d : docs)
             b.update(d.getReference(), "isRead", true);
         b.commit();
     }

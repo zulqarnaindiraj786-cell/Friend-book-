@@ -366,17 +366,41 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         absent(self, 'DELETE', docs, 'CloudflareDocs')
 
     def test_update_carries_existing_user_data_to_cloudflare_without_touching_the_old_copy(self):
+        # The carry-over moved off the phone: the app no longer ships the legacy SDK (Firebase is auth
+        # only), so the Worker does the reading - with the caller's own identity token, which is the
+        # only thing that keeps the migration from seeing anybody else's documents.
         mig = (JAVA / 'core/CloudMigration.java').read_text()
         # Once per versionCode, and the flag advances BEFORE the work so launches cannot double-run.
         self.assertIn('sp.edit().putInt("version", BuildConfig.VERSION_CODE).apply();', mig)
-        # Bounded slices: the bridge can never become a full-database scrape on a phone.
-        self.assertIn('private static final int SLICE_LIMIT = 100;', mig)
-        # Additive only: the bridge READS Firestore and WRITES Cloudflare - never the other way, so a
-        # user who never updates keeps the old app and the old data, untouched, forever.
-        for forbidden in ['.delete(', '.update(', '.set(', 'FieldValue']:
+        self.assertIn('CloudTransport.request("/v1/migrate/legacy", "POST", new JSONObject());', mig)
+        # The phone asks and gets out of the way: it never reads, writes or deletes legacy data itself.
+        for forbidden in ['.delete(', '.update(', '.set(', 'FieldValue', 'collection(']:
             absent(self, forbidden, mig, 'CloudMigration')
         main = (JAVA / 'main/MainActivity.java').read_text()
         self.assertIn('CloudMigration.runOnceAfterUpdate(this);', main)
+
+        bridge = (ROOT / 'cloudflare/legacy-migration.js').read_text()
+        # Bounded: page size, pages per slice, chats, messages per chat and a total document budget,
+        # so one request can never become a crawl over somebody's free tier.
+        for bound in ['pageSize: 100', 'maxPages: 3', 'chats: 50', 'messagesPerChat: 50',
+                      'maxDocuments: 1000']:
+            self.assertIn(bound, bridge)
+        # Additive only: insert-if-absent, so a document the user has edited since updating is never
+        # overwritten by the older copy, and a tombstone is never resurrected.
+        self.assertIn('ON CONFLICT(path) DO NOTHING', bridge)
+        # The legacy store is read, never written: a user who never updates keeps their data exactly
+        # where it is, forever.
+        for forbidden in ["method: 'PUT'", "method: 'PATCH'", "method: 'DELETE'", 'batch()']:
+            absent(self, forbidden, bridge, 'legacy-migration')
+        self.assertIn('legacyWrites: 0', bridge)
+        # Every query compares against the verified uid, so the token can only read its own slices.
+        self.assertIn('value: { stringValue: uid }', bridge)
+        # And the endpoint sits behind the identity check, with a switch to turn it off.
+        worker = (ROOT / 'worker.js').read_text()
+        self.assertIn("const migrate = path === '/v1/migrate/legacy';", worker)
+        self.assertIn('!views && !migrate) return json({ error: \'Not found\' }, 404);', worker)
+        self.assertIn("if (migrate) return legacyMigration(request, env, { uid, email, token: bearer[1] }", worker)
+        self.assertIn("LEGACY_MIGRATION_ENABLED === 'false'", bridge)
 
     def test_every_new_write_travels_to_cloudflare_with_the_legacy_write(self):
         sites = {
@@ -393,8 +417,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         }
         for rel, needle in sites.items():
             self.assertIn(needle, (JAVA / rel).read_text(), rel)
-        # Dual-write on purpose: the legacy Firestore write stays at every site while old builds
-        # exist, so an old-app user still sees everything a new-app user creates.
+        # One write, to Cloudflare: Fb.db() is the D1 shim now, so these sites no longer dual-write.
+        # The mirror call beside each of them is a documented no-op - the write it used to duplicate is
+        # the write that already happened.
         self.assertIn('Fb.db().collection("notifications").add(n)', (JAVA / 'core/Notify.java').read_text())
         self.assertIn('Fb.db().collection("comments").add(m)', (JAVA / 'post/PostDetailActivity.java').read_text())
 
