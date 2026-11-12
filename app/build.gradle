@@ -11,8 +11,8 @@ android {
         applicationId 'com.example.frienbook'
         minSdk 24
         targetSdk 35
-        versionCode 6
-        versionName '525.0.0.102'
+        versionCode 7
+        versionName '525.0.0.103'
 
         // Firebase is authentication only: views live in Cloudflare Analytics Engine and app
         // documents are mirrored to Cloudflare D1 through the Worker.

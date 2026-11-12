@@ -5,6 +5,12 @@ on:
   push:
     branches: [ main, 'arena/**' ]
 
+# Publishing the built APK to a GitHub Release needs write access to the repo's contents. Release
+# assets are used instead of actions/upload-artifact on purpose: artifact storage is exhausted on this
+# account, and a release asset has no quota that would silently swallow the build the owner asked for.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -86,6 +92,38 @@ jobs:
 
       # No upload-artifact steps on purpose: the account's Actions artifact storage is exhausted
       # (488 old build artifacts, ~3 GB) and GitHub refuses every new upload until it drains.
-      # The binaries themselves are never lost - signed releases go to GitHub Releases, and the
-      # cleanup-artifacts workflow frees the storage. A failed convenience upload must never be
-      # able to hide the compile verdict again.
+      # The binaries themselves are never lost - they go to GitHub Releases, and the cleanup-artifacts
+      # workflow frees the storage. A failed convenience upload must never be able to hide the
+      # compile verdict again.
+
+      - name: Package the installable APK
+        run: |
+          ls -lh app/build/outputs/apk/debug/ || true
+          cp app/build/outputs/apk/debug/app-debug.apk friendbook-test.apk
+          ls -lh friendbook-test.apk
+          test -s friendbook-test.apk
+
+      # The debug APK is the installable one on this line: the release build type here carries no
+      # signing config, so assembleRelease produces an unsigned APK nobody can install. It is
+      # published as a pre-release tagged with the branch, so a test build can never be mistaken for
+      # a store release of the production package.
+      - name: Publish the test APK to GitHub Releases
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -e
+          VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
+          BRANCH=$(echo "$GITHUB_REF_NAME" | tr '/' '-')
+          TAG="v${VER}-test-${BRANCH}"
+          TITLE="friendbook ${TAG} (TEST build - not a store release)"
+          NOTES="Test-line build of \`${GITHUB_REF_NAME}\` at \`${TARGET_SHA}\` (versionCode ${VCODE}, \`com.example.frienbook\`). Firebase is authentication only; posts, reels, comments, chats, friends, stories and notifications are documents in Cloudflare D1, media is in R2, view counters are Analytics Engine events, and an update carries the signed-in user's own legacy documents over additively. Debug-signed APK: installable, and not the production package."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" friendbook-test.apk --clobber
+            gh release edit "$TAG" --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES" --prerelease
+          else
+            gh release create "$TAG" friendbook-test.apk --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES" --prerelease
+          fi
+          gh release view "$TAG" --json tagName,assets --jq '.tagName, (.assets[].name)'
