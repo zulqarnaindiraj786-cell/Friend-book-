@@ -17,8 +17,8 @@ function hasPreset(env) {
  return /^[A-Za-z0-9_-]+$/.test(env.CLOUDINARY_UPLOAD_PRESET || '');
 }
 function configured(env) {
- return env.VIDEO_R2_ENABLED === 'true' && env.VIDEO_R2_RETENTION_VERIFIED === 'true' && env.VIDEO_BUCKET && env.DB
-  && /^[a-z0-9_-]+$/.test(env.CLOUDINARY_CLOUD_NAME || '') && (hasSigned(env) || hasPreset(env));
+ // Storage is R2. A transcode provider is optional: without one, the verified original is stored.
+ return env.VIDEO_R2_ENABLED === 'true' && env.VIDEO_R2_RETENTION_VERIFIED === 'true' && env.VIDEO_BUCKET && env.DB;
 }
 function ownTemporary(id) {
  return /^friendbook_r2_processing\/[a-f0-9]{64}\/[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
@@ -113,6 +113,21 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
  try {
   const previous=await env.VIDEO_BUCKET.head(key);
   if(previous){await request.body.cancel();return existingValid(previous,owner,id)?result(key,previous):json({error:'Video identity conflict'},409);}
+  // MEDIA = R2 only. When the transcode provider is not configured at all, a plain byte upload is
+  // stored straight in the bucket instead of failing: the bytes live in R2 either way, and the
+  // Cloudinary step is only ever the "prepare a 480p derivative" path, never the storage path.
+  const plainUpload = !isJson && !signedMode && !env.CLOUDINARY_UPLOAD_PRESET;
+  if(plainUpload) {
+   const directBytes=await boundedBytes(request,MAX_VIDEO_BYTES);
+   const meta={httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+    customMetadata:{owner,video_id:id,retention:'forever',processing_id:'r2_direct_'+id.slice(0,16),resolution:'source'}};
+   let stored;
+   try {stored=await env.VIDEO_BUCKET.put(key,directBytes,{onlyIf:{etagDoesNotMatch:'*'},...meta});}
+   catch {stored=await env.VIDEO_BUCKET.put(key,directBytes,meta);}
+   if(!stored && !(await env.VIDEO_BUCKET.head(key)))return json({error:'Video identity conflict'},409);
+   const verified=stored||await env.VIDEO_BUCKET.head(key);
+   return json({url:`${VIDEO_ORIGIN}/${key}`,bytes:directBytes.byteLength,retention:'forever',provider:'r2',resolution:'source'});
+  }
   if(fetcher===fetch && env.CLOUDINARY_CLOUD_NAME!=='fixture') {
    let directBytes, procId='r2_direct_'+id.slice(0,16);
    if(isJson) {

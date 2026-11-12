@@ -107,3 +107,29 @@ test('unsigned preset mode fetches 480p compressed MP4 into R2 and deletes tempo
   assert.equal(r2Health.status,200);assert.deepEqual(await r2Health.json(),{ok:true,r2Bound:true,videoR2Enabled:true});
  }finally{f.sql.close();}
 });
+
+test('without a transcode provider the bytes still land in R2, never in a second store',async()=>{
+ const f=setup();try{
+  const env={VIDEO_R2_ENABLED:'true',VIDEO_R2_RETENTION_VERIFIED:'true',DB:f.env.DB,
+   VIDEO_BUCKET:{async head(key){return f.objects.get(key)||null;},async put(key,body,options){
+    const data=new Uint8Array(await new Response(body).arrayBuffer());
+    const value={key,size:data.length,customMetadata:options.customMetadata};f.objects.set(key,value);return value;
+   }}};
+  let providerCalls=0;
+  const bytes=new Uint8Array([1,2,3,4,5]);
+  const plain=new Request('https://example.invalid/v1/videos',{method:'POST',
+   headers:{'X-Video-Id':'b'.repeat(64),'Content-Length':String(bytes.length),'Content-Type':'video/mp4'},body:bytes});
+  const response=await uploadVideo(plain,env,'actor',async()=>{
+   providerCalls++;return Response.json({});
+  });
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.provider,'r2');
+  assert.equal(body.retention,'forever');
+  assert.equal(providerCalls,0,'no second provider may be contacted for storage');
+  const stored=[...f.objects.values()][0];
+  assert.ok(stored.size>0);
+  assert.equal(stored.customMetadata.retention,'forever');
+  assert.equal(stored.customMetadata.owner!==undefined,true);
+ }finally{f.sql.close();}
+});

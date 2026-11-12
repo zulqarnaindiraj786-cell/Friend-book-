@@ -295,7 +295,12 @@ public class Cloudinary {
                         tcs.setResult(r2Url);
                         return;
                     }
-                } catch (Throwable ignored) { }
+                } catch (Throwable r2Error) {
+                    // No Cloudinary fallback: media lives in R2, and a failed upload is reported so
+                    // the caller can retry instead of silently storing bytes in a second provider.
+                    tcs.setException(new java.io.IOException("R2 photo upload failed"));
+                    return;
+                }
                 String boundary = "fbthumb" + System.currentTimeMillis();
                 conn = (HttpURLConnection) new URL(ENDPOINT).openConnection();
                 conn.setRequestMethod("POST");
@@ -390,7 +395,12 @@ public class Cloudinary {
                                 return;
                             }
                         }
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable r2Error) {
+                        // Photos are stored in R2 only; falling back to Cloudinary would put new media
+                        // in a backend this build is migrating away from.
+                        tcs.setException(new java.io.IOException("R2 photo upload failed"));
+                        return;
+                    }
                 }
                 String ext = "bin";
                 if (compressedImg != null) {
