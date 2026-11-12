@@ -307,15 +307,15 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('CloudflareViews.recordView(CloudflareViews.REELS, r.id, total -> {', reels)
         # ... and the same user is never sent twice in one session; Analytics Engine de-duplicates
         # each uid forever anyway, so the durable rule needs no database row at all.
-        self.assertIn('private final Set<String> sessionCountedViews = new HashSet<>();', reels)
-        self.assertIn('if (!sessionCountedViews.add(r.id)) return;', reels)
+        self.assertIn('private static final Set<String> SESSION_COUNTED_VIEWS = new HashSet<>();', reels)
+        self.assertIn('if (!SESSION_COUNTED_VIEWS.add(r.id)) return;', reels)
         # The displayed number only ever grows, and it is read in ONE batched request per page.
         self.assertIn('int shownViews = (int) Math.max(r.views, seenViews == null ? 0 : seenViews.intValue());', reels)
         self.assertIn('CloudflareViews.fetchViews(CloudflareViews.REELS, ids, totals -> {', reels)
         self.assertIn('r.views = Math.max(r.views, total);', reels)
         # Pausing or leaving the screen cancels the pending count: a view that was not watched is
         # never posted.
-        self.assertIn('viewTick.removeCallbacksAndMessages(null);', reels)
+        self.assertIn('VIEW_TICK.removeCallbacksAndMessages(null);', reels)
 
     def test_home_feed_does_zero_views_work(self):
         feed = (JAVA / 'post/FeedAdapter.java').read_text()

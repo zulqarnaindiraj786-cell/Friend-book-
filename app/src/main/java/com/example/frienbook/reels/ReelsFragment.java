@@ -52,11 +52,12 @@ public class ReelsFragment extends Fragment {
     private ReelAdapter adapter;
     private ListenerRegistration reg;
 
-    /** Live view totals from the Cloudflare Worker; Firestore never stores a views field. */
-    private final Map<String, Integer> viewTotals = new HashMap<>();
+    /** Live view totals from the Cloudflare Worker; Firestore never stores a views field.
+     *  Static because the page holders are a static adapter: all access happens on the main thread. */
+    private static final Map<String, Integer> VIEW_TOTALS = new HashMap<>();
     /** One counted view per user per Reel per app session; the Worker and AE refuse repeats anyway. */
-    private final Set<String> sessionCountedViews = new HashSet<>();
-    private final Handler viewTick = new Handler(Looper.getMainLooper());
+    private static final Set<String> SESSION_COUNTED_VIEWS = new HashSet<>();
+    private static final Handler VIEW_TICK = new Handler(Looper.getMainLooper());
 
     @Nullable
     @Override
@@ -111,7 +112,7 @@ public class ReelsFragment extends Fragment {
                     List<String> ids = new ArrayList<>();
                     for (Models.Reel r : list) ids.add(r.id);
                     CloudflareViews.fetchViews(CloudflareViews.REELS, ids, totals -> {
-                        viewTotals.putAll(totals);
+                        VIEW_TOTALS.putAll(totals);
                         for (Models.Reel r : list) {
                             Integer total = totals.get(r.id);
                             if (total != null) r.views = Math.max(r.views, total);
@@ -125,7 +126,7 @@ public class ReelsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        viewTick.removeCallbacksAndMessages(null);
+        VIEW_TICK.removeCallbacksAndMessages(null);
         if (reg != null) reg.remove();
         adapter.stopAll();
     }
@@ -329,21 +330,21 @@ public class ReelsFragment extends Fragment {
             }
 
             void pause() {
-                viewTick.removeCallbacksAndMessages(null);
+                VIEW_TICK.removeCallbacksAndMessages(null);
                 if (video.isPlaying()) video.pause();
             }
 
             /** One second of real watching counts this user's ONE view - in Cloudflare, never Firestore. */
             void scheduleViewCount() {
                 if (reel == null) return;
-                viewTick.removeCallbacksAndMessages(null);
+                VIEW_TICK.removeCallbacksAndMessages(null);
                 final Models.Reel r = reel;
-                viewTick.postDelayed(() -> {
+                VIEW_TICK.postDelayed(() -> {
                     if (reel != r || !video.isPlaying()) return;
-                    if (!sessionCountedViews.add(r.id)) return;
+                    if (!SESSION_COUNTED_VIEWS.add(r.id)) return;
                     CloudflareViews.recordView(CloudflareViews.REELS, r.id, total -> {
                         r.views = Math.max(r.views, total);
-                        viewTotals.put(r.id, total);
+                        VIEW_TOTALS.put(r.id, total);
                         if (reel == r) viewCount.setText(Format.count(total));
                     });
                 }, 1000);
