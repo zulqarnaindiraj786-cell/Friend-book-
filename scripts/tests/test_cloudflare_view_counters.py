@@ -22,6 +22,11 @@ def absent(test, token, source, where):
     test.assertFalse(token in source, '%s must not contain %s' % (where, token))
 
 
+def queries_text():
+    """doc-queries.js as text: guards that assert on the SQL a list query builds read it here."""
+    return (CLOUDFLARE / 'doc-queries.js').read_text()
+
+
 class CloudflareViewCounterGuards(unittest.TestCase):
     def test_worker_exposes_the_views_route_behind_the_token_gate(self):
         worker = (ROOT / 'worker.js').read_text()
@@ -488,6 +493,105 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('REFRESH_MS = 60_000L', client)
         main = (JAVA / 'main/MainActivity.java').read_text()
         self.assertIn('com.example.frienbook.core.CloudConfig.refresh();', main)
+
+    # ---------------- Cloudflare D1 is the app database: queries, access, atomic ops ----------------
+
+    def test_the_document_store_answers_real_queries_not_just_whole_collections(self):
+        queries = queries_text()
+        documents = (CLOUDFLARE / 'app-documents.js').read_text()
+        # Filters, ordering, keyset pages, counts and a change feed - the shapes the app asks for.
+        self.assertIn(r"const eq = /^eq\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);", queries)
+        self.assertIn(r"const has = /^has\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);", queries)
+        self.assertIn("if (!spec.order.includes(orderField)) throw new QueryError", queries)
+        self.assertIn("if (!(eq ? spec.eq : spec.has).includes(field)) throw new QueryError", queries)
+        self.assertIn('LIMIT ?', queries)
+        self.assertIn('SELECT COUNT(*) AS total FROM', queries)
+        self.assertIn("const since = params.get('since');", queries)
+        self.assertIn('updated_at > ?', queries)
+        # A cursor carries the order value AND the path, so a page can neither skip nor repeat a row.
+        self.assertIn('p: path });', queries)
+        self.assertIn('AND path > ?', queries)
+        # Everything is bounded: no request can ask for the whole table.
+        self.assertIn('MAX_LIMIT = 50', queries)
+        self.assertIn('MAX_FILTERS = 4', queries)
+        self.assertIn('COUNT_CAP = 5_000', queries)
+        self.assertIn('MAX_DOC_BYTES = 95_000', queries)
+        # Values are always bound, never concatenated into SQL.
+        absent(self, '${raw}', queries, 'doc-queries.js')
+        absent(self, '${value}', queries, 'doc-queries.js')
+        self.assertIn('bind(...built.binds)', documents)
+
+    def test_private_documents_are_scoped_by_the_worker_never_by_the_client(self):
+        access = (CLOUDFLARE / 'doc-access.js').read_text()
+        documents = (CLOUDFLARE / 'app-documents.js').read_text()
+        # A list on a private collection is filtered to the caller by the Worker itself.
+        self.assertIn('export function listScope(collection, uid, admin)', access)
+        self.assertIn("clauses.push('owner_uid = ?');", access)
+        self.assertIn('json_each(json_extract(document_json', access)
+        self.assertIn("if (isAdminOnlyRead(collection)) return { sql: ' AND 0', binds: [] };", access)
+        self.assertIn('const scope = listScope(collection, uid, admin);', queries_text())
+        # Chat messages are gated by their parent chat, and a thread must be named.
+        self.assertIn("chatId filter required", documents)
+        self.assertIn('async function isChatParticipant(db, chatId, uid, admin)', documents)
+        # Admin comes from the token email or a stored user document, never from the request.
+        self.assertIn('export async function resolveAdmin(db, uid, email, env)', documents)
+        self.assertIn("$.isAdmin'", documents)
+        self.assertIn('email.toLowerCase() === OWNER_EMAIL', documents)
+        # Only unfiltered public lists are cacheable, so one caller's page is never served to another.
+        self.assertIn('const cacheable = isPublicRead(collection) && !filtered;', documents)
+
+    def test_document_deletes_are_tombstones_and_no_row_is_ever_dropped(self):
+        documents = (CLOUDFLARE / 'app-documents.js').read_text()
+        self.assertIn("$.deleted', json('true')", documents)
+        self.assertIn('deletedAt', documents)
+        self.assertIn('deleted: true, kept: true', documents)
+        self.assertIn("$.deleted'), 0) = 0", queries_text())
+        # Nowhere in the Cloudflare layer may a document row be destroyed.
+        for path in sorted(CLOUDFLARE.rglob('*.js')):
+            source = path.read_text()
+            for forbidden in ['DELETE FROM friendbook_cf_documents', 'DROP TABLE', 'TRUNCATE']:
+                absent(self, forbidden, source, path.name)
+
+    def test_counters_and_arrays_are_atomic_instead_of_read_modify_write(self):
+        queries = queries_text()
+        documents = (CLOUDFLARE / 'app-documents.js').read_text()
+        self.assertIn('export function applyOps(doc, ops, now)', queries)
+        for op in ['ops.stamp', 'ops.set', 'ops.inc', 'ops.add', 'ops.remove', 'ops.unset']:
+            self.assertIn(op, queries)
+        # A double tap must not store the same uid twice, and an increment must not lose a writer.
+        self.assertIn('if (!list.some(item => item === value)) list.push(value);', queries)
+        self.assertIn('WHERE path = ? AND document_json = ?', documents)
+        self.assertIn('Concurrent write, please retry', documents)
+        self.assertIn('for (let attempt = 0; attempt < 4; attempt += 1)', documents)
+        # The server stamps its own clock; a client timestamp is never trusted for "now".
+        self.assertIn('out[field(name)] = now;', queries)
+
+    def test_migrated_firestore_documents_stay_readable_and_queryable(self):
+        queries = queries_text()
+        documents = (CLOUDFLARE / 'app-documents.js').read_text()
+        # A historical row wraps values as {fields:{name:{stringValue|integerValue|...}}}; a filter that
+        # only read the plain shape would hide migrated history from the app.
+        self.assertIn("$.fields.${field}", queries)
+        self.assertIn('.integerValue', queries)
+        self.assertIn('.stringValue', queries)
+        self.assertIn('.timestampValue', queries)
+        self.assertIn('.arrayValue.values', queries)
+        self.assertIn('export function toPlainDocument(rawJson, docId)', documents)
+        self.assertIn('fromFirestoreFields(parsed.fields)', documents)
+
+    def test_money_moderation_and_profile_writes_keep_their_old_rules(self):
+        access = (CLOUDFLARE / 'doc-access.js').read_text()
+        # Creating a payment, poke, gift, live room, event or page is bound to the caller's own uid.
+        self.assertIn("pokes: 'from', payments: 'userId'", access)
+        self.assertIn("const PENDING_ONLY_CREATE = new Set(['payments', 'boosts', 'subscriptions']);", access)
+        self.assertIn("payments: ['status', 'approvedBy', 'approvedAt'", access)
+        self.assertIn("users: ['isAdmin', 'banned', 'isModerator', 'deactivated', 'tickLevel', 'stars'],", access)
+        # A normal user can never lift a ban or grant admin, and only an admin moves money on.
+        self.assertIn("key === 'status'", access)
+        self.assertIn("if (method === 'delete') return OWNER_MAY_DELETE.has(collection);", access)
+        # Collaborative counters stay open on lives/events/pages, exactly like the old rules allowed.
+        self.assertIn("lives: ['viewers', 'stars'", access)
+        self.assertIn("const guarded = ['isAdmin', 'banned', 'isModerator', 'deactivated', 'tickLevel'];", access)
 
 
 if __name__ == '__main__':
