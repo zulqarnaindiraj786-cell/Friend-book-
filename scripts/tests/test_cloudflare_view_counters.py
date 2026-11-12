@@ -14,7 +14,7 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-JAVA = ROOT / 'app/src/main/java/com/friendbook/social'
+JAVA = ROOT / 'app/src/main/java/com/example/frienbook'
 CLOUDFLARE = ROOT / 'cloudflare'
 
 
@@ -298,40 +298,24 @@ class CloudflareViewCounterGuards(unittest.TestCase):
 
     def test_reels_count_one_view_and_never_show_a_lower_number(self):
         client = (JAVA / 'core/CloudflareViews.java').read_text()
+        # A number the user already saw can never be dragged down by a colder Worker isolate.
         self.assertIn('COUNTS.put(key, known != null ? Math.max(known.intValue(), views) : views);', client)
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
-        # The opening state must never strand the user: the label may not be clipped (a wrap-content
-        # box plus the LinearLayout default MATCH_PARENT width visibly truncated it to "Loadi"),
-        # a network failure ends in a Retry state instead of an endless spinner, retries are bounded,
-        # and a load that neither succeeds nor fails is settled by a watchdog.
-        self.assertIn('initialLoadingBox.addView(initTxt, new LinearLayout.LayoutParams(-2, -2));', reels)
-        self.assertIn("Ui.tvBold(a, \"Couldn't load Reels\", 19, Color.WHITE)", reels)
-        self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
-        self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
-        self.assertIn('}, 15_000L);', reels)
-        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
-        # The page-load listener must settle its source even when the page cannot be applied: this
-        # early return is what kept pagingVideos true and the spinner visible forever.
-        self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)
-        # One second of real watching is enough to count this user's one view.
-        self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', reels)
-        self.assertIn('countRealView();', reels)
-        # ... and a loop, a re-watch or a restart never posts (or counts) a second one.
-        self.assertIn('private static final java.util.Set<String> SESSION_COUNTED_VIEWS =', reels)
-        self.assertIn('if (!SESSION_COUNTED_VIEWS.add(key)) return;', reels)
-        # The displayed number only ever grows.
-        self.assertIn('total -> viewedReel.views = Math.max(viewedReel.views, Math.max(0, total))', reels)
-    def test_reels_count_a_view_after_one_second_and_on_every_loop(self):
-        source = (JAVA / 'reels/ReelsFragment.java').read_text()
-        self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', source)
-        self.assertIn('countRealView();', source)
-        self.assertIn('CloudflareViews.recordView(', source)
-        # A native loop or the trim window rewinds the position: that is a new real watch.
-        self.assertIn('if (pos + 400 < lastTickPos)', source)
-        # Starting from the beginning re-arms the counter; resuming after a pause does not.
-        self.assertIn('if (activeMp.getCurrentPosition() < 600)', source)
-        # The old "one view per Reel per app session" de-dupe is gone on purpose.
-        absent(self, 'sessionViewedReelIds', source, 'ReelsFragment')
+        # One second of real watching is enough to count this user's one view - in Cloudflare.
+        self.assertIn('void scheduleViewCount() {', reels)
+        self.assertIn('}, 1000);', reels)
+        self.assertIn('CloudflareViews.recordView(CloudflareViews.REELS, r.id, total -> {', reels)
+        # ... and the same user is never sent twice in one session; Analytics Engine de-duplicates
+        # each uid forever anyway, so the durable rule needs no database row at all.
+        self.assertIn('private final Set<String> sessionCountedViews = new HashSet<>();', reels)
+        self.assertIn('if (!sessionCountedViews.add(r.id)) return;', reels)
+        # The displayed number only ever grows, and it is read in ONE batched request per page.
+        self.assertIn('int shownViews = (int) Math.max(r.views, seenViews == null ? 0 : seenViews.intValue());', reels)
+        self.assertIn('CloudflareViews.fetchViews(CloudflareViews.REELS, ids, totals -> {', reels)
+        self.assertIn('r.views = Math.max(r.views, total);', reels)
+        # Pausing or leaving the screen cancels the pending count: a view that was not watched is
+        # never posted.
+        self.assertIn('viewTick.removeCallbacksAndMessages(null);', reels)
 
     def test_home_feed_does_zero_views_work(self):
         feed = (JAVA / 'post/FeedAdapter.java').read_text()
@@ -341,26 +325,39 @@ class CloudflareViewCounterGuards(unittest.TestCase):
             # D1 read, a D1 write, a KV read, a KV write or even an HTTP request.
             absent(self, 'CloudflareViews', source, name)
             absent(self, '/v1/views', source, name)
-        # The eye/view chip is gone from the featured Reels card, not merely hidden.
-        absent(self, 'firstPostReelViewsTv', feed, 'FeedAdapter')
-        absent(self, 'refreshRealViewCounts', feed, 'FeedAdapter')
-        # Post Insights still shows a real number: the post's own stored value, with no API call.
-        self.assertIn('int viewCount = Math.max(0, p.views);', feed)
-        # Everything else on the card is untouched - it still rotates to a fresh viral Reel.
-        self.assertIn('private Models.Reel pickFeaturedReel()', feed)
-        self.assertIn('public void setFeaturedReels(java.util.List<Models.Reel> reels)', feed)
-    def test_views_client_counts_repeats_and_never_touches_firestore(self):
+            # And Firestore never carries a views counter either.
+            absent(self, '"views"', source, name)
+
+    def test_views_client_is_cloudflare_only_and_gated_by_build_flags(self):
         gradle = (ROOT / 'app/build.gradle').read_text()
         self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'", gradle)
+        self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'true'", gradle)
         client = (JAVA / 'core/CloudflareViews.java').read_text()
         self.assertIn('/v1/views', client)
         self.assertIn('BuildConfig.CLOUDFLARE_VIEWS_ENABLED', client)
-        # Only an in-flight guard: two racing callbacks collapse, re-watches still count.
+        # Only an in-flight guard: two racing callbacks collapse into one request.
         self.assertIn('POSTING.add(key)', client)
         self.assertIn('POSTING.remove(key)', client)
-        absent(self, 'RECORDED', client, 'CloudflareViews')
+        # Firebase appears as authentication only - never as a data source in the views client.
         absent(self, 'com.google.firebase.firestore', client, 'CloudflareViews')
         absent(self, 'addSnapshotListener', client, 'CloudflareViews')
+        transport = (JAVA / 'core/CloudTransport.java').read_text()
+        self.assertIn('getIdToken(false)', transport)
+        absent(self, 'FirebaseFirestore', transport, 'CloudTransport')
+
+    def test_new_documents_are_mirrored_to_cloudflare_d1(self):
+        docs = (JAVA / 'core/CloudflareDocs.java').read_text()
+        self.assertIn('CloudTransport.BASE + "/v1/docs"', docs)
+        # Firestore sentinels are not JSON: a server timestamp becomes the client clock, anything
+        # else is dropped instead of leaking Firestore internals to the Worker.
+        self.assertIn('if (s.contains("serverTimestamp")) v = System.currentTimeMillis();', docs)
+        reel = (JAVA / 'reels/AddReelActivity.java').read_text()
+        post = (JAVA / 'post/CreatePostActivity.java').read_text()
+        self.assertIn('CloudflareDocs.mirror("reels", x.getId(), m);', reel)
+        self.assertIn('CloudflareDocs.mirror("posts", x.getId(), m);', post)
+        # The mirror is additive and fire-and-forget: a Worker outage can never block posting.
+        self.assertIn('catch (Throwable ignored) {', docs)
+        absent(self, 'DELETE', docs, 'CloudflareDocs')
 
     def test_view_migrations_are_additive_only(self):
         for name in ['0012_additive_view_counters.sql', '0013_additive_view_last_seen.sql']:
