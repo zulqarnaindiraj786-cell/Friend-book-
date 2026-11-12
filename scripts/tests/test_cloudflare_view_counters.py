@@ -106,7 +106,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('env.ANALYTICS_ENGINE.writeDataPoint({', worker)
         self.assertIn('indexes: [resource.slice(0, 128)]', worker)
         self.assertIn('dimensions: [collection, id.slice(0, 128), String(uid).slice(0, 128)]', worker)
-        self.assertIn('metrics: [1]', worker)
+        # A counted view carries metric 1 and a repeat carries metric 0, because this AE SQL API has
+        # no distinct-count aggregate: sum(double1) is viewers, count() is plays.
+        self.assertIn('metrics: [counted ? 1 : 0],', worker)
+        self.assertIn('writeViewEvent(env, collection, id, resource, uid, now, counted);', worker)
         self.assertIn("const AE_DATASET = 'friendbook_views';", worker)
         # The count is AE's uniq(uid): one view per user per video, forever, with no D1 row.
         self.assertIn('uniq(blob3) AS viewers', worker)
@@ -131,26 +134,33 @@ class CloudflareViewCounterGuards(unittest.TestCase):
     def test_the_ae_queries_use_the_syntax_the_real_dataset_accepted(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
         report = (CLOUDFLARE / 'report-views-ae.mjs').read_text()
+        # Comments are excluded from the bans on purpose: they quote the raw refusal AE answered with,
+        # and that sentence is the whole reason the syntax looks the way it does.
+        code = '\n'.join(line for line in worker.splitlines() if not line.lstrip().startswith('//'))
+        rcode = '\n'.join(line for line in report.splitlines() if not line.lstrip().startswith('//'))
         # Raw answers from the live dataset, published on the pull request:
-        #   `INTERVAL 90 DAY`  -> HTTP 422 "sql parser error: Expected literal string, found: 90"
-        #   `uniqExact(blob3)` -> HTTP 422 "unknown function call: UNIQEXACT"
+        #   `INTERVAL 90 DAY`   -> HTTP 422 "sql parser error: Expected literal string, found: 90"
+        #   `uniq(blob3)`       -> HTTP 422 "unknown function call: UNIQ"
+        #   `uniqExact(blob3)`  -> HTTP 422 "unknown function call: UNIQEXACT"
+        #   `count()` GROUP BY  -> HTTP 200
         self.assertIn("+ ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`", worker)
         self.assertNotIn('INTERVAL ${AE_WINDOW_DAYS} DAY', worker)
-        # Banned in the QUERIES. Full-line comments are excluded on purpose: they quote the raw
-        # refusal AE answered with, and that sentence is the reason the syntax looks the way it does.
-        code = '\n'.join(line for line in worker.splitlines() if not line.lstrip().startswith('//'))
         absent(self, 'uniqExact', code, 'view-counters.js queries')
-        absent(self, 'uniqExact', '\n'.join(
-            line for line in report.splitlines() if not line.lstrip().startswith('//')), 'report queries')
-        # uniq(blob3) IS the "1 user = 1 view" rule, so a count() answer must never become permanent.
-        self.assertEqual(worker.count('uniq(blob3) AS viewers'), 2)
-        self.assertIn('const AE_EXACT_VARIANTS = 2;', worker)
-        self.assertIn("const exact = typeof variant === 'number' && variant < AE_EXACT_VARIANTS;", worker)
-        self.assertIn('for (let index = exact ? variant : 0; index < AE_SQL_VARIANTS.length; index++) {', worker)
-        # The report probes the same queries the Worker runs, and says plainly whether uniq was accepted.
+        absent(self, 'uniqExact', rcode, 'report-views-ae.mjs queries')
+        # The viewer count is sum(double1), so the metric has to say whether a view counted.
+        self.assertEqual(worker.count('sum(double1) AS viewers'), 2)
+        self.assertIn('Math.round(viewers)', worker, 'sum() answers as a float; viewers are whole')
+        # A plain count() of events counts PLAYS - every rewatch - so it must never be a viewer query.
+        absent(self, 'SELECT index1 AS resource, count() AS viewers', code, 'view-counters.js')
+        # The report probes the Worker's own queries plus every alternative, judged separately.
         self.assertIn("INTERVAL '${WINDOW_DAYS}' DAY", report)
-        self.assertIn('const UNIQ_PROBE_INDEXES = [1, 2];', report)
-        self.assertIn('accepted (the one-view-per-user count)', report)
+        self.assertIn('const SUM_PROBE_INDEXES = [1, 2];', report)
+        self.assertIn('const DISTINCT_PROBE_INDEXES = [5, 6, 7];', report)
+        self.assertIn("accepted (the Worker's viewer count)", report)
+        # GraphQL is walked instead of guessed: the guess answered {"data":{"__type":null}}.
+        self.assertIn('{ __schema { queryType { name } } }', report)
+        self.assertIn("for (const wanted of ['viewer', 'accounts', null]) {", report)
+        absent(self, '__type(name: "Viewer")', rcode, 'report-views-ae.mjs')
 
     def test_kv_namespace_is_provisioned_by_ci_before_deploy(self):
         script = (CLOUDFLARE / 'ensure-views-kv.mjs').read_text()
@@ -211,7 +221,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('DEPLOY_ATTEMPT_USED', report)
         self.assertIn('/user/tokens/verify', report)
         self.assertIn('/storage/kv/namespaces', report)
-        self.assertIn('__type(name: \"Viewer\")', report)
+        self.assertIn('{ __schema { queryType { name } } }', report)
         self.assertIn('Analytics Engine > Edit', report)
         # Editing a comment is /repos/{o}/{r}/issues/comments/{id}; addressing it under the issue
         # number answers HTTP 404 and the pull request silently keeps the previous run's evidence.

@@ -10,12 +10,16 @@ path simply stopped writing to them.
 
 1. **Every view is one Analytics Engine event.** A view that reaches the Worker is written with
    `env.ANALYTICS_ENGINE.writeDataPoint({ indexes: [resource], dimensions: [collection, id, uid],
-   metrics: [1] })`.
+   metrics: [counted ? 1 : 0] })` — a repeat view is a real play, so it is recorded too, but with
+   metric **0**. That single bit is what carries rule 3 (see below).
 2. **D1 receives ZERO writes** from the view path — no totals upsert, no per-user stamp, no
    `CREATE TABLE`. It also performs zero reads, with one documented exception below.
 3. **ONE view per user per video, forever.** One second of watching is enough; the whole video, a
-   loop, or coming back next month adds nothing. Analytics Engine enforces this in the aggregation
-   (`uniq(uid)`), so the rule needs no database row at all.
+   loop, or coming back next month adds nothing. No database row is needed: the Worker writes metric 1
+   only for a user's first view of a resource and the viewer count is `sum(double1)`, while `count()`
+   of the same rows is the number of plays. This AE SQL API has **no** distinct-count aggregate —
+   `uniq(blob3)` answers `HTTP 422 unknown function call: UNIQ` — so the rule is carried by the
+   event, not by the query.
 
 And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV, no AE.
 
@@ -23,7 +27,7 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 
 | Layer | Role | Cost |
 | --- | --- | --- |
-| Analytics Engine (`ANALYTICS_ENGINE`, dataset `friendbook_views`) | Every view event + the real de-duplicated count | 1 event per view; ≤ 1 query per isolate per minute |
+| Analytics Engine (`ANALYTICS_ENGINE`, dataset `friendbook_views`) | Every view event + the viewer count (`sum(double1)`) | 1 event per view; ≤ 1 query per isolate per minute |
 | Workers KV (`VIEWS`, key `views:live:v1`) | Snapshot shared across isolates | 1 read per isolate, ≤ 288 writes/day per isolate |
 | R2 object (`views/live/v1.json`) | The same snapshot when KV cannot be bound to the Worker | 1 read per isolate, ≤ 288 Class A writes/day per isolate |
 | Worker memory | What a request is actually served from | free |
@@ -63,20 +67,27 @@ Which AE query API an account can use is not ours to pick, so the Worker tries, 
 remembers what worked for the life of the isolate:
 
 1. `GET /client/v4/accounts/{id}/analytics_engine/sql?query=…` with
-   `SELECT index1 AS resource, uniq(blob3) AS viewers, count() AS plays FROM friendbook_views WHERE
-   timestamp >= now() - INTERVAL '90' DAY GROUP BY index1 ORDER BY viewers DESC LIMIT 500`
-   (then the same without the time window, then a degraded `count()`), parsed from TSV *or* JSON.
+   `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM friendbook_views WHERE
+   timestamp >= now() - INTERVAL '90' DAY GROUP BY index1 ORDER BY viewers DESC LIMIT 500`, then the
+   same without the time window, then two `uniq(blob3)` forms, parsed from TSV *or* JSON.
 
-   The real dataset dictated that syntax, and the answers are published on the pull request:
-   `INTERVAL 90 DAY` → `HTTP 422 Input was invalid: sql parser error: Expected literal string, found:
-   90` (so the number is quoted), and `uniqExact(blob3)` → `HTTP 422 unknown function call:
-   UNIQEXACT` (so it is gone). `SELECT count() AS viewers FROM friendbook_views` → `HTTP 200`.
+   The real dataset dictated that list, and every answer is published on the pull request:
 
-   Only `uniq(blob3)` counts viewers, so the degraded `count()` variant is **never sticky**: an
-   isolate that fell back to it retries the uniq queries at the top of every refresh and upgrades
-   itself as soon as the dataset holds data (`AE_EXACT_VARIANTS`).
-2. `POST /client/v4/graphql` — the `viewer.accounts.<dataset>` query with
-   `dimensions { name count uniq }`.
+   | Query | Answer |
+   | --- | --- |
+   | `SELECT count() AS viewers FROM friendbook_views` | `HTTP 200` `{"viewers":"0"}` |
+   | `… WHERE timestamp >= now() - INTERVAL 90 DAY …` | `HTTP 422 Input was invalid: sql parser error: Expected literal string, found: 90` |
+   | `… uniq(blob3) …` | `HTTP 422 Input was invalid: unknown function call: UNIQ` |
+   | `… uniqExact(blob3) …` | `HTTP 422 Input was invalid: unknown function call: UNIQEXACT` |
+
+   So the window number is quoted, and **no query is allowed to serve plays as viewers**: a plain
+   `count()` grouped by `index1` answers `HTTP 200`, but it counts every rewatch. If AE refuses all
+   four viewer variants, `aeUsable` stays false and the counters are served from the snapshot +
+   memory — an honest number instead of an inflated one — while the events keep accumulating.
+2. `POST /client/v4/graphql` — `viewer.accounts.<dataset>` with `dimensions { name count uniq }`.
+   The dataset's real field name is not guessed: `cloudflare/report-views-ae.mjs` walks the schema
+   (`__schema { queryType }` → `viewer` → `accounts` → the Analytics Engine fields) and publishes each
+   hop, because a guessed `__type(name: "Viewer")` answered `{"data":{"__type":null}}`.
 
 Reads need `CF_AE_TOKEN` (an **encrypted Worker secret**, never a plaintext `--var`) and
 `CF_ACCOUNT_ID`. Without them the Worker still writes every event and still counts from the snapshot
@@ -155,7 +166,7 @@ For 1,000,000 view POSTs from 100,000 people (200,000 of them first-time views o
 | --- | --- | --- | --- |
 | D1 row reads | 1,000,000 | 0 | **0** (plus ≤ 500 once per isolate only if AE *and* KV are empty) |
 | D1 rows written | 2,000,000 | 200,000 + hourly totals | **0** |
-| AE events | – | – | 1,000,000 (one per view request) |
+| AE events | – | – | 1,000,000 (one per view request; 200,000 of them carry metric 1) |
 | AE queries | – | – | ≤ 1,440/day per isolate |
 | KV reads / writes | 0 | 1 per isolate / ≤ 288 per day | 1 per isolate / ≤ 288 per day (or the same on the R2 object when KV is unbound) |
 | Counted views | 1,000,000 | 200,000 | **200,000** (`uniq(uid)`) |
@@ -163,12 +174,13 @@ For 1,000,000 view POSTs from 100,000 people (200,000 of them first-time views o
 
 ## Tests
 
-* `cloudflare/test/view-counters.test.js` — 14 tests with a fake AE binding, a fake KV, a fake R2
+* `cloudflare/test/view-counters.test.js` — 15 tests with a fake AE binding, a fake KV, a fake R2
   bucket that throws on any key outside `views/` and has no `delete` method, a stubbed AE
   query API and a D1 that counts statements: one event per view with **zero D1 statements prepared**,
   one view per user across ten watches, AE `uniq` re-basing a cold isolate, the bridge never dipping
   or double counting, one AE query per minute deferred to `ctx.waitUntil`, GraphQL-only accounts,
-  no-AE fallback, the read-only last-resort seed, the KV throttle, batched/top reads, fail-closed
+  no-AE fallback, the read-only last-resort seed, a refused viewer query never being replaced by a
+  plays count, the KV throttle, batched/top reads, fail-closed
   validation and auth, the R2 snapshot surviving an isolate restart, AE winning over an older
   snapshot, and the deployed route plus `/health` bindings through `createWorker`.
 * `scripts/tests/test_cloudflare_view_counters.py` — source guards: no `INSERT`, `UPDATE`, `DELETE`,
