@@ -285,11 +285,12 @@ public class MainActivity extends Activity {
 
     /**
      * Switches directly to the Reels tab when the user taps the Featured Reels card on the Home Feed.
-     * Passes the featured reel's ID as an argument so the ReelsFragment can show it immediately on first load. */
+     * Passes the featured reel's full data as arguments so the ReelsFragment can show it immediately on first load. */
     public void openReelsTabFromFeed(com.friendbook.social.models.Models.Reel featuredReel) {
         clearReelsBadgeNow();
-        if (featuredReel != null && featuredReel.id != null && !featuredReel.id.isEmpty()) {
-            select(TAB_REELS, featuredReel.id);
+        if (featuredReel != null && featuredReel.id != null && !featuredReel.id.isEmpty()
+                && featuredReel.videoUrl != null && !featuredReel.videoUrl.isEmpty()) {
+            select(TAB_REELS, featuredReel);
         } else {
             select(TAB_REELS);
         }
@@ -442,17 +443,28 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Overload for Reels tab: accepts an optional initialReelId to pre-load a specific Reel
-     * (used when opening from Home Feed Featured Reels card). The ID is passed as a fragment
-     * argument so ReelsFragment.onCreateView can seed it immediately — no spinner delay. */
-    public void select(int tab, String initialReelId) {
-        if (tab == TAB_REELS && initialReelId != null && !initialReelId.isEmpty()) {
+     * Overload for Reels tab: accepts a featured Reel to pre-load immediately
+     * (used when opening from Home Feed Featured Reels card). All reel data is passed
+     * as fragment arguments so ReelsFragment.resetVideoPages() can seed it instantly — no spinner/blank delay. */
+    public void select(int tab, com.friendbook.social.models.Models.Reel featuredReel) {
+        if (tab == TAB_REELS && featuredReel != null
+                && featuredReel.id != null && !featuredReel.id.isEmpty()
+                && featuredReel.videoUrl != null && !featuredReel.videoUrl.isEmpty()) {
             Fragment existing = tabFragments[TAB_REELS];
             if (existing == null) {
-                // First time: create fragment with argument BEFORE adding to container
+                // First time: create fragment with ALL reel data as arguments BEFORE adding to container
                 com.friendbook.social.reels.ReelsFragment f = new com.friendbook.social.reels.ReelsFragment();
                 Bundle args = new Bundle();
-                args.putString("initial_reel_id", initialReelId);
+                args.putString("initial_reel_id", featuredReel.id);
+                args.putString("video_url", featuredReel.videoUrl);
+                args.putBoolean("is_post", featuredReel.isFromPost);
+                args.putString("author_id", featuredReel.authorId);
+                args.putString("author_name", featuredReel.authorName);
+                args.putString("author_photo", featuredReel.authorPhoto);
+                args.putString("caption", featuredReel.caption);
+                args.putInt("likes", featuredReel.likes);
+                args.putInt("comments", featuredReel.comments);
+                args.putInt("shares", featuredReel.shares);
                 f.setArguments(args);
                 tabFragments[TAB_REELS] = f;
             }
