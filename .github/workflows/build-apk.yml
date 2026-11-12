@@ -84,18 +84,8 @@ jobs:
           echo "===== apk outputs ====="
           find app/build/outputs -name '*.apk' -o -name '*.aab' | head -20 || true
 
-      - name: Upload debug APK
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: FriendBook-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
-          retention-days: 1
-
-      - name: Upload release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FriendBook-release-apk
-          path: app/build/outputs/apk/release/app-release*.apk
-          retention-days: 1
+      # No upload-artifact steps on purpose: the account's Actions artifact storage is exhausted
+      # (488 old build artifacts, ~3 GB) and GitHub refuses every new upload until it drains.
+      # The binaries themselves are never lost - signed releases go to GitHub Releases, and the
+      # cleanup-artifacts workflow frees the storage. A failed convenience upload must never be
+      # able to hide the compile verdict again.
