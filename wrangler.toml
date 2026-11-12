@@ -1,0 +1,47 @@
+# Recheck Git-connected deployment after outage; both D1 gates remain OFF.
+# Git-connected build trigger; no runtime or database changes.
+name = "rough-firefly-dd7b"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
+FIREBASE_PROJECT_ID = "friendbook-17551"
+D1_INTERACTIONS_ENABLED = "true"
+VIDEO_R2_ENABLED = "true"
+VIDEO_R2_RETENTION_VERIFIED = "true"
+REALTIME_WS_ENABLED = "true"
+CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
+CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "friendbook-db"
+database_id = "e1c605ca-a50b-46c6-9deb-56dd1f70d163"
+migrations_dir = "cloudflare/migrations"
+
+# Publish only the allowlisted website files, not docs/testing or source code.
+[build]
+command = "npm run build:assets"
+
+[assets]
+directory = "./.worker-assets"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+not_found_handling = "none"
+
+# Every view is one Analytics Engine event; the count is AE's uniq(uid) per Reel/post, so
+# "1 user = 1 view" needs no D1 row at all. Never written to D1, never read from it.
+[[analytics_engine_datasets]]
+binding = "ANALYTICS_ENGINE"
+dataset = "friendbook_views"
+
+# Existing owner-provided bucket. Never create or replace it.
+[[r2_buckets]]
+binding = "VIDEO_BUCKET"
+bucket_name = "friendbook"
+
+[triggers]
+# Cleans temporary Cloudinary processing assets ONLY; never deletes R2 videos.
+crons = ["*/15 * * * *"]
