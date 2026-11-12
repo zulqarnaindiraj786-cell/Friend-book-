@@ -359,6 +359,48 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('catch (Throwable ignored) {', docs)
         absent(self, 'DELETE', docs, 'CloudflareDocs')
 
+    def test_update_carries_existing_user_data_to_cloudflare_without_touching_the_old_copy(self):
+        mig = (JAVA / 'core/CloudMigration.java').read_text()
+        # Once per versionCode, and the flag advances BEFORE the work so launches cannot double-run.
+        self.assertIn('sp.edit().putInt("version", BuildConfig.VERSION_CODE).apply();', mig)
+        # Bounded slices: the bridge can never become a full-database scrape on a phone.
+        self.assertIn('private static final int SLICE_LIMIT = 100;', mig)
+        # Additive only: the bridge READS Firestore and WRITES Cloudflare - never the other way, so a
+        # user who never updates keeps the old app and the old data, untouched, forever.
+        for forbidden in ['.delete(', '.update(', '.set(', 'FieldValue']:
+            absent(self, forbidden, mig, 'CloudMigration')
+        main = (JAVA / 'main/MainActivity.java').read_text()
+        self.assertIn('CloudMigration.runOnceAfterUpdate(this);', main)
+
+    def test_every_new_write_travels_to_cloudflare_with_the_legacy_write(self):
+        sites = {
+            'core/Notify.java': 'CloudflareDocs.mirror("notifications", ref.getId(), n)',
+            'post/PostDetailActivity.java': 'CloudflareDocs.mirror("comments", ref.getId(), m)',
+            'reels/ReelCommentsActivity.java': 'CloudflareDocs.mirror("comments", ref.getId(), m)',
+            'post/FeedAdapter.java': 'CloudflareDocs.mirror("stories", ref.getId(), s)',
+            'story/AddStoryActivity.java': 'CloudflareDocs.mirror("stories", ref.getId(), m)',
+            'friends/FriendsFragment.java': 'CloudflareDocs.mirror("friend_requests", ref.getId(), m)',
+            'chat/ChatActivity.java': 'CloudflareDocs.mirror("messages", chatId + "~" + msgRef.getId(), msgMirror)',
+            'core/Fb.java': 'CloudflareDocs.mirror("users", uid, fields);',
+            'reels/AddReelActivity.java': 'CloudflareDocs.mirror("reels", x.getId(), m);',
+            'post/CreatePostActivity.java': 'CloudflareDocs.mirror("posts", x.getId(), m);',
+        }
+        for rel, needle in sites.items():
+            self.assertIn(needle, (JAVA / rel).read_text(), rel)
+        # Dual-write on purpose: the legacy Firestore write stays at every site while old builds
+        # exist, so an old-app user still sees everything a new-app user creates.
+        self.assertIn('Fb.db().collection("notifications").add(n)', (JAVA / 'core/Notify.java').read_text())
+        self.assertIn('Fb.db().collection("comments").add(m)', (JAVA / 'post/PostDetailActivity.java').read_text())
+
+    def test_reads_are_cloudflare_first_with_the_legacy_store_as_backfill(self):
+        reels = (JAVA / 'reels/ReelsFragment.java').read_text()
+        home = (JAVA / 'main/HomeFragment.java').read_text()
+        self.assertIn('CloudflareDocs.list("reels", 50, arr -> {', reels)
+        self.assertIn('CloudflareDocs.list("posts", 50, arr -> {', home)
+        # Union only: a Cloudflare document joins the page, it never replaces or removes a legacy one.
+        self.assertIn('if (cr == null || cr.id == null || !have.add(cr.id)) continue;', reels)
+        self.assertIn('if (cp == null || cp.id == null || !have.add(cp.id)) continue;', home)
+
     def test_view_migrations_are_additive_only(self):
         for name in ['0012_additive_view_counters.sql', '0013_additive_view_last_seen.sql']:
             sql = (CLOUDFLARE / 'migrations' / name).read_text().upper()

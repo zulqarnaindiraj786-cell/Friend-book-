@@ -1,53 +1,45 @@
 # Firebase = authentication only. Everything else lives on Cloudflare.
 
-This line of the app (`com.example.frienbook`) still reads and writes most social data in Firestore.
-That ends, collection by collection, with one rule: **Firebase supplies the ID token and nothing
-else.** The Cloudflare Worker (`rough-firefly-dd7b`, binding `DB` = D1, `VIDEO_BUCKET` = R2,
-`ANALYTICS_ENGINE` = dataset `friendbook_views`) verifies that token and owns the data.
+## The three product rules (owner's acceptance criteria)
 
-Nothing is deleted, reset or re-imported destructively: the Cloudflare copy is **additive** (merge
-upserts, no deletes), Firestore keeps serving reads until a read path is explicitly switched, and
-every switch ships behind a build flag so a batch can be turned off without a release.
+1. **New data goes to Cloudflare.** Every write this build makes - posts, reels, comments, stories,
+   notifications, friend requests, friendships, chat messages, profile edits - travels to Cloudflare
+   D1 through the Worker (`PUT /v1/docs/...`) together with the legacy write. Views never touch the
+   legacy store at all: they are Analytics Engine events counted with `count(DISTINCT blob3)`.
+2. **A user who never updates stays on the old app, and nothing of theirs is deleted.** The legacy
+   store keeps receiving writes (dual-write) and keeps serving old builds. No code path in this
+   migration deletes, resets, prunes or rewrites legacy documents; `CloudMigration` contains no
+   write to the legacy store at all (guards enforce both).
+3. **A user who updates gets their history carried over automatically.** On the first launch of a
+   newer build, `CloudMigration.runOnceAfterUpdate` mirrors that user's own slices (own profile,
+   posts, reels, stories, comments, notifications, friend requests, friendships, chats plus a bounded
+   tail of each chat's messages) to D1 - once per versionCode, bounded to 100 documents per slice,
+   additive merge-upserts only.
 
-## Where each thing lives today
+Reads are **Cloudflare-first with the legacy store as backfill**: a page is the union of the legacy
+listener and `GET /v1/docs?collection=...`; a Cloudflare document only ever *joins* the page, never
+replaces or removes a legacy one, so old-build writes stay visible to everyone during the overlap.
 
-| Data | Today | Cloudflare home | Status |
+## Where each thing lives today (this line)
+
+| Data | Legacy store | Cloudflare home | Status |
 | --- | --- | --- | --- |
 | Sign-in, ID token | Firebase Auth | — (stays) | **permanent** |
-| Reel/Post view counts | nowhere (never counted on this line) | Analytics Engine events + `count(DISTINCT blob3)` | **batch 1 — live**: `CloudflareViews`, one real second of watching = one view per user, forever |
-| New posts & reels documents | Firestore (source of truth) | D1 `friendbook_cf_documents` via `PUT /v1/docs/...` | **batch 1 — live**: mirror on create, fire-and-forget |
-| Videos / photos | Firebase Storage / Cloudinary | R2 `friendbook` | Worker endpoints live (`/v1/videos`, `/v1/photos`); client switch = batch 3 |
-| Likes / comments / reactions | Firestore | D1 interaction tables (`/v1/engagement/...`) | Worker + migrations live; client switch = batch 2 |
-| Posts & reels list reads | Firestore snapshot listeners | `GET /v1/docs?collection=...` | batch 2 (union read, then Firestore off) |
-| users / friends / friend_requests / notifications / stories / groups / pages / lives / pokes / official_broadcasts | Firestore | `friendbook_cf_documents` (all in the Worker's allowlist) | batch 3–4: mirror on write, then switch reads |
-| chats / messages | Firestore (+ Supabase push gateway) | `friendbook_cf_documents` mirror; push gateway **stays on Supabase** | batch 4 |
-| payments / subscriptions / referrals / boosts / reports / feedback / config / mail / events / sessions | Firestore | not mirrored yet (money & safety records stay dual-written until a reviewed batch) | batch 5, reviewed separately |
-
-Firestore usage counted in this line before batch 1: `users` 71 call sites, `posts` 28, `chats` 18,
-`friend_requests` 14, `lives` 12, `friends` 12, `comments` 11, `notifications` 10, `reels` 7, …
-Each batch shrinks this table and the guards in `scripts/tests/test_cloudflare_view_counters.py`
-pin what has already moved, so nothing silently slides back.
-
-## Batch 1 (this change)
-
-- `core/CloudTransport.java` — one bounded HTTP door to the Worker; Firebase appears only as
-  `getIdToken(false)`.
-- `core/CloudflareViews.java` — POST one real play to `/v1/views/{collection}/{id}` after one second
-  of watching; read totals batched (≤50 ids, 60 s cache); totals only ever grow on screen.
-- `core/CloudflareDocs.java` — `mirror(collection, id, fields)` PUTs the document to D1 (merge
-  upsert, Firestore sentinels sanitized); `list(...)` is ready for the batch-2 read switch.
-- `ReelsFragment` — eye glyph + live count on the rail, count scheduled at 1 s, cancelled on pause;
-  totals fetched in one request per page. The Home Feed issues **zero** views requests.
-- `AddReelActivity` / `CreatePostActivity` — every new Reel/Post is mirrored to D1 the moment the
-  Firestore write succeeds; a Worker outage never blocks posting (the next edit re-mirrors).
+| View counts | never stored | Analytics Engine (`count(DISTINCT blob3)`) | **live** |
+| posts / reels / stories / comments / notifications / friend_requests / friends / chats / messages / users | source of truth for old builds | D1 `friendbook_cf_documents` | **dual-write live** + self-sync on update + union reads for posts & reels |
+| videos / photos | unused on this line | R2 via Worker endpoints | Worker live; client switch = next batch |
+| likes / reactions | legacy increments | D1 interaction tables (`/v1/engagement`) | Worker live; client gate `D1_INTERACTIONS_ENABLED=false` until the interaction batch |
+| payments / subscriptions / referrals / reports / config | legacy | not mirrored yet | reviewed batch, separately |
 
 ## Honesty notes
 
-- Until a read path is switched, Firestore remains the source of truth for that collection; the D1
-  mirror is a copy, not yet the authority. Claims like "views come from Cloudflare" are true from
-  batch 1 because views never existed in Firestore on this line.
-- The Worker, its D1 migrations (0001–0013, additive only) and its CI deploy chain are identical to
-  the proven production code; `wrangler deploy --dry-run` reports `env.ANALYTICS_ENGINE
-  (friendbook_views)` with no warnings.
-- Auth never moves: no Firestore credential, no user password, no token ever reaches Cloudflare
-  except the short-lived ID token the Worker verifies with Firebase's public keys.
+- Dual-write is deliberate and temporary: it is what keeps rule 2 true (old builds keep working) while
+  rule 1 holds (new data lives on Cloudflare). Removing the legacy write is a later, explicit cutover
+  per collection, never a silent flip.
+- The mirror is additive only: merge-upsert on the Worker, no DELETE anywhere, 95 KiB document cap,
+  fire-and-forget so a Worker outage can never block posting; the next edit re-mirrors the document.
+- Guards pin all three rules: `test_update_carries_existing_user_data_to_cloudflare_without_touching_the_old_copy`,
+  `test_every_new_write_travels_to_cloudflare_with_the_legacy_write`,
+  `test_reads_are_cloudflare_first_with_the_legacy_store_as_backfill`.
+- The Play Store line (`com.friendbook.social`) receives this through the controlled port described in
+  `docs/handoff-social-line-port.md` - same rules, same guards, monotonic versionCode, same signing.
