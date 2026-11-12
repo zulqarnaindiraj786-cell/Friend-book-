@@ -162,6 +162,7 @@ public class AddStoryActivity extends Activity {
                             "createdAt", FieldValue.serverTimestamp(),
                             "expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
                     Fb.db().collection("stories").add(m)
+                            .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("stories", ref.getId(), m))
                             .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
                             .addOnFailureListener(e -> fail());
                 })

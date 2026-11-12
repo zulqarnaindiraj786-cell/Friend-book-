@@ -29,7 +29,8 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        Fb.db().collection("notifications").add(n)
+                .addOnSuccessListener(ref -> CloudflareDocs.mirror("notifications", ref.getId(), n));
     }
 
     /** Like/love/etc. on a post (respects local preference of the sender device). */

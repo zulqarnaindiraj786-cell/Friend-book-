@@ -298,6 +298,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                             "status", "pending",
                             "createdAt", FieldValue.serverTimestamp());
                     Fb.db().collection("friend_requests").add(m)
+                            .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("friend_requests", ref.getId(), m))
                             .addOnSuccessListener(ref -> {
                                 Notify.send(target.uid, "friend_request", "sent you a friend request");
                                 Ui.toast(getActivity(), "Friend request sent ✓");
@@ -324,9 +325,15 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         WriteBatch batch = Fb.db().batch();
         batch.update(Fb.db().collection("friend_requests").document(r.requestId),
                 "status", "accepted");
-        batch.set(Fb.db().collection("friends").document(), Fb.map(
+        com.google.firebase.firestore.DocumentReference friendRef = Fb.db().collection("friends").document();
+        batch.set(friendRef, Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
                 "createdAt", FieldValue.serverTimestamp()));
+        com.example.frienbook.core.CloudflareDocs.mirror("friend_requests", r.requestId,
+                Fb.map("fromUid", me, "toUid", from, "status", "accepted"));
+        com.example.frienbook.core.CloudflareDocs.mirror("friends", friendRef.getId(),
+                Fb.map("participants", java.util.Arrays.asList(me, from),
+                        "createdAt", System.currentTimeMillis()));
         batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
         batch.commit().addOnSuccessListener(x -> {

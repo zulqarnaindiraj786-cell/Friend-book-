@@ -137,6 +137,7 @@ public class Fb {
         String uid = uid();
         if (uid == null) return;
         db().collection("users").document(uid).set(fields, SetOptions.merge());
+        CloudflareDocs.mirror("users", uid, fields);
     }
 
     public static Map<String, Object> map(Object... kv) {

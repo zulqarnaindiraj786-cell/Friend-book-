@@ -279,6 +279,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 });
             }
             adapter.setPosts(list);
+            // Cloudflare-first union: posts that already live in D1 join the feed even when the
+            // Firestore listener is slow or filtered; Firestore stays authoritative for its ids so
+            // old app builds keep working for everyone. Nothing is removed from either side.
+            final List<Models.Post> fsList = list;
+            com.example.frienbook.core.CloudflareDocs.list("posts", 50, arr -> {
+                List<Models.Post> merged = new ArrayList<>(fsList);
+                java.util.Set<String> have = new java.util.HashSet<>();
+                for (Models.Post post : merged) have.add(post.id);
+                boolean added = false;
+                for (int i = 0; i < arr.length(); i++) {
+                    Models.Post cp = Models.Post.fromCloud(arr.optJSONObject(i));
+                    if (cp == null || cp.id == null || !have.add(cp.id)) continue;
+                    merged.add(cp);
+                    added = true;
+                }
+                if (added && adapter != null) {
+                    merged.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
+                    adapter.setPosts(merged);
+                }
+            });
         });
     }
 

@@ -253,6 +253,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                 "parentId", replyingTo == null ? null : replyingTo.id,
                 "createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("comments").add(m)
+                .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("comments", ref.getId(), m))
                 .addOnSuccessListener(x -> {
                     Fb.db().collection("posts").document(postId).update("comments", FieldValue.increment(1));
                     if (postAuthorId != null) Notify.comment(this, postAuthorId, postId);

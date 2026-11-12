@@ -162,6 +162,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
                 "parentId", replyingTo == null ? null : replyingTo.id,
                 "createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("comments").add(m)
+                .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("comments", ref.getId(), m))
                 .addOnSuccessListener(x -> {
                     Fb.db().collection("reels").document(reelId)
                             .set(Fb.map("comments", FieldValue.increment(1)), SetOptions.merge());

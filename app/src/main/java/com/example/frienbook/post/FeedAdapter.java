@@ -652,6 +652,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         s.put("expiresAt", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
         Fb.db().collection("stories").add(s)
+                .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("stories", ref.getId(), s))
                 .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖"))
                 .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage()));
     }

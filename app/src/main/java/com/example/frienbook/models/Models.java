@@ -86,7 +86,40 @@ public class Models {
         public List<String> taggedUids = new ArrayList<>();  // 👥 friends tagged in this post
         public List<String> taggedNames = new ArrayList<>(); // denormalized for fast render
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
-        public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
+        public Map<String, Long> pollVotes = new HashMap<>();
+
+        /** Parses the Cloudflare D1 copy (plain JSON, timestamps already in millis). */
+        public static Post fromCloud(org.json.JSONObject o) {
+            if (o == null) return null;
+            Post p = new Post();
+            p.id = o.optString("id", null);
+            p.authorId = o.optString("authorId", null);
+            p.authorName = o.optString("authorName", "User");
+            p.authorPhoto = o.optString("authorPhotoUrl", null);
+            p.content = o.optString("content", null);
+            p.mediaUrl = o.optString("mediaUrl", null);
+            p.mediaType = o.optString("mediaType", null);
+            p.feeling = o.optString("feeling", null);
+            p.privacy = o.optString("privacy", null);
+            p.location = o.optString("location", null);
+            p.groupId = o.optString("groupId", null);
+            p.sharedFromId = o.optString("sharedFromId", null);
+            p.sharedFromAuthor = o.optString("sharedFromAuthor", null);
+            p.sharedFromContent = o.optString("sharedFromContent", null);
+            p.sharedFromMediaUrl = o.optString("sharedFromMediaUrl", null);
+            p.sharedFromMediaType = o.optString("sharedFromMediaType", null);
+            p.likes = o.optInt("likes", 0);
+            p.comments = o.optInt("comments", 0);
+            p.shares = o.optInt("shares", 0);
+            p.bgColor = o.optInt("bgColor", 0);
+            p.createdAt = o.optLong("createdAt", 0L);
+            p.savedBy = Reel.cloudList(o.optJSONArray("savedBy"));
+            p.mediaUrls = Reel.cloudList(o.optJSONArray("mediaUrls"));
+            p.taggedUids = Reel.cloudList(o.optJSONArray("taggedUids"));
+            p.taggedNames = Reel.cloudList(o.optJSONArray("taggedNames"));
+            p.pollOptions = Reel.cloudList(o.optJSONArray("pollOptions"));
+            return p;
+        } // uid → option index
 
         public boolean authorVerified; // copied from author's profile when the post is created
         public String authorTickLevel = "none"; // none | blue | gold | diamond (denormalized)
@@ -195,6 +228,30 @@ public class Models {
         public long views;
         public long createdAt;
         public List<String> likedBy = new ArrayList<>();
+
+        /** Parses the Cloudflare D1 copy (plain JSON, timestamps already in millis). */
+        public static Reel fromCloud(org.json.JSONObject o) {
+            if (o == null) return null;
+            Reel r = new Reel();
+            r.id = o.optString("id", null);
+            r.authorId = o.optString("authorId", null);
+            r.authorName = o.optString("authorName", "User");
+            r.authorPhoto = o.optString("authorPhotoUrl", null);
+            r.videoUrl = o.optString("videoUrl", null);
+            r.caption = o.optString("caption", null);
+            r.likes = o.optInt("likes", 0);
+            r.comments = o.optInt("comments", 0);
+            r.shares = o.optInt("shares", 0);
+            r.createdAt = o.optLong("createdAt", 0L);
+            r.likedBy = cloudList(o.optJSONArray("likedBy"));
+            return r;
+        }
+
+        static List<String> cloudList(org.json.JSONArray a) {
+            List<String> out = new ArrayList<>();
+            if (a != null) for (int i = 0; i < a.length(); i++) out.add(a.optString(i));
+            return out;
+        }
 
         public static Reel fromDoc(DocumentSnapshot d) {
             Reel r = new Reel();

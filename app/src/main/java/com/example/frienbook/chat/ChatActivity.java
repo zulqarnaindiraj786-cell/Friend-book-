@@ -376,9 +376,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "lastMessageTime", FieldValue.serverTimestamp(),
                 "unreadCount", unread);
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The Cloudflare copy travels with the Firestore write while old builds are in the wild:
+        // messages are flat in D1, keyed chatId~msgId, and the chat gets a small mirror summary.
+        Map<String, Object> msgMirror = new HashMap<>(msg);
+        msgMirror.put("chatId", chatId);
+        com.example.frienbook.core.CloudflareDocs.mirror("messages", chatId + "~" + msgRef.getId(), msgMirror);
+        Map<String, Object> chatMirror = new HashMap<>();
+        chatMirror.put("participants", java.util.Arrays.asList(me, peerId));
+        chatMirror.put("lastMessage", String.valueOf(chatDoc.get("lastMessage")));
+        chatMirror.put("lastMessageTime", System.currentTimeMillis());
+        com.example.frienbook.core.CloudflareDocs.mirror("chats", chatId, chatMirror);
         batch.commit().addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
 
@@ -461,9 +472,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "typing", typingOff,
                 "unreadCount", unread);
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The Cloudflare copy travels with the Firestore write while old builds are in the wild:
+        // messages are flat in D1, keyed chatId~msgId, and the chat gets a small mirror summary.
+        Map<String, Object> msgMirror = new HashMap<>(msg);
+        msgMirror.put("chatId", chatId);
+        com.example.frienbook.core.CloudflareDocs.mirror("messages", chatId + "~" + msgRef.getId(), msgMirror);
+        Map<String, Object> chatMirror = new HashMap<>();
+        chatMirror.put("participants", java.util.Arrays.asList(me, peerId));
+        chatMirror.put("lastMessage", String.valueOf(chatDoc.get("lastMessage")));
+        chatMirror.put("lastMessageTime", System.currentTimeMillis());
+        com.example.frienbook.core.CloudflareDocs.mirror("chats", chatId, chatMirror);
         batch.commit()
                 .addOnSuccessListener(x -> busy = false)
                 .addOnFailureListener(e -> { busy = false; Ui.toast(this, "Couldn't send — " + e.getMessage()); });
@@ -502,9 +524,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "unreadCount", unread);
 
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId)
-                .collection("messages").document(), msg);
+        com.google.firebase.firestore.DocumentReference msgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The Cloudflare copy travels with the Firestore write while old builds are in the wild:
+        // messages are flat in D1, keyed chatId~msgId, and the chat gets a small mirror summary.
+        Map<String, Object> msgMirror = new HashMap<>(msg);
+        msgMirror.put("chatId", chatId);
+        com.example.frienbook.core.CloudflareDocs.mirror("messages", chatId + "~" + msgRef.getId(), msgMirror);
+        Map<String, Object> chatMirror = new HashMap<>();
+        chatMirror.put("participants", java.util.Arrays.asList(me, peerId));
+        chatMirror.put("lastMessage", String.valueOf(chatDoc.get("lastMessage")));
+        chatMirror.put("lastMessageTime", System.currentTimeMillis());
+        com.example.frienbook.core.CloudflareDocs.mirror("chats", chatId, chatMirror);
         batch.commit()
                 .addOnSuccessListener(x -> {
                     busy = false;

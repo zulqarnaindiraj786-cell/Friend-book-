@@ -108,6 +108,26 @@ public class ReelsFragment extends Fragment {
                         }
                     }
                     adapter.setData(list);
+                    // Cloudflare-first union: reels that already live in D1 join the page even when
+                    // the Firestore listener is slow or filtered. Firestore stays authoritative for
+                    // ids it still owns, so writes from old app builds keep showing for everyone.
+                    com.example.frienbook.core.CloudflareDocs.list("reels", 50, arr -> {
+                        List<Models.Reel> merged = new ArrayList<>(list);
+                        java.util.Set<String> have = new java.util.HashSet<>();
+                        for (Models.Reel r : merged) have.add(r.id);
+                        boolean added = false;
+                        for (int i = 0; i < arr.length(); i++) {
+                            Models.Reel cr = Models.Reel.fromCloud(arr.optJSONObject(i));
+                            if (cr == null || cr.id == null || !have.add(cr.id)) continue;
+                            if (cr.videoUrl == null || cr.videoUrl.isEmpty()) continue;
+                            merged.add(cr);
+                            added = true;
+                        }
+                        if (added) {
+                            merged.sort((x, y) -> Long.compare(y.createdAt, x.createdAt));
+                            adapter.setData(merged);
+                        }
+                    });
                     // View totals come from Cloudflare Analytics Engine in ONE batched request.
                     List<String> ids = new ArrayList<>();
                     for (Models.Reel r : list) ids.add(r.id);

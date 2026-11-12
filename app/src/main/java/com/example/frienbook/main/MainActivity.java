@@ -54,6 +54,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         if (!Fb.signedIn()) { finish(); return; }
+        // The update bridge: this user's own existing data starts living on Cloudflare now,
+        // additively - the old copy is never touched, and users who never update keep the old app.
+        com.example.frienbook.core.CloudMigration.runOnceAfterUpdate(this);
         Ui.statusBarBlue(this);
         Fb.ensureMeFresh();
         Presence.init();
