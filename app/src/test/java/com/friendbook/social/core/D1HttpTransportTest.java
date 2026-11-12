@@ -69,7 +69,9 @@ public class D1HttpTransportTest {
  @Test public void failedWriteHasNoRetryOrFallback()throws Exception{status=503;rejected();assertEquals(1,calls.get());}
  @Test public void redirectsDoNotForwardCredentialsOrRepeatWrites()throws Exception{status=302;rejected();assertEquals(1,calls.get());}
  @Test public void oversizedRequestRejectedBeforeAnyNetworkWrite()throws Exception{
-  char[] chars=new char[32769];java.util.Arrays.fill(chars,'a');
+  // The transport ceiling is 64 KiB of UTF-8 (the Worker's own document ceiling is 95 000 chars), so
+  // the fixture is one byte past it rather than the old 32 KiB comment limit.
+  char[] chars=new char[65537];java.util.Arrays.fill(chars,'a');
   try{D1HttpTransport.send(url,"POST","synthetic-token",new JSONObject().put("text",new String(chars)));fail("Expected size bound");}
   catch(IOException expected){}assertEquals(0,calls.get());
  }

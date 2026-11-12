@@ -7,6 +7,7 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
+import com.google.firebase.firestore.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -235,7 +236,8 @@ public class CommentsEngine {
             if (cb != null) cb.onComplete(false, "Not signed in");
             return null;
         }
-        final String newId = d1(collection)?java.util.UUID.randomUUID().toString():Fb.db().collection("comments").document().getId();
+        final String newId = d1(collection) ? java.util.UUID.randomUUID().toString()
+                : com.friendbook.social.core.CloudflareDocs.newId();
         final long now = System.currentTimeMillis();
 
         Models.Comment local = new Models.Comment();
@@ -281,17 +283,27 @@ public class CommentsEngine {
             return local;
         }
 
-        // WRITE = Cloudflare (the branch above is the pre-migration path, kept only for a build with
-        // the Cloudflare flag off): the comment row and the parent's counter delta both go to D1.
-        local.canonicalStored=true;
-        Map<String,Object> patch=new HashMap<>();
-        patch.put("lastComment",commentMap); patch.put("commentsDelta",1L);
-        patch.put("commentsStorageVersion",2);
-        D1Write.write("comments", newId, commentMap, () -> {
-            if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-            if(cb!=null) cb.onComplete(true,null);
-        }, error -> { if(cb!=null) cb.onComplete(false,error); }, null);
-        D1Write.write(collection, docId, patch, null, null, null);
+        // The pre-migration write, reached only with the Cloudflare flag off: the canonical comment,
+        // its flat mirror and the parent's preview + counter in one batch.
+        local.canonicalStored = true;
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("lastComment", commentMap);
+        patch.put("comments", FieldValue.increment(1));   // counter only: the frozen map is not grown
+        patch.put("commentsStorageVersion", 2);
+        DocumentReference canonicalRef = parentRef.collection("comments").document(newId);
+        DocumentReference mirrorRef = Fb.db().collection("comments").document(newId);
+        WriteBatch batch = Fb.db().batch();
+        batch.set(canonicalRef, commentMap);
+        batch.set(mirrorRef, commentMap);
+        batch.update(parentRef, patch);
+        batch.commit().addOnSuccessListener(v -> {
+            if (!me.equals(Fb.uid())) return;
+            if ("posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions))
+                com.friendbook.social.push.FCMPush.bulkMention(docId, newId);
+            if (cb != null) cb.onComplete(true, null);
+        }).addOnFailureListener(e -> {
+            if (cb != null) cb.onComplete(false, e.getMessage());
+        });
 
         return local;
     }

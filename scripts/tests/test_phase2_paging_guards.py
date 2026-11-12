@@ -24,5 +24,9 @@ class PagingGuards(unittest.TestCase):
         source=(JAVA/'post/CommentsEngine.java').read_text()
         self.assertIn('handle.query.limit(50).addSnapshotListener',source)
         self.assertIn('query.startAfter(cursor).limit(50).get()',source)
-        self.assertIn('patch.put("lastComment",commentMap)',source)
+        # The pre-migration parent patch writes the preview and the counter, never the frozen map.
+        compact = source.replace(' ', '')
+        self.assertIn('patch.put("lastComment",commentMap)', compact)
+        self.assertIn('patch.put("comments",FieldValue.increment(1))', compact)
+        self.assertNotIn('commentsMap.put("lastComment"'.replace(' ', ''), compact)
         self.assertNotIn('dot.put("commentsMap." + c.id + ".',source)

@@ -36,13 +36,16 @@ public class FirebaseOffRoutingTest {
  @Test public void offCommentSendCommitsCanonicalMirrorAndParentOnlyToFirestore(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<CloudflareDocs> docs=mockStatic(CloudflareDocs.class)){
    docs.when(CloudflareDocs::enabled).thenReturn(false); // the pre-migration branch is the OFF branch now
+   docs.when(CloudflareDocs::newId).thenReturn("new-id"); // the id is made on the device now
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
    FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
    DocumentReference parent=mock(DocumentReference.class),canonical=mock(DocumentReference.class),copy=mock(DocumentReference.class);WriteBatch batch=mock(WriteBatch.class);
    fb.when(Fb::db).thenReturn(db);when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);
    when(parent.collection("comments")).thenReturn(comments);when(comments.document("new-id")).thenReturn(canonical);
-   when(db.collection("comments")).thenReturn(mirror);when(mirror.document()).thenReturn(copy);when(copy.getId()).thenReturn("new-id");when(mirror.document("new-id")).thenReturn(copy);
+   // The id of a pre-migration comment is made on the device now, so the fixture pins it rather than
+   // asking a collection for a new document reference.
+   when(db.collection("comments")).thenReturn(mirror);when(mirror.document("new-id")).thenReturn(copy);
    when(db.batch()).thenReturn(batch);when(batch.commit()).thenReturn(Tasks.forResult(null));
    boolean[] ack={false};Models.Comment local=CommentsEngine.sendComment("posts","p1","p1","hello","","",(ok,error)->ack[0]=ok);
    Shadows.shadowOf(Looper.getMainLooper()).idle();assertNotNull(local);assertEquals("new-id",local.id);assertTrue(ack[0]);
