@@ -535,7 +535,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('export function listScope(collection, uid, admin)', access)
         self.assertIn("clauses.push('owner_uid = ?');", access)
         # A comparison on a text field would silently misorder, so only numeric fields may be ranged.
-        self.assertIn('if (!isNumericField(field)) throw new QueryError', queries_text())
+        # A range compares a declared numeric field as a number and a declared text field as text,
+        # because the app asks both: 'stories that have not expired' and the displayName prefix search.
+        self.assertIn('CAST(${fieldExpr(field)} AS TEXT) ${operator} CAST(? AS TEXT)', queries_text())
+        self.assertIn("const operator = { gt: '>', gte: '>=', lt: '<', lte: '<=' }[kind];", queries_text())
         self.assertIn('json_each(json_extract(document_json', access)
         self.assertIn("if (isAdminOnlyRead(collection)) return { sql: ' AND 0', binds: [] };", access)
         self.assertIn('const scope = listScope(collection, uid, admin);', queries_text())

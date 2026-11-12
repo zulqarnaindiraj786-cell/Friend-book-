@@ -177,11 +177,22 @@ export function buildListQuery(collection, params, uid, admin, { count = false }
       const value = String(raw).slice(0, 512);
       binds.push(value, value);
     } else {
-      // gt/gte/lt/lte are numeric only: comparing text across mixed shapes would silently misorder.
-      if (!isNumericField(field)) throw new QueryError(`${field} cannot be compared`);
+      // Ranges answer two different questions in this app, and both are real:
+      //   numbers  - "stories that have not expired", "boosts still running"
+      //   text     - the name search, which asks for displayName >= q AND <= q + '\uf8ff'
+      // A numeric field compares as a number and anything else compares as text, byte for byte, which
+      // is the same ordering the old prefix search relied on. The field still has to be declared for
+      // this collection, so a range can never be aimed at an arbitrary key.
       const operator = { gt: '>', gte: '>=', lt: '<', lte: '<=' }[kind];
-      where.push(`${fieldExpr(field)} ${operator} ?`);
-      binds.push(coerce(field, raw));
+      if (isNumericField(field)) {
+        where.push(`${fieldExpr(field)} ${operator} ?`);
+        binds.push(coerce(field, raw));
+      } else {
+        const value = String(raw);
+        if (value.length > 512) throw new QueryError('Filter value too large');
+        where.push(`CAST(${fieldExpr(field)} AS TEXT) ${operator} CAST(? AS TEXT)`);
+        binds.push(value);
+      }
     }
   }
 

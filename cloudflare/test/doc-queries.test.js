@@ -404,14 +404,19 @@ test('the comparison and set filters answer the questions the app used to ask Fi
   const byIds = await (await list(w, db, 'collection=posts&inId=p2,p1,missing')).json();
   assert.deepEqual(byIds.documents.map(d => d.id).sort(), ['p1', 'p2']);
 
-  // A comparison on a text field would silently misorder, so it is refused rather than guessed.
-  assert.equal((await list(w, db, 'collection=posts&gt%5BmediaType%5D=photo')).status, 400);
+  // The name search is a text range: displayName >= q AND <= q + '\uf8ff'.
+  await seed(db, [['users/u9', 'users', 'u9', 'u9', { displayName: 'Ali Raza', createdAt: now }, now]]);
+  const prefix = await (await list(w, db, 'collection=users&gte%5BdisplayName%5D=Ali&lte%5BdisplayName%5D=Ali%EF%BB%BF')).json();
+  assert.deepEqual(prefix.documents.map(d => d.id), ['u9']);
+  const missed = await (await list(w, db, 'collection=users&gte%5BdisplayName%5D=Bil')).json();
+  assert.equal(missed.documents.length, 0);
+  // A range on a field this collection never declared is still refused.
+  assert.equal((await list(w, db, 'collection=posts&gt%5BmediaType%5D=photo')).status, 200);
+  assert.equal((await list(w, db, 'collection=posts&gt%5Bsecret%5D=1')).status, 400);
   // An unbounded set is refused too: one request cannot smuggle a full table scan in.
   const tooMany = Array.from({ length: 40 }, (_, i) => `u${i}`).join(',');
   assert.equal((await list(w, db, `collection=posts&in%5BauthorId%5D=${tooMany}`)).status, 400);
   assert.equal((await list(w, db, 'collection=posts&inId=')).status, 400);
-  // A field the collection does not expose cannot be compared.
-  assert.equal((await list(w, db, 'collection=posts&gt%5Bsecret%5D=1')).status, 400);
 });
 
 test('a nested collection is addressed by its parent and gated by the parent, not by its own fields', async () => {
@@ -458,16 +463,22 @@ test('a nested collection is addressed by its parent and gated by the parent, no
   // A batch may carry a nested op, addressed the same way, and one refusal cancels the whole batch.
   const batched = await call(inside, db, '/v1/docs/batch', {
     method: 'POST',
-    body: { ops: [{ op: 'set', collection: 'messages', id: 'm2', parent: 'chats/c1', subcollection: 'messages', fields: { text: 'two' } }] },
+    body: { ops: [{ op: 'set', collection: 'chats/c1/messages', id: 'm2', fields: { text: 'two' } }] },
   });
   assert.equal(batched.status, 200);
   assert.equal((await call(inside, db, '/v1/docs/chats/c1/messages/m2')).status, 200);
+
+  const malformed = await call(inside, db, '/v1/docs/batch', {
+    method: 'POST',
+    body: { ops: [{ op: 'set', collection: 'chats/c1/messages/extra', id: 'm9', fields: {} }] },
+  });
+  assert.equal(malformed.status, 400);
 
   const refused = await call(outside, db, '/v1/docs/batch', {
     method: 'POST',
     body: { ops: [
       { op: 'set', collection: 'posts', id: 'p9', fields: { authorId: 'u3', text: 'allowed' } },
-      { op: 'set', collection: 'messages', id: 'm3', parent: 'chats/c1', subcollection: 'messages', fields: { text: 'not allowed' } },
+      { op: 'set', collection: 'chats/c1/messages', id: 'm3', fields: { text: 'not allowed' } },
     ] },
   });
   assert.equal(refused.status, 403);
@@ -497,4 +508,107 @@ test('a change feed reports a tombstone so a listener can drop the row, while a 
   assert.equal((await call(w, db, '/v1/docs/posts/p1')).status, 404);
   const kept = await db.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path = 'posts/p1'").first();
   assert.ok(kept && kept.document_json.includes('"deleted":true'));
+});
+
+test('set() replaces a document and set(merge) adds to it, exactly like the old client', async () => {
+  const { db } = createSqliteD1();
+  const w = workerFor('u1');
+  await put(w, db, '/v1/docs/posts/p1', { authorId: 'u1', text: 'first', likes: 3, createdAt: 1 });
+
+  // A merge keeps what is already there.
+  const merged = await put(w, db, '/v1/docs/posts/p1', { text: 'edited' });
+  assert.equal(merged.status, 200);
+  assert.equal((await (await call(w, db, '/v1/docs/posts/p1')).json()).document.likes, 3);
+
+  // A replace drops the fields that are not sent again - but keeps the row, its id and its birthday.
+  const replaced = await put(w, db, '/v1/docs/posts/p1', { __replace: true, authorId: 'u1', text: 'fresh' });
+  assert.equal(replaced.status, 200);
+  const doc = (await (await call(w, db, '/v1/docs/posts/p1')).json()).document;
+  assert.equal(doc.likes, undefined);
+  assert.equal(doc.text, 'fresh');
+  assert.equal(doc.id, 'p1');
+  assert.equal(doc.createdAt, 1);
+  assert.ok(doc.updatedAt > 1);
+
+  // The reserved key never reaches storage, and it cannot be used to smuggle a field past the rules.
+  assert.equal(JSON.stringify(doc).includes('__replace'), false);
+  const smuggled = await put(w, db, '/v1/docs/payments/pay1', { __replace: true, userId: 'u1', status: 'approved', amount: 5 });
+  assert.equal(smuggled.status, 403);
+});
+
+test('a replace really replaces, a merge really merges, and FieldValue ops stay atomic in both', async () => {
+  const { db } = createSqliteD1();
+  const w = workerFor('u1');
+  await put(w, db, '/v1/docs/users/u1', { displayName: 'Ali', bio: 'old bio', stars: 2, createdAt: 100 });
+
+  // set(map, merge()) keeps what it was not told about.
+  const merged = await put(w, db, '/v1/docs/users/u1', { op: 'merge', fields: { displayName: 'Ali Raza' } });
+  assert.equal(merged.status, 200);
+  assert.equal((await (await call(w, db, '/v1/docs/users/u1')).json()).document.bio, 'old bio');
+
+  // set(map) drops it - clearing a field has to clear it, or the profile keeps lying.
+  const replaced = await put(w, db, '/v1/docs/users/u1', { op: 'replace', fields: { displayName: 'Ali Raza' } });
+  assert.equal(replaced.status, 200);
+  const doc = (await (await call(w, db, '/v1/docs/users/u1')).json()).document;
+  assert.equal(doc.bio, undefined);
+  assert.equal(doc.stars, undefined);
+  // ...but the row's birthday survives, because the feed orders by it.
+  assert.equal(doc.createdAt, 100);
+
+  // FieldValue.increment / arrayUnion / serverTimestamp inside a set stay server-side and exact.
+  const withOps = await put(w, db, '/v1/docs/posts/p1', {
+    op: 'merge',
+    fields: { authorId: 'u1', text: 'hi' },
+    ops: { inc: { likes: 2 }, add: { likedBy: ['u1'] }, stamp: ['publishedAt'] },
+  });
+  assert.equal(withOps.status, 200);
+  const post = (await (await call(w, db, '/v1/docs/posts/p1')).json()).document;
+  assert.equal(post.likes, 2);
+  assert.deepEqual(post.likedBy, ['u1']);
+  assert.ok(post.publishedAt > 1_600_000_000_000);
+  assert.equal(post.text, 'hi');
+
+  // A plain object body still means merge, so the mirrors already in the app keep working.
+  const plain = await put(w, db, '/v1/docs/posts/p1', { text: 'edited' });
+  assert.equal(plain.status, 200);
+  const after = (await (await call(w, db, '/v1/docs/posts/p1')).json()).document;
+  assert.equal(after.text, 'edited');
+  assert.equal(after.likes, 2);
+});
+
+test('a batch keeps FieldValue arithmetic on the server and replaces only where set() means replace', async () => {
+  const { db } = createSqliteD1();
+  const w = workerFor('u1');
+  const now = 1_700_000_000_000;
+  await seed(db, [
+    ['posts/p1', 'posts', 'p1', 'u1', { authorId: 'u1', text: 'first', likes: 4, createdAt: now - 5 }, now - 5],
+  ]);
+
+  const applied = await call(w, db, '/v1/docs/batch', {
+    method: 'POST',
+    body: { ops: [
+      { op: 'update', collection: 'posts', id: 'p1', fields: { text: 'edited' }, ops: { inc: { likes: 1 }, add: { likedBy: ['u1'] } } },
+      { op: 'set', collection: 'notifications', id: 'n1', fields: { toUid: 'u1', kind: 'like' }, ops: { stamp: ['createdAt'] } },
+    ] },
+  });
+  assert.equal(applied.status, 200);
+
+  const post = (await (await call(w, db, '/v1/docs/posts/p1')).json()).document;
+  assert.equal(post.likes, 5);
+  assert.deepEqual(post.likedBy, ['u1']);
+  assert.equal(post.text, 'edited');
+
+  // set() inside a batch replaces, so a field nobody sent is gone - but the birthday stays.
+  const replaced = await call(w, db, '/v1/docs/batch', {
+    method: 'POST',
+    body: { ops: [{ op: 'set', collection: 'posts', id: 'p1', fields: { authorId: 'u1', text: 'clean' } }] },
+  });
+  assert.equal(replaced.status, 200);
+  const after = (await (await call(w, db, '/v1/docs/posts/p1')).json()).document;
+  assert.equal(after.likes, undefined);
+  assert.equal(after.text, 'clean');
+  assert.equal(after.createdAt, now - 5);
+
+  const notif = (await (await call(w, db, '/v1/docs/notifications/n1')).json()).document;
+  assert.ok(notif.createdAt >= now - 1000, 'the Worker stamped its own clock');
 });

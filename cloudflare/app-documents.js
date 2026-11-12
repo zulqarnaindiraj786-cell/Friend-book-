@@ -342,24 +342,23 @@ export async function appDocuments(request, env, identity) {
     const touched = [];
     try {
       for (const op of ops) {
-        // A nested operation names its parent (chats/<chatId>) and its leaf (messages), and is stored
-        // flat under the parent's path - the same addressing the single-document routes use.
-        const nested = typeof op.parent === 'string' && typeof op.subcollection === 'string';
-        let leaf = op.collection;
-        let stored = null;
-        let parentCollection = null;
-        let parentId = null;
-        let storedCollection = op.collection;
-        if (nested) {
-          const parts = op.parent.split('/');
-          if (parts.length !== 2 || !validSegment(parts[0]) || !validSegment(parts[1])) {
-            return json({ error: 'Invalid parent path' }, 400);
-          }
-          parentCollection = parts[0];
-          parentId = parts[1];
-          leaf = op.subcollection;
-          storedCollection = `${op.parent}/${op.subcollection}`;
+        // A batch operation names its collection the same way the app addresses it: `posts`, or
+        // `chats/<chatId>/messages` for a nested one. Splitting it here keeps the client honest about
+        // where a row lives, and the parent still decides who may write there.
+        const rawCollection = String(op.collection || '');
+        const segments = rawCollection.split('/');
+        if (segments.length !== 1 && segments.length !== 3) {
+          return json({ error: 'Invalid collection path' }, 400);
         }
+        const nested = segments.length === 3;
+        if (nested && (!validSegment(segments[0]) || !validSegment(segments[1]))) {
+          return json({ error: 'Invalid parent path' }, 400);
+        }
+        const leaf = nested ? segments[2] : rawCollection;
+        const parentCollection = nested ? segments[0] : null;
+        const parentId = nested ? segments[1] : null;
+        const storedCollection = rawCollection;
+        let stored = null;
         if (!queryable(leaf) || !validSegment(op.id)) {
           return json({ error: 'Invalid collection or document ID' }, 400);
         }
@@ -384,9 +383,14 @@ export async function appDocuments(request, env, identity) {
              WHERE path = ? AND COALESCE(json_extract(document_json, '$.deleted'), 0) = 0`
           ).bind(now, now, docPath));
         } else {
-          const merged = op.op === 'set'
-            ? { ...fields, id: op.id }
+          // batch.set() replaces, batch.update() merges - the same split as a single write - and
+          // FieldValue markers travel in `ops` so an increment inside a batch stays arithmetic on the
+          // server instead of being stored as a literal object.
+          const base = op.op === 'set'
+            ? { ...(stored?.doc?.createdAt ? { createdAt: stored.doc.createdAt } : {}), ...fields, id: op.id }
             : { ...(stored?.doc || {}), ...fields, id: op.id };
+          const opOps = op.ops && typeof op.ops === 'object' && !Array.isArray(op.ops) ? op.ops : null;
+          const merged = opOps ? applyOps(base, opOps, now) : base;
           if (!merged.createdAt) merged.createdAt = stored?.doc?.createdAt || now;
           merged.updatedAt = now;
           const serialized = JSON.stringify(merged);
@@ -650,14 +654,34 @@ export async function appDocuments(request, env, identity) {
     try {
       const stored = await readStored(db, docPath, docId);
       if (stored && stored.doc.deleted) return json({ error: 'Document is deleted' }, 404);
+      // Firestore's set() REPLACES a document while set(..., merge()) adds to it, and the two behave
+      // differently the moment a field disappears - clearing a profile field must actually clear it.
+      // A body of {op:'replace'|'merge', fields:{...}, ops:{...}} says which one this is; a plain
+      // object still means merge, so the migration mirrors that were already writing keep working.
+      // FieldValue markers travel in `ops` and stay atomic (see applyOps).
+      const envelope = incoming && typeof incoming === 'object'
+        && (incoming.op === 'replace' || incoming.op === 'merge');
+      const replace = envelope ? incoming.op === 'replace' : incoming.__replace === true;
+      const fields = envelope
+        ? (incoming.fields && typeof incoming.fields === 'object' && !Array.isArray(incoming.fields)
+          ? { ...incoming.fields } : {})
+        : { ...incoming };
+      delete fields.__replace;
+      const putOps = envelope && incoming.ops && typeof incoming.ops === 'object' && !Array.isArray(incoming.ops)
+        ? incoming.ops : null;
       const chatOk = parentCollection
         ? await canWriteNested(db, parentCollection, parentId, collection, uid, admin)
         : !isChatScoped(leafCollection)
-          || await isChatParticipant(db, String(incoming.chatId || stored?.doc?.chatId || parentId || ''), uid, admin);
-      if (!chatOk || !canWrite(leafCollection, stored?.doc || null, incoming, uid, admin, stored ? 'update' : 'create')) {
+          || await isChatParticipant(db, String(fields.chatId || stored?.doc?.chatId || parentId || ''), uid, admin);
+      if (!chatOk || !canWrite(leafCollection, stored?.doc || null, fields, uid, admin, stored ? 'update' : 'create')) {
         return json({ error: 'Not allowed' }, 403);
       }
-      const merged = { ...(stored?.doc || {}), ...incoming, id: docId };
+      const base = replace
+        // A replace still keeps the row's birthday: ordering by createdAt must never break because a
+        // client rewrote a document, and nothing is deleted either way.
+        ? { ...(stored?.doc?.createdAt ? { createdAt: stored.doc.createdAt } : {}), ...fields, id: docId }
+        : { ...(stored?.doc || {}), ...fields, id: docId };
+      const merged = putOps ? applyOps(base, putOps, now) : base;
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
       const ownerUid = ownerUidOf(merged, stored?.ownerUid, uid);
