@@ -292,3 +292,41 @@ test('a write belongs to its author: nobody can overwrite, forge or read another
   assert.equal((await getOne('a9', 'posts/p6')).status, 404);
   assert.equal((await getOne('a9', 'posts/p5')).status, 200);
 });
+
+test('a comment counter is a delta the database applies, never a client-computed total', async () => {
+  const { db } = createSqliteD1();
+  await seed(db);
+  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test', fetch: firestoreStub() };
+  async function put(uid, path, body) {
+    const w = createWorker(async () => uid);
+    const res = await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env);
+    return { status: res.status, body: await res.json() };
+  }
+  async function getOne(uid, path) {
+    const w = createWorker(async () => uid);
+    const res = await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env);
+    return { status: res.status, body: await res.json() };
+  }
+
+  // The author's post starts with no counter at all.
+  assert.equal((await put('a1', 'posts/c1', { authorId: 'a1', content: 'count me', privacy: 'Public' })).status, 200);
+  // Three comments from three different readers, each sending a delta rather than a total.
+  assert.equal((await put('a2', 'comments/k1', { authorId: 'a2', postId: 'c1', commentsDelta: 1 })).status, 200);
+  assert.equal((await put('a9', 'comments/k2', { authorId: 'a9', postId: 'c1', commentsDelta: 1 })).status, 200);
+  assert.equal((await put('a3', 'comments/k3', { authorId: 'a3', postId: 'c1', commentsDelta: 1 })).status, 200);
+  // The delta never becomes a stored field of its own.
+  assert.equal((await getOne('a3', 'comments/k3')).body.document.commentsDelta, undefined);
+
+  // A counter the client does own is still writable, and it is additive on the stored value.
+  assert.equal((await put('a2', 'posts/c1', { comments: 9 })).status, 200);
+  assert.equal((await put('a9', 'posts/c1', { commentsDelta: 1 })).status, 200);
+  const post = await getOne('a1', 'posts/c1');
+  assert.equal(post.body.document.comments, 10, 'the stored total is incremented, not replaced');
+  assert.equal(post.body.document.content, 'count me', 'a delta must not touch the content');
+});

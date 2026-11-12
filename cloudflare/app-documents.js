@@ -4,8 +4,8 @@ const json = (body, status = 200) => Response.json(body, {
 });
 
 const ALLOWED_COLLECTIONS = new Set([
-  'users', 'posts', 'reels', 'stories', 'chats', 'messages',
-  'friends', 'friend_requests', 'follows', 'groups', 'pages',
+  'users', 'posts', 'reels', 'stories', 'chats', 'messages', 'comments',
+  'friends', 'friend_requests', 'follows', 'groups', 'pages', 'events',
   'notifications', 'official_broadcasts', 'lives', 'pokes',
 ]);
 
@@ -182,6 +182,9 @@ const MAX_FILTERS = 6;
 const COUNTER_FIELDS = new Set([
   'likes', 'comments', 'shares', 'views', 'reactions', 'savedBy', 'subscribedBy',
   'reportedBy', 'hiddenBy', 'pollVotes', 'lastSeen',
+  // Deltas are how a reader bumps somebody else's counter (a comment, a like): the Worker applies
+  // them to the stored number, so they are counters, not content.
+  'commentsDelta', 'likesDelta', 'sharesDelta',
 ]);
 
 function jsonPath(field) {
@@ -518,7 +521,16 @@ export async function appDocuments(request, env, identity) {
         // A brand new document owned by somebody else would let a caller write as that person.
         return json({ error: 'Not your document' }, 403);
       }
-      const merged = { ...existingPlain, ...payload, id: docId };
+      // A counter delta is not a stored value: it is applied to the stored number, by the database,
+      // so two devices commenting at the same moment cannot overwrite each other's increment.
+      const hadDelta = Object.prototype.hasOwnProperty.call(payload, 'commentsDelta');
+      const delta = hadDelta ? Math.trunc(Number(payload.commentsDelta) || 0) : 0;
+      const cleanPayload = { ...payload };
+      if (hadDelta) {
+        delete cleanPayload.commentsDelta;
+        cleanPayload.comments = Math.max(0, Number(existingPlain.comments || 0) + delta);
+      }
+      const merged = { ...existingPlain, ...cleanPayload, id: docId };
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
       const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingOwner || uid);

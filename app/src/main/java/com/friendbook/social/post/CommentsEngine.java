@@ -124,6 +124,26 @@ public class CommentsEngine {
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
             D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);return handle;
         }
+        // D1 FIRST for comments written by this build. They are read from the document store and
+        // merged into the same maps the pre-migration listener fills, by comment id.
+        if(com.friendbook.social.core.CloudflareDocs.enabled()){
+            handle.collection=collection;handle.docId=docId;handle.key=queryKey;
+            com.friendbook.social.core.CloudflareDocs.read("comments",50,
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt").where("postId", queryKey==null||queryKey.isEmpty()?docId:queryKey),
+                    cloudPage -> {
+                if(!handle.active() || cloudPage==null || cloudPage.documents.isEmpty()) return;
+                for(java.util.Map<String,Object> row:cloudPage.documents){
+                    Object id=row.get("id");
+                    if(id==null) continue;
+                    Models.Comment c=Models.Comment.fromMap(String.valueOf(id),row);
+                    if(c==null || c.id==null) continue;
+                    c.postId=handle.key;
+                    handle.latest.put(c.id,c);
+                    handle.deleted.remove(c.id);
+                }
+                handle.emit();
+            });
+        }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
         handle.query=parent.collection("comments").orderBy("createdAt",com.google.firebase.firestore.Query.Direction.DESCENDING);
         // Compatibility only: one parent read. Never rebuild or expand its old commentsMap.
@@ -240,6 +260,25 @@ public class CommentsEngine {
         }
         final Map<String, Object> commentMap = toMap(local, local.postId);
         final DocumentReference parentRef = Fb.db().collection(collection).document(docId);
+
+        // WRITE = Cloudflare. A comment written by this build is a D1 row under its parent, plus the
+        // parent's counter bump - both in D1. The pre-migration batch below only runs when Cloudflare
+        // is switched off, so nothing new is ever written back to the old source.
+        if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+            // The parent's counter is a stored Counter field, incremented by the Worker on write - the
+            // client never recomputes a total, so two devices can never disagree about it.
+            commentMap.put("commentsDelta", 1L);
+            com.friendbook.social.core.CloudflareDocs.write("comments", newId, commentMap, () -> {
+                if (me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions))
+                    com.friendbook.social.push.FCMPush.bulkMention(docId, newId);
+                if (cb != null) cb.onComplete(true, null);
+            }, reason -> {
+                com.friendbook.social.core.CloudflareOutbox.enqueue(com.friendbook.social.App.instance,
+                        "comments", newId, com.friendbook.social.core.CloudflareDocs.sanitize(commentMap));
+                if (cb != null) cb.onComplete(false, "Comment saved on this phone — it will post when you are online.");
+            }, null);
+            return local;
+        }
 
         // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
         // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
