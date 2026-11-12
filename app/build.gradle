@@ -13,6 +13,12 @@ android {
         targetSdk 35
         versionCode 6
         versionName '525.0.0.102'
+
+        // Firebase is authentication only: views live in Cloudflare Analytics Engine and app
+        // documents are mirrored to Cloudflare D1 through the Worker.
+        buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
+        buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'true'
+        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
     }
 
     buildTypes {
@@ -24,6 +30,10 @@ android {
         debug {
             minifyEnabled false
         }
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {
