@@ -43,7 +43,7 @@ public final class CloudMigration {
 
     /** Call once from the signed-in entry point; returns immediately, all work is asynchronous. */
     public static void runOnceAfterUpdate(Context ctx) {
-        if (ctx == null || !CloudflareDocs.enabled()) return;
+        if (ctx == null || !BuildConfig.CLOUDFLARE_DOCS_ENABLED) return;
         if (Fb.uid() == null || Fb.uid().isEmpty()) return;
         final SharedPreferences sp = ctx.getApplicationContext()
                 .getSharedPreferences("cf_migration", Context.MODE_PRIVATE);

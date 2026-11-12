@@ -1,45 +1,70 @@
 # Firebase = authentication only. Everything else lives on Cloudflare.
 
-## The three product rules (owner's acceptance criteria)
+## What changed on this line
 
-1. **New data goes to Cloudflare.** Every write this build makes - posts, reels, comments, stories,
-   notifications, friend requests, friendships, chat messages, profile edits - travels to Cloudflare
-   D1 through the Worker (`PUT /v1/docs/...`) together with the legacy write. Views never touch the
-   legacy store at all: they are Analytics Engine events counted with `count(DISTINCT blob3)`.
-2. **A user who never updates stays on the old app, and nothing of theirs is deleted.** The legacy
-   store keeps receiving writes (dual-write) and keeps serving old builds. No code path in this
-   migration deletes, resets, prunes or rewrites legacy documents; `CloudMigration` contains no
-   write to the legacy store at all (guards enforce both).
-3. **A user who updates gets their history carried over automatically.** On the first launch of a
-   newer build, `CloudMigration.runOnceAfterUpdate` mirrors that user's own slices (own profile,
-   posts, reels, stories, comments, notifications, friend requests, friendships, chats plus a bounded
-   tail of each chat's messages) to D1 - once per versionCode, bounded to 100 documents per slice,
-   additive merge-upserts only.
+`app/src/main/java/com/example/frienbook/core/cloud/` is now the app's database client: a small
+HTTP client for the Worker's `/v1/docs` API, shaped like the SDK it replaced (`Database`,
+`CollectionReference`, `Query`, `DocumentReference`, `DocumentSnapshot`, `QuerySnapshot`,
+`FieldValue`, `FieldPath`, `Timestamp`, `WriteBatch`, `Transaction`, `SetOptions`,
+`ListenerRegistration`) so 283 call sites moved by changing their imports, not their logic.
+`Fb.db()` returns it. `firebase-firestore` is gone from `app/build.gradle`; `firebase-auth` stays,
+and it is the only Firebase product the app uses.
 
-Reads are **Cloudflare-first with the legacy store as backfill**: a page is the union of the legacy
-listener and `GET /v1/docs?collection=...`; a Cloudflare document only ever *joins* the page, never
-replaces or removes a legacy one, so old-build writes stay visible to everyone during the overlap.
+| Data | Where it lives | How |
+| --- | --- | --- |
+| Sign-in, ID token | Firebase Auth | the token is also what authenticates every Worker call |
+| posts, reels, stories, comments, notifications, friends, requests, chats + messages, users, payments, config | Cloudflare D1 `friendbook_cf_documents` | `core/cloud` → `GET/PUT/PATCH/DELETE /v1/docs/...`, `POST /v1/docs/batch` |
+| videos, photos, voice notes | Cloudflare R2 `friendbook` | `core/CloudflareMedia` → `/v1/videos`, `/v1/photos` |
+| view counts | Cloudflare Analytics Engine | one event per view, `count(DISTINCT blob3)`, zero D1 writes |
+| presence, typing | D1 (`friendbook_cf_presence`, `_typing`) | `core/Presence` → `/v1/presence/...` |
+| runtime switches (ads kill switch) | Worker vars | `core/CloudConfig` → `/v1/config` |
 
-## Where each thing lives today (this line)
+## The three product rules, as they hold now
 
-| Data | Legacy store | Cloudflare home | Status |
-| --- | --- | --- | --- |
-| Sign-in, ID token | Firebase Auth | — (stays) | **permanent** |
-| View counts | never stored | Analytics Engine (`count(DISTINCT blob3)`) | **live** |
-| posts / reels / stories / comments / notifications / friend_requests / friends / chats / messages / users | source of truth for old builds | D1 `friendbook_cf_documents` | **dual-write live** + self-sync on update + union reads for posts & reels |
-| videos / photos | unused on this line | R2 via Worker endpoints | Worker live; client switch = next batch |
-| likes / reactions | legacy increments | D1 interaction tables (`/v1/engagement`) | Worker live; client gate `D1_INTERACTIONS_ENABLED=false` until the interaction batch |
-| payments / subscriptions / referrals / reports / config | legacy | not mirrored yet | reviewed batch, separately |
+1. **New data goes to Cloudflare.** There is no second store to write to: every create and edit in
+   the app is a D1 write. Views are Analytics Engine events and never touch a document.
+2. **A user who never updates keeps their data.** Nothing in this migration deletes, resets, prunes
+   or rewrites a legacy document - the legacy store is only ever *read*, by
+   `cloudflare/legacy-migration.js`, and only with the reading user's own token. Old builds keep
+   running against the legacy store exactly as before.
+   **Honest consequence:** because new builds no longer dual-write, an old build stops seeing what a
+   new build creates. Old-build users lose nothing they already had; they simply stop receiving new
+   content until they update. That is the trade the owner's "Firebase se Firestore hatao" instruction
+   implies, and it is stated here rather than hidden.
+3. **A user who updates gets their history carried over.** `CloudMigration.runOnceAfterUpdate`
+   (once per versionCode, flag written before the work) posts `/v1/migrate/legacy`. The Worker reads
+   that user's own slices - profile, posts, reels, stories, comments, notifications, requests both
+   directions, friendships, chats and the last 50 messages of each - and writes them into D1.
+   Bounded at 100 rows/page, 3 pages/slice, 50 chats, 1000 documents per run. Every write is
+   `ON CONFLICT(path) DO NOTHING`: a document the user has edited since updating is never replaced by
+   the older copy, and a tombstone is never resurrected. A slice the legacy store refuses comes back
+   in `errors` with `ok:false` instead of a silent half-migration.
 
-## Honesty notes
+## What the client does not pretend
 
-- Dual-write is deliberate and temporary: it is what keeps rule 2 true (old builds keep working) while
-  rule 1 holds (new data lives on Cloudflare). Removing the legacy write is a later, explicit cutover
-  per collection, never a silent flip.
-- The mirror is additive only: merge-upsert on the Worker, no DELETE anywhere, 95 KiB document cap,
-  fire-and-forget so a Worker outage can never block posting; the next edit re-mirrors the document.
-- Guards pin all three rules: `test_update_carries_existing_user_data_to_cloudflare_without_touching_the_old_copy`,
-  `test_every_new_write_travels_to_cloudflare_with_the_legacy_write`,
-  `test_reads_are_cloudflare_first_with_the_legacy_store_as_backfill`.
-- The Play Store line (`com.friendbook.social`) receives this through the controlled port described in
-  `docs/handoff-social-line-port.md` - same rules, same guards, monotonic versionCode, same signing.
+- A page is 50 rows (the Worker's ceiling), so a larger `limit` is fetched as cursor slices; a list
+  of 13 friends is still one request. `limitToLast(n)` reads the newest *n* in the opposite direction
+  and reverses them, which is what "the last n in this order" means.
+- A snapshot listener is a poller on the Worker's change feed (`since=`), merging by id: changed rows
+  update in place, deleted rows leave the list, and a page is never re-downloaded. Chat threads and
+  live rooms poll at 2.5 s, feeds and admin tables at 8 s.
+- A 404 becomes `exists() == false`; a 403, a 503 and "no network" stay errors, with the Worker's own
+  reason as the message. Nothing is retried behind the caller's back and no value is invented.
+- `FieldValue` markers travel as `ops`, so increments and array unions are applied by the Worker to
+  the stored row (compare-and-swap) and cannot be lost to a second writer. Reactions move the like
+  counter with `increment`, not with a number the phone calculated.
+- A `WriteBatch`/`Transaction` is one all-or-nothing Worker call of up to 20 operations; a larger
+  batch is sent as successive calls, and the first failure is reported rather than papered over.
+- `CloudflareDocs.mirror` is now a documented no-op and `CLOUDFLARE_DOCS_MIRROR` is `false`: the write
+  it used to duplicate is the write that already happened.
+
+## Guards
+
+`scripts/tests/test_cloudflare_view_counters.py` (32) and `npm test` (83) pin this: no Firebase
+database/analytics/storage/config dependency, no `com.google.firebase.firestore` import anywhere in
+`app/src`, the carry-over's bounds and its insert-if-absent write, "legacy store is read, never
+written", the endpoint sitting behind the identity check, and every query the app runs being on the
+Worker's allowlist.
+
+The Play Store line (`com.friendbook.social`) receives this through the controlled port described in
+`docs/handoff-social-line-port.md` - same rules, same guards, monotonic versionCode, same signing.

@@ -337,7 +337,17 @@ class CloudflareViewCounterGuards(unittest.TestCase):
     def test_views_client_is_cloudflare_only_and_gated_by_build_flags(self):
         gradle = (ROOT / 'app/build.gradle').read_text()
         self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'", gradle)
-        self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'true'", gradle)
+        # Mirroring is over - D1 is the primary store now, so the duplicate write and the union reads
+        # it fed are switched off, and the carry-over runs on its own flag instead.
+        self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'false'", gradle)
+        self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_DOCS_ENABLED', 'true'", gradle)
+        # Firebase is authentication: no document-database SDK is left in the app's dependencies.
+        self.assertNotIn('firebase-firestore', gradle)
+        self.assertNotIn('firebase-database', gradle)
+        self.assertNotIn('firebase-config', gradle)
+        self.assertNotIn('firebase-storage', gradle)
+        self.assertNotIn('firebase-analytics', gradle)
+        self.assertIn("implementation 'com.google.firebase:firebase-auth'", gradle)
         client = (JAVA / 'core/CloudflareViews.java').read_text()
         self.assertIn('/v1/views', client)
         self.assertIn('BuildConfig.CLOUDFLARE_VIEWS_ENABLED', client)
