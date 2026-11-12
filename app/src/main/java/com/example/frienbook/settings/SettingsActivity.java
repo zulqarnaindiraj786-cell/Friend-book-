@@ -231,7 +231,7 @@ public class SettingsActivity extends Activity {
                 "friendbook lite 525.0.0.102\n\nA fast, light social app — Facebook-Lite style.\n" +
                 "Feed • Stories • Reels • Watch • Groups • Events • Pages • Marketplace\n" +
                 "Messenger (voice + stickers) • Pokes • Leaderboard • Daily bonus\n" +
-                "Media on Cloudinary • Realtime on Firebase.\n\nPackage: com.example.frienbook")));
+                "Media on Cloudflare R2 • Data on Cloudflare D1 • Sign-in on Firebase Auth.\n\nPackage: com.example.frienbook")));
         body.addView(cardEnd());
 
         // ============ LOG OUT ============
@@ -301,7 +301,7 @@ public class SettingsActivity extends Activity {
                 "🔐 Login / account problems",
                 "📮 Post not showing on feed?",
                 "⭐ Stars, ticks & payments",
-                "📤 How uploads work (Cloudinary)",
+                "📤 How uploads work (Cloudflare R2)",
                 "📧 Email support"};
         Ui.choose(this, "Help & support", opts, w -> {
             if (w == 0) Ui.info(this, "🔐 Login & account",
@@ -320,8 +320,8 @@ public class SettingsActivity extends Activity {
                             + "• Paid options upload a payment screenshot — admin approves.\n"
                             + "• Track everything in Settings → Monetization.");
             else if (w == 3) Ui.info(this, "📤 Media uploads",
-                    "• Photos, videos, reels, stories and voice notes upload to Cloudinary.\n"
-                            + "• If Cloudinary is unreachable, uploads retry via Firebase automatically.\n"
+                    "• Photos, videos, reels, stories and voice notes upload to Cloudflare R2\n"
+                            + "  (bucket friendbook — retention: forever, 99 MB per video).\n"
                             + "• Large videos may take a while on slow networks — stay on the screen.");
             else {
                 Intent i = new Intent(Intent.ACTION_SENDTO);

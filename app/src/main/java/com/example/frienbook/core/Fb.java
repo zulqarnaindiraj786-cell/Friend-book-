@@ -14,14 +14,11 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.storage.FirebaseStorage;
-import com.google.firebase.storage.StorageReference;
-import com.google.firebase.storage.UploadTask;
 
 import java.util.HashMap;
 import java.util.Map;
 
-/** Central Firebase access point: Auth, Firestore, Realtime Database, Storage. */
+/** Central Firebase access point. Auth is the product here; app data lives on Cloudflare. */
 public class Fb {
 
     public static final String RTDB_URL = "https://friendbook-17551-default-rtdb.firebaseio.com";
@@ -58,9 +55,6 @@ public class Fb {
         return rtdb;
     }
 
-    public static StorageReference storage() {
-        return FirebaseStorage.getInstance().getReference();
-    }
 
     @Nullable
     public static String uid() {
@@ -75,14 +69,6 @@ public class Fb {
     }
 
     /** Upload a local file and resolve its download URL. */
-    public static Task<Uri> upload(String path, Uri file) {
-        StorageReference ref = storage().child(path);
-        UploadTask up = ref.putFile(file);
-        return up.continueWithTask(t -> {
-            if (!t.isSuccessful()) throw t.getException();
-            return ref.getDownloadUrl();
-        });
-    }
 
     /** Start (or restart) the live listener that keeps {@link #me} fresh.
      *  Also enforces admin bans: banned accounts are signed out immediately. */

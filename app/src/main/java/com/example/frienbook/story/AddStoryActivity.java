@@ -147,25 +147,29 @@ public class AddStoryActivity extends Activity {
         if (mediaUri == null) { Ui.toast(this, "Choose a photo or video first"); return; }
         busy = true;
         share.setText("Sharing…");
-        String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
-        String path = "stories/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, mediaUri)
-                .addOnSuccessListener(url -> {
-                    Map<String, Object> m = Fb.map(
-                            "authorId", Fb.uid(),
-                            "authorName", Fb.myName(),
-                            "authorPhotoUrl", Fb.myPhoto(),
-                            "mediaUrl", url.toString(),
-                            "mediaType", mediaType,
-                            "caption", caption.getText().toString().trim(),
-                            "viewedBy", new ArrayList<String>(),
-                            "createdAt", FieldValue.serverTimestamp(),
-                            "expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                    Fb.db().collection("stories").add(m)
-                            .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("stories", ref.getId(), m))
-                            .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
-                            .addOnFailureListener(e -> fail());
-                })
+        // Media goes to Cloudflare R2 (bucket friendbook, retention forever) - not Firebase Storage.
+        if ("video".equals(mediaType)) {
+            com.example.frienbook.core.CloudflareMedia.uploadVideo(this, mediaUri, this::write, err -> fail());
+        } else {
+            com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, mediaUri, null, this::write, err -> fail());
+        }
+    }
+
+    /** Writes the story once its media URL is back from R2. */
+    private void write(String url) {
+        Map<String, Object> m = Fb.map(
+                "authorId", Fb.uid(),
+                "authorName", Fb.myName(),
+                "authorPhotoUrl", Fb.myPhoto(),
+                "mediaUrl", url,
+                "mediaType", mediaType,
+                "caption", caption.getText().toString().trim(),
+                "viewedBy", new ArrayList<String>(),
+                "createdAt", FieldValue.serverTimestamp(),
+                "expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
+        Fb.db().collection("stories").add(m)
+                .addOnSuccessListener(ref -> com.example.frienbook.core.CloudflareDocs.mirror("stories", ref.getId(), m))
+                .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
                 .addOnFailureListener(e -> fail());
     }
 

@@ -88,14 +88,12 @@ public class AddReelActivity extends Activity {
         if (videoUri == null) { Ui.toast(this, "Choose a video first"); return; }
         busy = true;
         shareBtn.setText("Uploading…");
-        String path = "reels/" + Fb.uid() + "/" + System.currentTimeMillis() + ".mp4";
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, videoUri)
-                .addOnSuccessListener(url -> {
+        com.example.frienbook.core.CloudflareMedia.uploadVideo(this, videoUri, url -> {
                     Map<String, Object> m = Fb.map(
                             "authorId", Fb.uid(),
                             "authorName", Fb.myName(),
                             "authorPhotoUrl", Fb.myPhoto(),
-                            "videoUrl", url.toString(),
+                            "videoUrl", url,
                             "caption", caption.getText().toString().trim(),
                             "likes", 0, "comments", 0, "shares", 0,
                             "likedBy", new ArrayList<String>(),
@@ -106,8 +104,7 @@ public class AddReelActivity extends Activity {
                                 Ui.toast(this, "Reel shared 🎉"); finish();
                             })
                             .addOnFailureListener(e -> fail());
-                })
-                .addOnFailureListener(e -> fail());
+        }, err -> fail());
     }
 
     private void fail() {

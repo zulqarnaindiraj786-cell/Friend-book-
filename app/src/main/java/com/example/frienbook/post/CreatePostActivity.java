@@ -570,15 +570,18 @@ public class CreatePostActivity extends Activity {
             return;
         }
         Uri uri = mediaUris.get(done.size());
-        String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
-        String path = "posts/" + Fb.uid() + "/" + System.currentTimeMillis() + "_" + done.size() + ext;
         postBtn.setText("Uploading " + (done.size() + 1) + "/" + mediaUris.size() + "…");
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> {
-                    done.add(url.toString());
-                    uploadAll(content, done);
-                })
-                .addOnFailureListener(e -> fail("Upload failed: " + e.getMessage()));
+        if ("video".equals(mediaType)) {
+            com.example.frienbook.core.CloudflareMedia.uploadVideo(this, uri, url -> {
+                done.add(url);
+                uploadAll(content, done);
+            }, err -> fail("Upload failed: " + err));
+        } else {
+            com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, uri, null, url -> {
+                done.add(url);
+                uploadAll(content, done);
+            }, err -> fail("Upload failed: " + err));
+        }
     }
 
     private void save(String content, String uploadedUrl, List<String> allUrls) {

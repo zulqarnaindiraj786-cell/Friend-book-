@@ -231,10 +231,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         busy = true;
         sendBtn.setEnabled(false);
         if (commentImage != null) {
-            String path = "comments/" + Fb.uid() + "/" + System.currentTimeMillis() + ".jpg";
-            com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, commentImage)
-                    .addOnSuccessListener(url -> write(text, url.toString()))
-                    .addOnFailureListener(e -> { busy = false; sendBtn.setEnabled(true); Ui.toast(this, "Upload failed"); });
+            com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, commentImage, null,
+                    url -> write(text, url),
+                    e -> { busy = false; sendBtn.setEnabled(true); Ui.toast(this, "Upload failed"); });
         } else {
             write(text, null);
         }

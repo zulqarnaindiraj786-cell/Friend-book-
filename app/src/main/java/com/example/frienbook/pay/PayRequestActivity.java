@@ -200,11 +200,11 @@ public class PayRequestActivity extends Activity {
         if (picked == null) { Ui.toast(this, "Upload your payment screenshot first"); return; }
         busy = true;
         statusT.setText("Uploading screenshot…");
-        String path = "payments/" + Fb.uid() + "/" + System.currentTimeMillis() + ".jpg";
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, picked).addOnSuccessListener(uri -> writeDocs(uri.toString()))
-                .addOnFailureListener(e -> {
+        com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, picked, null,
+                url -> writeDocs(url),
+                err -> {
                     busy = false;
-                    statusT.setText("Upload failed: " + e.getMessage());
+                    statusT.setText("Upload failed: " + err);
                 });
     }
 

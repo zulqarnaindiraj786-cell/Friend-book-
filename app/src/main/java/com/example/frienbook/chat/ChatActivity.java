@@ -349,10 +349,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (!send || voicePath == null) return;
         Ui.toast(this, "Uploading voice note…");
         Uri uri = Uri.fromFile(new java.io.File(voicePath));
-        String path = "chat/" + chatId + "/voice_" + System.currentTimeMillis() + ".m4a";
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> sendVoice(url.toString(), durSec))
-                .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
+        com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, uri, null,
+                url -> sendVoice(url, durSec),
+                err -> Ui.toast(this, "Voice upload failed"));
     }
 
     private void sendVoice(String url, int durSec) {
@@ -556,10 +555,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (req == PICK_IMG && res == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
             Ui.toast(this, "Uploading photo…");
-            String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
-            com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                    .addOnSuccessListener(url -> send(null, url.toString(), null))
-                    .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
+            com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, uri, null,
+                    url -> send(null, url, null),
+                    err -> Ui.toast(this, "Upload failed"));
         }
     }
 

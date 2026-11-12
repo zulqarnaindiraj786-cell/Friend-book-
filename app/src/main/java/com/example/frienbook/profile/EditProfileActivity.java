@@ -173,16 +173,12 @@ public class EditProfileActivity extends Activity {
         Uri uri = data.getData();
         boolean isAvatar = req == PICK_AVATAR;
         Ui.toast(this, "Uploading…");
-        String path = "profiles/" + Fb.uid() + "/" + (isAvatar ? "avatar" : "cover")
-                + "_" + System.currentTimeMillis() + ".jpg";
-        com.example.frienbook.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> {
-                    Map<String, Object> patch = new HashMap<>();
-                    patch.put(isAvatar ? "photoUrl" : "coverUrl", url.toString());
-                    Fb.patchMe(patch);
-                    Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓");
-                })
-                .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
+        com.example.frienbook.core.CloudflareMedia.uploadPhoto(this, uri, null, url -> {
+            Map<String, Object> patch = new HashMap<>();
+            patch.put(isAvatar ? "photoUrl" : "coverUrl", url);
+            Fb.patchMe(patch);
+            Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓");
+        }, err -> Ui.toast(this, "Upload failed"));
     }
 
     private void save() {
