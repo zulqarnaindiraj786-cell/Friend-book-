@@ -421,6 +421,40 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
         self.assertIn('CloudflareDocs.read("reels"', reels)
 
+    def test_a_new_post_is_readable_after_it_is_written_to_cloudflare(self):
+        """The write path and the read path must describe the same store, or a post is written nowhere."""
+        profile = (JAVA / 'profile/ProfileActivity.java').read_text()
+        # The profile page reads Cloudflare first, then merges the pre-migration page by id.
+        self.assertIn('private void startCloudflarePosts() {', profile)
+        self.assertIn('CloudflareDocs.Query.orderDesc("createdAt").where("authorId", uid)', profile)
+        self.assertIn('startCloudflarePosts();', profile)
+        self.assertIn('if (cloudPostIds.contains(d.getId())) continue;', profile)
+        self.assertIn('allLoadedPosts.addAll(cloudOnly);', profile)
+
+        # Post detail is D1-first too, and its pre-migration listener never overwrites that answer.
+        detail = (JAVA / 'post/PostDetailActivity.java').read_text()
+        self.assertIn('CloudflareDocs.get("posts", postId, doc -> {', detail)
+        self.assertIn('final boolean[] cloudRendered = {false};', detail)
+        self.assertIn('if (cloudRendered[0]) return;', detail)
+        # Readers have to be on the main thread: both callbacks post there before touching views.
+        self.assertIn('MAIN.post(() -> callback.accept(result));', (JAVA / 'core/CloudflareDocs.java').read_text())
+
+    def test_the_outbox_replays_on_start_and_foreground_off_the_ui_thread(self):
+        app = (JAVA / 'App.java').read_text()
+        self.assertIn('installOutboxReplay();', app)
+        self.assertIn('onActivityResumed(android.app.Activity a) {', app)
+        self.assertIn('CloudflareOutbox.replay(a);', app)
+        self.assertIn('CloudflareOutbox.replay(this);', app)
+        outbox = (JAVA / 'core/CloudflareOutbox.java').read_text()
+        self.assertIn('public static void replay(Context context) {', outbox)
+        self.assertIn('private static volatile boolean flushing;', outbox)
+        # A second replay must not double-write the same document.
+        self.assertIn('if (flushing) return;', outbox)
+        # Replay is background only.
+        self.assertIn('IO.execute(() -> {', outbox)
+        for rel in ('post/CreatePostActivity.java', 'reels/ReelUploadManager.java'):
+            self.assertNotIn('CloudflareOutbox.flush(', (JAVA / rel).read_text(), rel + ' must not block the UI thread')
+
     def test_release_metadata_follows_the_build_file(self):
         import re
         gradle = (ROOT / 'app/build.gradle').read_text()

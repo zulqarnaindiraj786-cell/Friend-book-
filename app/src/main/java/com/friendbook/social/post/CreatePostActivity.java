@@ -954,7 +954,7 @@ public class CreatePostActivity extends Activity {
             final String newId = docRef.getId();
             com.friendbook.social.core.CloudflareDocs.write("posts", newId, post, () -> {
                 afterPostSaved.run();
-                com.friendbook.social.core.CloudflareOutbox.flush(this);
+                com.friendbook.social.core.CloudflareOutbox.replay(this);
             }, reason -> {
                 com.friendbook.social.core.CloudflareOutbox.enqueue(
                         this, "posts", newId, com.friendbook.social.core.CloudflareDocs.sanitize(post));

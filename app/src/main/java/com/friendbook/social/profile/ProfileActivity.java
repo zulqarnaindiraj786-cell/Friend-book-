@@ -79,6 +79,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private static final int REQ_PICK_COVER = 802;
 
     private com.friendbook.social.core.CursorPager postPager,videoPager;
+    /** Ids served by Cloudflare for this profile, so the pre-migration page never duplicates them. */
+    private final java.util.Set<String> cloudPostIds = new java.util.HashSet<>();
     private TextView moreProfileVideos,moreProfileFriends;
     private com.friendbook.social.core.CursorPager friendPager;
     private String uid;
@@ -883,13 +885,57 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
     }
 
+    /**
+     * The Cloudflare page of this profile's posts.
+     *
+     * Read with the owner scope so the author sees every post he wrote after updating, and merged
+     * into the same list the pre-migration query fills - by id, newest first, never duplicated.
+     */
+    private void startCloudflarePosts() {
+        if (uid == null || uid.isEmpty()) return;
+        com.friendbook.social.core.CloudflareDocs.read("posts", 30,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt").where("authorId", uid),
+                page -> {
+            if (isFinishing() || page == null || page.documents.isEmpty()) return;
+            List<Models.Post> cloud = new ArrayList<>();
+            for (Map<String, Object> m : page.documents) {
+                String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                if (id.isEmpty()) continue;
+                Models.Post post = Models.Post.fromMap(id, m);
+                if (post.authorId == null || !post.authorId.equals(uid)) continue;
+                cloud.add(post);
+            }
+            if (cloud.isEmpty()) return;
+            allLoadedPosts.clear();
+            allLoadedPosts.addAll(cloud);
+            cloudPostIds.clear();
+            for (Models.Post post : cloud) cloudPostIds.add(post.id);
+            Collections.sort(allLoadedPosts, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
+            userPostCount = Math.max(userPostCount, allLoadedPosts.size());
+            if (user != null) updateStatsLine();
+            applyPostsFilter();
+        });
+    }
+
     private void startPostsWatcher() {
         if(postPager!=null) postPager.close();
+        // D1 FIRST: this build writes new posts to Cloudflare, so the profile page must read them
+        // from there. Firestore still answers for the history that predates the migration - both
+        // pages are merged by post id, so nothing is lost and nothing is shown twice.
+        startCloudflarePosts();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
+                    // Keep the Cloudflare page (new posts), replace only the pre-migration rows, and
+                    // never add an id Cloudflare already served.
+                    List<Models.Post> cloudOnly = new ArrayList<>();
+                    for (Models.Post p : allLoadedPosts) {
+                        if (cloudPostIds.contains(p.id)) cloudOnly.add(p);
+                    }
                     allLoadedPosts.clear();
+                    allLoadedPosts.addAll(cloudOnly);
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
+                            if (cloudPostIds.contains(d.getId())) continue;
                             Models.Post p = Models.Post.fromDoc(d);
                             allLoadedPosts.add(p);
                         }

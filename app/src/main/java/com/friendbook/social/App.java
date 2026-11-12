@@ -59,6 +59,9 @@ public class App extends Application implements SensorEventListener {
     @Override
     public void onCreate() {
         super.onCreate();
+        // Cloudflare is the write path: anything parked in the outbox while offline is replayed as
+        // soon as the app starts, and again every time it comes back to the foreground.
+        installOutboxReplay();
         instance = this;
         com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
@@ -192,5 +195,25 @@ public class App extends Application implements SensorEventListener {
         Intent i = new Intent(from, LockActivity.class);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         from.startActivity(i);
+    }
+
+    /** Replays parked Cloudflare writes on start and on every foreground; never on a UI thread. */
+    private void installOutboxReplay() {
+        try {
+            com.friendbook.social.core.CloudflareOutbox.replay(this);
+            registerActivityLifecycleCallbacks(new android.app.Application.ActivityLifecycleCallbacks() {
+                @Override public void onActivityCreated(android.app.Activity a, android.os.Bundle b) { }
+                @Override public void onActivityStarted(android.app.Activity a) { }
+                @Override public void onActivityResumed(android.app.Activity a) {
+                    com.friendbook.social.core.CloudflareOutbox.replay(a);
+                }
+                @Override public void onActivityPaused(android.app.Activity a) { }
+                @Override public void onActivityStopped(android.app.Activity a) { }
+                @Override public void onActivitySaveInstanceState(android.app.Activity a, android.os.Bundle b) { }
+                @Override public void onActivityDestroyed(android.app.Activity a) { }
+            });
+        } catch (Throwable ignored) {
+            // The outbox is durability, not a startup dependency.
+        }
     }
 }

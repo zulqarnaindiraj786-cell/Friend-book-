@@ -24,6 +24,40 @@ public final class CloudflareOutbox {
 
     private CloudflareOutbox() {}
 
+    /** Replay never runs on the caller's thread (the UI thread must stay free while offline). */
+    private static final java.util.concurrent.ExecutorService IO =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "cf-outbox");
+                t.setPriority(Thread.MIN_PRIORITY);
+                return t;
+            });
+    private static volatile boolean flushing;
+
+    /**
+     * Starts a replay in the background. Safe to call on every app start, every foreground and after
+     * every successful online write: a flush already running owns the queue, and an empty queue is a
+     * single prefs read.
+     */
+    public static void replay(Context context) {
+        if (context == null) return;
+        final Context app = context.getApplicationContext();
+        if (flushing) return;
+        flushing = true;
+        try {
+            IO.execute(() -> {
+                try {
+                    flush(app);
+                } catch (Throwable ignored) {
+                    // A replay that cannot start is retried on the next start/foreground.
+                } finally {
+                    flushing = false;
+                }
+            });
+        } catch (Throwable rejected) {
+            flushing = false;
+        }
+    }
+
     private static final String PREFS = "cf_outbox_v1";
     private static final int MAX_ENTRIES = 200;
     private static final Object LOCK = new Object();
