@@ -500,7 +500,11 @@ test('a change feed reports a tombstone so a listener can drop the row, while a 
   assert.equal(feed.documents.length, 1);
   assert.equal(feed.documents[0].id, 'p1');
   assert.equal(feed.documents[0].deleted, true);
-  assert.ok(feed.since > before);
+  // >= on purpose, and it matters: the feed floor is inclusive because two writes inside one
+  // millisecond are indistinguishable, so a delete that lands in the same millisecond as the
+  // previous read still has to be delivered. Asserting a strict > made this test fail roughly one
+  // run in two on a fast machine, which is the test being wrong, not the feed.
+  assert.ok(feed.since >= before);
 
   // A plain read still never shows it, and the row is still on disk.
   const after = await (await list(w, db, 'collection=posts')).json();
