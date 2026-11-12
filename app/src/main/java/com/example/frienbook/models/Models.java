@@ -191,6 +191,8 @@ public class Models {
     public static class Reel {
         public String id, authorId, authorName, authorPhoto, videoUrl, caption;
         public int likes, comments, shares;
+        /** Live total from the Cloudflare Worker (Analytics Engine). Firestore never stores it. */
+        public long views;
         public long createdAt;
         public List<String> likedBy = new ArrayList<>();
 

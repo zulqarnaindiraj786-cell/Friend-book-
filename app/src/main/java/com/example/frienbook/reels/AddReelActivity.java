@@ -101,7 +101,10 @@ public class AddReelActivity extends Activity {
                             "likedBy", new ArrayList<String>(),
                             "createdAt", FieldValue.serverTimestamp());
                     Fb.db().collection("reels").add(m)
-                            .addOnSuccessListener(x -> { Ui.toast(this, "Reel shared 🎉"); finish(); })
+                            .addOnSuccessListener(x -> {
+                                com.example.frienbook.core.CloudflareDocs.mirror("reels", x.getId(), m);
+                                Ui.toast(this, "Reel shared 🎉"); finish();
+                            })
                             .addOnFailureListener(e -> fail());
                 })
                 .addOnFailureListener(e -> fail());

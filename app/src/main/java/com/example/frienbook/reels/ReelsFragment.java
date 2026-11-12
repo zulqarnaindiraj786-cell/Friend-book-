@@ -5,6 +5,8 @@ import android.app.Fragment;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -22,8 +24,10 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
+import com.example.frienbook.core.CloudflareViews;
 import com.example.frienbook.core.Fb;
 import com.example.frienbook.core.Format;
+import com.example.frienbook.core.StudioVectorIcons;
 import com.example.frienbook.core.Notify;
 import com.example.frienbook.core.Ui;
 import com.example.frienbook.models.Models;
@@ -36,8 +40,10 @@ import com.google.firebase.firestore.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Reels tab: full-screen vertical video feed (TikTok-style scroll). */
 public class ReelsFragment extends Fragment {
@@ -45,6 +51,12 @@ public class ReelsFragment extends Fragment {
     private ViewPager2 pager;
     private ReelAdapter adapter;
     private ListenerRegistration reg;
+
+    /** Live view totals from the Cloudflare Worker; Firestore never stores a views field. */
+    private final Map<String, Integer> viewTotals = new HashMap<>();
+    /** One counted view per user per Reel per app session; the Worker and AE refuse repeats anyway. */
+    private final Set<String> sessionCountedViews = new HashSet<>();
+    private final Handler viewTick = new Handler(Looper.getMainLooper());
 
     @Nullable
     @Override
@@ -95,6 +107,17 @@ public class ReelsFragment extends Fragment {
                         }
                     }
                     adapter.setData(list);
+                    // View totals come from Cloudflare Analytics Engine in ONE batched request.
+                    List<String> ids = new ArrayList<>();
+                    for (Models.Reel r : list) ids.add(r.id);
+                    CloudflareViews.fetchViews(CloudflareViews.REELS, ids, totals -> {
+                        viewTotals.putAll(totals);
+                        for (Models.Reel r : list) {
+                            Integer total = totals.get(r.id);
+                            if (total != null) r.views = Math.max(r.views, total);
+                        }
+                        adapter.notifyDataSetChanged();
+                    });
                     pager.postDelayed(() -> adapter.playOnly(pager, pager.getCurrentItem()), 350);
                 });
     }
@@ -102,6 +125,7 @@ public class ReelsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
+        viewTick.removeCallbacksAndMessages(null);
         if (reg != null) reg.remove();
         adapter.stopAll();
     }
@@ -166,6 +190,8 @@ public class ReelsFragment extends Fragment {
         class VH extends RecyclerView.ViewHolder {
             final VideoView video;
             final TextView likeT, likeCount, commentT, commentCount, shareT, nameT, captionT, followT;
+            final ImageView viewIcon;
+            final TextView viewCount;
             final ImageView avatar;
             Models.Reel reel;
 
@@ -190,6 +216,12 @@ public class ReelsFragment extends Fragment {
                 commentCount = Ui.tvBold(a, "0", 12, Color.WHITE);
                 commentCount.setGravity(Gravity.CENTER);
                 shareT = Ui.tv(a, "↗", 30, Color.WHITE);
+                viewIcon = StudioVectorIcons.iconView(a, "eye", 26, Color.WHITE);
+                viewCount = Ui.tvBold(a, "0", 12, Color.WHITE);
+                viewCount.setGravity(Gravity.CENTER);
+                rail.addView(viewIcon);
+                rail.addView(viewCount);
+                rail.addView(spacer(a, 18));
                 rail.addView(likeT);
                 rail.addView(likeCount);
                 rail.addView(spacer(a, 18));
@@ -280,6 +312,9 @@ public class ReelsFragment extends Fragment {
                 likeT.setText(liked ? "❤️" : "🤍");
                 likeCount.setText(Format.count(r.likes));
                 commentCount.setText(Format.count(r.comments));
+                Integer seenViews = CloudflareViews.cached(CloudflareViews.REELS, r.id);
+                int shownViews = (int) Math.max(r.views, seenViews == null ? 0 : seenViews.intValue());
+                viewCount.setText(Format.count(shownViews));
                 video.setVideoURI(android.net.Uri.parse(r.videoUrl));
                 video.setOnPreparedListener(mp -> { mp.setLooping(true); });
             }
@@ -290,10 +325,28 @@ public class ReelsFragment extends Fragment {
                     video.seekTo(0);
                     video.start();
                 }
+                scheduleViewCount();
             }
 
             void pause() {
+                viewTick.removeCallbacksAndMessages(null);
                 if (video.isPlaying()) video.pause();
+            }
+
+            /** One second of real watching counts this user's ONE view - in Cloudflare, never Firestore. */
+            void scheduleViewCount() {
+                if (reel == null) return;
+                viewTick.removeCallbacksAndMessages(null);
+                final Models.Reel r = reel;
+                viewTick.postDelayed(() -> {
+                    if (reel != r || !video.isPlaying()) return;
+                    if (!sessionCountedViews.add(r.id)) return;
+                    CloudflareViews.recordView(CloudflareViews.REELS, r.id, total -> {
+                        r.views = Math.max(r.views, total);
+                        viewTotals.put(r.id, total);
+                        if (reel == r) viewCount.setText(Format.count(total));
+                    });
+                }, 1000);
             }
 
             private void like(boolean fromDoubleTap) {

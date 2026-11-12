@@ -627,7 +627,10 @@ public class CreatePostActivity extends Activity {
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("posts").add(m)
-                .addOnSuccessListener(x -> { Ui.toast(this, "Posted ✓"); finish(); })
+                .addOnSuccessListener(x -> {
+                    com.example.frienbook.core.CloudflareDocs.mirror("posts", x.getId(), m);
+                    Ui.toast(this, "Posted ✓"); finish();
+                })
                 .addOnFailureListener(e -> fail(e.getMessage()));
     }
 
