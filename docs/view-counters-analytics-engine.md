@@ -96,10 +96,13 @@ remembers what worked for the life of the isolate:
    Each event still carries a metric: **1** when that view counted as the user's first one, **0** for
    a repeat. That is what makes `sum(double1)` a second, independent viewer count and `count()` the
    number of plays, and it costs nothing extra — one view is one event either way.
-2. `POST /client/v4/graphql` — `viewer.accounts.<dataset>` with `dimensions { name count uniq }`.
-   The dataset's real field name is not guessed: `cloudflare/report-views-ae.mjs` walks the schema
-   (`__schema { queryType }` → `viewer` → `accounts` → the Analytics Engine fields) and publishes each
-   hop, because a guessed `__type(name: "Viewer")` answered `{"data":{"__type":null}}`.
+2. `POST /client/v4/graphql` — kept as a fallback, but on this account it is **not** the working path:
+   `viewer.accounts.friendbook_views` answers `HTTP 200 {"errors":[{"message":"unknown field
+   \"friendbook_views\""}]}`, and the schema walk (`__schema { queryType }` → `viewer` → `accounts`)
+   shows the Analytics Engine adapter is one grouped field, `workersAnalyticsEngineAdaptiveGroups`,
+   which answers `error parsing args … filter: not an object` unless a filter object is sent. The SQL
+   endpoint above is what serves the counts; every hop of the walk is published on the pull request so
+   this is a measured fact, not an assumption.
 
 Reads need `CF_AE_TOKEN` (an **encrypted Worker secret**, never a plaintext `--var`) and
 `CF_ACCOUNT_ID`. Without them the Worker still writes every event and still counts from the snapshot

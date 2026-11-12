@@ -206,7 +206,9 @@ async function discoverGraphqlFields() {
     || discovered.fields.find((name) => /analyticsengine/i.test(name));
   if (match) {
     discovered.probe = await postGraphql(
-      `query ($tag: string!) { viewer { accounts(filter: { accountTag: $tag }) { ${match}(limit: ${LIMIT})`
+      // The adapter answered 'filter: not an object' without one, so it is sent explicitly: this
+      // probe exists to learn the real GraphQL shape, not to assume it.
+      `query ($tag: string!) { viewer { accounts(filter: { accountTag: $tag }) { ${match}(filter: {}, limit: ${LIMIT})`
       + ' { dimensions { name count uniq } } } } }',
       { tag: account }, `AE GraphQL ${match}`,
     );
@@ -340,7 +342,7 @@ const lines = [
   `- Analytics Engine queryable with this token: **${sqlOk ? 'YES' : 'NO'}**`,
   `- \`count(DISTINCT blob3)\` accepted (AE de-duplicates each uid itself): **${distinctOk ? 'YES' : 'NO'}**`,
   `- \`sum(double1)\` accepted (the fallback viewer count): **${sumOk ? 'YES' : 'NO'}**`,
-  `- GraphQL dataset field discovered: **${graphql.fields.length > 0 ? graphql.fields.join(', ') : 'NO'}**`,
+  `- GraphQL dataset field discovered: **${graphql.probe?.field || 'NO (SQL is the working path)'}**`,
   `- Workers KV snapshot binding live: **${flags.kv === true ? 'YES' : 'NO'}**`
     + ` (R2 snapshot fallback: **${flags.r2Snapshot === true ? 'YES' : 'NO'}**)`,
   `- Analytics Engine read secret present: **${flags.aeReadToken === true ? 'YES' : 'NO'}**`,
