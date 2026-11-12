@@ -79,9 +79,17 @@ public class ReelsFragment extends Fragment {
     private ListenerRegistration reelsReg, videoPostsReg;
     private DocumentSnapshot reelsCursor, postsCursor;
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
+    /** True when a load attempt ended with nothing because the NETWORK failed, not because empty. */
+    private boolean reelsLoadFailed;
+    /** Bounded automatic retries: an outage must end in a visible Retry state, not a retry storm. */
+    private int loadAttempts;
+    /** A load that neither succeeds nor fails (black-hole network) must not strand the spinner. */
+    private final android.os.Handler reelsWatchdog = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int watchdogGen;
     private int videoGeneration;
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
     private LinearLayout emptyState;
+    private LinearLayout loadErrorState;
     private LinearLayout initialLoadingBox;
     private LinearLayout uploadStatusBanner;
     private TextView uploadStatusText;
@@ -195,6 +203,28 @@ public class ReelsFragment extends Fragment {
         emptyState.addView(createNow, clp);
         root.addView(emptyState, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
+        // Network-failure state: an endless spinner is the worst answer a slow network can get.
+        loadErrorState = Ui.col(a);
+        loadErrorState.setGravity(Gravity.CENTER);
+        Ui.pad(loadErrorState, 28, 28, 28, 28);
+        loadErrorState.setVisibility(View.GONE);
+        ImageView ni = com.friendbook.social.core.StudioVectorIcons.iconView(a, "globe", 62, 0x66FFFFFF);
+        loadErrorState.addView(ni, new LinearLayout.LayoutParams(Ui.dp(a, 68), Ui.dp(a, 68)));
+        TextView nt1 = Ui.tvBold(a, "Couldn't load Reels", 19, Color.WHITE);
+        nt1.setGravity(Gravity.CENTER);
+        nt1.setPadding(0, Ui.dp(a, 10), 0, Ui.dp(a, 4));
+        loadErrorState.addView(nt1, new LinearLayout.LayoutParams(-2, -2));
+        TextView nt2 = Ui.tv(a, "The network did not answer. Your Reels are safe — try again.", 13.5f, 0xBBFFFFFF);
+        nt2.setGravity(Gravity.CENTER);
+        loadErrorState.addView(nt2, new LinearLayout.LayoutParams(-2, -2));
+        TextView retryNow = com.friendbook.social.core.StudioVectorIcons.iconChip(
+                a, "play", "Retry", 15f, Ui.BLUE, Color.WHITE, Color.WHITE);
+        LinearLayout.LayoutParams retryLp = new LinearLayout.LayoutParams(-2, -2);
+        retryLp.topMargin = Ui.dp(a, 18);
+        retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });
+        loadErrorState.addView(retryNow, retryLp);
+        root.addView(loadErrorState, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+
         // Initial Loading Indicator (so opening Reels NEVER shows a blank black screen!)
         initialLoadingBox = Ui.col(a);
         initialLoadingBox.setGravity(Gravity.CENTER);
@@ -203,7 +233,10 @@ public class ReelsFragment extends Fragment {
         initialLoadingBox.addView(initSpin, new LinearLayout.LayoutParams(Ui.dp(a, 42), Ui.dp(a, 42)));
         TextView initTxt = Ui.tvBold(a, "Loading Videos…", 14.5f, 0xEEFFFFFF);
         initTxt.setPadding(0, Ui.dp(a, 10), 0, 0);
-        initialLoadingBox.addView(initTxt);
+        initTxt.setGravity(Gravity.CENTER);
+        // Explicit WRAP_CONTENT: inside this wrap-content box the LinearLayout default (MATCH_PARENT
+        // width) measured the text against nothing and visibly clipped it to "Loadi".
+        initialLoadingBox.addView(initTxt, new LinearLayout.LayoutParams(-2, -2));
         root.addView(initialLoadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         // Top Overlay Stack (Header + Live Background Upload Progress Pill)
@@ -444,8 +477,11 @@ public class ReelsFragment extends Fragment {
         if (initialLoadingBox != null) {
             initialLoadingBox.setVisibility((merged.isEmpty() && pagingVideos) ? View.VISIBLE : View.GONE);
         }
+        if (loadErrorState != null) {
+            loadErrorState.setVisibility((merged.isEmpty() && !pagingVideos && reelsLoadFailed) ? View.VISIBLE : View.GONE);
+        }
         if (emptyState != null) {
-            emptyState.setVisibility((merged.isEmpty() && !pagingVideos) ? View.VISIBLE : View.GONE);
+            emptyState.setVisibility((merged.isEmpty() && !pagingVideos && !reelsLoadFailed) ? View.VISIBLE : View.GONE);
         }
 
         boolean wasEmpty = adapter.rawReels().isEmpty();
@@ -518,6 +554,8 @@ public class ReelsFragment extends Fragment {
 
     private void resetVideoPages() {
         videoGeneration++; pagingVideos=false; moreReels=true; moreVideoPosts=true;
+        reelsLoadFailed=false; loadAttempts=0; watchdogGen++;
+        reelsWatchdog.removeCallbacksAndMessages(null);
         reelsCursor=null; postsCursor=null; loadedVideoIds.clear(); fromReels.clear(); fromPosts.clear();
 
         // 1. 0.0ms Instant Launch when clicking a Video Post from Home Feed / Watch / Profile!
@@ -623,7 +661,19 @@ public class ReelsFragment extends Fragment {
     }
     private void loadNextVideos() {
         if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
-        pagingVideos=true; final int generation=videoGeneration; final String actor=Fb.uid();
+        pagingVideos=true; reelsLoadFailed=false; final int generation=videoGeneration; final String actor=Fb.uid();
+        // A Firestore get() on a black-hole network calls NEITHER listener. Without this watchdog the
+        // opening spinner would spin forever; after 15s the user gets the failure state and a Retry.
+        reelsWatchdog.removeCallbacksAndMessages(null);
+        final int wdGen=++watchdogGen;
+        reelsWatchdog.postDelayed(() -> {
+            if (wdGen != watchdogGen || generation != videoGeneration || !isAdded()) return;
+            if (!pagingVideos || (adapter != null && !adapter.rawReels().isEmpty())) return;
+            pagingVideos=false;
+            reelsLoadFailed=true;
+            rebuildMergedFeed(true);
+            if (getActivity() != null) Ui.toast(getActivity(), "Network slow — tap Retry to load Reels");
+        }, 15_000L);
         if (reelsCursor == null && postsCursor == null) {
             com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
                 if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
@@ -646,9 +696,14 @@ public class ReelsFragment extends Fragment {
             if(generation!=videoGeneration) return;
             if(--pending[0]==0) {
                 pagingVideos=false;
+                watchdogGen++;
+                reelsWatchdog.removeCallbacksAndMessages(null);
                 if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
-                    loadNextVideos();
+                    // An outage must NOT become a retry storm: three attempts, then a visible Retry.
+                    if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
+                    else { reelsLoadFailed=true; rebuildMergedFeed(true); }
                 } else {
+                    reelsLoadFailed=false;
                     rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 }
             }
@@ -660,25 +715,31 @@ public class ReelsFragment extends Fragment {
             DocumentSnapshot cursor=nativeReel?reelsCursor:postsCursor;
             if(cursor!=null) query=query.startAfter(cursor);
             query.limit(5).get().addOnSuccessListener(page -> {
-                if(generation!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-                if(nativeReel) { moreReels=page.size()==5; if(!page.isEmpty()) reelsCursor=page.getDocuments().get(page.size()-1); }
-                else { moreVideoPosts=page.size()==5; if(!page.isEmpty()) postsCursor=page.getDocuments().get(page.size()-1); }
-                boolean addedNow = false;
-                for(DocumentSnapshot doc:page) {
-                    if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                    Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
-                    if(reel.videoUrl==null || reel.videoUrl.isEmpty()) continue;
-                    if(Fb.me!=null && Fb.me.blocked.contains(reel.authorId)) continue;
-                    if(Prefs.isPostHidden(getActivity(),reel.id)) continue;
-                    if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) continue;
-                    if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
-                        (nativeReel?fromReels:fromPosts).add(reel);
-                        addedNow = true;
+                // A superseded generation returns without settling: the newer load owns pagingVideos.
+                if(generation!=videoGeneration) return;
+                // But an auth flip or a hide/show MUST NOT swallow the settle - that is exactly how
+                // pagingVideos stayed true forever and the opening spinner never went away. The page
+                // is simply not applied when it no longer belongs to this session.
+                if(java.util.Objects.equals(actor,Fb.uid()) && isAdded()) {
+                    if(nativeReel) { moreReels=page.size()==5; if(!page.isEmpty()) reelsCursor=page.getDocuments().get(page.size()-1); }
+                    else { moreVideoPosts=page.size()==5; if(!page.isEmpty()) postsCursor=page.getDocuments().get(page.size()-1); }
+                    boolean addedNow = false;
+                    for(DocumentSnapshot doc:page) {
+                        if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                        Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+                        if(reel.videoUrl==null || reel.videoUrl.isEmpty()) continue;
+                        if(Fb.me!=null && Fb.me.blocked.contains(reel.authorId)) continue;
+                        if(Prefs.isPostHidden(getActivity(),reel.id)) continue;
+                        if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) continue;
+                        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
+                            (nativeReel?fromReels:fromPosts).add(reel);
+                            addedNow = true;
+                        }
                     }
+                    if (addedNow) rebuildMergedFeed(false);
                 }
-                if (addedNow) rebuildMergedFeed(false);
                 done.run();
-            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load videos — tap More videos to retry"); } });
+            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load Reels — tap Retry"); } });
         }
     }
 
@@ -720,7 +781,8 @@ public class ReelsFragment extends Fragment {
     public void onStop() {
         super.onStop();
         AdsConfig.setReelsPoolListener(null);
-        videoGeneration++; pagingVideos=false;
+        videoGeneration++; pagingVideos=false; watchdogGen++;
+        reelsWatchdog.removeCallbacksAndMessages(null);
         ReelUploadManager.removeListener(bgUploadListener);
         if (reelsReg != null) { reelsReg.remove(); reelsReg = null; }
         if (videoPostsReg != null) { videoPostsReg.remove(); videoPostsReg = null; }
