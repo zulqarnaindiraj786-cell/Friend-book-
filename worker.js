@@ -10,7 +10,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 const googleKeys = createRemoteJWKSet(new URL(
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
 ));
-export async function verifyFirebaseToken(token, project, keys = googleKeys) {
+export async function verifyFirebaseIdentity(token, project, keys = googleKeys) {
   if (!project) throw new Error('Firebase project is not configured');
   const { payload } = await jwtVerify(token, keys, {
     algorithms: ['RS256'], audience: project,
@@ -22,12 +22,16 @@ export async function verifyFirebaseToken(token, project, keys = googleKeys) {
       typeof payload.auth_time !== 'number' || payload.auth_time > Date.now() / 1000 + 5) {
     throw new Error('Invalid Firebase identity');
   }
-  return payload.sub;
+  // The email claim only ever decides the owner-admin shortcut; the uid is the identity.
+  return { uid: payload.sub, email: typeof payload.email === 'string' ? payload.email.slice(0, 200) : '' };
+}
+export async function verifyFirebaseToken(token, project, keys = googleKeys) {
+  return (await verifyFirebaseIdentity(token, project, keys)).uid;
 }
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
-export function createWorker(verify = verifyFirebaseToken) {
+export function createWorker(verify = verifyFirebaseIdentity) {
   return {
     async fetch(request, env, ctx) {
       const path = new URL(request.url).pathname;
@@ -47,7 +51,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (path === '/v1/config') return appConfig(request, env);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
-      const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
+      const docs = path === '/v1/docs' || path === '/v1/docs/batch' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
@@ -79,12 +83,17 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (!env.FIREBASE_PROJECT_ID) return json({ error: 'Service unavailable' }, 503);
       const bearer = /^Bearer ([^\s]+)$/i.exec(request.headers.get('Authorization') || '');
       if (!bearer || bearer[1].length > 8192) return json({ error: 'Unauthorized' }, 401);
-      let uid;
-      try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
-      catch { return json({ error: 'Unauthorized' }, 401); }
+      let uid, email = '';
+      try {
+        // A verifier may answer with a uid string (tests, older callers) or with the identity object.
+        const verified = await verify(bearer[1], env.FIREBASE_PROJECT_ID);
+        uid = typeof verified === 'string' ? verified : verified?.uid;
+        email = typeof verified === 'object' && verified && typeof verified.email === 'string' ? verified.email : '';
+      } catch { return json({ error: 'Unauthorized' }, 401); }
+      if (typeof uid !== 'string' || !uid.length || uid.length > 128) return json({ error: 'Unauthorized' }, 401);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
-      if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
+      if (docs) return appDocuments(request, env, { uid, email, token: bearer[1] });
       // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
       // KV aggregate write happen after the response is already sent.
       if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);
