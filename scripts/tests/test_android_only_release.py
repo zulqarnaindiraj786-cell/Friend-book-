@@ -17,8 +17,22 @@ class AndroidOnlyReleaseTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         for required in ('testReleaseUnitTest bundleRelease assembleRelease',
                          'friendbook-playstore.aab', 'friendbook.apk',
-                         'friendbook-mapping.txt', 'FriendBook-release-mapping',
+                         'friendbook-mapping.txt',
                          'Reject private credentials in Android sources',
                          'Publish Signed Release APK + Play Store AAB'):
             self.assertIn(required, workflow)
         self.assertIn('contents: write', workflow)
+        # The three binaries are still produced and published - as GitHub Release assets, because the
+        # account's Actions artifact storage is exhausted and a failed convenience upload used to turn
+        # a successful compile into a red run. A release asset cannot be lost that way.
+        self.assertIn('gh release', workflow)
+        self.assertIn('publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber', workflow)
+        # Test lines publish a PRE-release with their own tag: the production "latest" APK that
+        # in-app updates serve is only ever written from main.
+        self.assertIn('--prerelease --latest=false', workflow)
+        self.assertIn('REF_NAME', workflow)
+
+    def test_no_actions_artifact_upload_can_block_the_build(self):
+        workflow = WORKFLOW.read_text()
+        self.assertNotIn('uses: actions/upload-artifact', workflow)
+        self.assertNotIn('retention-days:', workflow)

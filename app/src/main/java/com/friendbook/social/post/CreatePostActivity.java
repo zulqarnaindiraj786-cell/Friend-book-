@@ -869,6 +869,7 @@ public class CreatePostActivity extends Activity {
             m.put("editedAt", FieldValue.serverTimestamp());
             if (com.friendbook.social.core.CloudflareStore.enabled()) {
                 com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
+                com.friendbook.social.core.CloudflareDocs.mirror("posts", editId, m);
             } else {
                 Fb.db().collection("posts").document(editId).update(m);
             }
@@ -944,6 +945,10 @@ public class CreatePostActivity extends Activity {
         };
         if (com.friendbook.social.core.CloudflareStore.enabled()) {
             com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
+            // The same document also goes to the Cloudflare D1 mirror (/v1/docs) so the post exists
+            // outside Firestore the moment it is published. Additive and fire-and-forget: a Worker
+            // outage cannot block posting.
+            com.friendbook.social.core.CloudflareDocs.mirror("posts", docRef.getId(), m);
         } else {
             docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
                     android.util.Log.e("CreatePost", "Background sync failed: " + e));

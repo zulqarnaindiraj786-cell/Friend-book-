@@ -1,0 +1,70 @@
+name: Cleanup Actions artifacts (frees storage quota)
+
+# The account's Actions artifact storage filled up (488 artifacts, ~3 GB) and GitHub then refuses
+# EVERY upload-artifact on EVERY branch with "Artifact storage quota has been hit". Those artifacts are
+# regeneratable build outputs - the signed binaries live in GitHub Releases - so this workflow drains
+# the storage with the job token's `actions: write` permission (the session token does not have it).
+#
+# Run it once by hand (Actions -> this workflow -> Run workflow) to unblock the account immediately;
+# the weekly schedule then keeps it from ever filling again.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '20 3 * * 0'   # weekly, Sunday 03:20 UTC
+
+permissions:
+  actions: write
+
+concurrency:
+  group: friendbook-artifact-cleanup
+  cancel-in-progress: false
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Delete every Actions artifact (they are regeneratable build outputs)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          deleted=0
+          failed=0
+          page=1
+          while : ; do
+            body=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/actions/artifacts?per_page=100&page=$page")
+            ids=$(printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(str(a["id"]) for a in d.get("artifacts", [])))')
+            if [ -z "$ids" ]; then
+              # page 1 empty means the storage is already clean; a later empty page means we are done
+              break
+            fi
+            for id in $ids; do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/actions/artifacts/$id")
+              if [ "$code" = "204" ] || [ "$code" = "404" ]; then
+                deleted=$((deleted+1))
+              else
+                failed=$((failed+1))
+                echo "::warning::artifact $id delete returned HTTP $code"
+              fi
+            done
+            echo "deleted so far: $deleted (errors: $failed)"
+            # Always re-read page 1: deleting shifts the list, so paging forward would skip artifacts.
+            page=1
+          done
+          echo "total deleted: $deleted"
+          {
+            echo "## Artifact storage cleanup"
+            echo "- deleted this run: **$deleted**"
+            echo "- failed deletions: **$failed**"
+            echo "- GitHub itself purges artifacts younger than the retention window after 24h; this workflow removes the rest."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed artifacts could not be deleted - check the job token's actions:write permission"
+            exit 1
+          fi

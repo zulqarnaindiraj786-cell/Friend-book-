@@ -81,12 +81,24 @@ public class ReelsFragment extends Fragment {
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
     /** True when a load attempt ended with nothing because the NETWORK failed, not because empty. */
     private boolean reelsLoadFailed;
-    /** Bounded automatic retries: an outage must end in a visible Retry state, not a retry storm. */
-    private int loadAttempts;
     /** A load that neither succeeds nor fails (black-hole network) must not strand the spinner. */
     private final android.os.Handler reelsWatchdog = new android.os.Handler(android.os.Looper.getMainLooper());
-    private int watchdogGen;
     private int videoGeneration;
+    /**
+     * The load that is running RIGHT NOW. Every layer of this screen used to own a different
+     * "is it still loading" idea, and the ones that only knew Cloudflare's answer arrived later
+     * than the answer itself: the settle callback walked into guards that threw the page away and
+     * `pagingVideos` stayed true forever, which is exactly a Reels tab stuck on "Load…" until the
+     * user left the tab and came back (a fresh fragment then loaded instantly). One ticket, one
+     * settle, first source wins.
+     */
+    private ReelLoad currentLoad;
+    /**
+     * The newest Reels this session has already seen (Cloudflare's answer, or the disk cache while
+     * an answer is pending), ready to render the instant the tab appears - so opening Reels a second
+     * (or tenth) time never shows a spinner at all.
+     */
+    private final List<Models.Reel> sessionSeedReels = new ArrayList<>();
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
     private LinearLayout emptyState;
     private LinearLayout loadErrorState;
@@ -231,7 +243,7 @@ public class ReelsFragment extends Fragment {
         Ui.pad(initialLoadingBox, 24, 24, 24, 24);
         ProgressBar initSpin = new ProgressBar(a);
         initialLoadingBox.addView(initSpin, new LinearLayout.LayoutParams(Ui.dp(a, 42), Ui.dp(a, 42)));
-        TextView initTxt = Ui.tvBold(a, "Loading Videos…", 14.5f, 0xEEFFFFFF);
+        TextView initTxt = Ui.tvBold(a, "Loading Reels…", 14.5f, 0xEEFFFFFF);
         initTxt.setPadding(0, Ui.dp(a, 10), 0, 0);
         initTxt.setGravity(Gravity.CENTER);
         // Explicit WRAP_CONTENT: inside this wrap-content box the LinearLayout default (MATCH_PARENT
@@ -554,8 +566,11 @@ public class ReelsFragment extends Fragment {
 
     private void resetVideoPages() {
         videoGeneration++; pagingVideos=false; moreReels=true; moreVideoPosts=true;
-        reelsLoadFailed=false; loadAttempts=0; watchdogGen++;
+        reelsLoadFailed=false;
         reelsWatchdog.removeCallbacksAndMessages(null);
+        // A reset supersedes whatever was in flight: its ticket dies with the old generation, so it
+        // can never mark "loading finished" for the load this reset is about to start.
+        currentLoad=null;
         reelsCursor=null; postsCursor=null; loadedVideoIds.clear(); fromReels.clear(); fromPosts.clear();
 
         // 1. 0.0ms Instant Launch when clicking a Video Post from Home Feed / Watch / Profile!
@@ -582,8 +597,20 @@ public class ReelsFragment extends Fragment {
             }
         }
 
-        // 2. 0.0ms Instant Seed from FastCache (Home Feed videos already in memory!)
+        // 2. 0.0ms Instant Seed: everything Cloudflare already handed us this session, then the
+        //    Home Feed videos already in memory (FastCache). Re-opening the tab therefore paints
+        //    instantly instead of spinning.
         boolean hasPinnedTarget = (initialReelId == null || initialReelId.isEmpty());
+        for (Models.Reel r : sessionSeedReels) {
+            if (r == null || r.videoUrl == null || r.videoUrl.isEmpty()) continue;
+            if (Fb.me != null && Fb.me.blocked.contains(r.authorId)) continue;
+            if (com.friendbook.social.core.Prefs.isPostHidden(getActivity(), r.id)) continue;
+            if (loadedVideoIds.add((r.isFromPost ? "posts/" : "reels/") + r.id)) {
+                if (r.isFromPost) fromPosts.add(r);
+                else fromReels.add(r);
+            }
+            if (initialReelId != null && initialReelId.equals(r.id)) hasPinnedTarget = true;
+        }
         for (Models.Reel r : fromReels) {
             if (r != null && initialReelId != null && initialReelId.equals(r.id)) hasPinnedTarget = true;
         }
@@ -624,9 +651,13 @@ public class ReelsFragment extends Fragment {
                             added = true;
                         }
                     }
-                    if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
+                    // Disk-cache Reels are only a seed: never paint them over a fresher page, and
+                    // never end a load on their account.
+                    if (added) rememberSeedReels(fromReels);
                 });
 
+        // The reset IS a load: claim the paging flag here so the opening spinner is honest and a
+        // concurrent load can never start on top of this one (loadNextVideos refuses when detached).
         loadNextVideos();
         if(initialReelId!=null && !initialReelId.isEmpty()) {
             final int request=videoGeneration; final String target=initialReelId; final String actor=Fb.uid();
@@ -638,6 +669,50 @@ public class ReelsFragment extends Fragment {
                 });
             });
         }
+    }
+
+    /**
+     * Paints the Reels Cloudflare already returned this session, without any network wait. This is
+     * what makes re-opening the tab instant, and it also covers the "tab was hidden while the very
+     * first page was in flight" case.
+     */
+    private void seedFromSessionReels() {
+        if (adapter == null || sessionSeedReels.isEmpty()) return;
+        boolean added = false;
+        for (Models.Reel r : sessionSeedReels) {
+            if (r == null || r.videoUrl == null || r.videoUrl.isEmpty()) continue;
+            if (Fb.me != null && Fb.me.blocked.contains(r.authorId)) continue;
+            if (Prefs.isPostHidden(getActivity(), r.id)) continue;
+            String key = (r.isFromPost ? "posts/" : "reels/") + r.id;
+            if (!loadedVideoIds.add(key)) continue;
+            if (r.isFromPost) fromPosts.add(r); else fromReels.add(r);
+            added = true;
+        }
+        if (added) {
+            reelsLoadFailed = false;
+            rebuildMergedFeed(true);
+        }
+    }
+
+    /** Keeps the newest Reels so the next open of the tab paints without waiting again. */
+    private void rememberSeedReels(List<Models.Reel> reels) {
+        if (reels == null) return;
+        for (Models.Reel r : reels) {
+            if (r == null || r.id == null || r.id.isEmpty()) continue;
+            if (r.videoUrl == null || r.videoUrl.isEmpty()) continue;
+            boolean replaced = false;
+            for (int i = 0; i < sessionSeedReels.size(); i++) {
+                Models.Reel known = sessionSeedReels.get(i);
+                if (known != null && r.id.equals(known.id) && known.isFromPost == r.isFromPost) {
+                    sessionSeedReels.set(i, r);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) sessionSeedReels.add(r);
+        }
+        // Bounded: it is a paint-fast seed, not a second copy of the whole library.
+        while (sessionSeedReels.size() > 60) sessionSeedReels.remove(sessionSeedReels.size() - 1);
     }
     private void addLinkedVideo(DocumentSnapshot doc,boolean nativeReel) {
         if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) return;
@@ -659,87 +734,177 @@ public class ReelsFragment extends Fragment {
         boolean wasEmpty = (adapter == null || adapter.rawReels().isEmpty());
         rebuildMergedFeed(wasEmpty);
     }
+    /**
+     * One opening / paging load with exactly one settle point.
+     *
+     * Why this shape: the tab used to open with two independent sources (Cloudflare, then
+     * Firestore) and every callback had its own guards. The Cloudflare answer regularly arrived
+     * after auth had finished restoring, or while the fragment was momentarily not added, so the
+     * listener returned without settling - `pagingVideos` stayed true, every later load
+     * early-returned, and the tab sat on "Load…" until it was closed and reopened (a brand-new
+     * fragment then loaded fine). Now the FIRST source that answers becomes the page, the ticket
+     * rings exactly once, and whoever holds the ticket settles the screen no matter what happened
+     * to the uid or the fragment in between. Reels therefore load on the FIRST open.
+     */
     private void loadNextVideos() {
-        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
-        pagingVideos=true; reelsLoadFailed=false; final int generation=videoGeneration; final String actor=Fb.uid();
-        // A Firestore get() on a black-hole network calls NEITHER listener. Without this watchdog the
-        // opening spinner would spin forever; after 15s the user gets the failure state and a Retry.
-        reelsWatchdog.removeCallbacksAndMessages(null);
-        final int wdGen=++watchdogGen;
-        reelsWatchdog.postDelayed(() -> {
-            if (wdGen != watchdogGen || generation != videoGeneration || !isAdded()) return;
-            if (!pagingVideos || (adapter != null && !adapter.rawReels().isEmpty())) return;
-            pagingVideos=false;
-            reelsLoadFailed=true;
-            rebuildMergedFeed(true);
-            if (getActivity() != null) Ui.toast(getActivity(), "Network slow — tap Retry to load Reels");
-        }, 15_000L);
-        if (reelsCursor == null && postsCursor == null) {
-            com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
-                if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
-                boolean added = false;
-                for (Map<String, Object> m : docs) {
-                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
-                    if (id.isEmpty()) continue;
-                    Models.Reel reel = Models.Reel.fromMap(id, m);
-                    if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
-                    if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
-                    if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
-                    if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added = true; }
-                }
-                if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
-            });
+        if (pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
+        pagingVideos = true; reelsLoadFailed = false;
+        // Five metadata documents per source per batch, exactly as before: at most ten.
+        loadFromCloudflareThenFirestore(5);
+    }
+
+    private static final class ReelLoad {
+        final int generation;
+        final String actor;
+        /** Firestore page size for the two sources of one batch: at most ten metadata documents. */
+        final int limit;
+        boolean done;
+        int pending;
+        ReelLoad(int generation, String actor, int limit) {
+            this.generation = generation; this.actor = actor; this.limit = limit;
         }
-        // Two sources contribute five metadata documents each: at most ten per batch.
-        final int[] pending={(moreReels?1:0)+(moreVideoPosts?1:0)};
-        Runnable done=() -> {
-            if(generation!=videoGeneration) return;
-            if(--pending[0]==0) {
-                pagingVideos=false;
-                watchdogGen++;
-                reelsWatchdog.removeCallbacksAndMessages(null);
-                if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
-                    // An outage must NOT become a retry storm: three attempts, then a visible Retry.
-                    if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
-                    else { reelsLoadFailed=true; rebuildMergedFeed(true); }
-                } else {
-                    reelsLoadFailed=false;
+    }
+
+    /**
+     * Cloudflare first, Firestore as the fallback. This is the FIRST-open path: the D1 mirror is
+     * asked for the newest Reels, and if it has nothing to show (or does not answer in time) the
+     * Firestore page is requested instead - one page, one result, never "loading forever".
+     */
+    private void loadFromCloudflareThenFirestore(int limit) {
+        if (!isAdded()) { pagingVideos = false; return; }
+        final int pageSize = Math.max(1, Math.min(10, limit));
+        final ReelLoad ticket = new ReelLoad(videoGeneration, Fb.uid(), pageSize);
+        currentLoad = ticket;
+        // One live timer per load, never a pile of them.
+        reelsWatchdog.removeCallbacksAndMessages(null);
+
+        // A black-hole network must never strand the spinner: after 12s the ticket fails visibly.
+        reelsWatchdog.postDelayed(() -> {
+            if (currentLoad != ticket || ticket.done) return;
+            settleLoad(ticket, true, "open");
+        }, 12_000L);
+
+        // Only the FIRST page is asked of Cloudflare. Later pages belong to the Firestore cursor
+        // that owns them, so the mirror is never hit for a page it cannot address.
+        boolean firstPage = reelsCursor == null && postsCursor == null;
+        if (!firstPage || !com.friendbook.social.core.CloudflareStore.enabled()) {
+            loadFirestorePage(ticket);
+            return;
+        }
+        com.friendbook.social.core.CloudflareStore.list("reels", Math.max(ticket.limit, 5), docs -> {
+            if (ticket.done) return;
+            // Even when this ticket no longer belongs to the current generation, its page is still
+            // real data: remember it for the next open, then let the ticket settle.
+            int added = 0;
+            if (docs != null) added = applyCloudflarePage(docs, ticket.limit);
+            if (added > 0) {
+                rememberSeedReels(fromReels);
+                // Paint first, settle second: the settle is what clears the opening spinner.
+                if (ticket.generation == videoGeneration) {
                     rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 }
+                settleLoad(ticket, false, "cloudflare");
+            } else {
+                // Cloudflare has nothing (or refused): the Firestore fallback answers for this ticket.
+                loadFirestorePage(ticket);
             }
-        };
-        for(boolean nativeReel:new boolean[]{true,false}) {
-            if(nativeReel?!moreReels:!moreVideoPosts) continue;
-            Query query=nativeReel?Fb.db().collection("reels").orderBy("createdAt",Query.Direction.DESCENDING)
-                    :Fb.db().collection("posts").whereEqualTo("mediaType","video");
-            DocumentSnapshot cursor=nativeReel?reelsCursor:postsCursor;
-            if(cursor!=null) query=query.startAfter(cursor);
-            query.limit(5).get().addOnSuccessListener(page -> {
-                // A superseded generation returns without settling: the newer load owns pagingVideos.
-                if(generation!=videoGeneration) return;
-                // But an auth flip or a hide/show MUST NOT swallow the settle - that is exactly how
-                // pagingVideos stayed true forever and the opening spinner never went away. The page
-                // is simply not applied when it no longer belongs to this session.
-                if(java.util.Objects.equals(actor,Fb.uid()) && isAdded()) {
-                    if(nativeReel) { moreReels=page.size()==5; if(!page.isEmpty()) reelsCursor=page.getDocuments().get(page.size()-1); }
-                    else { moreVideoPosts=page.size()==5; if(!page.isEmpty()) postsCursor=page.getDocuments().get(page.size()-1); }
+        });
+    }
+
+    /** Translates one Cloudflare `/v1/docs` page into Reels. Returns how many were new. */
+    private int applyCloudflarePage(List<Map<String, Object>> docs, int limit) {
+        if (docs == null || docs.isEmpty()) return 0;
+        int added = 0;
+        for (Map<String, Object> m : docs) {
+            if (m == null) continue;
+            String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+            if (id.isEmpty()) continue;
+            Models.Reel reel = Models.Reel.fromMap(id, m);
+            if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
+            if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
+            if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
+            if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added++; }
+        }
+        if (added > 0) {
+            // Another page may exist; the next load continues on the Firestore cursor, which the D1
+            // page cannot advance (mirror rows carry no Firestore snapshot).
+            moreReels = true;
+        }
+        return added;
+    }
+
+    /**
+     * The fallback page: native Reels and video Posts, exactly one batch, one settle. Each source
+     * settles the ticket even when it cannot APPLY its page (auth flip, fragment hidden) - that
+     * early return is what used to leave `pagingVideos` true and the spinner on screen forever.
+     */
+    private void loadFirestorePage(ReelLoad ticket) {
+        ticket.pending = (moreReels ? 1 : 0) + (moreVideoPosts ? 1 : 0);
+        if (ticket.pending == 0) { settleLoad(ticket, false, "empty"); return; }
+        for (boolean nativeReel : new boolean[]{true, false}) {
+            if (nativeReel ? !moreReels : !moreVideoPosts) continue;
+            Query query = nativeReel
+                    ? Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING)
+                    : Fb.db().collection("posts").whereEqualTo("mediaType", "video");
+            DocumentSnapshot cursor = nativeReel ? reelsCursor : postsCursor;
+            if (cursor != null) query = query.startAfter(cursor);
+            query.limit(ticket.limit).get().addOnSuccessListener(page -> {
+                if (ticket.done) return;
+                if (ticket.generation == videoGeneration && isAdded()
+                        && java.util.Objects.equals(ticket.actor, Fb.uid())) {
+                    if (nativeReel) {
+                        moreReels = page.size() == ticket.limit;
+                        if (!page.isEmpty()) reelsCursor = page.getDocuments().get(page.size() - 1);
+                    } else {
+                        moreVideoPosts = page.size() == ticket.limit;
+                        if (!page.isEmpty()) postsCursor = page.getDocuments().get(page.size() - 1);
+                    }
                     boolean addedNow = false;
-                    for(DocumentSnapshot doc:page) {
-                        if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                        Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
-                        if(reel.videoUrl==null || reel.videoUrl.isEmpty()) continue;
-                        if(Fb.me!=null && Fb.me.blocked.contains(reel.authorId)) continue;
-                        if(Prefs.isPostHidden(getActivity(),reel.id)) continue;
-                        if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) continue;
-                        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
-                            (nativeReel?fromReels:fromPosts).add(reel);
+                    for (DocumentSnapshot doc : page) {
+                        if (Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                        Models.Reel reel = nativeReel ? Models.Reel.fromDoc(doc)
+                                : Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+                        if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
+                        if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
+                        if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
+                        if (ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),
+                                nativeReel ? "reels" : "posts", reel.id, reel.authorId, reel.caption,
+                                reel.videoUrl, null)) continue;
+                        if (loadedVideoIds.add((nativeReel ? "reels/" : "posts/") + doc.getId())) {
+                            (nativeReel ? fromReels : fromPosts).add(reel);
                             addedNow = true;
                         }
                     }
                     if (addedNow) rebuildMergedFeed(false);
                 }
-                done.run();
-            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load Reels — tap Retry"); } });
+                if (--ticket.pending == 0) settleLoad(ticket, false, "firestore");
+            }).addOnFailureListener(error -> {
+                if (ticket.done) return;
+                if (--ticket.pending == 0) settleLoad(ticket, true, "firestore");
+            });
+        }
+    }
+
+    /**
+     * The single place a load ends. It always clears `pagingVideos` and always rebuilds the screen,
+     * so "Load…" can only ever be a transition, never a resting state.
+     */
+    private void settleLoad(ReelLoad ticket, boolean failed, String source) {
+        if (ticket == null || ticket.done) return;
+        ticket.done = true;
+        if (currentLoad == ticket) currentLoad = null;
+        reelsWatchdog.removeCallbacksAndMessages(null);
+        if (ticket.generation != videoGeneration) return; // a newer reset owns the screen now
+        pagingVideos = false;
+        boolean empty = fromReels.isEmpty() && fromPosts.isEmpty();
+        if (failed && empty) {
+            reelsLoadFailed = true;
+        } else {
+            reelsLoadFailed = false;
+        }
+        rebuildMergedFeed(empty);
+        if (failed && empty && getActivity() != null && !isHidden()) {
+            Ui.toast(getActivity(), "Couldn't load Reels — tap Retry");
         }
     }
 
@@ -767,7 +932,11 @@ public class ReelsFragment extends Fragment {
         } else {
             AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
             if (adapter.rawReels().isEmpty()) {
-                resetVideoPages();
+                // Coming back to a tab that never got its page (or is brand new): paint from what
+                // Cloudflare already gave us and, only when that is empty, reload.
+                seedFromSessionReels();
+                if (adapter.rawReels().isEmpty()) resetVideoPages();
+                else if (moreReels || moreVideoPosts) loadNextVideos();
             } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
                 loadNextVideos();
             }
@@ -781,7 +950,8 @@ public class ReelsFragment extends Fragment {
     public void onStop() {
         super.onStop();
         AdsConfig.setReelsPoolListener(null);
-        videoGeneration++; pagingVideos=false; watchdogGen++;
+        videoGeneration++; pagingVideos=false;
+        currentLoad = null;
         reelsWatchdog.removeCallbacksAndMessages(null);
         ReelUploadManager.removeListener(bgUploadListener);
         if (reelsReg != null) { reelsReg.remove(); reelsReg = null; }

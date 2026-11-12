@@ -179,36 +179,23 @@ jobs:
           test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
           ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
 
-      - name: Upload Google Play Store Signed AAB
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: FriendBook-playstore-aab
-          path: friendbook-playstore.aab
-          retention-days: 1
-
-      - name: Upload Signed Release APK
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: FriendBook-release-apk
-          path: friendbook.apk
-          retention-days: 1
-
-      - name: Upload R8 Deobfuscation Mapping
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: FriendBook-release-mapping
-          path: friendbook-mapping.txt
-          retention-days: 1
+      - name: List packaged binaries (the binaries live in GitHub Releases, not in Actions artifacts)
+        run: |
+          echo "===== packaged outputs ====="
+          ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
+          echo "No upload-artifact step on purpose: the account's Actions artifact storage is exhausted"
+          echo "(488 artifacts, ~3 GB) and GitHub refuses every new upload until it drains. Signed APK,"
+          echo "AAB and the R8 mapping are published to GitHub Releases by the next step, and the"
+          echo "cleanup-artifacts workflow frees the storage. A convenience upload must never turn a"
+          echo "successful compile into a red run again."
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/362c2faf-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           publish() {
             local OUTPUT CODE
@@ -222,15 +209,25 @@ jobs:
           }
           VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
           VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
-          TAG="v${VER}"
-          TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
+          # main publishes the production release that in-app updates serve. Any other allowed line
+          # publishes a PRE-release with its own tag, so the owner can install and test the exact APK
+          # without touching the production "latest" release (and without any Actions artifact).
+          if [ "$REF_NAME" = "main" ]; then
+            TAG="v${VER}"
+            PRERELEASE=""
+            TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
+          else
+            TAG="v${VER}-test-${REF_NAME##*/}"
+            PRERELEASE="--prerelease --latest=false"
+            TITLE="friendbook ${TAG} (TEST build - not a store release)"
+          fi
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
             publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber
-            publish release edit "$TAG" --latest --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
+            publish release edit "$TAG" $PRERELEASE --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
           else
             publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$TARGET_SHA" \
-              --latest \
+              $PRERELEASE \
               --title "$TITLE" \
               --notes "$NOTES"
           fi

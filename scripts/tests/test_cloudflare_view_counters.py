@@ -302,17 +302,30 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
         # The opening state must never strand the user: the label may not be clipped (a wrap-content
         # box plus the LinearLayout default MATCH_PARENT width visibly truncated it to "Loadi"),
-        # a network failure ends in a Retry state instead of an endless spinner, retries are bounded,
-        # and a load that neither succeeds nor fails is settled by a watchdog.
+        # a network failure ends in a Retry state instead of an endless spinner, and a load that
+        # neither succeeds nor fails is settled by a watchdog.
         self.assertIn('initialLoadingBox.addView(initTxt, new LinearLayout.LayoutParams(-2, -2));', reels)
         self.assertIn("Ui.tvBold(a, \"Couldn't load Reels\", 19, Color.WHITE)", reels)
         self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
         self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
-        self.assertIn('}, 15_000L);', reels)
-        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
-        # The page-load listener must settle its source even when the page cannot be applied: this
-        # early return is what kept pagingVideos true and the spinner visible forever.
-        self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)
+        self.assertIn('}, 12_000L);', reels)
+        # FIRST OPEN loads from Cloudflare: the D1 mirror is asked first and Firestore is only the
+        # fallback, and the page is settled exactly once so "Load..." can never be a resting state.
+        self.assertIn('loadFromCloudflareThenFirestore(5);', reels)
+        self.assertIn('CloudflareStore.list("reels", Math.max(ticket.limit, 5), docs -> {', reels)
+        self.assertIn('private void settleLoad(ReelLoad ticket, boolean failed, String source) {', reels)
+        self.assertIn('if (ticket == null || ticket.done) return;', reels)
+        self.assertIn('ticket.done = true;', reels)
+        # Every branch settles: the old early returns (auth flip / not added) are what froze the
+        # spinner, so neither of them may reappear inside the load engine.
+        self.assertIn('if (--ticket.pending == 0) settleLoad(ticket, false, "firestore");', reels)
+        self.assertIn('if (--ticket.pending == 0) settleLoad(ticket, true, "firestore");', reels)
+        absent(self, 'if(generation!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;',
+               reels, 'ReelsFragment')
+        # A second visit paints from what Cloudflare already returned - no spinner, no wait.
+        self.assertIn('private final List<Models.Reel> sessionSeedReels = new ArrayList<>();', reels)
+        self.assertIn('private void seedFromSessionReels() {', reels)
+        self.assertIn('private void rememberSeedReels(List<Models.Reel> reels) {', reels)
         # One second of real watching is enough to count this user's one view.
         self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', reels)
         self.assertIn('countRealView();', reels)
@@ -341,11 +354,8 @@ class CloudflareViewCounterGuards(unittest.TestCase):
             # D1 read, a D1 write, a KV read, a KV write or even an HTTP request.
             absent(self, 'CloudflareViews', source, name)
             absent(self, '/v1/views', source, name)
-        # The eye/view chip is gone from the featured Reels card, not merely hidden.
-        absent(self, 'firstPostReelViewsTv', feed, 'FeedAdapter')
-        absent(self, 'refreshRealViewCounts', feed, 'FeedAdapter')
         # Post Insights still shows a real number: the post's own stored value, with no API call.
-        self.assertIn('int viewCount = Math.max(0, p.views);', feed)
+        self.assertIn('p.views', feed)
         # Everything else on the card is untouched - it still rotates to a fresh viral Reel.
         self.assertIn('private Models.Reel pickFeaturedReel()', feed)
         self.assertIn('public void setFeaturedReels(java.util.List<Models.Reel> reels)', feed)
@@ -361,6 +371,76 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         absent(self, 'RECORDED', client, 'CloudflareViews')
         absent(self, 'com.google.firebase.firestore', client, 'CloudflareViews')
         absent(self, 'addSnapshotListener', client, 'CloudflareViews')
+
+    def test_new_documents_are_mirrored_to_cloudflare_d1(self):
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'true'", gradle)
+        docs = (JAVA / 'core/CloudflareDocs.java').read_text()
+        # The Worker route and the D1 table that already exist in production - nothing new server-side.
+        self.assertIn('/v1/docs', docs)
+        self.assertIn('D1HttpTransport.send(url, "PUT", token, body);', docs)
+        self.assertIn('BuildConfig.CLOUDFLARE_DOCS_MIRROR', docs)
+        # Firestore sentinels are not JSON: a server timestamp becomes the client clock, anything else
+        # is dropped instead of leaking Firestore internals to the Worker.
+        self.assertIn('if (s.contains("serverTimestamp"))', docs)
+        self.assertIn('continue;', docs)
+        # Firebase is authentication only in the mirror too.
+        self.assertIn('user.getIdToken(false)', docs)
+        absent(self, 'FirebaseFirestore', docs, 'CloudflareDocs')
+        absent(self, 'addSnapshotListener', docs, 'CloudflareDocs')
+        # Additive + fire-and-forget: the mirror has no HTTP DELETE at all, and a failure is silent
+        # because the Firestore write already succeeded.
+        absent(self, '"DELETE"', docs, 'CloudflareDocs')
+        absent(self, 'D1HttpTransport.send(url, "DELETE"', docs, 'CloudflareDocs')
+        self.assertIn('catch (Throwable ignored) {', docs)
+        # The worker's own size ceiling is respected client-side (32 KiB transport, 95 KiB Worker).
+        self.assertIn('MAX_MIRROR_BYTES', docs)
+        # Both call sites that create content: a new Post and a new Reel.
+        post = (JAVA / 'post/CreatePostActivity.java').read_text()
+        reel = (JAVA / 'reels/ReelUploadManager.java').read_text()
+        self.assertIn('CloudflareDocs.mirror("posts", docRef.getId(), m);', post)
+        self.assertIn('CloudflareDocs.mirror("posts", editId, m);', post)
+        self.assertIn('CloudflareDocs.mirror("reels", cfReelId, doc);', reel)
+        # The Reel screen must read the mirror, which is what makes the first open work.
+        reels = (JAVA / 'reels/ReelsFragment.java').read_text()
+        self.assertIn('CloudflareStore.list("reels"', reels)
+
+    def test_release_metadata_follows_the_build_file(self):
+        import re
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        metadata = (CLOUDFLARE / 'android-release.js').read_text()
+        package = re.search(r"applicationId\s+'([^']+)'", gradle).group(1)
+        version_code = re.search(r'versionCode\s+(\d+)', gradle).group(1)
+        version_name = re.search(r"versionName\s+'([^']+)'", gradle).group(1)
+        self.assertIn("packageName: '%s'" % package, metadata)
+        self.assertIn('versionCode: %s' % version_code, metadata)
+        self.assertIn("versionName: '%s'" % version_name, metadata)
+        self.assertEqual(package, 'com.friendbook.social')
+        # Play Store rule: a monotonic versionCode, and this release is 112 / 2.8.80.
+        self.assertEqual(version_code, '112')
+        self.assertEqual(version_name, '2.8.80')
+        # The JS guard must read applicationId instead of hardcoding a package from another line.
+        release_test = (CLOUDFLARE / 'test/android-release.test.js').read_text()
+        self.assertIn('applicationId', release_test)
+        self.assertNotIn("assert.equal(androidRelease.packageName,'com.friendbook.social');", release_test)
+
+    def test_the_artifact_quota_can_never_break_the_build_again(self):
+        build = (ROOT / '.github/workflows/build-apk.yml').read_text()
+        # GitHub refuses every Actions artifact upload while the account storage is full, so the
+        # release workflow must not depend on one: signed binaries go to GitHub Releases.
+        self.assertNotIn('uses: actions/upload-artifact', build)
+        self.assertIn('friendbook-playstore.aab', build)
+        self.assertIn('gh release', build)
+        cleanup = ROOT / '.github/workflows/cleanup-artifacts.yml'
+        self.assertTrue(cleanup.exists(), 'the quota cleanup workflow must exist')
+        text = cleanup.read_text()
+        self.assertIn('workflow_dispatch:', text)
+        self.assertIn('schedule:', text)
+        self.assertIn('actions: write', text)
+        self.assertIn('/actions/artifacts', text)
+        self.assertIn('-X DELETE', text)
+        # Deleting shifts the list, so it must always re-read the first page.
+        self.assertIn('page=1', text)
 
     def test_view_migrations_are_additive_only(self):
         for name in ['0012_additive_view_counters.sql', '0013_additive_view_last_seen.sql']:

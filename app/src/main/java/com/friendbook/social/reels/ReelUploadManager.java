@@ -347,6 +347,10 @@ public final class ReelUploadManager {
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);
             String cfReelId = "reel_" + System.currentTimeMillis() + "_" + (Fb.uid() != null ? Fb.uid().substring(0, Math.min(6, Fb.uid().length())) : "u");
             if (com.friendbook.social.core.CloudflareStore.enabled()) {
+                // Every new Reel is mirrored to the Cloudflare D1 document store the moment it is
+                // published, so Reels live outside Firestore. Additive + fire-and-forget, and the
+                // video bytes themselves stay in R2/Cloudinary - only metadata is mirrored.
+                com.friendbook.social.core.CloudflareDocs.mirror("reels", cfReelId, doc);
                 com.friendbook.social.core.CloudflareStore.put("reels", cfReelId, doc, () -> {
                     optimisticReel = null;
                     MAIN.postDelayed(() -> {
