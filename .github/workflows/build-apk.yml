@@ -78,14 +78,24 @@ jobs:
       - name: Build release APK
         run: gradle assembleRelease --console=plain --stacktrace
 
+      - name: List build outputs (so a missing APK is visible, not guessed)
+        if: always()
+        run: |
+          echo "===== apk outputs ====="
+          find app/build/outputs -name '*.apk' -o -name '*.aab' | head -20 || true
+
       - name: Upload debug APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: FriendBook-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: FriendBook-release-apk
           path: app/build/outputs/apk/release/app-release*.apk
+          retention-days: 1
