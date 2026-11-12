@@ -300,6 +300,19 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         client = (JAVA / 'core/CloudflareViews.java').read_text()
         self.assertIn('COUNTS.put(key, known != null ? Math.max(known.intValue(), views) : views);', client)
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
+        # The opening state must never strand the user: the label may not be clipped (a wrap-content
+        # box plus the LinearLayout default MATCH_PARENT width visibly truncated it to "Loadi"),
+        # a network failure ends in a Retry state instead of an endless spinner, retries are bounded,
+        # and a load that neither succeeds nor fails is settled by a watchdog.
+        self.assertIn('initialLoadingBox.addView(initTxt, new LinearLayout.LayoutParams(-2, -2));', reels)
+        self.assertIn("Ui.tvBold(a, \"Couldn't load Reels\", 19, Color.WHITE)", reels)
+        self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
+        self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
+        self.assertIn('}, 15_000L);', reels)
+        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        # The page-load listener must settle its source even when the page cannot be applied: this
+        # early return is what kept pagingVideos true and the spinner visible forever.
+        self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)
         # One second of real watching is enough to count this user's one view.
         self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', reels)
         self.assertIn('countRealView();', reels)
