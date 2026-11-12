@@ -276,7 +276,7 @@ public class CommentsEngine {
                 com.friendbook.social.core.CloudflareOutbox.enqueue(com.friendbook.social.App.instance,
                         "comments", newId, com.friendbook.social.core.CloudflareDocs.sanitize(commentMap));
                 if (cb != null) cb.onComplete(false, "Comment saved on this phone — it will post when you are online.");
-            }, null);
+            });
             return local;
         }
 
