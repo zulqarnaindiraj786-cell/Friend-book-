@@ -511,7 +511,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('LIMIT ?', queries)
         self.assertIn('SELECT COUNT(*) AS total FROM', queries)
         self.assertIn("const since = params.get('since');", queries)
-        self.assertIn('updated_at > ?', queries)
+        # Inclusive: two writes in one millisecond are indistinguishable, so the feed delivers at
+        # least once and the listener de-duplicates. A strict > would lose the second one.
+        self.assertIn('updated_at >= ?', queries)
         # A cursor carries the order value AND the path, so a page can neither skip nor repeat a row.
         self.assertIn('p: path });', queries)
         self.assertIn('AND path > ?', queries)

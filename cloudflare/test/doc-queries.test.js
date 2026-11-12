@@ -474,3 +474,27 @@ test('a nested collection is addressed by its parent and gated by the parent, no
   const leaked = await db.prepare("SELECT path FROM friendbook_cf_documents WHERE path = 'posts/p9'").first();
   assert.equal(leaked, null);
 });
+
+test('a change feed reports a tombstone so a listener can drop the row, while a normal read cannot see it', async () => {
+  const { db } = createSqliteD1();
+  const w = workerFor('u1');
+  const now = 1_700_000_000_000;
+  await put(w, db, '/v1/docs/posts/p1', { authorId: 'u1', text: 'here', createdAt: now });
+
+  const before = (await (await list(w, db, 'collection=posts')).json()).since;
+  assert.equal((await call(w, db, '/v1/docs/posts/p1', { method: 'DELETE' })).status, 200);
+
+  // The feed carries the tombstone, marked, so a poller removes it from the screen it is showing.
+  const feed = await (await list(w, db, `collection=posts&since=${before}`)).json();
+  assert.equal(feed.documents.length, 1);
+  assert.equal(feed.documents[0].id, 'p1');
+  assert.equal(feed.documents[0].deleted, true);
+  assert.ok(feed.since > before);
+
+  // A plain read still never shows it, and the row is still on disk.
+  const after = await (await list(w, db, 'collection=posts')).json();
+  assert.equal(after.documents.length, 0);
+  assert.equal((await call(w, db, '/v1/docs/posts/p1')).status, 404);
+  const kept = await db.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path = 'posts/p1'").first();
+  assert.ok(kept && kept.document_json.includes('"deleted":true'));
+});

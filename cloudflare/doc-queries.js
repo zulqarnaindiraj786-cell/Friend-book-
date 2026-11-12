@@ -120,7 +120,12 @@ export function buildListQuery(collection, params, uid, admin, { count = false }
   const spec = queryable(collection);
   if (!spec) throw new QueryError('Unsupported collection');
 
-  const where = ['collection = ?', "COALESCE(json_extract(document_json, '$.deleted'), 0) = 0"];
+  // A change feed (since=) is the one read that must also return tombstones: a listener can only drop
+  // a row it is told about, and every other read keeps filtering deleted documents out.
+  const feed = params.get('since') !== null && params.get('since') !== '';
+  const where = feed
+    ? ['collection = ?']
+    : ['collection = ?', "COALESCE(json_extract(document_json, '$.deleted'), 0) = 0"];
   const binds = [collection];
 
   const scope = listScope(collection, uid, admin);
@@ -181,10 +186,13 @@ export function buildListQuery(collection, params, uid, admin, { count = false }
   }
 
   const since = params.get('since');
-  if (since !== null && since !== '') {
+  if (feed) {
     const ms = Number(since);
     if (!Number.isFinite(ms) || ms < 0) throw new QueryError('Invalid since');
-    where.push('updated_at > ?');
+    // Inclusive on purpose: two writes inside one millisecond are indistinguishable, so the feed
+    // delivers at least once and the listener de-duplicates by id. A strict > would silently drop
+    // the second of them, which in a chat thread is a lost message.
+    where.push('updated_at >= ?');
     binds.push(Math.trunc(ms));
   }
 
