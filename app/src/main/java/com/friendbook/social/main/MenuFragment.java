@@ -534,15 +534,18 @@ public class MenuFragment extends Fragment {
                     upd.put("dailyStreak", newStreak);
                     upd.put("lastBonusAt", now);
                     // WRITE = Cloudflare (own profile row), pre-migration only when it is off.
-                    com.friendbook.social.core.CloudflareDocs.writeDocument("users", me, upd, null, null,
-                            () -> Fb.db().collection("users").document(me).update(upd))
-                            .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
+                    com.friendbook.social.core.CloudflareDocs.writeDocument("users", me, upd,
+                            () -> Ui.info(a, "🎁 Bonus claimed!",
                                     "+" + bonusF + " ⭐ added to your balance!\n\n"
                                             + "🔥 Streak: " + newStreak + " day(s)\n"
                                             + (verified ? "✓ Verified ×2 bonus applied 💙\n" : "")
                                             + (newStreak >= 5 ? "Max bonus unlocked — keep it going! 👑"
-                                            : "Come back tomorrow — streak rewards grow!")))
-                            .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
+                                            : "Come back tomorrow — streak rewards grow!")),
+                            reason -> Ui.toast(a, "Bonus saved locally; it will sync shortly"),
+                            () -> Fb.db().collection("users").document(me).update(upd)
+                                    .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
+                                            "+" + bonusF + " ⭐ added to your balance!"))
+                                    .addOnFailureListener(e -> Ui.toast(a, e.getMessage())));
                 })
                 .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
     }

@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import com.friendbook.social.BuildConfig;
+import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FieldValue;
 
@@ -313,6 +314,69 @@ public final class CloudflareDocs {
             final Map<String, Object> result = doc;
             MAIN.post(() -> callback.accept(result));
         }, () -> MAIN.post(() -> callback.accept(null)));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Blocking variants, for a background worker that has no main thread to call back into
+    // (WorkManager's doWork()). They use the same transport, the same token and the same rules; they
+    // simply wait for the answer instead of posting it back. Never call these from an Activity.
+    // ---------------------------------------------------------------------------------------------
+
+    /** One document, read synchronously, or null when it is not there / not reachable. */
+    public static Map<String, Object> readSync(String collection, String id) {
+        if (!enabled() || collection == null || id == null || id.isEmpty()) return null;
+        try {
+            FirebaseUser user = Fb.auth().getCurrentUser();
+            String token = user == null ? null : Tasks.await(user.getIdToken(false)).getToken();
+            if (token == null || token.isEmpty()) return null;
+            JSONObject data = D1HttpTransport.send(new URL(BASE + '/' + Uri.encode(collection) + '/' + Uri.encode(id)),
+                    "GET", token, null);
+            JSONObject document = data != null ? data.optJSONObject("document") : null;
+            if (document == null) return null;
+            List<Map<String, Object>> docs = D1Client.maps(new JSONArray().put(document));
+            return docs.isEmpty() ? null : docs.get(0);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** One page of a collection, read synchronously (a background worker's paging step). */
+    public static List<Map<String, Object>> readSyncPage(String collection, int limit, String orderField,
+                                                         String cursor) {
+        if (!enabled() || collection == null) return new ArrayList<>();
+        try {
+            FirebaseUser user = Fb.auth().getCurrentUser();
+            String token = user == null ? null : Tasks.await(user.getIdToken(false)).getToken();
+            if (token == null || token.isEmpty()) return new ArrayList<>();
+            Query q = Query.orderAsc(orderField == null || orderField.isEmpty() ? "uid" : orderField)
+                    .cursor(cursor);
+            int bounded = Math.max(1, Math.min(MAX_LIST_IDS, limit));
+            String url = BASE + "?collection=" + Uri.encode(collection) + "&limit=" + bounded + q.encode();
+            JSONObject data = D1HttpTransport.send(new URL(url), "GET", token, null);
+            JSONArray arr = data != null ? data.optJSONArray("documents") : null;
+            return arr != null ? D1Client.maps(arr) : new ArrayList<>();
+        } catch (Throwable ignored) {
+            return new ArrayList<>();
+        }
+    }
+
+    /** One document, written synchronously. Returns true when the Worker accepted it. */
+    public static boolean writeSync(String collection, String id, Map<String, Object> fields) {
+        if (!enabled() || collection == null || id == null || id.isEmpty() || fields == null) return false;
+        JSONObject body = sanitize(fields);
+        if (body.length() == 0) return false;
+        try {
+            FirebaseUser user = Fb.auth().getCurrentUser();
+            String token = user == null ? null : Tasks.await(user.getIdToken(false)).getToken();
+            if (token == null || token.isEmpty()) return false;
+            if (body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_WRITE_BYTES) return false;
+            D1HttpTransport.send(new URL(BASE + '/' + Uri.encode(collection) + '/' + Uri.encode(id)),
+                    "PUT", token, body);
+            READ_CACHE.evictAll();
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private interface TokenWork {

@@ -221,7 +221,9 @@ public class ArchiveTrashActivity extends Activity {
             del.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 4), 0);
             del.setOnClickListener(v -> Ui.confirm(this, "Delete story?",
                     "This removes the story permanently from your archive.", "Delete",
-                    () -> Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(x->{myStories.remove(s);render();})));
+                    // WRITE = Cloudflare: the story row is deleted from D1 (queued offline).
+                    () -> D1Write.delete("stories", s.id, () -> {myStories.remove(s);render();}, null,
+                            () -> Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(x->{myStories.remove(s);render();}))));
             btns.addView(del);
 
             info.addView(btns);
@@ -331,13 +333,22 @@ public class ArchiveTrashActivity extends Activity {
         sp.leftMargin = Ui.dp(this, 8);
         second.setOnClickListener(v -> {
             if (isTrash) {
+                // WRITE = Cloudflare: a permanent delete is a D1 delete; the row is already offline-safe.
                 Ui.confirm(this, "Delete forever?", "This post cannot be recovered.", "Delete",
-                        () -> Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");}));
+                        () -> D1Write.delete("posts", p.id,
+                                () -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");},
+                                null,
+                                () -> Fb.db().collection("posts").document(p.id).delete()
+                                        .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");})));
             } else {
-                Fb.db().collection("posts").document(p.id)
-                        .update("archived", false, "trashedAt", System.currentTimeMillis())
-                        .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=System.currentTimeMillis();render();Ui.toast(this, "Moved to Recycle Bin 🗑");});
+                // WRITE = Cloudflare: moving to the Recycle Bin is two fields on the post row.
+                long trashedAt = System.currentTimeMillis();
+                D1Write.write("posts", p.id, Fb.map("archived", false, "trashedAt", trashedAt),
+                        () -> {p.archived=false;p.trashedAt=trashedAt;render();Ui.toast(this, "Moved to Recycle Bin 🗑");},
+                        reason -> Ui.toast(this, "Queued; it will sync shortly"),
+                        () -> Fb.db().collection("posts").document(p.id)
+                                .update("archived", false, "trashedAt", trashedAt)
+                                .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=trashedAt;render();Ui.toast(this, "Moved to Recycle Bin 🗑");}));
             }
         });
         btns.addView(second, sp);

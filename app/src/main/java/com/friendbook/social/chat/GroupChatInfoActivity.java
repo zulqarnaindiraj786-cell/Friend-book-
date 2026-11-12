@@ -194,11 +194,16 @@ public class GroupChatInfoActivity extends Activity {
         dlp.topMargin = Ui.dp(this, 8);
         deleteGroupBtn.setOnClickListener(v -> Ui.confirm(this, "Delete Group?",
                 "Permanently delete this group chat for everyone?", "Delete", () ->
-                        Fb.db().collection("chats").document(chatId).delete()
+                        // WRITE = Cloudflare: the room row is deleted from D1; a queued delete is
+                        // replayed offline, so the group cannot come back later.
+                        D1Write.delete("chats", chatId, () -> {
+                            Ui.toast(this, "Group deleted");
+                            finish();
+                        }, null, () -> Fb.db().collection("chats").document(chatId).delete()
                                 .addOnSuccessListener(x -> {
                                     Ui.toast(this, "Group deleted");
                                     finish();
-                                })));
+                                }))));
         actCard.addView(deleteGroupBtn, dlp);
 
         body.addView(actCard);
@@ -458,17 +463,27 @@ public class GroupChatInfoActivity extends Activity {
                     up.put("participants", FieldValue.arrayRemove(me));
                     up.put("adminIds", FieldValue.arrayRemove(me));
                     // If creator leaves and no other admin exists, promote next remaining member!
+                    final java.util.List<String> promotedTo = new java.util.ArrayList<>();
                     if (me.equals(room.createdBy)) {
                         for (String p : room.participants) {
                             if (!p.equals(me)) {
                                 up.put("createdBy", p);
                                 up.put("adminIds", FieldValue.arrayUnion(p));
+                                promotedTo.add(p);
                                 break;
                             }
                         }
                     }
                     postSystemMessage("🚪 " + Fb.myName() + " left the group");
-                    D1Write.write("chats", chatId, Fb.map("participantsRemove", me, "adminIdsRemove", me, "createdBy", p, "adminIdsAdd", p), null, null, () -> Fb.db().collection("chats").document(chatId).update(up) .addOnSuccessListener(x -> { Ui.toast(this, "You left the group"); finish(); }));
+                    // WRITE = Cloudflare: the member and the admin role are two list removals, and a
+                    // promoted successor is only written when there was one to promote.
+                    Map<String, Object> leaving = Fb.map("participantsRemove", me, "adminIdsRemove", me);
+                    for (String promoted : promotedTo)
+                        leaving.putAll(Fb.map("createdBy", promoted, "adminIdsAdd", promoted));
+                    D1Write.write("chats", chatId, leaving,
+                            () -> { Ui.toast(this, "You left the group"); finish(); },
+                            null, () -> Fb.db().collection("chats").document(chatId).update(up)
+                                    .addOnSuccessListener(x -> { Ui.toast(this, "You left the group"); finish(); }));
                 });
     }
 

@@ -28,8 +28,13 @@ class ClientPushHooksTest(unittest.TestCase):
         self.assertIn('PushFanoutWorker.enqueue("chat", chatId, messageId)', source)
         self.assertIn('PushFanoutWorker.enqueue("friend_post", postId', source)
         worker = (JAVA/'push/PushFanoutWorker.java').read_text()
-        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'if (!tx.get(ref).exists()) tx.set(ref, n)']:
+        # The fan-out reads its recipient list from D1 and skips an account that already got the row,
+        # so a retry can never notify somebody twice (Firestore is not touched by this worker anymore).
+        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP',
+                     'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to',
+                     'if (CloudflareDocs.readSync("notifications", noteId) != null) continue;']:
             self.assertIn(part, worker)
+        self.assertNotIn('Fb.db()', worker)
         chat = (JAVA/'chat/ChatActivity.java').read_text()
         # Every send path (text, image, voice, sticker) announces the message after its D1 write.
         self.assertEqual(chat.count('FCMPush.message(chatId, msgId)'), 3)

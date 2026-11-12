@@ -170,7 +170,22 @@ public class Admin {
      */
     public static void setTickLevel(Context c, String uid, String displayName, String level) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
-        Fb.db().collection("users").document(uid) .set(Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0), com.google.firebase.firestore.SetOptions.merge()) .addOnSuccessListener(x -> { TickCache.put(uid, level); syncAuthorVerified(uid, Icons.tickRank(level) > 0); java.util.Map<String, Object> n = Fb.map( "toUserId", uid, "fromUserId", Ui.TEAM_USER_ID, "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN, "type", "tick", "text", Icons.tickRank(level) > 0 ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "." : "The tick on your account has been removed.", "isRead", false, "createdAt", FieldValue.serverTimestamp()); D1Write.add("notifications", Fb.map("toUserId", uid, "fromUserId", Ui.TEAM_USER_ID, "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN, "type", "tick", "text", Icons.tickRank(level) > 0 ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "." : "The tick on your account has been removed.", "isRead", false), null, null, () -> Fb.db().collection("notifications").add(n)); Ui.toast(c, tickLabel(level) + " → " + displayName); }) .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+        // WRITE = Cloudflare: the badge lives on the user's own row, and the notification is a new
+        // row of its own. Nothing is written back to the pre-migration source on this build.
+        String tickText = Icons.tickRank(level) > 0
+                ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "."
+                : "The tick on your account has been removed.";
+        D1Write.write("users", uid, Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0),
+                () -> {
+                    TickCache.put(uid, level);
+                    syncAuthorVerified(uid, Icons.tickRank(level) > 0);
+                    D1Write.create("notifications", Fb.map("toUserId", uid, "fromUserId", Ui.TEAM_USER_ID,
+                            "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
+                            "type", "tick", "text", tickText, "isRead", false,
+                            "createdAt", System.currentTimeMillis()), null, null, null);
+                    Ui.toast(c, tickLabel(level) + " → " + displayName);
+                },
+                reason -> Ui.toast(c, "Failed: " + reason), null);
     }
 
     /** Back-compat shortcuts (blue / none). */
@@ -235,7 +250,16 @@ public class Admin {
         Models.User me = Fb.me;
         int currentRank = me != null ? me.tickRank() : 0;
         if (currentRank >= Icons.tickRank(level)) return; // already this good or better
-        Fb.db().collection("users").document(uid) .set(Fb.map("tickLevel", level, "isVerified", true), com.google.firebase.firestore.SetOptions.merge()) .addOnSuccessListener(x -> { java.util.Map<String, Object> n = Fb.map( "toUserId", uid, "fromUserId", uid, "fromUserName", "friendbook", "fromUserPhotoUrl", "", "type", "tick", "text", "🎉 Congratulations! " + referralCount + " friends joined from your invite — you earned the " + tickLabel(level) + " for FREE!", "isRead", false, "createdAt", FieldValue.serverTimestamp()); D1Write.add("notifications", Fb.map("toUserId", uid, "fromUserId", Ui.TEAM_USER_ID, "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN, "type", "tick", "text", Icons.tickRank(level) > 0 ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "." : "The tick on your account has been removed.", "isRead", false), null, null, () -> Fb.db().collection("notifications").add(n)); Ui.toast(c, "🎉 You earned the " + tickLabel(level) + "!"); });
+        // WRITE = Cloudflare (own row + the congratulation row), pre-migration never written to.
+        D1Write.write("users", uid, Fb.map("tickLevel", level, "isVerified", true), () -> {
+            D1Write.create("notifications", Fb.map("toUserId", uid, "fromUserId", Ui.TEAM_USER_ID,
+                    "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
+                    "type", "tick", "text", "🎉 Congratulations! " + referralCount
+                            + " friends joined from your invite — you earned the "
+                            + tickLabel(level) + " for FREE!",
+                    "isRead", false, "createdAt", System.currentTimeMillis()), null, null, null);
+            Ui.toast(c, "🎉 You earned the " + tickLabel(level) + "!");
+        }, null, null);
     }
 
     /** Referral invite link for a user (official Google Play Store URL). */

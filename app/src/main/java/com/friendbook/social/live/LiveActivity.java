@@ -306,6 +306,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // Listeners & Timers
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
+    private boolean livePacketsPolling;
     private ListenerRegistration pkBattleReg;
     private ListenerRegistration pkMediaAReg;
     private ListenerRegistration pkMediaBReg;
@@ -1441,7 +1442,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         joinPkt.put("text", "joined the live");
         joinPkt.put("createdAtMs", System.currentTimeMillis());
         joinPkt.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(joinPkt);
+        writeLivePacket(liveId, joinPkt);
     }
 
     // ==================== DUAL-LANE STREAMING (RTDB FAST LANE + FIRESTORE GUARANTEED LANE) ====================
@@ -1638,6 +1639,24 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     onLiveDocumentSnapshot(snap);
                 });
 
+        // The live room's packets are read from Cloudflare D1 first: the last 100 packets of this
+        // room, polled while the broadcast is open. The pre-migration listener only runs for a room
+        // whose history was written before the migration.
+        com.friendbook.social.core.CloudflareDocs.read("live_chat", 100,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAtMs")
+                        .where("liveId", liveId),
+                first -> {
+                    if (isFinishing()) return;
+                    if (first != null && !first.documents.isEmpty()) {
+                        watchLivePacketsOnD1();
+                        return;
+                    }
+                    attachLegacyChatWatch();
+                });
+    }
+
+    /** The pre-migration listener for a room whose packets are not in D1 (written before the move). */
+    private void attachLegacyChatWatch() {
         chatColReg = Fb.db().collection("lives").document(liveId).collection("chat")
                 .orderBy("createdAtMs", Query.Direction.ASCENDING)
                 .limitToLast(100)
@@ -1645,6 +1664,49 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     if (isFinishing() || snap == null) return;
                     onChatSnapshot(snap.getDocuments(), snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
                 });
+    }
+
+    /** Polls the room's D1 packets every two seconds while the screen is open. */
+    private void watchLivePacketsOnD1() {
+        if (livePacketsPolling) return;
+        livePacketsPolling = true;
+        uiHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || liveId == null) { livePacketsPolling = false; return; }
+                com.friendbook.social.core.CloudflareDocs.read("live_chat", 100,
+                        com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAtMs")
+                                .where("liveId", liveId),
+                        page -> {
+                            if (isFinishing()) { livePacketsPolling = false; return; }
+                            if (page != null && !page.documents.isEmpty()) {
+                                java.util.List<java.util.Map<String, Object>> newest =
+                                        new java.util.ArrayList<>(page.documents);
+                                java.util.Collections.reverse(newest);   // the screen renders oldest first
+                                onChatRows(newest, false);
+                            }
+                            uiHandler.postDelayed(this, 2000L);
+                        });
+            }
+        }, 2000L);
+    }
+
+    /** The D1 shape of {@link #onChatSnapshot}: flat rows instead of Firestore snapshots. */
+    private void onChatRows(java.util.List<java.util.Map<String, Object>> rows, boolean fromCache) {
+        java.util.List<ChatPacket> packets = new java.util.ArrayList<>();
+        for (java.util.Map<String, Object> row : rows) {
+            if (row == null || row.get("id") == null) continue;
+            Map<String, Object> plain = new java.util.HashMap<>(row);
+            plain.remove("id");
+            packets.add(new ChatPacket(String.valueOf(row.get("id")), plain));
+        }
+        onChatPackets(packets, fromCache);
+    }
+
+    /** One live packet: the id that de-duplicates it and the fields the renderer reads. */
+    private static final class ChatPacket {
+        final String id;
+        final Map<String, Object> data;
+        ChatPacket(String id, Map<String, Object> data) { this.id = id; this.data = data; }
     }
 
     @SuppressWarnings("unchecked")
@@ -1822,13 +1884,31 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private final Set<String> processedPacketIds = new HashSet<>();
 
     private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(com.friendbook.social.core.Presence.now());
+    /**
+     * Every live packet (join, chat, reaction, gift, poll vote, PK invite...) is one flat row in D1:
+     * `live_chat/<liveId>_<id>`. The pre-migration packet lived in a sub-collection, so the flag-off
+     * build keeps writing there and nothing else ever does.
+     */
+    private static void writeLivePacket(String roomId, Map<String, Object> packet) {
+        if (roomId == null || roomId.isEmpty() || packet == null) return;
+        packet.put("liveId", roomId);
+        if (!packet.containsKey("createdAtMs")) packet.put("createdAtMs", System.currentTimeMillis());
+        D1Write.create("live_chat", packet, null, null, null);
+    }
+
     private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
+        List<ChatPacket> packets = new ArrayList<>();
+        for (DocumentSnapshot d : docs) packets.add(new ChatPacket(d.getId(), d.getData()));
+        onChatPackets(packets, fromCache);
+    }
+
+    private void onChatPackets(List<ChatPacket> packets, boolean fromCache) {
         boolean soundEligible = giftSoundGate.begin(fromCache);
         List<ChatItem> visibleMessages = new ArrayList<>();
-        for (DocumentSnapshot d : docs) {
-            Map<String, Object> m = d.getData();
+        for (ChatPacket packet : packets) {
+            Map<String, Object> m = packet.data;
             if (m == null) continue;
-            String id = d.getId();
+            String id = packet.id;
             if (deletedMsgIds.contains(id)) continue;
 
             String type = Format.strOr(m, "type", "chat");
@@ -2096,7 +2176,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (vB64 != null) pkt.put("v", vB64);
         if (aB64 != null) pkt.put("a", aB64);
         pkt.put("createdAtMs", now);
-        Fb.db().collection("lives").document(liveId).collection("chat").add(pkt);
+        writeLivePacket(liveId, pkt);
     }
 
     private void stopLocalCoHostStreaming() {
@@ -2124,7 +2204,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
         req.put("text", "wants to join on camera");
         req.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
+        writeLivePacket(liveId, req);
         Ui.toast(this, "Co-Host join request sent to " + hostNameStr + "!");
     }
 
@@ -2196,7 +2276,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 leavePkt.put("name", Fb.myName());
                 leavePkt.put("text", "left the Co-Host stage");
                 leavePkt.put("createdAtMs", System.currentTimeMillis());
-                Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
+                writeLivePacket(liveId, leavePkt);
             }
             Ui.toast(this, "You left the Co-Host match");
         }
@@ -2318,7 +2398,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         vote.put("uid", Fb.uid());
         vote.put("name", Fb.myName());
         vote.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(vote);
+        writeLivePacket(liveId, vote);
     }
 
     private void showAskQuestionDialog() {
@@ -2348,7 +2428,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     pkt.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
                     pkt.put("text", q);
                     pkt.put("createdAtMs", System.currentTimeMillis());
-                    Fb.db().collection("lives").document(liveId).collection("chat").add(pkt);
+                    writeLivePacket(liveId, pkt);
                     Ui.toast(this, "Question sent to Host!");
                 })
                 .setNegativeButton("Cancel", null)
@@ -2427,7 +2507,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         msg.put("isMod", isMeModerator());
         msg.put("createdAtMs", lastCommentSentMs);
         msg.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(msg);
+        writeLivePacket(liveId, msg);
     }
 
     private boolean matchesBlockedKeyword(String text) {
@@ -2452,7 +2532,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         sys.put("name", Fb.myName());
         sys.put("text", text);
         sys.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(sys);
+        writeLivePacket(liveId, sys);
     }
 
     private void sendHeartLike() {
@@ -2469,7 +2549,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         r.put("name", Fb.myName());
         r.put("text", "heart");
         r.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+        writeLivePacket(liveId, r);
     }
 
     private void sendReaction(String emoji) {
@@ -2486,7 +2566,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         r.put("name", Fb.myName());
         r.put("text", emoji);
         r.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+        writeLivePacket(liveId, r);
     }
 
     private void spawnFloatingEmoji(String emoji) {
@@ -2593,12 +2673,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     chatGift.put("createdAtMs", System.currentTimeMillis());
                     chatGift.put("createdAt", FieldValue.serverTimestamp());
                     if (liveId != null) {
-                        Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
+                        writeLivePacket(liveId, chatGift);
                     }
                     // Mirror gift celebration banner to opponent's room if battling across 2 Live rooms!
                     if (pkBattleActive && !pkLiveIdA.isEmpty() && !pkLiveIdB.isEmpty() && !pkLiveIdA.equals(pkLiveIdB)) {
                         String otherRoom = pkLiveIdA.equals(liveId) ? pkLiveIdB : pkLiveIdA;
-                        Fb.db().collection("lives").document(otherRoom).collection("chat").add(chatGift);
+                        writeLivePacket(otherRoom, chatGift);
                     }
 
                     spawnFloatingEmoji(gift.icon);
@@ -3220,7 +3300,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
         req.put("text", "challenged Host to a Split-Screen PK Battle!");
         req.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
+        writeLivePacket(liveId, req);
         Ui.toast(this, "PK Battle challenge sent to " + hostNameStr + "!");
     }
 
@@ -3273,7 +3353,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         inv.put("durationSec", durationSec);
         inv.put("text", "challenged " + targetHostName + " to a PK Battle!");
         inv.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(targetLiveId).collection("chat").add(inv);
+        writeLivePacket(targetLiveId, inv);
         LivePkAndGiftsUi.sendDirectLiveInviteToUser(
                 me, targetHostUid,
                 hostId != null && !hostId.isEmpty() ? hostId : me,
@@ -3320,7 +3400,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         inv.put("durationSec", durationSec);
         inv.put("text", "invited " + targetName + " to a Split-Screen PK Battle!");
         inv.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(inv);
+        writeLivePacket(liveId, inv);
 
         LivePkAndGiftsUi.sendDirectLiveInviteToUser(
                 me, targetUid,
@@ -3747,13 +3827,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         leavePkt.put("text", "left the Live Match");
         leavePkt.put("createdAtMs", System.currentTimeMillis());
         if (liveId != null && !liveId.isEmpty()) {
-            Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
+            writeLivePacket(liveId, leavePkt);
         }
         if (!oldLiveA.isEmpty() && !oldLiveA.equals(liveId)) {
-            Fb.db().collection("lives").document(oldLiveA).collection("chat").add(leavePkt);
+            writeLivePacket(oldLiveA, leavePkt);
         }
         if (!oldLiveB.isEmpty() && !oldLiveB.equals(liveId) && !oldLiveB.equals(oldLiveA)) {
-            Fb.db().collection("lives").document(oldLiveB).collection("chat").add(leavePkt);
+            writeLivePacket(oldLiveB, leavePkt);
         }
         teardownPkStageUi();
         Ui.toast(this, "Left Live Match");
@@ -4017,6 +4097,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         uiHandler.removeCallbacksAndMessages(null);
         if (liveDocReg != null) { liveDocReg.remove(); liveDocReg = null; }
         if (chatColReg != null) { chatColReg.remove(); chatColReg = null; }
+        livePacketsPolling = false;
         cleanupPkListeners();
         if (rtdbStreamRef != null && rtdbStreamListener != null) {
             try { rtdbStreamRef.removeEventListener(rtdbStreamListener); } catch (Throwable ignored) { }
@@ -4039,7 +4120,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             leave.put("uid", Fb.uid());
             leave.put("name", Fb.myName());
             leave.put("createdAtMs", System.currentTimeMillis());
-            Fb.db().collection("lives").document(liveId).collection("chat").add(leave);
+            writeLivePacket(liveId, leave);
         }
 
         stopLocalCoHostStreaming();

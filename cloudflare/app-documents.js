@@ -10,6 +10,11 @@ const ALLOWED_COLLECTIONS = new Set([
   // Everything else this build writes: moderation, money, sessions, marketplace, feedback.
   'reports', 'sessions', 'payments', 'referrals', 'feedback', 'gifts', 'config',
   'subscriptions', 'crashReports', 'broadcasts', 'activity',
+  // The packets of a live broadcast (join, chat, reaction, gift, poll vote, PK invite) are flat rows
+  // here, one per packet, because a live room is a chat room like any other.
+  'live_chat',
+  // One row per admin announcement job: the queue entry the delivery worker reads its spec from.
+  'officialBroadcasts',
 ]);
 
 function validSegment(value) {
@@ -176,7 +181,7 @@ const ORDER_FIELDS = new Set([
   // Fields the client's own rows are ordered by: a chat sorts by the millisecond of a message, a
   // marketplace listing by price, a story by when it was posted.
   'createdAtMs', 'lastMessageAt', 'updatedAtMs', 'at', 'ts', 'price', 'amount', 'postedAt',
-  'sentAt', 'seenAt', 'viewers',
+  'sentAt', 'seenAt', 'viewers', 'uid',
 ]);
 const FILTER_OPS = new Set(['eq', 'in', 'contains', 'gt', 'gte', 'lt', 'lte', 'ne']);
 const MAX_FILTERS = 6;
@@ -197,6 +202,7 @@ const COUNTER_FIELDS = new Set([
 /** Lists a reader may append to / remove themselves from on somebody else's document. */
 const SHARED_ARRAYS = new Set([
   'likedBy', 'savedBy', 'viewedBy', 'subscribedBy', 'reportedBy', 'hiddenBy', 'reactions', 'voters',
+  'interested', // an event's attendee list: going/interested is a self-service membership
 ]);
 
 /** Lists only their owner may change (membership lists, blocks, saved ids on an own profile). */
@@ -205,6 +211,8 @@ const OWNED_ARRAYS = new Set([
   'participants', 'participantIds', 'members', 'memberIds', 'adminIds', 'moderatorIds',
   'pendingMemberIds', 'invitedUids', 'bannedMemberIds', 'mutedUids', 'highlightStoryIds',
   'savedReelIds', 'savedPostIds', 'pinnedPostIds', 'storyIds', 'reelIds', 'tags', 'hashtags',
+  // The ids a user pins as favourites on their own profile row.
+  'favoriteUids',
 ]);
 
 /** `fieldArray` request: `field` + `Add` or `Remove`, applied to the stored list by the database. */
@@ -240,9 +248,29 @@ function asList(value) {
   return value === null || value === undefined ? [] : [value];
 }
 
-/** Counters that other people legitimately move on somebody else's document. */
-function personalCounter(field) {
-  return field === 'friendsCount' || field === 'followersCount';
+/** A counter another user may move on somebody else's row (a like, a view, an earned star). */
+const PUBLIC_COUNTERS = new Set([
+  'likes', 'comments', 'shares', 'views', 'reactions', 'stars', 'viewers', 'savedBy', 'reportedBy',
+  'commentsDelta', 'likesDelta', 'likesCountDelta', 'sharesDelta', 'viewsDelta', 'starsDelta',
+  'viewersDelta', 'friendsCount', 'followersCount',
+]);
+
+/**
+ * Is this single key a write a reader may make on somebody else's document?
+ *
+ * `callerOwnsRow` is true when the caller owns that row: a group admin removing a *different*
+ * member (`membersRemove`, `participantsAdd`) is editing a row they own, while a reader adding
+ * *themselves* to a shared list (`savedByAdd`, `interestedAdd`) is a membership change on a row they
+ * do not own. Every non-shared key stays refused, so content is still never writable by a stranger.
+ */
+function sharedWriteKey(key, callerOwnsRow) {
+  if (deltaField(key)) return true;
+  if (PUBLIC_COUNTERS.has(key) || COUNTER_FIELDS.has(key)) return true;
+  const op = arrayOp(key);
+  if (!op) return false;
+  if (SHARED_ARRAYS.has(op.base)) return true;
+  if (OWNED_ARRAYS.has(op.base)) return callerOwnsRow;
+  return false;
 }
 
 /** `field + "Delta"` request: the caller is asking for an adjustment of `field`, not a new value. */
@@ -426,6 +454,14 @@ export async function canReadDocument(db, doc, uid, options = {}) {
   const owner = docOwner(doc);
   if (!owner) return { allowed: false, reason: 'unowned' };
   if (owner === uid) return { allowed: true };
+  // A notification is read by the person it is for and by whoever sent it; a direct message by both
+  // ends of the conversation (the room check below covers a group message).
+  if (options.collection === 'notifications' && (doc.toUserId === uid || doc.fromUserId === uid)) {
+    return { allowed: true };
+  }
+  if (options.collection === 'messages' && (doc.senderId === uid || doc.receiverId === uid)) {
+    return { allowed: true };
+  }
   if (!SHARED_COLLECTIONS.has(options.collection)) return { allowed: false, reason: 'not shared' };
   if (doc.archived) return { allowed: false };
   if (Number(doc.trashedAt) > 0) return { allowed: false };
@@ -597,9 +633,10 @@ export async function appDocuments(request, env, identity) {
         const keys = Object.keys(incoming).filter((k) => k !== 'id');
         // A friend counter is the one shared number another person may move (accepting a request),
         // so its delta is allowed through the same door as likes and comments.
-        const allowed = (k) => COUNTER_FIELDS.has(k)
-          || (k.endsWith('Delta') && personalCounter(deltaField(k)))
-          || (arrayOp(k) !== null && SHARED_ARRAYS.has(arrayOp(k).base));
+        // Ownership is decided by the stored row, so a group admin editing the group they created is
+        // judged as an owner while a stranger touching the same row is judged as a reader.
+        const callerOwnsRow = !!(uid && existingOwner === uid);
+        const allowed = (k) => sharedWriteKey(k, callerOwnsRow);
         if (keys.some((k) => !allowed(k))) {
           return json({ error: 'Not your document' }, 403);
         }
@@ -644,7 +681,11 @@ export async function appDocuments(request, env, identity) {
       if (collection === 'users' && !docOwner(merged)) merged.uid = docId;
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
-      const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingOwner || uid);
+      let ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingOwner || uid);
+      // A notification's row belongs to the person it is FOR: whoever sent it can only create it, and
+      // only the recipient may then mark it read. (A message stays owned by its sender - the receiver
+      // reads it through the pair rule in `canReadDocument`.)
+      if (collection === 'notifications' && merged.toUserId) ownerUid = String(merged.toUserId);
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       await env.DB.prepare(

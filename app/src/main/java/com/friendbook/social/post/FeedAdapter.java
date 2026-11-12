@@ -1595,13 +1595,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Translate post")) translatePost(p.content);
             else if (t.contains("Pin to profile") || t.contains("Unpin from profile")) {
                 boolean unpin = t.contains("Unpin");
+                // WRITE = Cloudflare: one field on the user's own row (an empty value clears it).
                 java.util.Map<String, Object> upd = new HashMap<>();
-                upd.put("pinnedPostId", unpin
-                        ? com.google.firebase.firestore.FieldValue.delete() : p.id);
-                Fb.db().collection("users").document(Fb.uid()).update(upd)
-                        .addOnSuccessListener(x -> Ui.toast(activity,
-                                unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
-                        .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
+                upd.put("pinnedPostId", unpin ? "" : p.id);
+                com.friendbook.social.core.D1Write.write("users", Fb.uid(), upd,
+                        () -> Ui.toast(activity,
+                                unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"),
+                        reason -> Ui.toast(activity, "Pin saved; it will sync shortly"),
+                        () -> Fb.db().collection("users").document(Fb.uid()).update(
+                                Fb.map("pinnedPostId", unpin
+                                        ? com.google.firebase.firestore.FieldValue.delete() : p.id)));
             }
             else if (t.contains("Save post")) toggleSave(p, false);
             else if (t.contains("Delete post (moderator)")) {
@@ -1776,6 +1779,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private void shareToFeedDialog(Models.Post p) {
+        final Models.Post shared = p;
         Context c = activity;
         LinearLayout box = Ui.col(c);
         Ui.pad(box, 18, 10, 18, 0);
@@ -1785,14 +1789,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .setTitle("Share to your feed")
                 .setView(box)
                 .setPositiveButton("Share now", (d, w) -> {
-                    String baseId = p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromId : p.id;
-                    Map<String, Object> m = Fb.map(
+                    String baseId = shared.sharedFromId != null && !shared.sharedFromId.isEmpty()
+                            ? shared.sharedFromId : shared.id;
+                    String text = caption.getText().toString().trim();
+                    // WRITE = Cloudflare: a share is a new post row of the sharer's own plus one
+                    // counter on the original - the pre-migration document is never rewritten.
+                    Map<String, Object> share = Fb.map(
                             "authorId", Fb.uid(),
                             "authorName", Fb.myName(),
                             "authorPhotoUrl", Fb.myPhoto(),
                             "authorVerified", Fb.me != null && Fb.me.isVerified,
                             "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none",
-                            "content", caption.getText().toString().trim(),
+                            "content", text,
                             "mediaType", "none",
                             "mediaUrl", "",
                             "feeling", "",
@@ -1800,14 +1808,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "likes", 0, "comments", 0, "shares", 0,
                             "savedBy", new ArrayList<String>(),
                             "sharedFromId", baseId,
-                            "sharedFromAuthor", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromAuthor : p.authorName,
-                            "sharedFromContent", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromContent : p.content,
-                            "sharedFromMediaUrl", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaUrl : (p.mediaUrl == null ? "" : p.mediaUrl),
-                            "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
-                            "createdAt", FieldValue.serverTimestamp());
-                    D1Write.add("posts", Fb.map("postId", p.id, "type", "post", "reason", reason, "reportedBy", Fb.uid(), "authorId", p.authorId), null, null, () -> Fb.db().collection("posts").add(m));
-                    D1Write.write("posts", p.id, Fb.map("sharesDelta", 1), null, null, () -> Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1)));
-                    Notify.send(p.authorId, "share", "shared your post", p.id);
+                            "sharedFromAuthor", shared.sharedFromId != null && !shared.sharedFromId.isEmpty()
+                                    ? shared.sharedFromAuthor : shared.authorName,
+                            "sharedFromContent", shared.sharedFromId != null && !shared.sharedFromId.isEmpty()
+                                    ? shared.sharedFromContent : shared.content,
+                            "sharedFromMediaUrl", shared.sharedFromId != null && !shared.sharedFromId.isEmpty()
+                                    ? shared.sharedFromMediaUrl : (shared.mediaUrl == null ? "" : shared.mediaUrl),
+                            "sharedFromMediaType", shared.sharedFromId != null && !shared.sharedFromId.isEmpty()
+                                    ? shared.sharedFromMediaType : shared.mediaType,
+                            "createdAt", System.currentTimeMillis());
+                    D1Write.create("posts", share, null, null, null);
+                    D1Write.write("posts", shared.id, Fb.map("sharesDelta", 1), null, null, null);
+                    Notify.send(shared.authorId, "share", "shared your post", shared.id);
                     Ui.toast(c, "Shared to your feed ✓");
                 })
                 .setNegativeButton("Cancel", null)

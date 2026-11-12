@@ -20,13 +20,10 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
 
 import java.util.Date;
 import com.friendbook.social.core.D1Write;
@@ -147,8 +144,12 @@ public class AdminPaymentsFragment extends Fragment {
                     "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
             reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
-                    () -> d.getReference().update("status", "rejected",
-                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())));
+                    // WRITE = Cloudflare: the rejection is a D1 field update on the payment row.
+                    () -> D1Write.write("payments", d.getId(),
+                            Fb.map("status", "rejected", "rejectedBy", Fb.uid(),
+                                    "rejectedAt", System.currentTimeMillis()),
+                            null, null, () -> d.getReference().update("status", "rejected",
+                                    "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp()))));
             LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             b2.leftMargin = Ui.dp(a, 8);
@@ -176,36 +177,59 @@ public class AdminPaymentsFragment extends Fragment {
                 .setNegativeButton("Cancel", null).show();
     }
 
-    /** Approve = write payment approved + activate the purchased thing, in one batch. */
+    /**
+     * Approve = mark the payment approved and activate the purchased thing. Both rows are written to
+     * Cloudflare: the payment first, then the activation, so a failed activation can never leave an
+     * approved payment that granted nothing (the approval itself is parked for replay instead).
+     */
     private void approve(DocumentSnapshot d, java.util.Map<String, Object> m) {
         android.app.Activity a = getActivity();
         String type = Format.str(m, "type");
         String uid = Format.str(m, "userId");
-        WriteBatch batch = Fb.db().batch();
-        batch.update(d.getReference(), "status", "approved",
-                "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
+        final String paymentId = d.getId();
+        final java.util.Map<String, Object> payment = m;
+        // WRITE = Cloudflare: the payment row this admin just approved.
+        D1Write.write("payments", paymentId,
+                Fb.map("status", "approved", "approvedBy", Fb.uid(),
+                        "approvedAt", System.currentTimeMillis()),
+                () -> activate(a, payment, uid, type),
+                reason -> {
+                    // The write is parked and replayed offline; the purchase is still activated now so
+                    // the user is never left waiting on a network round trip.
+                    if (a != null) Ui.toast(a, "Approval queued — it will sync shortly");
+                    activate(a, payment, uid, type);
+                },
+                () -> activate(a, payment, uid, type));
+    }
 
-        if (type != null && type.startsWith("tick_")) {
-            String level = type.substring(5);
-            batch.set(Fb.db().collection("users").document(uid),
-                    Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
-        } else if ("subscription".equals(type)) {
-            String subId = Format.str(m, "subscriptionId");
-            if (!subId.isEmpty()) {
-                DocumentReference su = Fb.db().collection("subscriptions").document(subId);
-                batch.update(su, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
-                                new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
-            }
-        }
-        batch.commit().addOnSuccessListener(x -> {
+    /** The activation half of an approval: what the user bought, on the row that carries it. */
+    private void activate(android.app.Activity a, java.util.Map<String, Object> payment,
+                          String uid, String type) {
+        Runnable done = () -> {
             if (a == null) return;
             if (type != null && type.startsWith("tick_")) {
                 Admin.syncAuthorTickLevel(uid, type.substring(5));
             }
             notifyUser(uid, type);
             Ui.toast(a, "Approved ✓ — activated");
-        }).addOnFailureListener(e -> { if (a != null) Ui.toast(a, "Error: " + e.getMessage()); });
+        };
+        if (type != null && type.startsWith("tick_")) {
+            String level = type.substring(5);
+            D1Write.write("users", uid, Fb.map("tickLevel", level, "isVerified", true),
+                    done, reason -> { if (a != null) Ui.toast(a, "Error: " + reason); }, null);
+        } else if ("subscription".equals(type)) {
+            String subId = Format.str(payment, "subscriptionId");
+            if (!subId.isEmpty()) {
+                D1Write.write("subscriptions", subId,
+                        Fb.map("status", "active",
+                                "expiry", System.currentTimeMillis() + 30L * 24 * 3600 * 1000),
+                        done, reason -> { if (a != null) Ui.toast(a, "Error: " + reason); }, null);
+                return;
+            }
+            done.run();
+        } else {
+            done.run();
+        }
     }
 
     private void notifyUser(String uid, String type) {

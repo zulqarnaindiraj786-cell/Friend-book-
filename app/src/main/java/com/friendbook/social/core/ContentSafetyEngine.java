@@ -493,16 +493,21 @@ public final class ContentSafetyEngine {
         }
 
         try {
-            // 1. Mark safetyFlagged=true first (allowed by signedIn() update rule), then delete!
+            // 1. Flag it, then delete it - both on Cloudflare, in that order. The flag is kept so an
+            // admin can still see what was removed, and the pre-migration source is only written when
+            // Cloudflare is off for this build.
             Map<String, Object> flag = new HashMap<>();
             flag.put("safetyFlagged", true);
             flag.put("safetyCategory", category == null ? "policy_violation" : category);
-            Fb.db().collection(collection).document(docId)
-                    .set(flag, SetOptions.merge())
-                    .addOnSuccessListener(x ->
-                            Fb.db().collection(collection).document(docId).delete())
-                    .addOnFailureListener(e ->
-                            Fb.db().collection(collection).document(docId).delete());
+            D1Write.write(collection, docId, flag,
+                    // The delete is dispatched by the flag write's outcome, so it can never overtake it.
+                    () -> D1Write.delete(collection, docId, null, null, null),
+                    null, () -> Fb.db().collection(collection).document(docId)
+                            .set(flag, SetOptions.merge())
+                            .addOnSuccessListener(x ->
+                                    Fb.db().collection(collection).document(docId).delete())
+                            .addOnFailureListener(e ->
+                                    Fb.db().collection(collection).document(docId).delete()));
 
             // 2. Log automated safety action for Admin transparency
             Map<String, Object> audit = new HashMap<>();

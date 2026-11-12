@@ -22,63 +22,33 @@ public final class OfficialBroadcastWorker extends Worker {
     @NonNull @Override public Result doWork() {
         String uid = getInputData().getString("uid"), id = getInputData().getString("job");
         if (uid == null || !uid.equals(Fb.uid()) || id == null) return Result.failure();
-        DocumentReference job = Fb.db().collection("officialBroadcasts").document(id);
         try {
-            DocumentSnapshot spec = Tasks.await(job.get(Source.SERVER), 20, TimeUnit.SECONDS);
-            if (!uid.equals(spec.getString("adminId"))) return Result.failure();
-            String text = spec.getString("text"), media = spec.getString("mediaUrl"), type = spec.getString("mediaType");
-            DocumentSnapshot cursor = null;
+            // The job row lives in Cloudflare D1, read with the same blocking transport the Worker
+            // already uses: no Firestore query, only the ID token as the credential.
+            Map<String, Object> spec = CloudflareDocs.readSync("officialBroadcasts", id);
+            if (spec == null || !uid.equals(String.valueOf(spec.get("adminId")))) return Result.failure();
+            String text = Format.str(spec, "text"), media = Format.str(spec, "mediaUrl"), type = Format.str(spec, "mediaType");
             int processed = 0;
+            String cursor = "";
             while (!isStopped()) {
                 if (!uid.equals(Fb.uid())) return Result.failure();
-                Query query = Fb.db().collection("users").orderBy(FieldPath.documentId()).limit(100);
-                if (cursor != null) query = query.startAfter(cursor);
-                QuerySnapshot page = Tasks.await(query.get(Source.SERVER), 30, TimeUnit.SECONDS);
+                // One page of accounts, walked by id so a retried job resumes from the same place.
+                List<Map<String, Object>> page = CloudflareDocs.readSyncPage("users", 100, "uid", cursor);
                 if (page.isEmpty()) break;
-                for (DocumentSnapshot user : page) {
+                for (Map<String, Object> user : page) {
                     if (isStopped()) return Result.retry();
                     if (!uid.equals(Fb.uid())) return Result.failure();
-                    String to = user.getId();
-                    DocumentReference note = Fb.db().collection("notifications").document("broadcast_" + id + "_" + to);
-                    DocumentReference chat = Fb.db().collection("chats").document("team_" + to);
-                    DocumentReference message = chat.collection("messages").document("broadcast_" + id);
-                    Tasks.await(Fb.db().runTransaction(tx -> {
-                        // Replaying after process death/retry must not add another message or unread increment.
-                        if (tx.get(note).exists() || tx.get(message).exists()) return null;
-                        Map<String, Object> n = new HashMap<>();
-                        n.put("toUserId", to); n.put("fromUserId", Ui.TEAM_USER_ID);
-                        n.put("fromUserName", "friendbook Team"); n.put("fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN);
-                        n.put("type", "announcement"); n.put("text", text); n.put("isRead", false);
-                        n.put("broadcastId", id); n.put("mediaUrl", media); n.put("mediaType", type);
-                        n.put("createdAt", FieldValue.serverTimestamp());
-                        tx.set(note, n);
-                        Map<String, Object> room = new HashMap<>();
-                        room.put("participants", Arrays.asList(Ui.TEAM_USER_ID, to));
-                        room.put("participantNames", Collections.singletonMap(Ui.TEAM_USER_ID, "friendbook Team"));
-                        room.put("participantPhotos", Collections.singletonMap(Ui.TEAM_USER_ID, Ui.TEAM_AVATAR_TOKEN));
-                        room.put("lastMessage", text == null || text.isEmpty() ? ("video".equals(type) ? "Video" : "Photo") : text);
-                        room.put("lastMessageTime", FieldValue.serverTimestamp());
-                        room.put("lastMessageTimeMs", System.currentTimeMillis());
-                        room.put("unreadCount", Collections.singletonMap(to, FieldValue.increment(1)));
-                        tx.set(chat, room, SetOptions.merge());
-                        Map<String, Object> m = new HashMap<>();
-                        m.put("senderId", Ui.TEAM_USER_ID); m.put("senderName", "friendbook Team");
-                        m.put("senderPhoto", Ui.TEAM_AVATAR_TOKEN); m.put("receiverId", to);
-                        m.put("text", text); m.put("type", type == null || type.isEmpty() ? "text" : type);
-                        m.put("imageUrl", "image".equals(type) ? media : "");
-                        m.put("videoUrl", "video".equals(type) ? media : "");
-                        m.put("isDelivered", true); m.put("isSeen", false); m.put("broadcastId", id);
-                        m.put("createdAt", FieldValue.serverTimestamp()); m.put("createdAtMs", System.currentTimeMillis());
-                        tx.set(message, m);
-                        return null;
-                    }), 30, TimeUnit.SECONDS);
+                    String to = String.valueOf(user.get("id"));
+                    cursor = to;
+                    if ("null".equals(to) || to.isEmpty() || Ui.TEAM_USER_ID.equals(to)) continue;
+                    deliver(id, to, text, media, type);   // idempotent: one notification per account
                     processed++;
                 }
-                cursor = page.getDocuments().get(page.size() - 1);
-                Tasks.await(job.update("status", "sending", "processed", processed), 20, TimeUnit.SECONDS);
+                writeJobStatus(id, "sending", processed);
+                if (page.size() < 100) break;
             }
             if (isStopped()) return Result.retry();
-            Tasks.await(job.update("status", "complete", "processed", processed), 20, TimeUnit.SECONDS);
+            writeJobStatus(id, "complete", processed);
             return Result.success(); // Persistence completed, not a claim of FCM/device receipt.
         } catch (Exception e) {
             com.friendbook.social.push.PushTrace.failure("official_broadcast_failed", e);
@@ -86,9 +56,63 @@ public final class OfficialBroadcastWorker extends Worker {
             while (cause.getCause() != null) cause = cause.getCause();
             boolean denied = cause instanceof FirebaseFirestoreException
                     && ((FirebaseFirestoreException) cause).getCode() == FirebaseFirestoreException.Code.PERMISSION_DENIED;
-            try { Tasks.await(job.update("status", denied ? "permission_denied" : "retrying"), 10, TimeUnit.SECONDS); }
+            try { writeJobStatus(id, denied ? "permission_denied" : "retrying", -1); }
             catch (Exception ignored) {}
             return denied ? Result.failure() : Result.retry();
         }
+    }
+
+    /**
+     * Delivers one announcement to one account, exactly once: the notification row has a deterministic
+     * id, so a retried job overwrites the same row instead of notifying the user twice, and the chat
+     * message id is deterministic for the same reason. Both writes go to Cloudflare D1.
+     */
+    private static boolean deliver(String jobId, String to, String text, String media, String type) {
+        String noteId = "broadcast_" + jobId + "_" + to;
+        if (CloudflareDocs.readSync("notifications", noteId) != null) return false;   // already delivered
+        long now = System.currentTimeMillis();
+        String body = text == null || text.isEmpty() ? ("video".equals(type) ? "Video" : "Photo") : text;
+        Map<String, Object> note = new HashMap<>();
+        note.put("toUserId", to); note.put("fromUserId", Ui.TEAM_USER_ID);
+        note.put("fromUserName", "friendbook Team"); note.put("fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN);
+        note.put("type", "announcement"); note.put("text", text); note.put("isRead", false);
+        note.put("broadcastId", jobId); note.put("mediaUrl", media); note.put("mediaType", type);
+        note.put("createdAt", now);
+        CloudflareDocs.writeSync("notifications", noteId, note);
+
+        String chatId = "team_" + to;
+        Map<String, Object> names = new HashMap<>();
+        names.put(Ui.TEAM_USER_ID, "friendbook Team");
+        Map<String, Object> photos = new HashMap<>();
+        photos.put(Ui.TEAM_USER_ID, Ui.TEAM_AVATAR_TOKEN);
+        Map<String, Object> unread = new HashMap<>();
+        unread.put(to, 1);
+        Map<String, Object> room = new HashMap<>();
+        room.put("participants", Arrays.asList(Ui.TEAM_USER_ID, to));
+        room.put("participantNames", names);
+        room.put("participantPhotos", photos);
+        room.put("lastMessage", body);
+        room.put("lastMessageTimeMs", now);
+        room.put("unreadCount", unread);
+        CloudflareDocs.writeSync("chats", chatId, room);
+
+        Map<String, Object> m = new HashMap<>();
+        m.put("chatId", chatId); m.put("senderId", Ui.TEAM_USER_ID); m.put("senderName", "friendbook Team");
+        m.put("senderPhoto", Ui.TEAM_AVATAR_TOKEN); m.put("receiverId", to);
+        m.put("text", text); m.put("type", type == null || type.isEmpty() ? "text" : type);
+        m.put("imageUrl", "image".equals(type) ? media : "");
+        m.put("videoUrl", "video".equals(type) ? media : "");
+        m.put("isDelivered", true); m.put("isSeen", false); m.put("broadcastId", jobId);
+        m.put("createdAt", now); m.put("createdAtMs", now);
+        CloudflareDocs.writeSync("messages", chatId + "_broadcast_" + jobId, m);
+        return true;
+    }
+
+    /** Progress of one job, written to its D1 row (the screen watches that row). */
+    private static void writeJobStatus(String id, String status, int processed) {
+        Map<String, Object> patch = new HashMap<>();
+        patch.put("status", status);
+        if (processed >= 0) patch.put("processed", processed);
+        CloudflareDocs.writeSync("officialBroadcasts", id, patch);
     }
 }

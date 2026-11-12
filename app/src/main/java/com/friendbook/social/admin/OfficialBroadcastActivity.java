@@ -21,6 +21,7 @@ public final class OfficialBroadcastActivity extends Activity {
     private String mediaType = "", mediaUrl = "", uploadPath = "", jobId;
     private boolean busy;
     private ListenerRegistration listener;
+    private Runnable jobWatcher;
     private com.google.android.gms.tasks.Task<String> pendingUpload;
     private String uploadingText, uploadingUid;
     @Override protected void onCreate(Bundle state) {
@@ -125,7 +126,6 @@ public final class OfficialBroadcastActivity extends Activity {
     @Override protected void onStart() { super.onStart(); observeUpload(); }
     private void queue(String text, String uid) {
         if (!uid.equals(Fb.uid()) || !Admin.isAdmin()) { fail("Admin account changed; broadcast stopped"); return; }
-        DocumentReference ref = Fb.db().collection("officialBroadcasts").document(jobId);
         Map<String, Object> spec = new HashMap<>();
         spec.put("adminId", uid); spec.put("text", text); spec.put("mediaUrl", mediaUrl);
         spec.put("mediaType", mediaType); spec.put("storagePath", uploadPath);
@@ -133,30 +133,54 @@ public final class OfficialBroadcastActivity extends Activity {
         else if (mediaUrl.startsWith("https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/videos/")) {
             spec.put("mediaProvider", "r2"); spec.put("mediaRetention", "forever");
         }
-        spec.put("createdAt", FieldValue.serverTimestamp()); spec.put("status", "queued"); spec.put("processed", 0);
-        Fb.db().runTransaction(tx -> { if (!tx.get(ref).exists()) tx.set(ref, spec); return null; })
-                .addOnSuccessListener(v -> {
+        spec.put("createdAt", System.currentTimeMillis()); spec.put("status", "queued"); spec.put("processed", 0);
+        // WRITE = Cloudflare: the job row is a D1 document, and the delivery worker is only started
+        // once it exists (it is the worker that reads that row).
+        D1Write.write("officialBroadcasts", jobId, spec,
+                () -> {
                     OfficialBroadcastWorker.enqueue(getApplicationContext(), jobId, uid);
                     if (!isDestroyed()) status.setText("Queued. Background sending will continue while this admin account is signed in.");
-                }).addOnFailureListener(e -> {
-                    if (!isDestroyed()) fail("Could not queue broadcast. Check deployed Firestore rules and connection.");
-                });
+                },
+                e -> { if (!isDestroyed()) fail("Could not queue broadcast. Check your connection and retry."); },
+                null);
     }
     private void fail(String reason) { busy = false; send.setEnabled(true); message.setEnabled(true); status.setText(reason); }
+    /** The job row lives in D1, so progress is polled from it while this screen is open. */
     private void watchJob() {
-        listener = Fb.db().collection("officialBroadcasts").document(jobId).addSnapshotListener((doc, error) -> {
-            if (error != null || doc == null || !doc.exists()) return;
-            String state = doc.getString("status");
-            status.setText("Broadcast: " + state + " • " + doc.getLong("processed") + " accounts processed");
-            if ("complete".equals(state) || "queued".equals(state) || "sending".equals(state) || "retrying".equals(state)) {
-                busy = true; send.setEnabled(false); message.setEnabled(false);
-            } else if ("permission_denied".equals(state)) fail("Broadcast stopped: Firestore permission denied. Deploy the admin rules before retrying.");
-        });
+        final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable[] poll = new Runnable[1];
+        final boolean[] watching = {true};
+        jobWatcher = () -> watching[0] = false;   // onDestroy stops the poll
+        final String watchedJob = jobId;
+        poll[0] = () -> {
+            if (!watching[0] || isFinishing() || isDestroyed() || watchedJob == null) return;
+            com.friendbook.social.core.CloudflareDocs.get("officialBroadcasts", watchedJob, doc -> {
+                if (doc != null) {
+                    String state = Format.str(doc, "status");
+                    long processed = Format.longOf(doc, "processed");
+                    status.setText("Broadcast: " + state + " • " + processed + " accounts processed");
+                    if ("complete".equals(state) || "queued".equals(state) || "sending".equals(state) || "retrying".equals(state)) {
+                        busy = true; send.setEnabled(false); message.setEnabled(false);
+                    } else if ("permission_denied".equals(state)) {
+                        fail("Broadcast stopped: the account is not allowed to write this job.");
+                    }
+                    if ("complete".equals(state)) return;   // nothing left to watch
+                }
+                if (watching[0]) handler.postDelayed(poll[0], 2000L);
+            });
+        };
+        handler.postDelayed(poll[0], 1000L);
     }
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out); out.putString("job", jobId);
         out.putString("uri", selected == null ? null : selected.toString()); out.putString("type", mediaType);
         out.putString("url", mediaUrl); out.putString("path", uploadPath); out.putString("text", message.getText().toString());
     }
-    @Override protected void onDestroy() { if (listener != null) listener.remove(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        // Stop the poll: the flag lives in the closure, so clearing this field is not enough.
+        if (jobWatcher != null) jobWatcher.run();
+        jobWatcher = null;
+        if (listener != null) listener.remove();
+        super.onDestroy();
+    }
 }

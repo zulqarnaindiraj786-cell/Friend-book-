@@ -145,13 +145,16 @@ public class AdminContentActivity extends Activity {
     private void deleteItem(Item it) {
         Ui.confirm(this, "Delete this " + tab.substring(0, tab.length() - 1) + "?",
                 it.title + "\n" + it.sub, "Delete", () -> {
-                    // WRITE = Cloudflare: moderation deletes the D1 row of whichever tab is open.
+                    // WRITE = Cloudflare: moderation deletes the D1 row of whichever tab is open, and
+                    // the sweep of the comments that referenced it is the pre-migration cleanup only.
                     D1Write.delete(tab, it.id, null, null,
-                            () -> Fb.db().collection(tab).document(it.id).delete());
-                    if ("posts".equals(tab)) {
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
-                                .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));
-                    }
+                            () -> {
+                                Fb.db().collection(tab).document(it.id).delete();
+                                if ("posts".equals(tab)) {
+                                    com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId", it.id))
+                                            .addOnFailureListener(e -> Ui.toast(this, "Some comments could not be cleaned up."));
+                                }
+                            });
                     Ui.toast(this, "Deleted ✓");
                 });
     }

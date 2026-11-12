@@ -16,8 +16,13 @@ class LinksBroadcastTest(unittest.TestCase):
             ET.parse(path)
     def test_broadcast_is_paginated_and_transactionally_replay_safe(self):
         worker = (JAVA/'admin/OfficialBroadcastWorker.java').read_text()
-        for token in ['limit(100)', 'startAfter(cursor)', 'runTransaction', 'tx.get(note).exists()', 'tx.get(message).exists()', 'uid.equals(Fb.uid())', 'Result.retry()']:
+        # The job rows live in Cloudflare D1 now: the worker pages the account list with a cursor and
+        # a delivery is idempotent because its notification id is derived from (job, account), so a
+        # retried job overwrites the same row instead of notifying a user twice.
+        for token in ['readSyncPage("users", 100, "uid", cursor)', 'cursor = to',
+                      'readSync("notifications", noteId) != null', 'uid.equals(Fb.uid())', 'Result.retry()']:
             self.assertIn(token,worker)
+        self.assertNotIn('Fb.db()', worker)   # no Firestore query in the delivery path at all
         self.assertNotIn('limit(400)', (JAVA/'admin/AdminPanelActivity.java').read_text())
     def test_media_model_and_recycling_key_include_video(self):
         self.assertIn('m0.videoUrl = Format.str(m, "videoUrl")', (JAVA/'models/Models.java').read_text())

@@ -4,14 +4,14 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.work.*;
 import com.friendbook.social.App;
+import com.friendbook.social.core.CloudflareDocs;
 import com.friendbook.social.core.Fb;
-import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.firestore.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 
-/** Durable recipient lookup: transient Firestore failures must not silently lose chat/post pushes. */
+/** Durable recipient lookup on Cloudflare D1: a transient failure must not silently lose a push. */
 public final class PushFanoutWorker extends Worker {
     public PushFanoutWorker(@NonNull Context c, @NonNull WorkerParameters p) { super(c, p); }
     public static void enqueue(String kind, String documentId, String messageId) {
@@ -36,9 +36,11 @@ public final class PushFanoutWorker extends Worker {
         if (uid == null || !uid.equals(Fb.uid())) return Result.success();
         String id = getInputData().getString("document");
         try {
+            // Every lookup below reads Cloudflare D1 with the blocking transport: the app writes there
+            // now, so a recipient list must be resolved from the same store or it would be empty.
             if ("chat".equals(getInputData().getString("kind"))) {
-                DocumentSnapshot chat = Tasks.await(Fb.db().collection("chats").document(id)
-                        .get(Source.SERVER), 20, TimeUnit.SECONDS);
+                Map<String, Object> chat = CloudflareDocs.readSync("chats", id);
+                if (chat == null) return Result.failure();
                 Object members = chat.get("participants");
                 if (!(members instanceof List) || !((List<?>) members).contains(uid)) return Result.failure();
                 for (Object member : (List<?>) members) {
@@ -49,34 +51,39 @@ public final class PushFanoutWorker extends Worker {
                     FCMPush.invoke((String) member, Fb.myName(), "New message", data);
                 }
             } else if ("friend_post".equals(getInputData().getString("kind"))) {
-                DocumentSnapshot post = Tasks.await(Fb.db().collection("posts").document(id)
-                        .get(Source.SERVER), 20, TimeUnit.SECONDS);
-                if (!post.exists() || !uid.equals(post.getString("authorId"))) return Result.failure();
-                QuerySnapshot friends = Tasks.await(Fb.db().collection("friends")
-                        .whereArrayContains("participants", uid).get(Source.SERVER), 20, TimeUnit.SECONDS);
+                Map<String, Object> post = CloudflareDocs.readSync("posts", id);
+                if (post == null || !uid.equals(String.valueOf(post.get("authorId")))) return Result.failure();
                 Set<String> recipients = new HashSet<>();
-                for (DocumentSnapshot friend : friends) {
-                    Object members = friend.get("participants");
-                    if (members instanceof List) for (Object m : (List<?>) members)
-                        if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
+                String cursor = "";
+                while (true) {
+                    List<Map<String, Object>> page = CloudflareDocs.readSyncPage("friends", 50, "createdAt", cursor);
+                    if (page.isEmpty()) break;
+                    for (Map<String, Object> friend : page) {
+                        cursor = String.valueOf(friend.get("id"));
+                        Object members = friend.get("participants");
+                        if (members instanceof List) for (Object m : (List<?>) members)
+                            if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
+                        // A `friends/<a>_<b>` row carries no participants array: the id is the pair.
+                        String[] pair = cursor.split("_");
+                        for (String part : pair)
+                            if (part.length() > 10 && !part.equals(uid)) recipients.add(part);
+                    }
+                    if (page.size() < 50) break;
                 }
                 for (String to : recipients) {
                     if (!uid.equals(Fb.uid())) return Result.success();
-                    // Stable document/event ID makes replay safe if a partial fan-out is retried.
-                    DocumentReference ref = Fb.db().collection("notifications")
-                            .document("friend_post_" + id + "_" + to);
+                    // A stable id makes a retried fan-out safe, and the same id means the same
+                    // notification row is overwritten instead of duplicated.
+                    String noteId = "friend_post_" + id + "_" + to;
+                    if (CloudflareDocs.readSync("notifications", noteId) != null) continue;
                     Map<String, Object> n = new HashMap<>();
                     n.put("toUserId", to); n.put("fromUserId", uid); n.put("fromUserName", Fb.myName());
                     n.put("fromUserPhotoUrl", Fb.myPhoto()); n.put("type", "friend_post");
                     n.put("text", "shared a new post"); n.put("postId", id);
-                    n.put("isRead", false); n.put("createdAt", FieldValue.serverTimestamp());
-                    // Transaction preserves read state and original timestamp when replaying a partial batch.
-                    Tasks.await(Fb.db().runTransaction(tx -> {
-                        if (!tx.get(ref).exists()) tx.set(ref, n);
-                        return null;
-                    }), 20, TimeUnit.SECONDS);
+                    n.put("isRead", false); n.put("createdAt", System.currentTimeMillis());
+                    CloudflareDocs.writeSync("notifications", noteId, n);
                     if (!uid.equals(Fb.uid())) return Result.success();
-                    FCMPush.notification(ref.getId(), n);
+                    FCMPush.notification(noteId, n);
                 }
             } else return Result.failure();
             return Result.success();

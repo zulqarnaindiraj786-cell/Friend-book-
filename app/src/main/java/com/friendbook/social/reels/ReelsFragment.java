@@ -2826,13 +2826,14 @@ public class ReelsFragment extends Fragment {
                 saveBtnBox.animate().scaleX(1.25f).scaleY(1.25f).setDuration(110).withEndAction(() ->
                         saveBtnBox.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
                 ).start();
-                Map<String, Object> favUp = new HashMap<>();
-                favUp.put("savedBy", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                favUp.put("favorites", reel.favorites);
-                Fb.db().collection(reel.collectionName()).document(reel.id)
-                        .set(favUp, SetOptions.merge());
-                Fb.db().collection("users").document(me)
-                        .set(Fb.map("savedReelIds", already ? FieldValue.arrayRemove(reel.id) : FieldValue.arrayUnion(reel.id)), SetOptions.merge());
+                // WRITE = Cloudflare: the reel's save list gets my id (add/remove, so two savers
+                // cannot overwrite each other) and my own row remembers which reels I saved.
+                D1Write.write(reel.collectionName(), reel.id,
+                        already ? Fb.map("savedByRemove", me) : Fb.map("savedByAdd", me),
+                        null, null, null);
+                D1Write.write("users", me,
+                        already ? Fb.map("savedReelIdsRemove", reel.id) : Fb.map("savedReelIdsAdd", reel.id),
+                        null, null, null);
                 if (!already) {
                     FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
                 }
@@ -3013,8 +3014,13 @@ public class ReelsFragment extends Fragment {
                                 return;
                             }
                             Ui.confirm(a, "Delete Reel?", "Remove this reel permanently?", "Delete", () ->
-                                    Fb.db().collection(reel.collectionName()).document(reel.id).delete()
-                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted")));
+                                    // WRITE = Cloudflare: a moderation delete is a D1 delete (queued
+                                    // offline), so the reel cannot reappear from an old copy.
+                                    com.friendbook.social.core.D1Write.delete(reel.collectionName(), reel.id,
+                                            () -> Ui.toast(a, "Reel deleted"), null,
+                                            () -> Fb.db().collection(reel.collectionName())
+                                                    .document(reel.id).delete()
+                                                    .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted"))));
                         });
                         return true;
                     }

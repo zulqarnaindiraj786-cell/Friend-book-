@@ -702,7 +702,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                                     incoming = true;
                                 }
                             }
-                            if (incoming) com.friendbook.social.core.SoundManager.playNewMessage(this);
+                            if (incoming) com.friendbook.social.core.SoundManager.playNewMessage(ChatActivity.this);
                             Map<String, Models.Message> combined = new HashMap<>(historyMessages);
                             combined.putAll(messageSnapshots);
                             java.util.List<Models.Message> list = new java.util.ArrayList<>(combined.values());
