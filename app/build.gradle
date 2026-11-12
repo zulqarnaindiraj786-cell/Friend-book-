@@ -17,14 +17,14 @@ android {
         // D1, no KV. Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
         // Every new/edited document (posts, reels, stories, chats, ...) is ALSO mirrored to the
-        // Cloudflare D1 document store (/v1/docs). Additive and fire-and-forget: Firestore stays the
-        // source of truth for reads until a read path switches over, and Firebase stays auth only.
+        // Cloudflare D1 document store (/v1/docs) is the app's store: every write goes there, reads go
+        // there first and only fall back to the pre-migration source, and Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_DOCS_MIRROR', 'true'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 112
-        versionName '2.8.80'
+        versionCode 113
+        versionName '2.8.81'
         ndk {
             debugSymbolLevel 'FULL'
         }

@@ -472,9 +472,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('versionCode: %s' % version_code, metadata)
         self.assertIn("versionName: '%s'" % version_name, metadata)
         self.assertEqual(package, 'com.friendbook.social')
-        # Play Store rule: a monotonic versionCode, and this release is 112 / 2.8.80.
-        self.assertEqual(version_code, '112')
-        self.assertEqual(version_name, '2.8.80')
+        # Play Store rule: a monotonic versionCode, and this release is 113 / 2.8.81.
+        self.assertEqual(version_code, '113')
+        self.assertEqual(version_name, '2.8.81')
         # The JS guard must read applicationId instead of hardcoding a package from another line.
         release_test = (CLOUDFLARE / 'test/android-release.test.js').read_text()
         self.assertIn('applicationId', release_test)
