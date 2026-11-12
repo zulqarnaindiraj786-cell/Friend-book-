@@ -822,6 +822,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
+        // READ = Cloudflare first: a profile written by this build is a D1 row, so the header is filled
+        // from there and the pre-migration listener only refines it (it also covers old profiles).
+        com.friendbook.social.core.CloudflareDocs.get("users", uid, row -> {
+            if (row == null) return;
+            Models.User fromD1 = Models.User.fromMap(uid, row);
+            if (fromD1 == null) return;
+            // Never let a slower D1 answer overwrite what the listener already showed.
+            if (user != null && user.uid != null) return;
+            user = fromD1;
+            FastCache.putUser(user);
+            if (mine) FastCache.saveMe(this, user);
+            bindUser();
+            if (activeTab == 3 && friendPager == null) startFriendPages();
+        });
         userReg = Fb.db().collection("users").document(uid)
                 .addSnapshotListener((d, err) -> {
                     if (d == null || !d.exists()) {

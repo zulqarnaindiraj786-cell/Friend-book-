@@ -476,21 +476,35 @@ public class MenuFragment extends Fragment {
         super.onStart();
         String me = Fb.uid();
         if (me == null) return;
+        // READ = Cloudflare first: this build writes the profile row to D1, so the card is filled from
+        // there before any pre-migration listener runs.
+        com.friendbook.social.core.CloudflareDocs.get("users", me, row -> {
+            if (row != null && getActivity() != null) {
+                Models.User u = Models.User.fromMap(me, row);
+                if (u != null) renderMe(u);
+            }
+        });
         meReg = Fb.db().collection("users").document(me)
                 .addSnapshotListener((d, err) -> {
                     if (d == null || !d.exists() || getActivity() == null) return;
                     Models.User u = Models.User.fromDoc(d);
-                    name.setText(u.displayName);
-                    Icons.setTickBadge(tickIv, u.tickLevel, false);
-                    String sub = (u.professionalMode ? "📊 Creator · " : "")
-                            + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
-                    bio.setText(sub);
-                    Ui.avatar(getActivity(), avatar, u.photoUrl);
-                    if (Fb.auth().getCurrentUser() != null) {
-                        Prefs.saveAccount(getActivity(), u.uid,
-                                Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
-                    }
+                    renderMe(u);
                 });
+    }
+
+    /** Fills the profile card in the drawer for whichever source answered. */
+    private void renderMe(Models.User u) {
+        if (u == null || getActivity() == null) return;
+        name.setText(u.displayName);
+        Icons.setTickBadge(tickIv, u.tickLevel, false);
+        String sub = (u.professionalMode ? "📊 Creator · " : "")
+                + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
+        bio.setText(sub);
+        Ui.avatar(getActivity(), avatar, u.photoUrl);
+        if (Fb.auth().getCurrentUser() != null) {
+            Prefs.saveAccount(getActivity(), u.uid,
+                    Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
+        }
     }
 
     @Override

@@ -80,9 +80,15 @@ public class Models {
         public List<String> blocked = new ArrayList<>();
 
         public static User fromDoc(DocumentSnapshot d) {
+            if (d == null) return null;
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** The same mapping for a plain row (a Cloudflare document read), never a snapshot. */
+        public static User fromMap(String id, Map<String, Object> m) {
+            if (m == null) return null;
             User u = new User();
-            Map<String, Object> m = d.getData();
-            u.uid = d.getId();
+            u.uid = id;
             u.displayName = Format.strOr(m, "displayName", "User");
             u.email = Format.str(m, "email");
             u.photoUrl = Format.str(m, "photoUrl");

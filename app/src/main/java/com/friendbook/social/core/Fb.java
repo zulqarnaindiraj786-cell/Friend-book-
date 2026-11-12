@@ -264,12 +264,22 @@ public class Fb {
     }
 
     private static void fetchUserNetwork(String uid, TaskCompletionSource<Models.User> tcs) {
-        db().collection("users").document(uid).get()
+        // READ = Cloudflare first (that is where this build writes profiles), the pre-migration source
+        // only for a person whose profile was written before the migration.
+        com.friendbook.social.core.CloudflareDocs.getUnion("users", uid, row -> {
+            Models.User u = Models.User.fromMap(String.valueOf(row.get("id")), row);
+            if (u != null) {
+                FastCache.putUser(u);
+                tcs.trySetResult(u);
+            } else {
+                tcs.trySetResult(null);
+            }
+        }, () -> db().collection("users").document(uid).get()
                 .addOnSuccessListener(d -> {
                     Models.User u = (d != null && d.exists()) ? Models.User.fromDoc(d) : null;
                     if (u != null) FastCache.putUser(u);
                     tcs.trySetResult(u);
                 })
-                .addOnFailureListener(e -> tcs.trySetResult(null));
+                .addOnFailureListener(e -> tcs.trySetResult(null)));
     }
 }

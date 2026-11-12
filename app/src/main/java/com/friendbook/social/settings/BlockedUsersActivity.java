@@ -52,35 +52,43 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
+        // READ = Cloudflare first: the blocked list this build edits lives on the D1 profile row.
+        com.friendbook.social.core.CloudflareDocs.get("users", me, row -> {
+            if (row != null) renderBlocked(Models.User.fromMap(me, row));
+        });
         reg = Fb.db().collection("users").document(me)
                 .addSnapshotListener((d, err) -> {
                     if (d == null || !d.exists()) return;
-                    Models.User me2 = Models.User.fromDoc(d);
-                    List<UsersAdapter.Row> rows = new ArrayList<>();
-                    if (me2.blocked.isEmpty()) {
-                        adapter.setData(rows);
-                        empty.setVisibility(android.view.View.VISIBLE);
-                        return;
-                    }
-                    empty.setVisibility(android.view.View.GONE);
-                    final List<UsersAdapter.Row> out = new ArrayList<>();
-                    final int[] pending = {me2.blocked.size()};
-                    for (String uid : me2.blocked) {
-                        Fb.getUser(uid).addOnSuccessListener(u -> {
-                            if (u != null) {
-                                UsersAdapter.Row r = new UsersAdapter.Row();
-                                r.user = u;
-                                r.subtitle = "Blocked";
-                                r.primaryLabel = "Unblock";
-                                out.add(r);
-                            }
-                            if (--pending[0] <= 0) {
-                                out.sort((a, b2) -> a.user.displayName.compareToIgnoreCase(b2.user.displayName));
-                                adapter.setData(out);
-                            }
-                        });
-                    }
+                    renderBlocked(Models.User.fromDoc(d));
                 });
+    }
+
+    /** Renders the blocked list for whichever source answered. */
+    private void renderBlocked(Models.User me2) {
+        if (me2 == null || adapter == null) return;
+        if (me2.blocked.isEmpty()) {
+            adapter.setData(new ArrayList<>());
+            if (empty != null) empty.setVisibility(android.view.View.VISIBLE);
+            return;
+        }
+        if (empty != null) empty.setVisibility(android.view.View.GONE);
+        final List<UsersAdapter.Row> out = new ArrayList<>();
+        final int[] pending = {me2.blocked.size()};
+        for (String uid : me2.blocked) {
+            Fb.getUser(uid).addOnSuccessListener(u -> {
+                if (u != null) {
+                    UsersAdapter.Row r = new UsersAdapter.Row();
+                    r.user = u;
+                    r.subtitle = "Blocked";
+                    r.primaryLabel = "Unblock";
+                    out.add(r);
+                }
+                if (--pending[0] <= 0) {
+                    out.sort((a, b2) -> a.user.displayName.compareToIgnoreCase(b2.user.displayName));
+                    adapter.setData(out);
+                }
+            });
+        }
     }
 
     @Override
