@@ -6,6 +6,8 @@
 //
 //   GET    /v1/docs?collection=posts&eq[authorId]=uid&order=createdAt&dir=desc&limit=20&after=<cur>
 //   GET    /v1/docs?collection=comments&eq[postId]=x&count=1
+//   GET    /v1/docs?collection=posts&in[authorId]=a,b&gt[createdAt]=1700000000000&order=createdAt
+//   GET    /v1/docs/chats/<chatId>/messages/<messageId>     (a nested collection keeps its parent)
 //   GET    /v1/docs?collection=messages&eq[chatId]=c&since=<ms>     (what changed since I looked)
 //   GET    /v1/docs/<collection>/<id>
 //   PUT    /v1/docs/<collection>/<id>          merge-upsert a document
@@ -242,6 +244,61 @@ function ownerUidOf(merged, existingOwner, uid) {
 }
 
 /** Is this caller a participant of `chats/<chatId>`? The chat row decides, never the request. */
+/**
+ * A nested document (chats/<chatId>/messages/<id>, lives/<liveId>/chat/<id>) has no identity of its
+ * own: whoever may use the parent may use the child. The parent is read here, so a caller can never
+ * open a thread by naming it, and a live room's chat stays closed when the room ends.
+ */
+/**
+ * A nested document has no identity of its own: the parent decides. These are the only four nested
+ * collections the app has - a thread's messages, a live room's chat and viewers, a reaction on a post
+ * or reel, and somebody's own session list - so each one is named explicitly rather than guessed.
+ */
+async function canReadNested(db, parentCollection, parentId, collection, doc, uid, admin) {
+  if (admin) return true;
+  const leaf = leafOf(collection);
+  // A thread's messages are readable exactly by the thread's participants.
+  if (isChatScoped(parentCollection) || isChatScoped(leaf)) {
+    return isChatParticipant(db, parentId, uid, admin);
+  }
+  // Somebody's own sessions belong to that somebody (and to an admin), never to a reader of users.
+  if (leaf === 'sessions') return parentCollection === 'users' && parentId === uid;
+  const parent = await readStored(db, `${parentCollection}/${parentId}`, parentId);
+  if (!parent || parent.doc.deleted) return false;
+  if (!canRead(parentCollection, parent.doc, uid, admin)) return false;
+  // A child of a readable parent is readable only where the parent's audience is meant to see it.
+  return NESTED_PUBLIC.has(`${parentCollection}/${leaf}`);
+}
+
+async function canWriteNested(db, parentCollection, parentId, collection, uid, admin) {
+  if (admin) return true;
+  const leaf = leafOf(collection);
+  if (isChatScoped(parentCollection) || isChatScoped(leaf)) {
+    return isChatParticipant(db, parentId, uid, admin);
+  }
+  if (leaf === 'sessions') return parentCollection === 'users' && parentId === uid;
+  const parent = await readStored(db, `${parentCollection}/${parentId}`, parentId);
+  if (!parent || parent.doc.deleted) return false;
+  // Reading a public parent never means writing into it: the child must be one the audience
+  // contributes to, so nobody can add rows to somebody else's profile, page or room.
+  return NESTED_WRITABLE.has(`${parentCollection}/${leaf}`) && canRead(parentCollection, parent.doc, uid, admin);
+}
+
+function leafOf(collection) {
+  const parts = String(collection).split('/');
+  return parts[parts.length - 1];
+}
+
+/** Children that follow their parent's read: a room's viewers, a reaction under a post or reel. */
+const NESTED_PUBLIC = new Set([
+  'lives/viewers', 'posts/reactions', 'reels/reactions', 'events/going', 'lives/chat',
+]);
+
+/** Children a participant may write into. Everything else nested is read-only. */
+const NESTED_WRITABLE = new Set([
+  'lives/viewers', 'lives/chat', 'posts/reactions', 'reels/reactions', 'events/going',
+]);
+
 async function isChatParticipant(db, chatId, uid, admin) {
   if (admin) return true;
   if (!validSegment(chatId)) return false;
@@ -285,18 +342,39 @@ export async function appDocuments(request, env, identity) {
     const touched = [];
     try {
       for (const op of ops) {
-        if (!queryable(op.collection) || !validSegment(op.id)) {
+        // A nested operation names its parent (chats/<chatId>) and its leaf (messages), and is stored
+        // flat under the parent's path - the same addressing the single-document routes use.
+        const nested = typeof op.parent === 'string' && typeof op.subcollection === 'string';
+        let leaf = op.collection;
+        let stored = null;
+        let parentCollection = null;
+        let parentId = null;
+        let storedCollection = op.collection;
+        if (nested) {
+          const parts = op.parent.split('/');
+          if (parts.length !== 2 || !validSegment(parts[0]) || !validSegment(parts[1])) {
+            return json({ error: 'Invalid parent path' }, 400);
+          }
+          parentCollection = parts[0];
+          parentId = parts[1];
+          leaf = op.subcollection;
+          storedCollection = `${op.parent}/${op.subcollection}`;
+        }
+        if (!queryable(leaf) || !validSegment(op.id)) {
           return json({ error: 'Invalid collection or document ID' }, 400);
         }
-        const docPath = `${op.collection}/${op.id}`;
-        const stored = await readStored(db, docPath, op.id);
-        if (stored && stored.doc.deleted) return json({ error: 'Document is deleted' }, 404);
+        const docPath = `${storedCollection}/${op.id}`;
+        stored = await readStored(db, docPath, op.id);
         const fields = op.fields && typeof op.fields === 'object' && !Array.isArray(op.fields) ? op.fields : {};
-        const chatOk = !isChatScoped(op.collection) || await isChatParticipant(
-          db, String(fields.chatId || stored?.doc?.chatId || ''), uid, admin);
+        if (op.op === 'delete' && (!stored || stored.doc.deleted)) continue;   // already gone
+        if (stored && stored.doc.deleted) return json({ error: 'Document is deleted' }, 404);
+        const chatOk = nested
+          ? await canWriteNested(db, parentCollection, parentId, storedCollection, uid, admin)
+          : !isChatScoped(leaf) || await isChatParticipant(
+            db, String(fields.chatId || stored?.doc?.chatId || ''), uid, admin);
         const allowed = chatOk && (op.op === 'delete'
-          ? canWrite(op.collection, stored?.doc || null, {}, uid, admin, 'delete')
-          : canWrite(op.collection, stored?.doc || null, fields, uid, admin, stored ? 'update' : 'create'));
+          ? canWrite(leaf, stored?.doc || null, {}, uid, admin, 'delete')
+          : canWrite(leaf, stored?.doc || null, fields, uid, admin, stored ? 'update' : 'create'));
         if (!allowed) return json({ error: 'Not allowed' }, 403);
         if (op.op === 'delete') {
           statements.push(db.prepare(
@@ -320,11 +398,11 @@ export async function appDocuments(request, env, identity) {
                owner_uid = excluded.owner_uid,
                document_json = excluded.document_json,
                updated_at = excluded.updated_at`
-          ).bind(docPath, op.collection, op.id, ownerUidOf(merged, stored?.ownerUid, uid), serialized, now));
+          ).bind(docPath, storedCollection, op.id, ownerUidOf(merged, stored?.ownerUid, uid), serialized, now));
         }
         touched.push(docPath);
       }
-      await db.batch(statements);
+      if (statements.length) await db.batch(statements);
     } catch {
       return json({ error: 'Batch write unavailable' }, 503);
     }
@@ -335,11 +413,25 @@ export async function appDocuments(request, env, identity) {
   // ------------------------------------------------------------- GET /v1/docs (list, count, watch)
   if (path === '/v1/docs') {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
-    const collection = url.searchParams.get('collection') || '';
-    if (!queryable(collection)) return json({ error: 'Unsupported collection' }, 400);
+    const requested = url.searchParams.get('collection') || '';
+    // A nested collection is named by its whole path (chats/<chatId>/messages). The leaf decides what
+    // may be filtered and ordered; the parent decides who may see any of it.
+    const parts = requested.split('/');
+    if (parts.length !== 1 && parts.length !== 3) return json({ error: 'Unsupported collection' }, 400);
+    const collection = requested;
+    const leaf = parts.length === 3 ? parts[2] : requested;
+    const listParent = parts.length === 3 ? parts[0] : null;
+    const listParentId = parts.length === 3 ? parts[1] : null;
+    if (!queryable(leaf)) return json({ error: 'Unsupported collection' }, 400);
     const wantsCount = ['1', 'true', 'yes'].includes(String(url.searchParams.get('count') || '').toLowerCase());
     const admin = await isAdmin();
-    if (isChatScoped(collection)) {
+    if (listParent) {
+      if (!validSegment(listParentId)) return json({ error: 'Unsupported collection' }, 400);
+      const inside = isChatScoped(listParent) || isChatScoped(leaf)
+        ? await isChatParticipant(db, listParentId, uid, admin)
+        : await canReadNested(db, listParent, listParentId, collection, {}, uid, admin);
+      if (!inside) return json({ error: 'Not allowed' }, 403);
+    } else if (isChatScoped(leaf)) {
       // Messages are only ever listed for one chat, and only for somebody inside that chat.
       const chatId = url.searchParams.get('eq[chatId]');
       if (!validSegment(chatId)) return json({ error: 'chatId filter required' }, 400);
@@ -353,8 +445,9 @@ export async function appDocuments(request, env, identity) {
     }
 
     // Only unfiltered public lists are cacheable: a scoped list belongs to exactly one caller.
-    const filtered = [...url.searchParams.keys()].some(key => key.startsWith('eq[') || key.startsWith('has[') || key === 'since');
-    const cacheable = isPublicRead(collection) && !filtered;
+    const filtered = [...url.searchParams.keys()].some(key =>
+      /^(eq|has|in|gt|gte|lt|lte)\[/.test(key) || key === 'since' || key === 'inId');
+    const cacheable = !listParent && isPublicRead(leaf) && !filtered;
     const cacheKey = `${collection}?${[...url.searchParams.entries()].map(([k, v]) => `${k}=${v}`).sort().join('&')}`;
     const lCache = getDbMap(listCache, db);
     const now = Date.now();
@@ -365,19 +458,31 @@ export async function appDocuments(request, env, identity) {
 
     try {
       const rows = await db.prepare(built.sql).bind(...built.binds).all();
-      if (wantsCount) return json({ collection, count: Number(rows?.results?.[0]?.total) || 0 });
+      if (wantsCount) return json({ collection, count: Number(rows?.results?.[0]?.total) || 0, since: Date.now() });
       const results = rows?.results || [];
       const documents = [];
       for (const row of results.slice(0, built.limit)) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
-        if (doc) documents.push(doc);
+        if (!doc) continue;
+        // Flat, exactly as the app's reader and the staged history already expect, plus the two
+        // things a paging client needs: where this row sits in the feed, and when it last changed.
+        documents.push({
+          ...doc,
+          id: doc.id || row.doc_id,
+          updatedAt: Number(row.updated_at) || doc.updatedAt || 0,
+          cursor: encodeCursor(row.order_value ?? row.updated_at, row.path),
+        });
       }
       let next = null;
       if (results.length > built.limit) {
         const last = results[built.limit - 1];
         if (last) next = encodeCursor(last.order_value ?? last.updated_at, last.path);
       }
-      const body = { collection, documents, next };
+      // `since` is the position a watcher resumes from: the newest change this answer already
+      // includes, so the next poll asks for rows changed after it and never re-downloads the page.
+      let newest = 0;
+      for (const row of results) newest = Math.max(newest, Number(row.updated_at) || 0);
+      const body = { collection, documents, next, since: newest || Date.now() };
       if (cacheable) lCache.set(cacheKey, { body, expiresAt: now + LIST_CACHE_TTL_MS });
       return json(body);
     } catch {
@@ -385,8 +490,11 @@ export async function appDocuments(request, env, identity) {
     }
   }
 
-  // ------------------------------------------------------------- /v1/docs/<collection>/<id>
-  const match = /^\/v1\/docs\/([^/]+)\/([^/]+)$/.exec(path);
+  // ------------------------------------------------- /v1/docs/<collection>/<id>[/sub/<subId>]
+  // A nested collection is addressed by its parent's path, exactly like it was in Firestore, but it
+  // is stored flat: `collection` becomes `chats/<chatId>/messages` so one index still serves it and
+  // no schema change is needed. The parent document keeps the access decision.
+  const match = /^\/v1\/docs\/([^/]+)\/([^/]+)(?:\/([^/]+)\/([^/]+))?$/.exec(path);
   if (!match) return json({ error: 'Not found' }, 404);
   let collection, docId;
   try {
@@ -395,7 +503,23 @@ export async function appDocuments(request, env, identity) {
   } catch {
     return json({ error: 'Invalid path' }, 400);
   }
-  if (!queryable(collection) || !validSegment(docId)) {
+  let parentCollection = null;
+  let parentId = null;
+  if (match[3]) {
+    let sub;
+    try { sub = decodeURIComponent(match[3]); } catch { return json({ error: 'Invalid path' }, 400); }
+    const subId = decodeURIComponent(match[4] || '');
+    if (!validSegment(subId)) return json({ error: 'Invalid document ID' }, 400);
+    parentCollection = collection;
+    parentId = docId;
+    collection = `${parentCollection}/${parentId}/${sub}`;
+    docId = subId;
+  }
+  // Access rules are the leaf's (a message is judged as a message); the parent only decides who is
+  // inside it. For a top-level document the two are the same collection.
+  const rootCollection = parentCollection || collection;
+  const leafCollection = parentCollection ? leafOf(collection) : collection;
+  if (!queryable(rootCollection) || !validSegment(docId)) {
     return json({ error: 'Invalid collection or document ID' }, 400);
   }
   const docPath = `${collection}/${docId}`;
@@ -405,11 +529,13 @@ export async function appDocuments(request, env, identity) {
     try {
       const stored = await readStored(db, docPath, docId);
       if (!stored || stored.doc.deleted) return json({ error: 'Not found' }, 404);
-      const allowed = isChatScoped(collection)
-        ? await isChatParticipant(db, String(stored.doc.chatId || ''), uid, admin)
-        : canRead(collection, stored.doc, uid, admin);
+      const allowed = parentCollection
+        ? await canReadNested(db, parentCollection, parentId, collection, stored.doc, uid, admin)
+        : isChatScoped(leafCollection)
+          ? await isChatParticipant(db, String(stored.doc.chatId || parentId || ''), uid, admin)
+          : canRead(leafCollection, stored.doc, uid, admin);
       if (!allowed) return json({ error: 'Not allowed' }, 403);
-      return json({ id: docId, ...expose(stored) });
+      return json({ id: docId, path: docPath, exists: true, ...expose(stored) });
     } catch {
       return json({ error: 'Document read unavailable' }, 503);
     }
@@ -433,7 +559,10 @@ export async function appDocuments(request, env, identity) {
 
         if (!row) {
           const fresh = documentFromOps(body, docId, now);
-          if (!canWrite(collection, null, fresh, uid, admin, 'create')) return json({ error: 'Not allowed' }, 403);
+          if (parentCollection && !(await canWriteNested(db, parentCollection, parentId, collection, uid, admin))) {
+            return json({ error: 'Not allowed' }, 403);
+          }
+          if (!canWrite(leafCollection, null, fresh, uid, admin, 'create')) return json({ error: 'Not allowed' }, 403);
           const serialized = JSON.stringify(fresh);
           if (serialized.length > MAX_DOC_BYTES) return json({ error: 'Document too large' }, 413);
           const inserted = await db.prepare(
@@ -453,9 +582,11 @@ export async function appDocuments(request, env, identity) {
         if (!existing) return json({ error: 'Document unreadable' }, 500);
         if (existing.deleted) return json({ error: 'Document is deleted' }, 404);
         const preview = { ...existing, ...(body.set && typeof body.set === 'object' && !Array.isArray(body.set) ? body.set : {}) };
-        const chatOk = !isChatScoped(collection)
-          || await isChatParticipant(db, String(preview.chatId || existing.chatId || ''), uid, admin);
-        if (!chatOk || !canWrite(collection, existing, preview, uid, admin, 'update')) {
+        const chatOk = parentCollection
+          ? await canWriteNested(db, parentCollection, parentId, collection, uid, admin)
+          : !isChatScoped(leafCollection)
+            || await isChatParticipant(db, String(preview.chatId || existing.chatId || parentId || ''), uid, admin);
+        if (!chatOk || !canWrite(leafCollection, existing, preview, uid, admin, 'update')) {
           return json({ error: 'Not allowed' }, 403);
         }
 
@@ -488,9 +619,11 @@ export async function appDocuments(request, env, identity) {
     try {
       const stored = await readStored(db, docPath, docId);
       if (!stored || stored.doc.deleted) return json({ error: 'Not found' }, 404);
-      const chatOk = !isChatScoped(collection)
-        || await isChatParticipant(db, String(stored.doc.chatId || ''), uid, admin);
-      if (!chatOk || !canWrite(collection, stored.doc, {}, uid, admin, 'delete')) {
+      const chatOk = parentCollection
+        ? await canWriteNested(db, parentCollection, parentId, collection, uid, admin)
+        : !isChatScoped(leafCollection)
+          || await isChatParticipant(db, String(stored.doc.chatId || parentId || ''), uid, admin);
+      if (!chatOk || !canWrite(leafCollection, stored.doc, {}, uid, admin, 'delete')) {
         return json({ error: 'Not allowed' }, 403);
       }
       const now = Date.now();
@@ -517,9 +650,11 @@ export async function appDocuments(request, env, identity) {
     try {
       const stored = await readStored(db, docPath, docId);
       if (stored && stored.doc.deleted) return json({ error: 'Document is deleted' }, 404);
-      const chatOk = !isChatScoped(collection)
-        || await isChatParticipant(db, String(incoming.chatId || stored?.doc?.chatId || ''), uid, admin);
-      if (!chatOk || !canWrite(collection, stored?.doc || null, incoming, uid, admin, stored ? 'update' : 'create')) {
+      const chatOk = parentCollection
+        ? await canWriteNested(db, parentCollection, parentId, collection, uid, admin)
+        : !isChatScoped(leafCollection)
+          || await isChatParticipant(db, String(incoming.chatId || stored?.doc?.chatId || parentId || ''), uid, admin);
+      if (!chatOk || !canWrite(leafCollection, stored?.doc || null, incoming, uid, admin, stored ? 'update' : 'create')) {
         return json({ error: 'Not allowed' }, 403);
       }
       const merged = { ...(stored?.doc || {}), ...incoming, id: docId };

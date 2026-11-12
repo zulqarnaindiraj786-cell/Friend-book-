@@ -6,6 +6,8 @@ import { queryable, listScope } from './doc-access.js';
 export const MAX_LIMIT = 50;
 export const DEFAULT_LIMIT = 20;
 export const MAX_FILTERS = 4;
+/** A single `in`/`inId` filter is bounded so one request cannot smuggle a full table scan in. */
+export const MAX_IN = 30;
 export const MAX_OPS = 20;
 export const MAX_DOC_BYTES = 95_000;
 /** A count is capped so one request can never turn into a full-table scan on a big collection. */
@@ -51,6 +53,11 @@ export function fieldExpr(field) {
       + ` 0)`;
   }
   return `COALESCE(${plain}, json_extract(document_json, '${wrapped}.stringValue'), '')`;
+}
+
+/** A row whose id is one of a bounded set (Firestore's whereIn, used for FieldPath.documentId()). */
+export function idInExpr() {
+  return 'doc_id IN (%PLACEHOLDER%)';
 }
 
 /** Array-contains that works on a plain array and on a wrapped Firestore `arrayValue`. */
@@ -99,9 +106,14 @@ export function decodeCursor(raw) {
 /**
  * Builds a list/count statement from validated query parameters.
  *
- * Supported: `eq[field]=value` (max 4), `has[field]=value` (array-contains, max 2), `order=field`,
- * `dir=asc|desc`, `limit`, `after=<cursor>`, `since=<ms>` (documents changed after a moment, which is
- * how a client watches for updates) and `count=1`. Soft-deleted documents are always excluded.
+ * Supported: `eq[field]=value` (max 4), `has[field]=value` (array-contains, max 2), `in[field]=a,b,c`,
+ * `inId=a,b,c`, `gt/gte/lt/lte[field]=value` (max 2, numbers only), `order=field`, `dir=asc|desc`,
+ * `limit`, `after=<cursor>`, `since=<ms>` (documents changed after a moment, which is how a client
+ * watches for updates) and `count=1`. Soft-deleted documents are always excluded.
+ *
+ * The comparison operators exist because the app asks questions Firestore answered with them - "live
+ * stories that have not expired yet", "boosts still running" - and a numeric field can only be
+ * answered by the database, not by shipping a whole collection to a phone.
  */
 export function buildListQuery(collection, params, uid, admin, { count = false } = {}) {
   const spec = queryable(collection);
@@ -119,21 +131,51 @@ export function buildListQuery(collection, params, uid, admin, { count = false }
   const seenFilters = new Set();
   let filterCount = 0;
   for (const [key, raw] of params) {
-    const eq = /^eq\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);
-    const has = /^has\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);
-    if (!eq && !has) continue;
-    const field = eq ? eq[1] : has[1];
-    if (!(eq ? spec.eq : spec.has).includes(field)) throw new QueryError(`Cannot filter on ${field}`);
-    if (++filterCount > MAX_FILTERS) throw new QueryError('Too many filters');
-    if (seenFilters.has(`${eq ? 'eq' : 'has'}:${field}`)) continue;
-    seenFilters.add(`${eq ? 'eq' : 'has'}:${field}`);
-    if (eq) {
+    const match = /^(eq|has|in|gt|gte|lt|lte)\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);
+    const idIn = key === 'inId';
+    if (!match && !idIn) continue;
+    if (idIn) {
+      // Firestore's whereIn(FieldPath.documentId(), ids): a bounded set of document ids.
+      const ids = [...new Set(String(raw).split(',').map(id => id.trim()).filter(Boolean))].slice(0, MAX_IN);
+      if (!ids.length) throw new QueryError('inId requires at least one id');
+      where.push(`doc_id IN (${ids.map(() => '?').join(', ')})`);
+      binds.push(...ids);
+      continue;
+    }
+    const kind = match[1];
+    const field = match[2];
+    if (kind === 'eq' || kind === 'in') {
+      if (!spec.eq.includes(field)) throw new QueryError(`Cannot filter on ${field}`);
+    } else if (kind === 'has') {
+      if (!spec.has.includes(field)) throw new QueryError(`Cannot filter on ${field}`);
+    } else if (!spec.eq.includes(field) && !spec.order.includes(field)) {
+      // A comparison only makes sense on a field the collection is allowed to be filtered or sorted by.
+      throw new QueryError(`Cannot compare ${field}`);
+    }
+    if (kind === 'has' && ++filterCount > MAX_FILTERS) throw new QueryError('Too many filters');
+    if (kind !== 'has' && ++filterCount > MAX_FILTERS) throw new QueryError('Too many filters');
+    if (seenFilters.has(`${kind}:${field}`)) continue;
+    seenFilters.add(`${kind}:${field}`);
+    if (kind === 'eq') {
       where.push(`${fieldExpr(field)} = ?`);
       binds.push(coerce(field, raw));
-    } else {
+    } else if (kind === 'in') {
+      const values = [...new Set(String(raw).split(',').map(v => v.trim()).filter(v => v !== ''))];
+      if (!values.length) throw new QueryError('in requires at least one value');
+      if (values.length > MAX_IN) throw new QueryError('Too many values in filter');
+      const coerced = values.map(value => coerce(field, value));
+      where.push(`${fieldExpr(field)} IN (${coerced.map(() => '?').join(', ')})`);
+      binds.push(...coerced);
+    } else if (kind === 'has') {
       where.push(containsExpr(field));
       const value = String(raw).slice(0, 512);
       binds.push(value, value);
+    } else {
+      // gt/gte/lt/lte are numeric only: comparing text across mixed shapes would silently misorder.
+      if (!isNumericField(field)) throw new QueryError(`${field} cannot be compared`);
+      const operator = { gt: '>', gte: '>=', lt: '<', lte: '<=' }[kind];
+      where.push(`${fieldExpr(field)} ${operator} ?`);
+      binds.push(coerce(field, raw));
     }
   }
 

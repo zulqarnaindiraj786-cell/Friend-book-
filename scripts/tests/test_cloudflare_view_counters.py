@@ -500,10 +500,13 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         queries = queries_text()
         documents = (CLOUDFLARE / 'app-documents.js').read_text()
         # Filters, ordering, keyset pages, counts and a change feed - the shapes the app asks for.
-        self.assertIn(r"const eq = /^eq\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);", queries)
-        self.assertIn(r"const has = /^has\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key);", queries)
+        self.assertIn(r"/^(eq|has|in|gt|gte|lt|lte)\[([A-Za-z_][A-Za-z0-9_]{0,39})\]$/.exec(key)", queries)
+        self.assertIn("const idIn = key === 'inId';", queries)
         self.assertIn("if (!spec.order.includes(orderField)) throw new QueryError", queries)
-        self.assertIn("if (!(eq ? spec.eq : spec.has).includes(field)) throw new QueryError", queries)
+        # Each filter kind has its own allowlist: a field must be declared before it can be matched.
+        self.assertIn('if (!spec.eq.includes(field)) throw new QueryError', queries)
+        self.assertIn('if (!spec.has.includes(field)) throw new QueryError', queries)
+        self.assertIn('throw new QueryError(`Cannot compare ${field}`);', queries)
         self.assertIn('LIMIT ?', queries)
         self.assertIn('SELECT COUNT(*) AS total FROM', queries)
         self.assertIn("const since = params.get('since');", queries)
@@ -513,6 +516,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('AND path > ?', queries)
         # Everything is bounded: no request can ask for the whole table.
         self.assertIn('MAX_LIMIT = 50', queries)
+        self.assertIn('MAX_IN = 30', queries)
         self.assertIn('MAX_FILTERS = 4', queries)
         self.assertIn('COUNT_CAP = 5_000', queries)
         self.assertIn('MAX_DOC_BYTES = 95_000', queries)
@@ -527,18 +531,26 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # A list on a private collection is filtered to the caller by the Worker itself.
         self.assertIn('export function listScope(collection, uid, admin)', access)
         self.assertIn("clauses.push('owner_uid = ?');", access)
+        # A comparison on a text field would silently misorder, so only numeric fields may be ranged.
+        self.assertIn('if (!isNumericField(field)) throw new QueryError', queries_text())
         self.assertIn('json_each(json_extract(document_json', access)
         self.assertIn("if (isAdminOnlyRead(collection)) return { sql: ' AND 0', binds: [] };", access)
         self.assertIn('const scope = listScope(collection, uid, admin);', queries_text())
         # Chat messages are gated by their parent chat, and a thread must be named.
         self.assertIn("chatId filter required", documents)
+        # A nested collection (chats/<chatId>/messages) is gated by its parent, and a list of it is
+        # never cacheable, because the parent's membership decides who may read a single row.
+        self.assertIn('const cacheable = !listParent && isPublicRead(leaf) && !filtered;', documents)
+        self.assertIn('await canReadNested(db, listParent, listParentId, collection, {}, uid, admin)', documents)
+        self.assertIn('async function canWriteNested(db, parentCollection, parentId, collection, uid, admin)', documents)
+        self.assertIn("const NESTED_PUBLIC = new Set(['lives/viewers', 'posts/reactions', 'reels/reactions', 'events/going']);", documents)
         self.assertIn('async function isChatParticipant(db, chatId, uid, admin)', documents)
         # Admin comes from the token email or a stored user document, never from the request.
         self.assertIn('export async function resolveAdmin(db, uid, email, env)', documents)
         self.assertIn("$.isAdmin'", documents)
         self.assertIn('email.toLowerCase() === OWNER_EMAIL', documents)
         # Only unfiltered public lists are cacheable, so one caller's page is never served to another.
-        self.assertIn('const cacheable = isPublicRead(collection) && !filtered;', documents)
+        self.assertIn('isPublicRead(leaf) && !filtered', documents)
 
     def test_document_deletes_are_tombstones_and_no_row_is_ever_dropped(self):
         documents = (CLOUDFLARE / 'app-documents.js').read_text()

@@ -171,7 +171,12 @@ export function aboutMeFields(collection) {
 }
 
 export function queryable(collection) {
-  return QUERYABLE[collection] || null;
+  if (!collection) return null;
+  // A nested collection is stored under its parent's path (chats/<chatId>/messages); the rules that
+  // decide what may be filtered, ordered or compared belong to the leaf, while the ACL decision uses
+  // the parent - so this returns the leaf's spec and callers keep the full path for storage.
+  const leaf = collection.includes('/') ? collection.split('/').pop() : collection;
+  return QUERYABLE[leaf] || null;
 }
 
 /**
@@ -298,6 +303,10 @@ function isParticipantWrite(collection, fields, uid) {
  */
 export function listScope(collection, uid, admin) {
   if (admin) return { sql: '', binds: [] };
+  // A nested collection (chats/<chatId>/messages) was already admitted or refused by its parent, so
+  // re-scoping it by a field on the child would either leak nothing or - worse - hide real rows from
+  // somebody who is entitled to them. The parent's participation check is the whole decision.
+  if (String(collection).includes('/')) return { sql: '', binds: [] };
   if (isPublicRead(collection)) return { sql: '', binds: [] };
   // Chat messages are scoped by the parent chat participation check, not by a field on the message.
   if (isChatScoped(collection)) return { sql: '', binds: [] };

@@ -374,3 +374,103 @@ test('the document store refuses oversized writes and unbounded requests', async
   assert.equal(badCursor.status, 400);
   assert.equal((await call(w, db, '/v1/docs/posts/p1', { method: 'POST' })).status, 405);
 });
+
+test('the comparison and set filters answer the questions the app used to ask Firestore', async () => {
+  const { db } = createSqliteD1();
+  const w = workerFor('u1');
+  const now = 1_700_000_000_000;
+  await seed(db, [
+    ['stories/s1', 'stories', 's1', 'u1', { authorId: 'u1', expiresAt: now + 60_000, createdAt: now }, now],
+    ['stories/s2', 'stories', 's2', 'u1', { authorId: 'u1', expiresAt: now - 60_000, createdAt: now - 1 }, now - 1],
+    ['stories/s3', 'stories', 's3', 'u2', { authorId: 'u2', expiresAt: now + 90_000, createdAt: now - 2 }, now - 2],
+    ['posts/p1', 'posts', 'p1', 'u1', { authorId: 'u1', mediaType: 'video', createdAt: now }, now],
+    ['posts/p2', 'posts', 'p2', 'u2', { authorId: 'u2', mediaType: 'photo', createdAt: now - 1 }, now - 1],
+  ]);
+
+  // "stories that have not expired yet" - the live ring must never show yesterday's story.
+  const live = await (await list(w, db, `collection=stories&gt%5BexpiresAt%5D=${now}`)).json();
+  assert.deepEqual(live.documents.map(d => d.id).sort(), ['s1', 's3']);
+
+  const expiring = await (await list(w, db, `collection=stories&lte%5BexpiresAt%5D=${now}`)).json();
+  assert.deepEqual(expiring.documents.map(d => d.id), ['s2']);
+
+  // A feed filtered by one author and a media type at the same time.
+  const videos = await (await list(w, db, 'collection=posts&eq%5BmediaType%5D=video')).json();
+  assert.deepEqual(videos.documents.map(d => d.id), ['p1']);
+
+  // whereIn: the friend-picker loads exactly the profiles it asked for, in one request.
+  const picked = await (await list(w, db, 'collection=posts&in%5BauthorId%5D=u1,u2')).json();
+  assert.equal(picked.documents.length, 2);
+  const byIds = await (await list(w, db, 'collection=posts&inId=p2,p1,missing')).json();
+  assert.deepEqual(byIds.documents.map(d => d.id).sort(), ['p1', 'p2']);
+
+  // A comparison on a text field would silently misorder, so it is refused rather than guessed.
+  assert.equal((await list(w, db, 'collection=posts&gt%5BmediaType%5D=photo')).status, 400);
+  // An unbounded set is refused too: one request cannot smuggle a full table scan in.
+  const tooMany = Array.from({ length: 40 }, (_, i) => `u${i}`).join(',');
+  assert.equal((await list(w, db, `collection=posts&in%5BauthorId%5D=${tooMany}`)).status, 400);
+  assert.equal((await list(w, db, 'collection=posts&inId=')).status, 400);
+  // A field the collection does not expose cannot be compared.
+  assert.equal((await list(w, db, 'collection=posts&gt%5Bsecret%5D=1')).status, 400);
+});
+
+test('a nested collection is addressed by its parent and gated by the parent, not by its own fields', async () => {
+  const { db } = createSqliteD1();
+  const now = 1_700_000_000_000;
+  await seed(db, [
+    ['chats/c1', 'chats', 'c1', 'u1', { participants: ['u1', 'u2'], lastMessageAt: now }, now],
+    ['chats/c1/messages/m0', 'chats/c1/messages', 'm0', 'u1', { text: 'older', createdAt: now - 2 }, now - 2],
+  ]);
+
+  const inside = workerFor('u2');
+  const outside = workerFor('u3');
+
+  // A participant writes into the thread by its parent path, and the row is stored under that path.
+  const wrote = await put(inside, db, '/v1/docs/chats/c1/messages/m1', { text: 'hello', createdAt: now });
+  assert.equal(wrote.status, 200);
+  const stored = await db.prepare('SELECT collection, doc_id FROM friendbook_cf_documents WHERE path = ?')
+    .bind('chats/c1/messages/m1').first();
+  assert.equal(stored.collection, 'chats/c1/messages');
+  assert.equal(stored.doc_id, 'm1');
+
+  // Both participants can list and read the thread; a stranger gets 403 on every one of those.
+  const listed = await (await list(inside, db, 'collection=chats/c1/messages&order=createdAt&dir=asc')).json();
+  assert.deepEqual(listed.documents.map(d => d.id), ['m0', 'm1']);
+  assert.equal((await call(inside, db, '/v1/docs/chats/c1/messages/m1')).status, 200);
+  assert.equal((await list(outside, db, 'collection=chats/c1/messages')).status, 403);
+  assert.equal((await call(outside, db, '/v1/docs/chats/c1/messages/m1')).status, 403);
+  assert.equal((await put(outside, db, '/v1/docs/chats/c1/messages/m2', { text: 'intruder' })).status, 403);
+  assert.equal((await call(outside, db, '/v1/docs/chats/c1/messages/m1', { method: 'DELETE' })).status, 403);
+
+  // Somebody's session list is theirs alone: another signed-in user cannot read or write it.
+  const sessions = workerFor('u1');
+  assert.equal((await put(sessions, db, '/v1/docs/users/u1/sessions/s1', { uid: 'u1', device: 'pixel' })).status, 200);
+  assert.equal((await call(sessions, db, '/v1/docs/users/u1/sessions/s1')).status, 200);
+  assert.equal((await call(outside, db, '/v1/docs/users/u1/sessions/s1')).status, 403);
+  // Naming somebody else's uid does not open their session list either.
+  assert.equal((await put(outside, db, '/v1/docs/users/u1/sessions/s2', { uid: 'u3', device: 'intruder' })).status, 403);
+  assert.equal((await put(outside, db, '/v1/docs/users/u1/sessions/s3', { uid: 'u1', device: 'intruder' })).status, 403);
+
+  // A nested list is never cached, and a parent that does not exist closes the child.
+  const orphan = await list(inside, db, 'collection=chats/nope/messages');
+  assert.equal(orphan.status, 403);
+
+  // A batch may carry a nested op, addressed the same way, and one refusal cancels the whole batch.
+  const batched = await call(inside, db, '/v1/docs/batch', {
+    method: 'POST',
+    body: { ops: [{ op: 'set', collection: 'messages', id: 'm2', parent: 'chats/c1', subcollection: 'messages', fields: { text: 'two' } }] },
+  });
+  assert.equal(batched.status, 200);
+  assert.equal((await call(inside, db, '/v1/docs/chats/c1/messages/m2')).status, 200);
+
+  const refused = await call(outside, db, '/v1/docs/batch', {
+    method: 'POST',
+    body: { ops: [
+      { op: 'set', collection: 'posts', id: 'p9', fields: { authorId: 'u3', text: 'allowed' } },
+      { op: 'set', collection: 'messages', id: 'm3', parent: 'chats/c1', subcollection: 'messages', fields: { text: 'not allowed' } },
+    ] },
+  });
+  assert.equal(refused.status, 403);
+  const leaked = await db.prepare("SELECT path FROM friendbook_cf_documents WHERE path = 'posts/p9'").first();
+  assert.equal(leaked, null);
+});

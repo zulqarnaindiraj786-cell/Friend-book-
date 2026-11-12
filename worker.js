@@ -51,7 +51,11 @@ export function createWorker(verify = verifyFirebaseIdentity) {
       if (path === '/v1/config') return appConfig(request, env);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
-      const docs = path === '/v1/docs' || path === '/v1/docs/batch' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
+      // Two segments address a document, four address a document inside a nested collection
+      // (chats/<chatId>/messages/<messageId>); anything else is not a document path at all.
+      const docs = path === '/v1/docs' || path === '/v1/docs/batch'
+        || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path)
+        || /^\/v1\/docs\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
