@@ -283,12 +283,15 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Switches directly to the Reels tab when the user taps the Featured Reels card on the Home Feed. */
+    /**
+     * Switches directly to the Reels tab when the user taps the Featured Reels card on the Home Feed.
+     * Passes the featured reel's ID as an argument so the ReelsFragment can show it immediately on first load. */
     public void openReelsTabFromFeed(com.friendbook.social.models.Models.Reel featuredReel) {
         clearReelsBadgeNow();
-        select(TAB_REELS);
-        if (featuredReel != null && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
-            ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).focusFeaturedReel(featuredReel);
+        if (featuredReel != null && featuredReel.id != null && !featuredReel.id.isEmpty()) {
+            select(TAB_REELS, featuredReel.id);
+        } else {
+            select(TAB_REELS);
         }
     }
 
@@ -436,6 +439,25 @@ public class MainActivity extends Activity {
             menuBtnCircle.setBackground(Ui.circle(onMenu ? 0xFFE7F3FF : Ui.inputBg(this)));
             Icons.setTint(menuBtnIcon, onMenu ? Icons.BLUE : Ui.txt(this));
         }
+    }
+
+    /**
+     * Overload for Reels tab: accepts an optional initialReelId to pre-load a specific Reel
+     * (used when opening from Home Feed Featured Reels card). The ID is passed as a fragment
+     * argument so ReelsFragment.onCreateView can seed it immediately — no spinner delay. */
+    public void select(int tab, String initialReelId) {
+        if (tab == TAB_REELS && initialReelId != null && !initialReelId.isEmpty()) {
+            Fragment existing = tabFragments[TAB_REELS];
+            if (existing == null) {
+                // First time: create fragment with argument BEFORE adding to container
+                com.friendbook.social.reels.ReelsFragment f = new com.friendbook.social.reels.ReelsFragment();
+                Bundle args = new Bundle();
+                args.putString("initial_reel_id", initialReelId);
+                f.setArguments(args);
+                tabFragments[TAB_REELS] = f;
+            }
+        }
+        select(tab);
     }
 
     /** Dismiss ONLY the outer friend-request badge; pending requests and their seen flags stay untouched. */
