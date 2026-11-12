@@ -180,6 +180,25 @@ public class NotificationsFragment extends Fragment {
         initialLoaded = true;
         com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
+        // D1 FIRST: notifications created by this build live in Cloudflare. The pre-migration pager
+        // below still loads, and rows are merged by id so an older notification is never duplicated.
+        com.friendbook.social.core.CloudflareDocs.read("notifications", 30,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt").where("toUserId", me), page -> {
+            android.app.Activity act=getActivity();if(act==null || adapter==null || page==null)return;
+            if(me==null || !me.equals(Fb.uid()))return;
+            boolean changed=false;
+            for(java.util.Map<String,Object> row:page.documents){
+                Models.Notif n=Models.Notif.fromMap(String.valueOf(row.get("id")),row);
+                if(n==null || !allowedByPrefs(act,n.type))continue;
+                if(unreadOnly && n.isRead)continue;
+                boolean known=false;
+                for(Models.Notif existing:data){if(existing.id!=null && existing.id.equals(n.id)){known=true;break;}}
+                if(!known){data.add(n);changed=true;}
+            }
+            if(!changed)return;
+            Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
+            adapter.notifyDataSetChanged();empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+        });
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
@@ -238,7 +257,11 @@ public class NotificationsFragment extends Fragment {
 
     private void open(Models.Notif n) {
         if (!n.isRead) {
-            Fb.db().collection("notifications").document(n.id).update("isRead", true);
+            // WRITE = Cloudflare (the row may also exist in the old source; both are answered, and the
+            // enabled build only ever writes to Cloudflare).
+            com.friendbook.social.core.CloudflareDocs.writeDocument("notifications", n.id,
+                    java.util.Collections.singletonMap("isRead", true), null, null,
+                    () -> Fb.db().collection("notifications").document(n.id).update("isRead", true));
         }
         android.app.Activity a = getActivity();
         if (a == null) return;

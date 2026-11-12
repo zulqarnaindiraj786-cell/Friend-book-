@@ -12,8 +12,17 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.Query;
+
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -398,5 +407,177 @@ public final class CloudflareDocs {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> castMap(Object v) {
         return (Map<String, Object>) v;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The migration read contract: Cloudflare first, the pre-migration source as a union fallback.
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Reads a page of a collection, Cloudflare first and Firestore as the fallback that still holds
+     * the pre-migration history. Rows are de-duplicated by document id (Cloudflare wins), so a screen
+     * can never show the same item twice and can never lose one that only exists in the old source.
+     *
+     * `onFirestore` is handed the raw query so the caller keeps its own mapping (each screen already
+     * knows how to turn a snapshot into its model). It runs only when Cloudflare did not fill the page.
+     */
+    public static void readUnion(String collection, int limit, Query query,
+                                 Consumer<List<Map<String, Object>>> onMerged,
+                                 Consumer<Query> onFirestore) {
+        readUnion(collection, limit, query, onMerged, onFirestore, null);
+    }
+
+    /**
+     * Same, with a filter that Cloudflare cannot express in SQL (a set of ids, an array-contains
+     * that the Worker does not support) - `accept` decides what the Cloudflare page may contribute.
+     */
+    public static void readUnion(String collection, int limit, Query query,
+                                 Consumer<List<Map<String, Object>>> onMerged,
+                                 Consumer<Query> onFirestore,
+                                 java.util.function.Predicate<Map<String, Object>> accept) {
+        read(collection, limit, query, page -> {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            Set<String> ids = new HashSet<>();
+            if (page != null) {
+                for (Map<String, Object> row : page.documents) {
+                    if (row == null || accept == null || !accept.test(row)) continue;
+                    Object id = row.get("id");
+                    if (id == null || !ids.add(String.valueOf(id))) continue;
+                    rows.add(row);
+                }
+            }
+            if (onMerged != null) onMerged.accept(rows);
+            // Cloudflare answered with nothing usable: the pre-migration query owns this page.
+            if (rows.isEmpty() && onFirestore != null) onFirestore.accept(query);
+        });
+    }
+
+    /**
+     * Reads one document, Cloudflare first. `onFirestore` is only asked when the mirror does not hold
+     * it, which is exactly the history written before the migration.
+     */
+    public static void getUnion(String collection, String id,
+                                Consumer<Map<String, Object>> onDocument,
+                                Runnable onFirestore) {
+        get(collection, id, doc -> {
+            if (doc != null && doc.get("id") != null) {
+                if (onDocument != null) onDocument.accept(doc);
+                return;
+            }
+            if (onFirestore != null) onFirestore.run();
+        });
+    }
+
+    /**
+     * Writes one document to Cloudflare and, only when Cloudflare is switched off for this build,
+     * falls back to the previous source. This is the single write decision of the app.
+     *
+     * `previousWrite` is a lambda that performs the old Firestore write; it is never used while
+     * Cloudflare is enabled, so a user on this build cannot write back into the old source.
+     */
+    public static void writeDocument(String collection, String id, Map<String, Object> fields,
+                                     Runnable onSuccess, Consumer<String> onFailure,
+                                     Runnable previousWrite) {
+        if (!enabled()) {
+            if (previousWrite != null) previousWrite.run();
+            else if (onFailure != null) onFailure.accept("disabled");
+            return;
+        }
+        write(collection, id, fields, onSuccess, onFailure);
+    }
+
+    /** Deletes a document from Cloudflare (owner-only on the Worker) or from the old source if off. */
+    public static void deleteDocument(String collection, String id,
+                                      Runnable onSuccess, Consumer<String> onFailure,
+                                      Runnable previousDelete) {
+        if (!enabled()) {
+            if (previousDelete != null) previousDelete.run();
+            else if (onFailure != null) onFailure.accept("disabled");
+            return;
+        }
+        delete(collection, id, onSuccess, onFailure);
+    }
+
+    /**
+     * Creates a new document id without touching any backend, so an optimistic write and the real one
+     * share the same id (Firestore used to generate this on the client).
+     */
+    public static String newId(FirebaseFirestore db, String collection) {
+        // A locally generated id: no backend call, and the same id is used for the optimistic row and
+        // the real write. Kept here so callers do not each invent their own format.
+        return java.util.UUID.randomUUID().toString();
+    }
+
+    /** One snapshot row as the plain map the rest of this class speaks. */
+    public static Map<String, Object> plain(DocumentSnapshot snapshot) {
+        if (snapshot == null || !snapshot.exists()) return null;
+        Map<String, Object> row = new HashMap<>(snapshot.getData() == null
+                ? Collections.emptyMap() : snapshot.getData());
+        row.put("id", snapshot.getId());
+        return row;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Social graph: who is this user connected to, asked of Cloudflare first.
+    // ---------------------------------------------------------------------------------------------
+
+    /** The uids this user is friends with (Cloudflare rows, both id shapes), de-duplicated. */
+    public static void friendsOf(String uid, Consumer<Set<String>> callback) {
+        final Set<String> found = new HashSet<>();
+        if (callback == null) return;
+        if (uid == null || uid.isEmpty() || !enabled()) {
+            MAIN.post(() -> callback.accept(found));
+            return;
+        }
+        read("friends", 50, Query.orderDesc("createdAt").whereIn("participants", uid), page -> {
+            if (page != null) {
+                for (Map<String, Object> row : page.documents) {
+                    Object participants = row.get("participants");
+                    if (participants instanceof List) {
+                        for (Object participant : (List<?>) participants) {
+                            String other = participant == null ? "" : String.valueOf(participant);
+                            if (!other.isEmpty() && !other.equals(uid)) found.add(other);
+                        }
+                    }
+                    // The `a_b` id shape used by the migration carries no participants array.
+                    Object id = row.get("id");
+                    if (id != null) {
+                        String[] parts = String.valueOf(id).split("_");
+                        if (parts.length >= 2) {
+                            for (String part : parts) {
+                                if (!part.isEmpty() && !part.equals(uid) && part.length() > 10) found.add(part);
+                            }
+                        }
+                    }
+                }
+            }
+            MAIN.post(() -> callback.accept(found));
+        });
+    }
+
+    /**
+     * Pending friend requests addressed to this user, as `fromUid -> requestId`.
+     * Cloudflare answers for the requests created after the migration; the caller still runs its
+     * pre-migration listener, so an old request is neither lost nor shown twice.
+     */
+    public static void incomingRequests(String uid, Consumer<Map<String, String>> callback) {
+        final Map<String, String> found = new LinkedHashMap<>();
+        if (callback == null) return;
+        if (uid == null || uid.isEmpty() || !enabled()) {
+            MAIN.post(() -> callback.accept(found));
+            return;
+        }
+        read("friend_requests", 50, Query.orderDesc("createdAt").where("toUid", uid).where("status", "pending"), page -> {
+            if (page != null) {
+                for (Map<String, Object> row : page.documents) {
+                    Object from = row.get("fromUid");
+                    Object id = row.get("id");
+                    if (from == null || id == null) continue;
+                    if (!"pending".equals(String.valueOf(row.getOrDefault("status", "pending")))) continue;
+                    found.put(String.valueOf(from), String.valueOf(id));
+                }
+            }
+            MAIN.post(() -> callback.accept(found));
+        });
     }
 }

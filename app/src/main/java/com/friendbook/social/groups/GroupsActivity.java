@@ -147,6 +147,31 @@ public class GroupsActivity extends Activity {
     }
     private void startGroupPages() {
         if(reg!=null)reg.remove();
+        // D1 FIRST: a group created by this build lives in Cloudflare. Merged by id with the
+        // pre-migration page below, so older groups still appear and nothing is duplicated.
+        if (Fb.uid() != null) {
+            com.friendbook.social.core.CloudflareDocs.read("groups", 30,
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt"), cf -> {
+                if (cf == null || cf.documents.isEmpty() || isFinishing()) return;
+                java.util.Set<String> known = new java.util.HashSet<>();
+                for (Models.Group g : allGroups) if (g.id != null) known.add(g.id);
+                boolean changed = false;
+                for (java.util.Map<String, Object> row : cf.documents) {
+                    String id = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                    if (id.isEmpty() || known.contains(id)) continue;
+                    Models.Group group = Models.Group.fromMap(id, row);
+                    if (group == null) continue;
+                    // The same tab rules the pre-migration query applies.
+                    if (tabMode == 1 && !group.members.contains(Fb.uid())) continue;
+                    if (tabMode == 2 && !group.invitedUids.contains(Fb.uid())) continue;
+                    allGroups.add(group); known.add(id); changed = true;
+                }
+                if (!changed) return;
+                java.util.Collections.sort(allGroups, (a, b) -> Long.compare(b.createdAt, a.createdAt));
+                updateInviteBadge();
+                applyFilter();
+            });
+        }
         com.google.firebase.firestore.Query groupQuery=Fb.db().collection("groups");
         if(tabMode==1)groupQuery=groupQuery.whereArrayContains("members",Fb.uid());
         if(tabMode==2)groupQuery=groupQuery.whereArrayContains("invitedUids",Fb.uid());

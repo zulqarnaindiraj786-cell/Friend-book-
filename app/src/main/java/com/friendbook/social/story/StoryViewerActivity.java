@@ -255,11 +255,17 @@ public class StoryViewerActivity extends Activity {
     private void loadStoryPages(int request){
         if(specificStoryId!=null){
             moreStories.setVisibility(View.GONE);
-            Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
+            // D1 FIRST: a Story shared by this build only exists in Cloudflare.
+            com.friendbook.social.core.CloudflareDocs.getUnion("stories", specificStoryId, row -> {
+                if(request!=storyRequest || isFinishing())return;
+                Models.Story story=Models.Story.fromMap(String.valueOf(row.get("id")), row);
+                if(story==null || story.expired() || !authorId.equals(story.authorId) || !allowedStory(story)){finish();return;}
+                stories.clear();stories.add(story);index=0;show();
+            }, () -> Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
                 if(request!=storyRequest || isFinishing())return;
                 if(!doc.exists()){finish();return;}Models.Story story=Models.Story.fromDoc(doc);
                 if(!authorId.equals(story.authorId) || !allowedStory(story)){finish();return;}stories.clear();stories.add(story);index=0;show();
-            }).addOnFailureListener(e->{if(request==storyRequest)Ui.toast(this,"Couldn't load story. Reopen to retry.");});
+            }).addOnFailureListener(e->{if(request==storyRequest)Ui.toast(this,"Couldn't load story. Reopen to retry.");}));
             return;
         }
         storyPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("stories").whereEqualTo("authorId",authorId),10,"story-viewer:"+authorId,(docs,more,busy,error)->{
@@ -344,6 +350,19 @@ public class StoryViewerActivity extends Activity {
         if (me != null && !mine && !s.viewedBy.contains(me)) {
             Fb.db().collection("stories").document(s.id)
                     .update("viewedBy", FieldValue.arrayUnion(me));
+            // WRITE = Cloudflare: the "seen by" list of a story written by this build lives in D1.
+            if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+                com.friendbook.social.core.CloudflareDocs.get("stories", s.id, row -> {
+                    if (row == null) return;
+                    java.util.List<Object> seen = new java.util.ArrayList<>();
+                    Object existing = row.get("viewedBy");
+                    if (existing instanceof java.util.List) seen.addAll((java.util.List<?>) existing);
+                    if (!seen.contains(me)) seen.add(me);
+                    java.util.Map<String, Object> patch = new java.util.HashMap<>();
+                    patch.put("viewedBy", seen);
+                    com.friendbook.social.core.CloudflareDocs.write("stories", s.id, patch, null, null);
+                });
+            }
         }
 
         if (!"video".equals(s.mediaType)) {

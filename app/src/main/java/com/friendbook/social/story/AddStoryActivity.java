@@ -278,10 +278,9 @@ public class AddStoryActivity extends Activity {
             m.put("createdAt", FieldValue.serverTimestamp());
             m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
             String storyId = "story_" + System.currentTimeMillis();
-            com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-            Fb.db().collection("stories").add(m)
-                    .addOnSuccessListener(x -> { Ui.toast(this, "Text story shared 📖"); finish(); })
-                    .addOnFailureListener(e -> fail());
+            // WRITE = Cloudflare: a Story shared by this build is a D1 row (read back by the story bar
+            // and the viewer). The offline queue keeps it if the network is down.
+            saveStory(storyId, m, "Text story shared 📖");
             return;
         }
         if (mediaUri == null) { Ui.toast(this, "Choose Aa Text, Photo or Video first"); return; }
@@ -322,13 +321,25 @@ public class AddStoryActivity extends Activity {
                                 m.put("createdAt", FieldValue.serverTimestamp());
                                 m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
                                 String storyId = "story_" + System.currentTimeMillis();
-                                com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-                                Fb.db().collection("stories").add(m)
-                                        .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
-                                        .addOnFailureListener(e -> fail());
+                                saveStory(storyId, m, "Story shared ✓");
                             })
                             .addOnFailureListener(e -> fail());
                 });
+    }
+
+    /** One write decision for a Story: Cloudflare when enabled, the old source only when it is not. */
+    private void saveStory(String storyId, Map<String, Object> story, String doneMessage) {
+        com.friendbook.social.core.CloudflareDocs.writeDocument("stories", storyId, story,
+                () -> { Ui.toast(this, doneMessage); finish(); },
+                reason -> {
+                    com.friendbook.social.core.CloudflareOutbox.enqueue(this, "stories", storyId,
+                            com.friendbook.social.core.CloudflareDocs.sanitize(story));
+                    Ui.toast(this, doneMessage + " (will publish when online)");
+                    finish();
+                },
+                () -> Fb.db().collection("stories").add(story)
+                        .addOnSuccessListener(x -> { Ui.toast(this, doneMessage); finish(); })
+                        .addOnFailureListener(e -> fail()));
     }
 
     private void fail() {

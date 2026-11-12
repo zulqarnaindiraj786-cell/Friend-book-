@@ -470,9 +470,13 @@ public class Models {
         public boolean expired() { return System.currentTimeMillis() > expiresAt; }
 
         public static Story fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** The same story read from Cloudflare (no Firestore snapshot involved). */
+        public static Story fromMap(String id, Map<String, Object> m) {
             Story s = new Story();
-            Map<String, Object> m = d.getData();
-            s.id = d.getId();
+            s.id = id;
             s.authorId = Format.str(m, "authorId");
             s.authorName = Format.strOr(m, "authorName", "User");
             s.authorPhoto = Format.str(m, "authorPhotoUrl");
@@ -782,9 +786,13 @@ public class Models {
         }
 
         public static ChatRoom fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE));
+        }
+
+        /** The same room read from Cloudflare (no Firestore snapshot involved). */
+        public static ChatRoom fromMap(String id, Map<String, Object> m) {
             ChatRoom c = new ChatRoom();
-            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
-            c.id = d.getId();
+            c.id = id;
             c.isGroup = Format.boolOf(m, "isGroup");
             c.groupName = Format.str(m, "groupName");
             c.groupPhoto = Format.str(m, "groupPhoto");
@@ -853,9 +861,13 @@ public class Models {
         }
 
         public static Group fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** The same group read from Cloudflare (no Firestore snapshot involved). */
+        public static Group fromMap(String id, Map<String, Object> m) {
             Group g = new Group();
-            Map<String, Object> m = d.getData();
-            g.id = d.getId();
+            g.id = id;
             g.name = Format.strOr(m, "name", "Group");
             g.about = Format.str(m, "about");
             g.category = Format.strOr(m, "category", "Community");
@@ -910,6 +922,24 @@ public class Models {
             Notif n = new Notif();
             Map<String, Object> m = d.getData();
             n.id = d.getId();
+            n.toUserId = Format.str(m, "toUserId");
+            n.fromUserId = Format.str(m, "fromUserId");
+            n.fromUserName = Format.strOr(m, "fromUserName", "Someone");
+            n.fromUserPhoto = Format.str(m, "fromUserPhotoUrl");
+            n.type = Format.str(m, "type");
+            n.postId = Format.str(m, "postId");
+            n.groupId = Format.str(m, "groupId");
+            n.text = Format.str(m, "text");
+            n.isRead = Format.boolOf(m, "isRead");
+            n.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
+            return n;
+        }
+
+        /** The same row, read from Cloudflare instead of a Firestore snapshot. */
+        public static Notif fromMap(String id, Map<String, Object> m) {
+            if (id == null || m == null) return null;
+            Notif n = new Notif();
+            n.id = id;
             n.toUserId = Format.str(m, "toUserId");
             n.fromUserId = Format.str(m, "fromUserId");
             n.fromUserName = Format.strOr(m, "fromUserName", "Someone");

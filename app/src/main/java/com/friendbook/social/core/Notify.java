@@ -56,12 +56,24 @@ public class Notify {
         n.put("text", text);
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
-        n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+        n.put("createdAt", System.currentTimeMillis());
+        // WRITE = Cloudflare. A notification created by this build is a D1 row; the pre-migration
+        // write stays as the flag-off branch only, so nothing new is ever written back to Firebase.
+        final String notifId = com.friendbook.social.core.CloudflareDocs.newId(Fb.db(), "notifications");
+        com.friendbook.social.core.CloudflareDocs.writeDocument("notifications", notifId, n, () -> {
+            com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
+                    + com.friendbook.social.push.PushTrace.id(notifId));
+            if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(notifId, n);
+        }, reason -> {
+            com.friendbook.social.push.PushTrace.failure("notification_write_failed", new RuntimeException(String.valueOf(reason)));
+            com.friendbook.social.core.CloudflareOutbox.enqueue(
+                    com.friendbook.social.App.instance, "notifications", notifId,
+                    com.friendbook.social.core.CloudflareDocs.sanitize(n));
+        }, () -> Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
             com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
                     + com.friendbook.social.push.PushTrace.id(ref.getId()));
             if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
-        }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
+        }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e)));
     }
 
     /**

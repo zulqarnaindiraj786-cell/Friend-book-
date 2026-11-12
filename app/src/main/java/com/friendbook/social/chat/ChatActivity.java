@@ -691,6 +691,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         unreadResetOnce=true;
         batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
+        // WRITE = Cloudflare: the unread badge for this room is stored on the D1 room row, so a
+        // conversation created by this build shows the correct badge on both sides.
+        if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+            java.util.Map<String, Object> unread = new java.util.HashMap<>();
+            unread.put("unreadCount", java.util.Collections.singletonMap(me, 0L));
+            com.friendbook.social.core.CloudflareDocs.write("chats", chatId, unread, null, null);
+        }
     }
 
     private boolean typingOn = false;
@@ -872,6 +879,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (me == null || chatId == null) return;
         // Use update() rather than set() so opening an empty chat never creates an incomplete room doc
         Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
+        // WRITE = Cloudflare (this build's own rooms live there).
+        if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+            java.util.Map<String, Object> unread = new java.util.HashMap<>();
+            unread.put("unreadCount", java.util.Collections.singletonMap(me, 0L));
+            com.friendbook.social.core.CloudflareDocs.write("chats", chatId, unread, null, null);
+        }
     }
 
     /** ✨ Sticker pack — big emoji stickers, friendbook Messenger style. */

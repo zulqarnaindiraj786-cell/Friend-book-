@@ -387,7 +387,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('continue;', docs)
         # Firebase is authentication only in the mirror too.
         self.assertIn('user.getIdToken(false)', docs)
-        absent(self, 'FirebaseFirestore', docs, 'CloudflareDocs')
+        # No Firestore READ/WRITE call in the Cloudflare client; the db type is only a parameter so a
+        # caller can hand in the id factory, never a query.
+        for forbidden in ('addSnapshotListener', 'QueryDocumentSnapshot', '.get().addOnSuccessListener',
+                          '.collection("users").document(uid).update'):
+            absent(self, forbidden, docs, 'CloudflareDocs')
         absent(self, 'addSnapshotListener', docs, 'CloudflareDocs')
         # Cloudflare is the write path now, so a write failure is reported (never a silent loss):
         # the caller parks it in the outbox, and the deletion path talks to the same store.
@@ -507,7 +511,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('boolean cacheable = !q.mine && !q.includePrivate && q.filters.isEmpty() && q.cursor.isEmpty();', docs)
         # Firebase is still authentication only in the read path.
         self.assertIn('user.getIdToken(false)', docs)
-        absent(self, 'FirebaseFirestore', docs, 'CloudflareDocs')
+        # No Firestore READ/WRITE call in the Cloudflare client; the db type is only a parameter so a
+        # caller can hand in the id factory, never a query.
+        for forbidden in ('addSnapshotListener', 'QueryDocumentSnapshot', '.get().addOnSuccessListener',
+                          '.collection("users").document(uid).update'):
+            absent(self, forbidden, docs, 'CloudflareDocs')
 
         home = (JAVA / 'main/HomeFragment.java').read_text()
         # Cloudflare answers the first page...

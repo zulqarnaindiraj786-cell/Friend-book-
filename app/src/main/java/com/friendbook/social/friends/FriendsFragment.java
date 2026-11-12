@@ -165,6 +165,40 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
+        // D1 FIRST for the social graph: friends and requests created after the migration only exist
+        // in Cloudflare. The pre-migration pager below still runs and adds the older history on top.
+        if (selected == SEC_FRIENDS) {
+            com.friendbook.social.core.CloudflareDocs.friendsOf(me, found -> {
+                if (!current(token, me) || section != SEC_FRIENDS || found.isEmpty()) return;
+                for (String other : found) {
+                    if (removedFriendIds.contains(other) || friendIds.contains(other)) continue;
+                    friendIds.add(other);
+                    ensureUser(other);
+                }
+                render();
+            });
+        } else if (selected == SEC_REQUESTS) {
+            com.friendbook.social.core.CloudflareDocs.incomingRequests(me, found -> {
+                if (!current(token, me) || section != SEC_REQUESTS || found.isEmpty()) return;
+                for (java.util.Map.Entry<String, String> entry : found.entrySet()) {
+                    if (dismissedReqIds.contains(entry.getValue())) continue;
+                    boolean known = false;
+                    for (Models.FriendRequest req : incoming) {
+                        if (entry.getValue().equals(req.id)) { known = true; break; }
+                    }
+                    if (known) continue;
+                    Models.FriendRequest request = new Models.FriendRequest();
+                    request.id = entry.getValue();
+                    request.fromUid = entry.getKey();
+                    request.toUid = me;
+                    request.status = "pending";
+                    incoming.add(request);
+                    ensureUser(entry.getKey());
+                }
+                tabs[SEC_REQUESTS].setText("Requests");
+                render();
+            });
+        }
         activePager=new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20,"friends-section:"+selected,(docs,more,loading,error)->{
             if(!current(token,me) || section!=selected)return;
             pageMore=more;pageLoading=loading;pageError=error;
@@ -357,10 +391,19 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(!me.equals(Fb.uid()) || getActivity()==null)return;
             if(page.getMetadata().isFromCache()){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Reconnect to verify this request. Nothing changed.");return;}
             if(!page.isEmpty()){requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Ui.toast(getActivity(),"Request already sent");return;}
-            Fb.db().collection("friend_requests").add(Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",FieldValue.serverTimestamp()))
-                .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+            // WRITE = Cloudflare: a request sent by this build lands in D1, where the other user reads
+            // it. The id is deterministic (from_to) so the same pair can never create two requests.
+            final java.util.Map<String,Object> request=Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",System.currentTimeMillis());
+            final String requestId=me+"_"+target.uid;
+            com.friendbook.social.core.CloudflareDocs.writeDocument("friend_requests",requestId,request,
+                ()->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
                     requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
-                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}});
+                },
+                reason->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}},
+                ()->Fb.db().collection("friend_requests").add(request)
+                    .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                        requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
+                    }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}}));
         }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't check request. Try again.");}});
     }
 
@@ -384,22 +427,40 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         removedFriendIds.remove(from);candidateFriends.add(from);
         if (!friendIds.contains(from)) friendIds.add(from);
 
-        WriteBatch batch = Fb.db().batch();
-        batch.update(Fb.db().collection("friend_requests").document(rid),
-                "status", "accepted");
-        com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
-        Map<String, Object> friendDoc = Fb.map(
+        // WRITE = Cloudflare. The friendship row is what unlocks a "Friends"-privacy post for the
+        // other side (the Worker checks exactly this row), so it must exist in D1 before anything
+        // else: both users then see each other's friends-only content without a second migration.
+        final java.util.Map<String,Object> friendDoc = Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
-                "createdAt", FieldValue.serverTimestamp());
-        com.friendbook.social.core.CloudflareStore.put("friends", friendDocRef.getId(), friendDoc);
-        batch.set(friendDocRef, friendDoc);
-        batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
-        batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
-        batch.commit().addOnSuccessListener(x -> {
-            if(!me.equals(Fb.uid()) || getActivity()==null)return;
-            Notify.send(from, "friend_accept", "accepted your friend request");
-            Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
-        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
+                "createdAt", System.currentTimeMillis());
+        final String friendId = me.compareTo(from) < 0 ? me + "_" + from : from + "_" + me;
+        Runnable afterFriendship = () -> {
+            com.friendbook.social.core.CloudflareStore.put("users", me, Fb.map("friendsCount", FieldValue.increment(1)));
+            com.friendbook.social.core.CloudflareStore.put("users", from, Fb.map("friendsCount", FieldValue.increment(1)));
+        };
+        com.friendbook.social.core.CloudflareDocs.writeDocument("friends", friendId, friendDoc,
+            () -> {
+                if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                afterFriendship.run();
+                Notify.send(from, "friend_accept", "accepted your friend request");
+                Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
+            },
+            reason -> { if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();} },
+            () -> {
+                WriteBatch batch = Fb.db().batch();
+                com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
+                batch.set(friendDocRef, friendDoc);
+                batch.update(Fb.db().collection("friend_requests").document(rid), "status", "accepted");
+                batch.commit().addOnSuccessListener(x -> {
+                    if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                    Notify.send(from, "friend_accept", "accepted your friend request");
+                    Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
+                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
+            });
+        // The request itself is answered on both stores: D1 when enabled, the old source otherwise.
+        com.friendbook.social.core.CloudflareDocs.writeDocument("friend_requests", rid,
+                Fb.map("status", "accepted"), null, null,
+                () -> Fb.db().collection("friend_requests").document(rid).update("status", "accepted"));
     }
 
     private void unfriend(Models.User user) {
@@ -409,6 +470,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 if(!me.equals(Fb.uid()) || getActivity()==null)return;
                 if(page.getMetadata().isFromCache() || page.size()==20){Ui.toast(getActivity(),"Couldn't verify all relationship records. Nothing changed; retry online.");return;}
                 if(page.isEmpty()){removedFriendIds.add(user.uid);friendIds.remove(user.uid);render();return;}
+                // Both possible id shapes, so an unfriend removes whichever row the pair was stored as.
+                String abc = me.compareTo(user.uid) < 0 ? me + "_" + user.uid : user.uid + "_" + me;
+                for (String friendRowId : new String[]{abc, me + "_" + user.uid, user.uid + "_" + me}) {
+                    com.friendbook.social.core.CloudflareDocs.deleteDocument("friends", friendRowId, null, null, null);
+                }
                 WriteBatch batch=Fb.db().batch();for(DocumentSnapshot doc:page)batch.delete(doc.getReference());
                 batch.update(Fb.db().collection("users").document(me),"friendsCount",FieldValue.increment(-page.size()));
                 batch.update(Fb.db().collection("users").document(user.uid),"friendsCount",FieldValue.increment(-page.size()));

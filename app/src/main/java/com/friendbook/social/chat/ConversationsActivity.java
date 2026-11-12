@@ -329,6 +329,39 @@ public class ConversationsActivity extends Activity {
             if(generation!=inboxGeneration)return;
             inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setVisibility(View.VISIBLE);
         };
+        // D1 FIRST: a conversation created by this build lives in Cloudflare. The pre-migration
+        // listener below still runs and is merged by room id, so old chats are neither lost nor doubled.
+        if(reset) {
+            com.friendbook.social.core.CloudflareDocs.read("chats", 20,
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("lastMessageTime").whereIn("participants", me), cfPage -> {
+                if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
+                if(cfPage==null || cfPage.documents.isEmpty()) return;
+                java.util.Set<String> hidden = getSharedPreferences("fb_prefs", MODE_PRIVATE)
+                        .getStringSet("hiddenChats", new HashSet<>());
+                boolean changed = false;
+                for(java.util.Map<String,Object> row : cfPage.documents) {
+                    String roomId = row.get("id")==null ? "" : String.valueOf(row.get("id"));
+                    if(roomId.isEmpty() || hidden.contains(roomId)) continue;
+                    Models.ChatRoom room = Models.ChatRoom.fromMap(roomId, row);
+                    if(room.participants==null || !room.participants.contains(me)) continue;
+                    String other = room.otherUid(me);
+                    if(!room.isGroup && (other==null || other.isEmpty())) continue;
+                    if(!room.isGroup && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(other)) continue;
+                    boolean known=false;
+                    for(Room existing : allRooms) { if(existing.room!=null && roomId.equals(existing.room.id)) { known=true; existing.room=room; changed=true; break; } }
+                    if(known) continue;
+                    Room fresh=new Room(); fresh.room=room; fresh.other=other;
+                    allRooms.add(fresh); changed=true;
+                }
+                if(!changed) return;
+                java.util.Collections.sort(allRooms, (a,b2) -> Long.compare(
+                        b2.room==null?0:b2.room.lastMessageTime, a.room==null?0:a.room.lastMessageTime));
+                List<Models.ChatRoom> merged = new ArrayList<>();
+                for (Room r : allRooms) if (r.room != null) merged.add(r.room);
+                com.friendbook.social.core.FastCache.saveChats(merged);
+                applyFilter();
+            });
+        }
         if(reset){
             if(reg!=null)reg.remove();
             reg=query.limit(10).addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});

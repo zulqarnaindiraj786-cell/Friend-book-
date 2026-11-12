@@ -85,6 +85,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private String storiesActor,friendGraphActor;
     private int storyGeneration;
     private final Set<String> storyIds=new HashSet<>();
+    /** Stories served by Cloudflare (a story shared by this build has no snapshot to hold). */
+    private final Map<String, Models.Story> cloudStories = new java.util.LinkedHashMap<>();
     private final Set<String> loadedPostIds = new HashSet<>();
     private final Set<String> friendIds = new HashSet<>();
     private final Map<String, StoriesAdapter.Group> storyGroups = new HashMap<>();
@@ -852,6 +854,24 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
         storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",Timestamp.now())
                 .orderBy("expiresAt",Query.Direction.ASCENDING);
+        // D1 FIRST: a Story shared by this build only exists in Cloudflare. It is merged by id into
+        // the same list the pre-migration query fills, so old stories still appear and new ones do not wait.
+        com.friendbook.social.core.CloudflareDocs.read("stories", 30,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt"), storyPage -> {
+            if(storyPage==null || storyPage.documents.isEmpty() || !isAdded()) return;
+            if(!java.util.Objects.equals(actor,Fb.uid())) return;
+            boolean changed=false;
+            for(java.util.Map<String,Object> row:storyPage.documents){
+                String id=row.get("id")==null?"":String.valueOf(row.get("id"));
+                if(id.isEmpty() || loadedStoryDocs.containsKey(id)) continue;
+                Models.Story story=Models.Story.fromMap(id,row);
+                if(story==null || story.expired() || !storyAllowed(story)) continue;
+                loadedStoryDocs.put(id,null);
+                cloudStories.put(id,story);
+                changed=true;
+            }
+            if(changed) renderLoadedStories();
+        });
         loadMoreStories();
     }
 
@@ -864,7 +884,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         page.limit(10).get().addOnSuccessListener(snapshot -> {
             if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==10;
-            if(first)loadedStoryDocs.clear();
+            if(first){loadedStoryDocs.clear();cloudStories.clear();}
             if(!snapshot.isEmpty())storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
             for(DocumentSnapshot doc:snapshot)loadedStoryDocs.put(doc.getId(),doc);
             renderLoadedStories();
@@ -882,7 +902,16 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
     private void renderLoadedStories(){
         if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;storyGroups.clear();storyIds.clear();
+        // Cloudflare stories first (they carry no snapshot), then the pre-migration rows by id.
+        for(Models.Story cloud:cloudStories.values()){
+            if(loadedStoryDocs.containsKey(cloud.id) && loadedStoryDocs.get(cloud.id)!=null) continue;
+            if(!storyAllowed(cloud))continue;storyIds.add(cloud.id);
+            StoriesAdapter.Group cloudGroup=storyGroups.get(cloud.authorId);
+            if(cloudGroup==null){cloudGroup=new StoriesAdapter.Group();cloudGroup.authorId=cloud.authorId;cloudGroup.authorName=cloud.authorName;cloudGroup.authorPhoto=cloud.authorPhoto;storyGroups.put(cloud.authorId,cloudGroup);}
+            cloudGroup.stories.add(cloud);if(!cloud.authorId.equals(Fb.uid()) && !cloud.viewedBy.contains(Fb.uid()))cloudGroup.unseen=true;
+        }
         for(DocumentSnapshot doc:loadedStoryDocs.values()){
+            if(doc==null)continue;
             Models.Story story=Models.Story.fromDoc(doc);if(!storyAllowed(story))continue;storyIds.add(story.id);
             StoriesAdapter.Group group=storyGroups.get(story.authorId);
             if(group==null){group=new StoriesAdapter.Group();group.authorId=story.authorId;group.authorName=story.authorName;group.authorPhoto=story.authorPhoto;storyGroups.put(story.authorId,group);}
