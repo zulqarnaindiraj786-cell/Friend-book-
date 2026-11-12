@@ -40,6 +40,28 @@ public class CloudException extends Exception {
         return status == 404;
     }
 
+    /**
+     * A short machine-readable name for the failure, in the vocabulary screens already log: a refusal
+     * is PERMISSION_DENIED, a missing document NOT_FOUND, no answer at all UNAVAILABLE. It exists so a
+     * log line says what kind of problem this was, not just what the server printed.
+     */
+    public String getCode() {
+        switch (status) {
+            case 400: return "INVALID_ARGUMENT";
+            case 401: return "UNAUTHENTICATED";
+            case 403: return "PERMISSION_DENIED";
+            case 404: return "NOT_FOUND";
+            case 409: return "ABORTED";
+            case 413:
+            case 429: return "RESOURCE_EXHAUSTED";
+            case 500:
+            case 502:
+            case 503: return "UNAVAILABLE";
+            case 0: return "UNAVAILABLE";
+            default: return "UNKNOWN";
+        }
+    }
+
     private static int statusOf(Throwable cause) {
         if (cause instanceof com.example.frienbook.core.CloudTransport.HttpError) {
             return ((com.example.frienbook.core.CloudTransport.HttpError) cause).status;
