@@ -867,9 +867,12 @@ public class CreatePostActivity extends Activity {
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
+            // WRITE = Cloudflare. An edit by a user on this build lands in D1, whether or not the post
+            // was originally written to the old source - that history is only ever read again.
             if (com.friendbook.social.core.CloudflareStore.enabled()) {
-                com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
-                com.friendbook.social.core.CloudflareDocs.mirror("posts", editId, m);
+                com.friendbook.social.core.CloudflareDocs.write("posts", editId, m, null, reason ->
+                        com.friendbook.social.core.CloudflareOutbox.enqueue(
+                                this, "posts", editId, com.friendbook.social.core.CloudflareDocs.sanitize(m)));
             } else {
                 Fb.db().collection("posts").document(editId).update(m);
             }
@@ -944,11 +947,19 @@ public class CreatePostActivity extends Activity {
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());
         };
         if (com.friendbook.social.core.CloudflareStore.enabled()) {
-            com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
-            // The same document also goes to the Cloudflare D1 mirror (/v1/docs) so the post exists
-            // outside Firestore the moment it is published. Additive and fire-and-forget: a Worker
-            // outage cannot block posting.
-            com.friendbook.social.core.CloudflareDocs.mirror("posts", docRef.getId(), m);
+            // WRITE = Cloudflare D1, and only Cloudflare: a new post from ANY user on this build is
+            // written here, never back to the old source. If the Worker is unreachable the validated
+            // post is parked in the outbox and replayed, instead of being retyped by the user.
+            final java.util.Map<String, Object> post = new java.util.HashMap<>(m);
+            final String newId = docRef.getId();
+            com.friendbook.social.core.CloudflareDocs.write("posts", newId, post, () -> {
+                afterPostSaved.run();
+                com.friendbook.social.core.CloudflareOutbox.flush(this);
+            }, reason -> {
+                com.friendbook.social.core.CloudflareOutbox.enqueue(
+                        this, "posts", newId, com.friendbook.social.core.CloudflareDocs.sanitize(post));
+                Ui.toast(this, "Posted ✓ — will sync when you are back online");
+            });
         } else {
             docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
                     android.util.Log.e("CreatePost", "Background sync failed: " + e));

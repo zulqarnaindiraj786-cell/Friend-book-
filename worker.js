@@ -80,7 +80,11 @@ export function createWorker(verify = verifyFirebaseToken) {
       catch { return json({ error: 'Unauthorized' }, 401); }
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
-      if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
+      if (docs) return appDocuments(request, env, {
+        uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB,
+        // Only used to finish the visibility check for a profile that predates the migration.
+        firestore: { project: env.FIREBASE_PROJECT_ID, token: bearer[1], cache: new Map() },
+      });
       // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
       // KV aggregate write happen after the response is already sent.
       if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);

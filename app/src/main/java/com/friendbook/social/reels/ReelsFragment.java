@@ -79,6 +79,14 @@ public class ReelsFragment extends Fragment {
     private ListenerRegistration reelsReg, videoPostsReg;
     private DocumentSnapshot reelsCursor, postsCursor;
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
+    /**
+     * The Cloudflare page contract for Reels: where the last page ended, whether another one exists,
+     * and whether the mirror has already answered for this screen. A Reel written by this build only
+     * lives in D1, so paging has to continue there before the pre-migration history is consulted.
+     */
+    private String cloudReelCursor;
+    private boolean cloudReelHasMore;
+    private boolean cloudReelLoadedOnce;
     /** True when a load attempt ended with nothing because the NETWORK failed, not because empty. */
     private boolean reelsLoadFailed;
     /** A load that neither succeeds nor fails (black-hole network) must not strand the spinner. */
@@ -784,15 +792,21 @@ public class ReelsFragment extends Fragment {
             settleLoad(ticket, true, "open");
         }, 12_000L);
 
-        // Only the FIRST page is asked of Cloudflare. Later pages belong to the Firestore cursor
-        // that owns them, so the mirror is never hit for a page it cannot address.
-        boolean firstPage = reelsCursor == null && postsCursor == null;
-        if (!firstPage || !com.friendbook.social.core.CloudflareStore.enabled()) {
+        // Cloudflare is the source for this build: the first page of a session, and then every page
+        // that its own cursor can address. The pre-migration query only supplies the history the
+        // mirror does not hold (see loadFirestorePageOnly).
+        if (!com.friendbook.social.core.CloudflareStore.enabled()) {
             loadFirestorePage(ticket);
             return;
         }
-        com.friendbook.social.core.CloudflareStore.list("reels", Math.max(ticket.limit, 5), docs -> {
+        com.friendbook.social.core.CloudflareDocs.read("reels", Math.max(ticket.limit, 5),
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt"), page -> {
             if (ticket.done) return;
+            List<Map<String, Object>> docs = page != null ? page.documents : null;
+            cloudReelCursor = page != null ? page.cursor : null;
+            cloudReelHasMore = page != null && page.hasMore;
+            // An empty answer still proves the mirror was asked, so the next page may continue there.
+            cloudReelLoadedOnce = page != null;
             // Even when this ticket no longer belongs to the current generation, its page is still
             // real data: remember it for the next open, then let the ticket settle.
             int added = 0;
@@ -826,9 +840,9 @@ public class ReelsFragment extends Fragment {
             if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added++; }
         }
         if (added > 0) {
-            // Another page may exist; the next load continues on the Firestore cursor, which the D1
-            // page cannot advance (mirror rows carry no Firestore snapshot).
-            moreReels = true;
+            // The page itself says whether another one exists, so the paging flag is a fact and the
+            // next load knows to ask Cloudflare for the next cursor.
+            moreReels = cloudReelHasMore;
         }
         return added;
     }
@@ -839,6 +853,40 @@ public class ReelsFragment extends Fragment {
      * early return is what used to leave `pagingVideos` true and the spinner on screen forever.
      */
     private void loadFirestorePage(ReelLoad ticket) {
+        // Cloudflare first for the next page too: a Reel published by this build only exists in D1,
+        // so a pre-migration cursor could never reach it.
+        if (moreReels && cloudReelLoadedOnce && (cloudReelHasMore || cloudReelCursor != null)) {
+            String cursor = cloudReelCursor;
+            com.friendbook.social.core.CloudflareDocs.read("reels", Math.max(ticket.limit, 5),
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt").cursor(cursor), page -> {
+                if (ticket.done) return;
+                int added = 0;
+                if (page != null && !page.documents.isEmpty()) {
+                    cloudReelCursor = page.cursor;
+                    cloudReelHasMore = page.hasMore;
+                    added = applyCloudflarePage(page.documents, ticket.limit);
+                }
+                if (added > 0) {
+                    if (ticket.generation == videoGeneration) {
+                        rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
+                    }
+                    settleLoad(ticket, false, "cloudflare");
+                    return;
+                }
+                // Nothing further in the mirror: the pre-migration page owns the rest of the list,
+                // and this cursor is spent so the same empty range is never asked for twice.
+                cloudReelHasMore = false;
+                cloudReelCursor = null;
+                cloudReelLoadedOnce = false;
+                loadFirestorePageOnly(ticket);
+            });
+            return;
+        }
+        loadFirestorePageOnly(ticket);
+    }
+
+    /** The pre-migration paging path, unchanged: it supplies the history the mirror does not hold. */
+    private void loadFirestorePageOnly(ReelLoad ticket) {
         ticket.pending = (moreReels ? 1 : 0) + (moreVideoPosts ? 1 : 0);
         if (ticket.pending == 0) { settleLoad(ticket, false, "empty"); return; }
         for (boolean nativeReel : new boolean[]{true, false}) {

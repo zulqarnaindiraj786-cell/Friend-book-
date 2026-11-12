@@ -312,7 +312,8 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # FIRST OPEN loads from Cloudflare: the D1 mirror is asked first and Firestore is only the
         # fallback, and the page is settled exactly once so "Load..." can never be a resting state.
         self.assertIn('loadFromCloudflareThenFirestore(5);', reels)
-        self.assertIn('CloudflareStore.list("reels", Math.max(ticket.limit, 5), docs -> {', reels)
+        self.assertIn('CloudflareDocs.read("reels", Math.max(ticket.limit, 5),', reels)
+        self.assertIn('cloudReelCursor = page != null ? page.cursor : null;', reels)
         self.assertIn('private void settleLoad(ReelLoad ticket, boolean failed, String source) {', reels)
         self.assertIn('if (ticket == null || ticket.done) return;', reels)
         self.assertIn('ticket.done = true;', reels)
@@ -388,22 +389,37 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('user.getIdToken(false)', docs)
         absent(self, 'FirebaseFirestore', docs, 'CloudflareDocs')
         absent(self, 'addSnapshotListener', docs, 'CloudflareDocs')
-        # Additive + fire-and-forget: the mirror has no HTTP DELETE at all, and a failure is silent
-        # because the Firestore write already succeeded.
-        absent(self, '"DELETE"', docs, 'CloudflareDocs')
-        absent(self, 'D1HttpTransport.send(url, "DELETE"', docs, 'CloudflareDocs')
-        self.assertIn('catch (Throwable ignored) {', docs)
+        # Cloudflare is the write path now, so a write failure is reported (never a silent loss):
+        # the caller parks it in the outbox, and the deletion path talks to the same store.
+        self.assertIn('public static void write(String collection, String id, Map<String, Object> fields,', docs)
+        self.assertIn('D1HttpTransport.send(new URL(BASE + path), "DELETE", token, null);', docs)
+        outbox = (JAVA / 'core/CloudflareOutbox.java').read_text()
+        self.assertIn('public static void enqueue(Context context, String collection, String id, JSONObject fields) {', outbox)
+        self.assertIn('public static void flush(Context context) {', outbox)
+        # The queue is per account, so one user's pending writes can never replay as another's.
+        self.assertIn('String uid = Fb.uid();', outbox)
+        absent(self, 'addSnapshotListener', outbox, 'CloudflareOutbox')
         # The worker's own size ceiling is respected client-side (32 KiB transport, 95 KiB Worker).
         self.assertIn('MAX_MIRROR_BYTES', docs)
         # Both call sites that create content: a new Post and a new Reel.
         post = (JAVA / 'post/CreatePostActivity.java').read_text()
         reel = (JAVA / 'reels/ReelUploadManager.java').read_text()
-        self.assertIn('CloudflareDocs.mirror("posts", docRef.getId(), m);', post)
-        self.assertIn('CloudflareDocs.mirror("posts", editId, m);', post)
-        self.assertIn('CloudflareDocs.mirror("reels", cfReelId, doc);', reel)
+        # WRITE = Cloudflare: every client on this build writes to D1, new user and updated user
+        # alike, and a failure is parked in the outbox instead of being written back to the old source.
+        self.assertIn('CloudflareDocs.write("posts", newId, post, () -> {', post)
+        self.assertIn('CloudflareDocs.write("posts", editId, m, null, reason ->', post)
+        self.assertIn('CloudflareDocs.write("reels", cfReelId, reel, () -> {', reel)
+        # The ONLY remaining writes to the old source are the flag-off branch of each call site, and
+        # the Cloudflare write always comes first: a client on this build never falls back to it.
+        self.assertEqual(post.count('docRef.set(m)'), 1)
+        self.assertLess(post.index('CloudflareDocs.write("posts", newId'),
+                        post.index('docRef.set(m)'))
+        self.assertEqual(reel.count('collection("reels").add(doc)'), 1)
+        self.assertLess(reel.index('CloudflareDocs.write("reels", cfReelId'),
+                        reel.index('collection("reels").add(doc)'))
         # The Reel screen must read the mirror, which is what makes the first open work.
         reels = (JAVA / 'reels/ReelsFragment.java').read_text()
-        self.assertIn('CloudflareStore.list("reels"', reels)
+        self.assertIn('CloudflareDocs.read("reels"', reels)
 
     def test_release_metadata_follows_the_build_file(self):
         import re
@@ -477,7 +493,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn("if (!/^[A-Za-z0-9_]{1,64}$/.test(field || '')) return null;", source)
         self.assertIn('if (!orderPath || !ORDER_FIELDS.has(orderField)) return { error:', source)
         # One extra row is fetched so hasMore is a fact, not a guess about a short page.
-        self.assertIn('limit * 3 + 1 : limit + 1', source)
+        self.assertIn('? Math.min(400, limit * 8) + 1', source)
         # Reads never write.
         for write in ("INSERT INTO friendbook_cf_documents", "UPDATE friendbook_cf_documents SET", "DELETE FROM"):
             self.assertEqual(source.count(write), 1 if write == "INSERT INTO friendbook_cf_documents" else 0,

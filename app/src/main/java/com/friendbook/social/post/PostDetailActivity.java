@@ -343,7 +343,32 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (postReg != null) { postReg.remove(); postReg = null; }
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
+        // D1 FIRST: a post written by this build lives in Cloudflare, not in the old source. Read it
+        // there, render it immediately, and only then let the pre-migration listener take over for a
+        // post that is still Firestore-only (never to overwrite what Cloudflare already returned).
+        final boolean[] cloudRendered = {false};
+        com.friendbook.social.core.CloudflareDocs.get("posts", postId, doc -> {
+            if (doc == null || isFinishing()) return;
+            try {
+                Models.Post cloudPost = Models.Post.fromMap(postId, doc);
+                if (cloudPost.authorId == null || cloudPost.authorId.isEmpty()) return;
+                post = cloudPost;
+                cloudRendered[0] = true;
+                commentsAdapter.postAuthorId = post.authorId;
+                commentsAdapter.pinnedCommentId = post.pinnedCommentId;
+                if (!headerRendered[0]) {
+                    headerRendered[0] = true;
+                    postAdapter.setPosts(Collections.singletonList(post));
+                }
+                int likes = FastCache.getReactionTotal(postId, post.likes);
+                whoReactedChip.setText(likes > 0
+                        ? (likes + (likes == 1 ? " reaction · See all" : " reactions · See all"))
+                        : "See reactions");
+            } catch (Throwable ignored) { }
+        });
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
+            // Already served from Cloudflare: this listener only exists for pre-migration history.
+            if (cloudRendered[0]) return;
             if (d == null || !d.exists()) {
                 if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
                 finish();

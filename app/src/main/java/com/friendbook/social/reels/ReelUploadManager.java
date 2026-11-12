@@ -347,11 +347,12 @@ public final class ReelUploadManager {
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);
             String cfReelId = "reel_" + System.currentTimeMillis() + "_" + (Fb.uid() != null ? Fb.uid().substring(0, Math.min(6, Fb.uid().length())) : "u");
             if (com.friendbook.social.core.CloudflareStore.enabled()) {
-                // Every new Reel is mirrored to the Cloudflare D1 document store the moment it is
-                // published, so Reels live outside Firestore. Additive + fire-and-forget, and the
-                // video bytes themselves stay in R2/Cloudinary - only metadata is mirrored.
-                com.friendbook.social.core.CloudflareDocs.mirror("reels", cfReelId, doc);
-                com.friendbook.social.core.CloudflareStore.put("reels", cfReelId, doc, () -> {
+                // WRITE = Cloudflare D1. Every Reel published from this build is written here and
+                // never back to the old source; the video bytes stay in R2/Cloudinary and only the
+                // metadata goes through the document store. A failed write is parked and replayed so
+                // the user does not have to upload the video again.
+                final java.util.Map<String, Object> reel = new java.util.HashMap<>(doc);
+                com.friendbook.social.core.CloudflareDocs.write("reels", cfReelId, reel, () -> {
                     optimisticReel = null;
                     MAIN.postDelayed(() -> {
                         try { //noinspection ResultOfMethodCallIgnored
@@ -360,6 +361,10 @@ public final class ReelUploadManager {
                     }, 8000L);
                     emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
                     Ui.toast(appCtx, "Your Reel is Live!");
+                }, reason -> {
+                    com.friendbook.social.core.CloudflareOutbox.enqueue(
+                            appCtx, "reels", cfReelId, com.friendbook.social.core.CloudflareDocs.sanitize(reel));
+                    emit(false, 100, totalBytes, totalBytes, "Reel saved — will publish when online", true, null);
                 });
                 return;
             }

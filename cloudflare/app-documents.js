@@ -128,7 +128,24 @@ export async function hasD1Friendship(db, uidA, uidB) {
     const byKey = await db.prepare(
       'SELECT path FROM friendbook_cf_documents WHERE path IN (?, ?) LIMIT 1'
     ).bind(p1, p2).first();
-    return byKey ? true : null;
+    if (byKey) return true;
+    // The app also stores a friendship as one document with a `participants` pair; a friendship
+    // written to D1 after the update must unlock "Friends" posts the same way.
+    const byParticipants = await db.prepare(
+      `SELECT document_json FROM friendbook_cf_documents
+        WHERE collection = 'friends'
+          AND json_extract(document_json, '$.participants') LIKE ?
+          AND json_extract(document_json, '$.participants') LIKE ?
+        LIMIT 5`
+    ).bind(`%${uidA}%`, `%${uidB}%`).all();
+    for (const row of byParticipants?.results || []) {
+      try {
+        const parsed = JSON.parse(row.document_json);
+        const pair = Array.isArray(parsed?.participants) ? parsed.participants.map(String) : [];
+        if (pair.includes(uidA) && pair.includes(uidB)) return true;
+      } catch { /* a malformed row simply does not prove a friendship */ }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -156,6 +173,16 @@ const ORDER_FIELDS = new Set([
 ]);
 const FILTER_OPS = new Set(['eq', 'in', 'contains', 'gt', 'gte', 'lt', 'lte', 'ne']);
 const MAX_FILTERS = 6;
+/*
+ * A document belongs to the user who wrote it (`owner_uid`, stored by the Worker - never taken from
+ * the request). Writes since the update land here, so this is the only place ownership is enforced.
+ * Another signed-in user may only touch the shared counter fields below; the content, the author and
+ * the privacy of a document can never be changed by somebody else.
+ */
+const COUNTER_FIELDS = new Set([
+  'likes', 'comments', 'shares', 'views', 'reactions', 'savedBy', 'subscribedBy',
+  'reportedBy', 'hiddenBy', 'pollVotes', 'lastSeen',
+]);
 
 function jsonPath(field) {
   if (!/^[A-Za-z0-9_]{1,64}$/.test(field || '')) return null;
@@ -190,9 +217,21 @@ function queryPlan(url, collection, limit) {
   const ownerOnly = url.searchParams.get('owner') === '1';
   const includePrivate = url.searchParams.get('private') === '1';
   const excludeArchived = url.searchParams.get('archived') !== '1';
-  // A per-user scope is never cached under a shared key.
-  const privateFilter = ownerOnly || includePrivate || filters.length > 0;
-  const cacheKey = `${collection}:${limit}:${orderField}:${dir}:${cursor}:${rawFilters}:${ownerOnly}:${excludeArchived}`;
+  // Visibility is one exclusive mode per read, which is also what keeps a shared cache honest:
+  //   ownerOnly -> that user's own documents (writes keep their history here)
+  //   mine+public/friends -> the feed the query needs (own documents + what he is allowed to see)
+  const mineScope = url.searchParams.get('mine') === '1';
+  const scope = mineScope
+    ? { mode: 'feed', publicOnly: url.searchParams.get('public') === '1', friendsOnly: url.searchParams.get('friends') === '1' }
+    : ownerOnly ? { mode: 'owner' } : { mode: 'public' };
+  // `private=1` is accepted for compatibility but never widens anything: it only participates in
+  // the cache key, so a client cannot opt out of the visibility rules.
+  // Every page is per-user now: the visibility rules run on the Worker, so the engine must read a
+  // wider window than the page it returns.
+  const perUser = true;
+  // A per-user page is never cached under a shared key.
+  const privateFilter = perUser || filters.length > 0;
+  const cacheKey = `${collection}:${limit}:${orderField}:${dir}:${cursor}:${rawFilters}:${scope.mode}:${scope.publicOnly}:${scope.friendsOnly}:${excludeArchived}:${includePrivate}`;
 
   // SQL can only express the scalar comparisons; array membership is finished in JS below.
   const sqlParts = ['collection = ?'];
@@ -239,13 +278,120 @@ function queryPlan(url, collection, limit) {
   };
 
   return {
-    filters, privateFilter, cacheKey, accept,
+    filters, privateFilter, cacheKey, accept, scope,
     // One extra row answers "is there another page"; a JS-side filter gets a wider window so the
-    // page still fills after rows it has to drop.
-    run: (db) => db.prepare(sql).bind(...sqlArgs, filters.some((f) => f.op === 'contains' || f.op === 'in') ? limit * 3 + 1 : limit + 1).all(),
+    // page still fills after rows it has to drop. A per-user scope needs the widest window: rows it
+    // may not see are dropped, and the reader must still get a full page.
+    // Visibility is always applied AFTER the SQL read, so the window must be wide enough that a page
+    // still fills once rows the reader may not see are dropped: 8x, capped, is a bounded read that
+    // keeps a 15-document page a single D1 query.
+    run: (db) => db.prepare(sql).bind(...sqlArgs,
+      perUser || filters.some((f) => f.op === 'contains' || f.op === 'in')
+        ? Math.min(400, limit * 8) + 1
+        : limit + 1).all(),
   };
 }
 
+
+/*
+ * Who may see a shared document.
+ *
+ * The feed used to be filtered by Firestore rules. Once the row lives in D1 nobody else filters it,
+ * so the Worker has to apply the same rules itself - from the STORED document and the STORED user
+ * profile, never from anything the request claims. Firebase still only proves *who* is asking.
+ */
+const SHARED_COLLECTIONS = new Set([
+  'posts', 'reels', 'stories', 'users', 'groups', 'pages',
+  'official_broadcasts', 'lives', 'pokes', 'events',
+]);
+const OWNER_FIELDS = ['authorId', 'uid', 'senderId', 'ownerId', 'userId', 'recipientId', 'fromUid'];
+const MEMBER_FIELDS = ['participants', 'participantIds', 'members', 'memberIds', 'adminIds', 'moderatorIds'];
+
+function docOwner(doc) {
+  for (const field of OWNER_FIELDS) {
+    const value = doc?.[field];
+    if (typeof value === 'string' && value) return value;
+  }
+  return '';
+}
+
+function stringList(value) {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+/** Reads one stored document by path: D1 first, Firestore only when it predates the migration. */
+async function readProfile(db, path, firestore, fetcher = fetch) {
+  if (firestore?.cache?.has(path)) return firestore.cache.get(path);
+  try {
+    const row = await db.prepare(
+      'SELECT document_json FROM friendbook_cf_documents WHERE path = ?'
+    ).bind(path).first();
+    if (row?.document_json) {
+      const parsed = JSON.parse(row.document_json);
+      firestore?.cache?.set(path, parsed);
+      return parsed;
+    }
+  } catch { /* fall through to the pre-migration source */ }
+  if (!firestore?.project || !firestore?.token) return null;
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firestore.project)}`
+      + `/databases/(default)/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
+    const r = await fetcher(url, { headers: { Authorization: `Bearer ${firestore.token}` }, signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const parsed = fromFirestoreFields((await r.json()).fields || {});
+    firestore?.cache?.set(path, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns { allowed, reason }. A document without an owner is treated as unreadable: the mirror only
+ * ever holds documents written by a signed-in user, so a missing owner means a malformed row.
+ */
+export async function canReadDocument(db, doc, uid, options = {}) {
+  const owner = docOwner(doc);
+  if (!owner) return { allowed: false, reason: 'unowned' };
+  if (owner === uid) return { allowed: true };
+  if (!SHARED_COLLECTIONS.has(options.collection)) return { allowed: false, reason: 'not shared' };
+  if (doc.archived) return { allowed: false };
+  if (Number(doc.trashedAt) > 0) return { allowed: false };
+
+  const me = await readProfile(db, `users/${uid}`, options.firestore, options.fetcher);
+  const author = await readProfile(db, `users/${owner}`, options.firestore, options.fetcher);
+  if (me?.banned || me?.deactivated) return { allowed: false, reason: 'account' };
+  if (author?.banned || author?.deactivated) return { allowed: false, reason: 'author' };
+  if (stringList(me?.blocked).includes(owner)) return { allowed: false, reason: 'blocked' };
+  if (stringList(me?.blockedUsers).includes(owner)) return { allowed: false, reason: 'blocked' };
+  if (stringList(author?.blocked).includes(uid) || stringList(author?.blockedUsers).includes(uid)) {
+    return { allowed: false, reason: 'blocked by author' };
+  }
+
+  // Members-only containers: a chat, a group, a page.
+  for (const field of MEMBER_FIELDS) {
+    const list = stringList(doc?.[field]);
+    if (list.length && !list.includes(uid)) return { allowed: false, reason: 'members' };
+  }
+
+  const privacy = String(doc.privacy || 'Public').toLowerCase();
+  if (privacy === 'public' || privacy === 'everyone') return { allowed: true };
+  if (privacy === 'friends' || privacy === 'followers') {
+    const friend = await hasD1Friendship(db, uid, owner);
+    return friend === true ? { allowed: true } : { allowed: false, reason: 'friends' };
+  }
+  if (privacy === 'group') {
+    if (!doc.groupId) return { allowed: false, reason: 'group' };
+    const group = await readProfile(db, `groups/${doc.groupId}`, options.firestore, options.fetcher);
+    if (!group) return { allowed: false, reason: 'group' };
+    const members = [...stringList(group.members), ...stringList(group.memberIds), ...stringList(group.adminIds)];
+    const isMember = members.includes(uid) || group.adminId === uid || group.ownerId === uid;
+    const open = String(group.privacy || 'Public').toLowerCase() !== 'private';
+    return open || isMember ? { allowed: true } : { allowed: false, reason: 'group' };
+  }
+  // "Only me", an unknown privacy string and any future private value stay private.
+  return { allowed: false, reason: 'private' };
+}
 
 export async function appDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
@@ -276,9 +422,22 @@ export async function appDocuments(request, env, identity) {
     try {
       const rows = await plan.run(env.DB);
       const collected = [];
+      const aclOptions = { collection, firestore: identity?.firestore, fetcher: identity?.fetcher || fetch };
       for (const row of rows?.results || []) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
         if (!doc) continue;
+        if (plan.scope.mode === 'owner') {
+          if (docOwner(doc) !== uid) continue;   // own history only, from the stored owner
+        } else {
+          const verdict = await canReadDocument(env.DB, doc, uid, aclOptions);
+          if (!verdict.allowed) continue;
+          if (plan.scope.mode === 'feed' && plan.scope.publicOnly) {
+            if (docOwner(doc) !== uid && String(doc.privacy || 'Public').toLowerCase() !== 'public') continue;
+          }
+          if (plan.scope.mode === 'feed' && plan.scope.friendsOnly) {
+            if (docOwner(doc) !== uid && String(doc.privacy || '').toLowerCase() !== 'friends') continue;
+          }
+        }
         if (!plan.accept(doc)) continue;
         collected.push(doc);
       }
@@ -291,8 +450,9 @@ export async function appDocuments(request, env, identity) {
         cursor: documents.length ? String(documents[documents.length - 1].id) : null,
         hasMore,
         filtered: plan.privateFilter || plan.filters.length > 0,
+        scope: plan.scope.mode,
       };
-      if (!plan.privateFilter) lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
+      if (!body.filtered) lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
       return json(body);
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
@@ -319,7 +479,13 @@ export async function appDocuments(request, env, identity) {
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
       ).bind(docPath).first();
       if (!row) return json({ error: 'Not found' }, 404);
-      return json({ id: docId, document: toPlainDocument(row.document_json, docId) });
+      const doc = toPlainDocument(row.document_json, docId);
+      // A single document is not more public than a page of them: same rules, same source of truth.
+      const verdict = await canReadDocument(env.DB, doc, uid, {
+        collection, firestore: identity?.firestore, fetcher: identity?.fetcher || fetch,
+      });
+      if (!verdict.allowed) return json({ error: 'Not found' }, 404);
+      return json({ id: docId, document: doc });
     } catch {
       return json({ error: 'Document read unavailable' }, 503);
     }
@@ -338,10 +504,24 @@ export async function appDocuments(request, env, identity) {
         'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'
       ).bind(docPath).first();
       const existingPlain = existingRow ? (toPlainDocument(existingRow.document_json, docId) || {}) : {};
-      const merged = { ...existingPlain, ...incoming, id: docId };
+      const existingOwner = String(existingRow?.owner_uid || '');
+      const claim = String(incoming.authorId || incoming.uid || incoming.senderId || incoming.ownerId || '');
+      let payload = incoming;
+      if (existingOwner && existingOwner !== uid) {
+        // Somebody else's document: only the shared counters may be written, never the content.
+        const keys = Object.keys(incoming).filter((k) => k !== 'id');
+        if (keys.some((k) => !COUNTER_FIELDS.has(k))) {
+          return json({ error: 'Not your document' }, 403);
+        }
+        payload = Object.fromEntries(keys.map((k) => [k, incoming[k]]));
+      } else if (!existingOwner && claim && claim !== uid) {
+        // A brand new document owned by somebody else would let a caller write as that person.
+        return json({ error: 'Not your document' }, 403);
+      }
+      const merged = { ...existingPlain, ...payload, id: docId };
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
-      const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingRow?.owner_uid || uid);
+      const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingOwner || uid);
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       await env.DB.prepare(

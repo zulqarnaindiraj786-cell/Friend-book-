@@ -99,35 +99,15 @@ public final class CloudflareStore {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * One page of a collection, newest first.
+     *
+     * Delegated to {@link CloudflareDocs}, which speaks the real read contract (order + cursor +
+     * hasMore) and never caches a per-user page: the Worker now applies the visibility rules itself,
+     * so a page here can no longer be shared between two different viewers.
+     */
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {
         if (!enabled() || collection == null || callback == null) return;
-        final int safeLimit = Math.max(1, Math.min(50, limit));
-        final String cacheKey = collection + ":" + safeLimit;
-        long now = android.os.SystemClock.elapsedRealtime();
-        List<Map<String, Object>> cached = LIST_CACHE.get(cacheKey);
-        Long cachedAt = LIST_CACHE_AT.get(cacheKey);
-        if (cached != null && cachedAt != null && (now - cachedAt) < LIST_CACHE_TTL_MS) {
-            MAIN.post(() -> callback.accept(cached));
-            return;
-        }
-        try {
-            FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                IO.execute(() -> {
-                    try {
-                        URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + safeLimit);
-                        JSONObject data = D1HttpTransport.send(url, "GET", token, null);
-                        JSONArray arr = data.optJSONArray("documents");
-                        List<Map<String, Object>> docs = arr != null ? D1Client.maps(arr) : new ArrayList<>();
-                        LIST_CACHE.put(cacheKey, docs);
-                        LIST_CACHE_AT.put(cacheKey, android.os.SystemClock.elapsedRealtime());
-                        MAIN.post(() -> callback.accept(docs));
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
+        CloudflareDocs.list(collection, limit, callback);
     }
 }

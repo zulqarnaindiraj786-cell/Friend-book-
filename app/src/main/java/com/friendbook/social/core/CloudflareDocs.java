@@ -151,22 +151,72 @@ public final class CloudflareDocs {
      * background thread: the caller keeps using its current write path exactly as before.
      */
     public static void mirror(String collection, String id, Map<String, Object> fields) {
-        if (!enabled() || collection == null || collection.isEmpty()) return;
-        if (id == null || id.isEmpty() || fields == null) return;
+        write(collection, id, fields, null, null);
+    }
+
+    /**
+     * Writes one document to Cloudflare D1 and reports the outcome.
+     *
+     * This is the app's write path: every client on this build writes here - a brand new user and a
+     * user who just updated alike. A document that already exists in the pre-migration source is
+     * never written back to it; it is only ever *read* from there while history is still there.
+     *
+     * `onSuccess` runs on the main thread, `onFailure` too, so a caller can queue the write instead
+     * of losing it when the network is down.
+     */
+    public static void write(String collection, String id, Map<String, Object> fields,
+                             Runnable onSuccess, Consumer<String> onFailure) {
+        if (collection == null || collection.isEmpty() || id == null || id.isEmpty() || fields == null) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("invalid"));
+            return;
+        }
+        if (!enabled()) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("disabled"));
+            return;
+        }
         final JSONObject body = sanitize(fields);
-        if (body.length() == 0) return;
+        if (body.length() == 0) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("empty"));
+            return;
+        }
         final String path = '/' + collection + '/' + id;
         withToken(token -> {
             try {
                 if (body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_MIRROR_BYTES) {
-                    return; // The Worker would refuse it; retrying would only burn quota.
+                    throw new IllegalStateException("too-large");
                 }
                 D1HttpTransport.send(new URL(BASE + path), "PUT", token, body);
                 READ_CACHE.evictAll();
-            } catch (Throwable ignored) {
-                // Silent by design: the caller's own write already succeeded.
+                if (onSuccess != null) MAIN.post(onSuccess);
+            } catch (Throwable error) {
+                if (onFailure != null) {
+                    String reason = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+                    MAIN.post(() -> onFailure.accept(reason));
+                }
             }
-        }, null);
+        }, () -> {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("auth"));
+        });
+    }
+
+    /** Deletes one document from the store (the Worker refuses anything the caller does not own). */
+    public static void delete(String collection, String id, Runnable onSuccess, Consumer<String> onFailure) {
+        if (!enabled() || collection == null || id == null || id.isEmpty()) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("disabled"));
+            return;
+        }
+        final String path = '/' + collection + '/' + id;
+        withToken(token -> {
+            try {
+                D1HttpTransport.send(new URL(BASE + path), "DELETE", token, null);
+                READ_CACHE.evictAll();
+                if (onSuccess != null) MAIN.post(onSuccess);
+            } catch (Throwable error) {
+                if (onFailure != null) MAIN.post(() -> onFailure.accept("delete"));
+            }
+        }, () -> {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept("auth"));
+        });
     }
 
     /** One page of mirrored documents, newest first (the pre-query-engine behaviour, kept). */
@@ -295,7 +345,7 @@ public final class CloudflareDocs {
      * stamps its own authoritative updatedAt anyway — and every other sentinel is dropped instead of
      * leaking Firestore internals to Cloudflare.
      */
-    static JSONObject sanitize(Map<String, Object> fields) {
+    public static JSONObject sanitize(Map<String, Object> fields) {
         JSONObject out = new JSONObject();
         if (fields == null) return out;
         long now = System.currentTimeMillis();
