@@ -112,7 +112,8 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('writeViewEvent(env, collection, id, resource, uid, now, counted);', worker)
         self.assertIn("const AE_DATASET = 'friendbook_views';", worker)
         # The count is AE's uniq(uid): one view per user per video, forever, with no D1 row.
-        self.assertIn('uniq(blob3) AS viewers', worker)
+        # The count is AE's own distinct count of uids: exact across isolates, forever, no D1 row.
+        self.assertIn('count(DISTINCT blob3) AS viewers', worker)
         self.assertIn("const DEDUPE_RULE = 'once-per-user';", worker)
         self.assertIn('dedupe: DEDUPE_RULE', worker)
         self.assertIn('const seenKey = `${resource}|${uid}`;', worker)
@@ -142,24 +143,34 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         #   `INTERVAL 90 DAY`   -> HTTP 422 "sql parser error: Expected literal string, found: 90"
         #   `uniq(blob3)`       -> HTTP 422 "unknown function call: UNIQ"
         #   `uniqExact(blob3)`  -> HTTP 422 "unknown function call: UNIQEXACT"
-        #   `count()` GROUP BY  -> HTTP 200
+        #   `uniqHLL12(blob3)`  -> HTTP 422 "unknown function call: UNIQHLL12"
+        #   `count(DISTINCT blob3)` -> HTTP 200 (resource String, viewers UInt64)
+        #   `sum(double1)`      -> HTTP 200 (viewers Float64, plays UInt64)
         self.assertIn("+ ` WHERE timestamp >= now() - INTERVAL '${AE_WINDOW_DAYS}' DAY GROUP BY index1`", worker)
         self.assertNotIn('INTERVAL ${AE_WINDOW_DAYS} DAY', worker)
         absent(self, 'uniqExact', code, 'view-counters.js queries')
         absent(self, 'uniqExact', rcode, 'report-views-ae.mjs queries')
-        # The viewer count is sum(double1), so the metric has to say whether a view counted.
+        # The viewer count is AE's own distinct count of uids - exact across isolates and forever.
+        self.assertEqual(worker.count('count(DISTINCT blob3) AS viewers'), 2)
         self.assertEqual(worker.count('sum(double1) AS viewers'), 2)
+        # Exact dedupe first, the metric-based sum second, and no uniq() family at all: AE refuses it.
+        self.assertLess(worker.index('count(DISTINCT blob3)'), worker.index('sum(double1)'))
+        absent(self, 'uniq(blob3) AS viewers', code, 'view-counters.js queries')
+        absent(self, 'uniqHLL12', code, 'view-counters.js queries')
         self.assertIn('Math.round(viewers)', worker, 'sum() answers as a float; viewers are whole')
         # A plain count() of events counts PLAYS - every rewatch - so it must never be a viewer query.
         absent(self, 'SELECT index1 AS resource, count() AS viewers', code, 'view-counters.js')
         # The report probes the Worker's own queries plus every alternative, judged separately.
         self.assertIn("INTERVAL '${WINDOW_DAYS}' DAY", report)
-        self.assertIn('const SUM_PROBE_INDEXES = [1, 2];', report)
-        self.assertIn('const DISTINCT_PROBE_INDEXES = [5, 6, 7];', report)
-        self.assertIn("accepted (the Worker's viewer count)", report)
+        self.assertIn('const DISTINCT_PROBE_INDEXES = [1, 2];', report)
+        self.assertIn('const SUM_PROBE_INDEXES = [3, 4];', report)
+        self.assertIn('count(DISTINCT blob3)\\` accepted (AE de-duplicates each uid itself)', report)
         # GraphQL is walked instead of guessed: the guess answered {"data":{"__type":null}}.
         self.assertIn('{ __schema { queryType { name } } }', report)
         self.assertIn("for (const wanted of ['viewer', 'accounts', null]) {", report)
+        # `accounts` arrives as [Type!], so one ofType level cannot reach the type name.
+        self.assertIn('ofType { name kind ofType { name kind ofType { name kind } } }', report)
+        self.assertIn('for (let depth = 0; depth < 4 && node; depth++) {', report)
         absent(self, '__type(name: "Viewer")', rcode, 'report-views-ae.mjs')
 
     def test_kv_namespace_is_provisioned_by_ci_before_deploy(self):

@@ -15,11 +15,9 @@ path simply stopped writing to them.
 2. **D1 receives ZERO writes** from the view path — no totals upsert, no per-user stamp, no
    `CREATE TABLE`. It also performs zero reads, with one documented exception below.
 3. **ONE view per user per video, forever.** One second of watching is enough; the whole video, a
-   loop, or coming back next month adds nothing. No database row is needed: the Worker writes metric 1
-   only for a user's first view of a resource and the viewer count is `sum(double1)`, while `count()`
-   of the same rows is the number of plays. This AE SQL API has **no** distinct-count aggregate —
-   `uniq(blob3)` answers `HTTP 422 unknown function call: UNIQ` — so the rule is carried by the
-   event, not by the query.
+   loop, or coming back next month adds nothing. Analytics Engine enforces it in the query itself:
+   `count(DISTINCT blob3)` per resource counts each uid once, no matter which isolate wrote the event
+   or how often that user rewatched. No database row, and no dependence on one isolate's memory.
 
 And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV, no AE.
 
@@ -27,7 +25,7 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 
 | Layer | Role | Cost |
 | --- | --- | --- |
-| Analytics Engine (`ANALYTICS_ENGINE`, dataset `friendbook_views`) | Every view event + the viewer count (`sum(double1)`) | 1 event per view; ≤ 1 query per isolate per minute |
+| Analytics Engine (`ANALYTICS_ENGINE`, dataset `friendbook_views`) | Every view event + the viewer count (`count(DISTINCT blob3)`) | 1 event per view; ≤ 1 query per isolate per minute |
 | Workers KV (`VIEWS`, key `views:live:v1`) | Snapshot shared across isolates | 1 read per isolate, ≤ 288 writes/day per isolate |
 | R2 object (`views/live/v1.json`) | The same snapshot when KV cannot be bound to the Worker | 1 read per isolate, ≤ 288 Class A writes/day per isolate |
 | Worker memory | What a request is actually served from | free |
@@ -56,34 +54,48 @@ And the Home Feed does no view-counter work whatsoever: no request, no D1, no KV
 
 Memory settles repeats instantly: a user this isolate has already counted gets `counted: false` with
 no storage call at all. If an isolate is brand new (a deploy, a scale-out) and a user restarts their
-app and re-watches the same Reel, that isolate cannot know them, so the **live** number may lead by
-one until the next AE answer re-bases it. The durable record — AE's `uniq(uid)` and the KV snapshot —
-is always exact, and the Android client displays counts monotonically, so a number never visibly
-drops. The client also posts a given Reel at most once per app session, which keeps this rare.
+app and re-watches the same Reel, that isolate cannot know them, so it writes one more event with
+metric 1 and the **live** number may lead by one until the next AE answer re-bases it — usually within
+a minute. AE's own `count(DISTINCT blob3)` is exact regardless: that second event has the same `blob3`
+(uid), so the durable count does not move. The Android client displays counts monotonically, so a
+number never visibly drops, and it posts a given Reel at most once per app session, which keeps even
+the temporary lead rare.
 
 ## Querying Analytics Engine
 
 Which AE query API an account can use is not ours to pick, so the Worker tries, in order, and
 remembers what worked for the life of the isolate:
 
-1. `GET /client/v4/accounts/{id}/analytics_engine/sql?query=…` with
-   `SELECT index1 AS resource, sum(double1) AS viewers, count() AS plays FROM friendbook_views WHERE
-   timestamp >= now() - INTERVAL '90' DAY GROUP BY index1 ORDER BY viewers DESC LIMIT 500`, then the
-   same without the time window, then two `uniq(blob3)` forms, parsed from TSV *or* JSON.
+1. `GET /client/v4/accounts/{id}/analytics_engine/sql?query=…` with, in this order:
+   1. `SELECT index1 AS resource, count(DISTINCT blob3) AS viewers, count() AS plays FROM
+      friendbook_views GROUP BY index1 ORDER BY viewers DESC LIMIT 500`
+   2. the same with `WHERE timestamp >= now() - INTERVAL '90' DAY`
+   3. `sum(double1) AS viewers` without the window
+   4. `sum(double1) AS viewers` with the window
 
-   The real dataset dictated that list, and every answer is published on the pull request:
+   parsed from TSV *or* JSON. The real dataset dictated that list; every answer is published on the
+   pull request:
 
    | Query | Answer |
    | --- | --- |
    | `SELECT count() AS viewers FROM friendbook_views` | `HTTP 200` `{"viewers":"0"}` |
+   | `count(DISTINCT blob3) … GROUP BY index1` | `HTTP 200` `resource: String, viewers: UInt64` |
+   | `sum(double1) … count() AS plays … GROUP BY index1` | `HTTP 200` `viewers: Float64, plays: UInt64` |
+   | `SELECT blob3 AS uid … GROUP BY blob3` | `HTTP 200` |
    | `… WHERE timestamp >= now() - INTERVAL 90 DAY …` | `HTTP 422 Input was invalid: sql parser error: Expected literal string, found: 90` |
    | `… uniq(blob3) …` | `HTTP 422 Input was invalid: unknown function call: UNIQ` |
    | `… uniqExact(blob3) …` | `HTTP 422 Input was invalid: unknown function call: UNIQEXACT` |
+   | `… uniqHLL12(blob3) …` | `HTTP 422 Input was invalid: unknown function call: UNIQHLL12` |
 
-   So the window number is quoted, and **no query is allowed to serve plays as viewers**: a plain
-   `count()` grouped by `index1` answers `HTTP 200`, but it counts every rewatch. If AE refuses all
-   four viewer variants, `aeUsable` stays false and the counters are served from the snapshot +
-   memory — an honest number instead of an inflated one — while the events keep accumulating.
+   So the window number is quoted, the whole `uniq()` family does not exist here, and **no query is
+   allowed to serve plays as viewers**: a plain `count()` grouped by `index1` answers `HTTP 200`, but
+   it counts every rewatch. If AE ever refused all four viewer variants, `aeUsable` would stay false
+   and the counters would be served from the snapshot + memory — an honest number instead of an
+   inflated one — while the events keep accumulating.
+
+   Each event still carries a metric: **1** when that view counted as the user's first one, **0** for
+   a repeat. That is what makes `sum(double1)` a second, independent viewer count and `count()` the
+   number of plays, and it costs nothing extra — one view is one event either way.
 2. `POST /client/v4/graphql` — `viewer.accounts.<dataset>` with `dimensions { name count uniq }`.
    The dataset's real field name is not guessed: `cloudflare/report-views-ae.mjs` walks the schema
    (`__schema { queryType }` → `viewer` → `accounts` → the Analytics Engine fields) and publishes each
