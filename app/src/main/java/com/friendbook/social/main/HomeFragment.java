@@ -644,6 +644,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean postsFallbackUsed;
     private final List<Models.Post> cfPosts = new ArrayList<>();
     private List<DocumentSnapshot> lastPostDocs = new ArrayList<>();
+    /** Cursor of the Cloudflare page currently displayed, and whether the mirror had more. */
+    private String cfPageCursor;
+    private boolean cfPageHasMore;
+    /** True once Cloudflare answered the current page (empty answer still counts as an answer). */
+    private boolean cfPageLoaded;
 
     private void restartPostsListener() {
         if(loadingPosts) return;
@@ -655,16 +660,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (postsReg != null) { postsReg.remove(); postsReg=null; }
         final int generation=++feedGeneration;
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
+        // A fresh feed starts from the top of the Cloudflare page, with no stale cursor.
+        cfPageCursor=null; cfPageHasMore=false; cfPageLoaded=false;
         feedAccount=Fb.uid(); final String actor=feedAccount;
-        com.friendbook.social.core.CloudflareStore.list("posts", PAGE, docs -> {
+        // D1 FIRST: the Cloudflare document store now answers the same newest-first page the feed
+        // always asked Firestore for. The Firestore query below still runs as the union fallback, so
+        // a post that only exists in the pre-migration history can never vanish from the feed.
+        com.friendbook.social.core.CloudflareDocs.read("posts", PAGE,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt"),
+                page -> {
             if (generation != feedGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded()) return;
             cfPosts.clear();
-            if (docs != null) {
-                for (Map<String, Object> m : docs) {
+            if (page != null) {
+                cfPageCursor = page.cursor;
+                cfPageHasMore = page.hasMore;
+                for (Map<String, Object> m : page.documents) {
                     String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
                     if (!id.isEmpty()) cfPosts.add(Models.Post.fromMap(id, m));
                 }
             }
+            if (!cfPosts.isEmpty()) cfPageLoaded = true;
             if (loadedPosts || !cfPosts.isEmpty()) {
                 loadingPosts = false;
                 loadedPosts = true;
@@ -922,6 +937,47 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=feedGeneration; final String actor=feedAccount;
+        // Next page from Cloudflare when the mirror is what filled the current page; the Firestore
+        // page is the fallback and carries ids the mirror does not have yet.
+        if (cfPageLoaded) {
+            com.friendbook.social.core.CloudflareDocs.read("posts", PAGE,
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAt").cursor(cfPageCursor),
+                    page -> {
+                if (generation != feedGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded()) return;
+                if (page != null && !page.documents.isEmpty()) {
+                    cfPageCursor = page.cursor;
+                    cfPageHasMore = page.hasMore;
+                    loadingPosts = false;
+                    moreAvailable = page.hasMore;
+                    List<Models.Post> posts = new ArrayList<>();
+                    String filter = Prefs.feedFilter(getActivity());
+                    for (Map<String, Object> m : page.documents) {
+                        String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                        if (id.isEmpty() || !loadedPostIds.add(id)) continue;
+                        Models.Post post = Models.Post.fromMap(id, m);
+                        if (visible(post) && matchesFilter(post, filter)) {
+                            posts.add(post);
+                            sessionOrderIds.add(post.id);
+                        }
+                    }
+                    pageError = page.hasMore && posts.isEmpty();
+                    adapter.addPosts(posts);
+                    updatePagingUi();
+                    if (posts.isEmpty()) adapter.notifyDataSetChanged();
+                    return;
+                }
+                // The mirror had no further page: the union fallback owns this page, and stops the
+                // D1 cursor from being asked again for the same empty range.
+                cfPageLoaded = false;
+                loadMoreFromFirestore(generation, actor);
+            });
+            return;
+        }
+        loadMoreFromFirestore(generation, actor);
+    }
+
+    /** The pre-migration paging path: unchanged Firestore cursor page, used as the union fallback. */
+    private void loadMoreFromFirestore(int generation, String actor) {
         feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             loadingPosts=false;

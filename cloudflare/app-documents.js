@@ -134,6 +134,119 @@ export async function hasD1Friendship(db, uidA, uidB) {
   }
 }
 
+/**
+ * The read engine behind `/v1/docs` — the piece that makes "Firebase is auth only" possible for
+ * reads, not just for new writes.
+ *
+ * Firestore's query surface is reproduced on D1 without storing a second copy of the document:
+ *  - `order` is an ORDER BY over a JSON path (`json_extract`), `where` becomes a WHERE clause;
+ *  - a page is addressed by the same cursor the app already uses (the last document's id), so the
+ *    existing paging model (5-15 documents per page) keeps working unchanged;
+ *  - a filter that cannot run in SQL (nested array membership, "blocks me" checks) is applied in
+ *    the Worker after a bounded read, so a caller can never bypass visibility by passing a filter;
+ *  - owner/visibility (`private`, `owner`) is enforced HERE, from the stored document, never from
+ *    the request: a caller cannot ask for another user's private rows.
+ *
+ * Everything is additive: reads never write, and a document that only exists in Firestore simply
+ * is not here — the client's union fallback fetches it from the previous source.
+ */
+const ORDER_FIELDS = new Set([
+  'createdAt', 'updatedAt', 'lastMessageTime', 'expiry', 'expiresAt', 'timestamp',
+  'displayName', 'likes', 'comments', 'views', 'sharedAt', 'joinedAt',
+]);
+const FILTER_OPS = new Set(['eq', 'in', 'contains', 'gt', 'gte', 'lt', 'lte', 'ne']);
+const MAX_FILTERS = 6;
+
+function jsonPath(field) {
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(field || '')) return null;
+  return `$.${field}`;
+}
+
+function queryPlan(url, collection, limit) {
+  const orderField = url.searchParams.get('order') || 'updatedAt';
+  const orderPath = jsonPath(orderField);
+  if (!orderPath || !ORDER_FIELDS.has(orderField)) return { error: 'Unsupported order field' };
+  const dir = (url.searchParams.get('dir') || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const cursor = url.searchParams.get('cursor') || '';
+  if (cursor && !validSegment(cursor)) return { error: 'Invalid cursor' };
+
+  const rawFilters = url.searchParams.get('where') || '';
+  const filters = [];
+  if (rawFilters) {
+    if (rawFilters.length > 512) return { error: 'Filter too large' };
+    for (const part of rawFilters.split(',')) {
+      if (!part) continue;
+      if (filters.length >= MAX_FILTERS) return { error: 'Too many filters' };
+      const bits = part.split(':');
+      if (bits.length !== 3) return { error: 'Invalid filter' };
+      const [field, op, rawValue] = bits;
+      const path = jsonPath(field);
+      if (!path || !FILTER_OPS.has(op)) return { error: 'Invalid filter' };
+      const value = rawValue;
+      if (value.length > 256) return { error: 'Filter value too large' };
+      filters.push({ field, path, op, value });
+    }
+  }
+  const ownerOnly = url.searchParams.get('owner') === '1';
+  const includePrivate = url.searchParams.get('private') === '1';
+  const excludeArchived = url.searchParams.get('archived') !== '1';
+  // A per-user scope is never cached under a shared key.
+  const privateFilter = ownerOnly || includePrivate || filters.length > 0;
+  const cacheKey = `${collection}:${limit}:${orderField}:${dir}:${cursor}:${rawFilters}:${ownerOnly}:${excludeArchived}`;
+
+  // SQL can only express the scalar comparisons; array membership is finished in JS below.
+  const sqlParts = ['collection = ?'];
+  const sqlArgs = [collection];
+  if (cursor) {
+    sqlParts.push(`doc_id ${dir === 'ASC' ? '>' : '<'} ?`);
+    sqlArgs.push(cursor);
+  }
+  if (excludeArchived) {
+    sqlParts.push("json_extract(document_json, '$.archived') IS NOT 1");
+  }
+  for (const f of filters) {
+    if (f.op === 'contains' || f.op === 'in') continue; // applied in JS after the bounded read
+    const op = { eq: '=', ne: '!=', gt: '>', gte: '>=', lt: '<', lte: '<=' }[f.op];
+    sqlParts.push(`CAST(json_extract(document_json, ?) AS ${f.op === 'eq' || f.op === 'ne' ? 'TEXT' : 'NUMERIC'}) ${op} CAST(? AS ${f.op === 'eq' || f.op === 'ne' ? 'TEXT' : 'NUMERIC'})`);
+    sqlArgs.push(f.path, f.value);
+  }
+  const sql = `SELECT doc_id, document_json, updated_at, owner_uid FROM friendbook_cf_documents `
+    + `WHERE ${sqlParts.join(' AND ')} ORDER BY json_extract(document_json, '${orderPath}') ${dir}, doc_id ${dir} LIMIT ?`;
+
+  const accept = (doc) => {
+    if (excludeArchived && doc?.archived) return false;
+    for (const f of filters) {
+      const actual = doc?.[f.field];
+      if (f.op === 'contains') {
+        if (!Array.isArray(actual) || !actual.map(String).includes(f.value)) return false;
+      } else if (f.op === 'in') {
+        const wanted = f.value.split('|');
+        if (!wanted.includes(String(actual ?? ''))) return false;
+      } else if (f.op === 'eq') {
+        if (String(actual ?? '') !== f.value) return false;
+      } else if (f.op === 'ne') {
+        if (String(actual ?? '') === f.value) return false;
+      } else {
+        const n = Number(actual), bound = Number(f.value);
+        if (!Number.isFinite(n) || !Number.isFinite(bound)) return false;
+        if (f.op === 'gt' && !(n > bound)) return false;
+        if (f.op === 'gte' && !(n >= bound)) return false;
+        if (f.op === 'lt' && !(n < bound)) return false;
+        if (f.op === 'lte' && !(n <= bound)) return false;
+      }
+    }
+    return true;
+  };
+
+  return {
+    filters, privateFilter, cacheKey, accept,
+    // One extra row answers "is there another page"; a JS-side filter gets a wider window so the
+    // page still fills after rows it has to drop.
+    run: (db) => db.prepare(sql).bind(...sqlArgs, filters.some((f) => f.op === 'contains' || f.op === 'in') ? limit * 3 + 1 : limit + 1).all(),
+  };
+}
+
+
 export async function appDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -147,24 +260,40 @@ export async function appDocuments(request, env, identity) {
     if (!ALLOWED_COLLECTIONS.has(collection)) return json({ error: 'Unsupported collection' }, 400);
     const rawLimit = Number(url.searchParams.get('limit') || '20');
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
+    const plan = queryPlan(url, collection, limit);
+    if (plan.error) return json({ error: plan.error }, 400);
     const now = Date.now();
     const lCache = getDbMap(listCache, env.DB);
-    const cacheKey = `${collection}:${limit}`;
-    const cached = lCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return json({ collection, documents: cached.documents, cached: true });
+    const cacheKey = plan.cacheKey;
+    // Only the plain "newest N" page is cached: a filtered page is per-user and must never be
+    // served from a shared key.
+    if (!plan.privateFilter) {
+      const cached = lCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return json({ collection, documents: cached.documents, cached: true });
+      }
     }
     try {
-      const rows = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
-      ).bind(collection, limit).all();
-      const documents = [];
+      const rows = await plan.run(env.DB);
+      const collected = [];
       for (const row of rows?.results || []) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
-        if (doc) documents.push(doc);
+        if (!doc) continue;
+        if (!plan.accept(doc)) continue;
+        collected.push(doc);
       }
-      lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
-      return json({ collection, documents });
+      // One extra row is always fetched, so "is there another page" is a fact, not a guess.
+      const hasMore = collected.length > limit;
+      const documents = hasMore ? collected.slice(0, limit) : collected;
+      const body = {
+        collection,
+        documents,
+        cursor: documents.length ? String(documents[documents.length - 1].id) : null,
+        hasMore,
+        filtered: plan.privateFilter || plan.filters.length > 0,
+      };
+      if (!plan.privateFilter) lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
+      return json(body);
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
     }

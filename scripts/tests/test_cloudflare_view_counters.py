@@ -378,7 +378,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         docs = (JAVA / 'core/CloudflareDocs.java').read_text()
         # The Worker route and the D1 table that already exist in production - nothing new server-side.
         self.assertIn('/v1/docs', docs)
-        self.assertIn('D1HttpTransport.send(url, "PUT", token, body);', docs)
+        self.assertIn('D1HttpTransport.send(new URL(BASE + path), "PUT", token, body);', docs)
         self.assertIn('BuildConfig.CLOUDFLARE_DOCS_MIRROR', docs)
         # Firestore sentinels are not JSON: a server timestamp becomes the client clock, anything else
         # is dropped instead of leaking Firestore internals to the Worker.
@@ -441,6 +441,47 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('-X DELETE', text)
         # Deleting shifts the list, so it must always re-read the first page.
         self.assertIn('page=1', text)
+
+    def test_feed_reads_cloudflare_first_with_a_firestore_union_fallback(self):
+        """Batch 2: `/v1/docs` is the first read source, the pre-migration source is the fallback."""
+        docs = (JAVA / 'core/CloudflareDocs.java').read_text()
+        # The read engine contract: a page, its cursor, and whether another page exists.
+        self.assertIn('public static final class Page {', docs)
+        self.assertIn('public final String cursor;', docs)
+        self.assertIn('public final boolean hasMore;', docs)
+        self.assertIn('"&order="', docs)
+        self.assertIn('"&cursor="', docs)
+        self.assertIn('"&where="', docs)
+        self.assertIn('public static void read(String collection, int limit, Query query, Consumer<Page> callback)', docs)
+        # A per-user page is never memoised under a shared key.
+        self.assertIn('boolean cacheable = !q.mine && !q.includePrivate && q.filters.isEmpty() && q.cursor.isEmpty();', docs)
+        # Firebase is still authentication only in the read path.
+        self.assertIn('user.getIdToken(false)', docs)
+        absent(self, 'FirebaseFirestore', docs, 'CloudflareDocs')
+
+        home = (JAVA / 'main/HomeFragment.java').read_text()
+        # Cloudflare answers the first page...
+        self.assertIn('CloudflareDocs.read("posts", PAGE,', home)
+        self.assertIn('CloudflareDocs.Query.orderDesc("createdAt")', home)
+        # ... and Firestore remains, unchanged, as the union fallback for pre-migration history.
+        self.assertIn('private void loadMoreFromFirestore(int generation, String actor) {', home)
+        self.assertIn('feedQuery.startAfter(lastDoc).limit(PAGE).get()', home)
+        self.assertIn('cfPageLoaded = false;', home, 'an empty mirror page must hand the page to the fallback')
+
+    def test_the_d1_read_engine_orders_and_pages_without_sql_injection(self):
+        source = (CLOUDFLARE / 'app-documents.js').read_text()
+        self.assertIn('function queryPlan(url, collection, limit)', source)
+        self.assertIn("const ORDER_FIELDS = new Set([", source)
+        self.assertIn('function jsonPath(field)', source)
+        # Only whitelisted fields become a JSON path, so a caller can never reach a column or SQL.
+        self.assertIn("if (!/^[A-Za-z0-9_]{1,64}$/.test(field || '')) return null;", source)
+        self.assertIn('if (!orderPath || !ORDER_FIELDS.has(orderField)) return { error:', source)
+        # One extra row is fetched so hasMore is a fact, not a guess about a short page.
+        self.assertIn('limit * 3 + 1 : limit + 1', source)
+        # Reads never write.
+        for write in ("INSERT INTO friendbook_cf_documents", "UPDATE friendbook_cf_documents SET", "DELETE FROM"):
+            self.assertEqual(source.count(write), 1 if write == "INSERT INTO friendbook_cf_documents" else 0,
+                             '%s must only exist in the PUT path' % write)
 
     def test_view_migrations_are_additive_only(self):
         for name in ['0012_additive_view_counters.sql', '0013_additive_view_last_seen.sql']:
