@@ -34,7 +34,8 @@ public class FirebaseOffRoutingTest {
   }
  }
  @Test public void offCommentSendCommitsCanonicalMirrorAndParentOnlyToFirestore(){
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<CloudflareDocs> docs=mockStatic(CloudflareDocs.class)){
+   docs.when(CloudflareDocs::enabled).thenReturn(false); // the pre-migration branch is the OFF branch now
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
    FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
@@ -50,7 +51,8 @@ public class FirebaseOffRoutingTest {
   }
  }
  @Test public void offCommentWatchUsesFirebaseListenerAndRemovesItOnClose(){
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<CloudflareDocs> docs=mockStatic(CloudflareDocs.class)){
+   docs.when(CloudflareDocs::enabled).thenReturn(false); // the pre-migration listener is the OFF branch now
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");FirebaseFirestore db=mock(FirebaseFirestore.class);fb.when(Fb::db).thenReturn(db);
    CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class);DocumentReference parent=mock(DocumentReference.class),child=mock(DocumentReference.class);
@@ -71,7 +73,8 @@ public class FirebaseOffRoutingTest {
   }
  }
  @Test public void offPostReactionWritesFirebaseNotWorker(){
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);MockedStatic<CloudflareDocs> docs=mockStatic(CloudflareDocs.class)){
+   docs.when(CloudflareDocs::enabled).thenReturn(false);
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-owner");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
    FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),reactions=mock(CollectionReference.class);
