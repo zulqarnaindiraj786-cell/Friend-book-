@@ -125,6 +125,7 @@ public class AdminUsersFragment extends Fragment {
             else if (u.isAdmin) s.append("🛡 Admin · ");
             else if (u.isModerator) s.append("🛡 Moderator · ");
             if (u.banned) s.append("🚫 BANNED · ");
+            if (u.isSuspendedNow()) s.append("⏳ SUSPENDED (").append(u.suspensionStatusLabel()).append(") · ");
             if (!"none".equals(u.tickLevel)) s.append(Admin.tickLabel(u.tickLevel)).append(" · ");
             s.append(u.email);
             r.subtitle = s.toString();
@@ -147,6 +148,9 @@ public class AdminUsersFragment extends Fragment {
         if (Admin.isOwnerEmail(u.email)) {
             opts.add("ℹ️ Owner account (protected)");
         } else {
+            opts.add(u.isSuspendedNow()
+                    ? ("✅ Unsuspend / Change Suspension (" + u.suspensionStatusLabel() + ")…")
+                    : "⏳ Suspend ID (1d · 1w · 30d · 60d · Lifetime)…");
             opts.add(u.isModerator
                     ? "➖ Remove App Moderator"
                     : "🛡 Make App Moderator (Posts & Ban only)");
@@ -161,6 +165,8 @@ public class AdminUsersFragment extends Fragment {
             else if (sel.contains("Give GOLD")) Admin.setTickLevel(a, u.uid, u.displayName, "gold");
             else if (sel.contains("Give DIAMOND")) Admin.setTickLevel(a, u.uid, u.displayName, "diamond");
             else if (sel.contains("Remove ALL ticks")) Admin.setTickLevel(a, u.uid, u.displayName, "none");
+            else if (sel.contains("Suspend ID") || sel.contains("Unsuspend / Change Suspension"))
+                Admin.showSuspendUserDialog(a, u, this::render);
             else if (sel.contains("Make App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, true);
             else if (sel.contains("Remove App Moderator"))

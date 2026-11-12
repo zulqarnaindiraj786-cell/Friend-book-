@@ -8,13 +8,26 @@ test('health executes only a constant read and never exposes data', async () => 
   const response = await call('/health', { DB: { prepare(sql) {
     assert.equal(sql, 'SELECT 1 AS connected'); return { first: async () => ({ connected: 1 }) };
   } } });
-  assert.equal(response.status, 200); assert.deepEqual(await response.json(), { ok: true });
+  assert.equal(response.status, 200);
+  // Binding flags only: it proves which view-counter bindings a deploy actually shipped (Analytics
+  // Engine, the KV snapshot, or the R2 snapshot fallback), and exposes no counter, no id and no data.
+  assert.deepEqual(await response.json(),
+    { ok: true, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 test('missing binding and failed DB return no internal details', async () => {
   assert.equal((await call('/health')).status, 503);
   const response = await call('/health', { DB: { prepare() { throw Error('secret'); } } });
-  assert.equal(response.status, 503); assert.deepEqual(await response.json(), { ok: false });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(),
+    { ok: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+});
+test('health reports the R2 snapshot fallback when Workers KV is not bound', async () => {
+  const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
+  const response = await call('/health', { DB: db, ANALYTICS_ENGINE: {}, VIDEO_BUCKET: {}, CF_AE_TOKEN: 'tok' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(),
+    { ok: true, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
 });
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);
@@ -54,4 +67,21 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
   }
   const other = await generateKeyPair('RS256');
   await assert.rejects(verifyFirebaseToken(await sign({}, other.privateKey), claims.aud, keys));
+});
+test('realtime presence routes require verified Firebase identity and return fresh online state', async () => {
+  const now = Date.now();
+  const app = createWorker(async () => 'verified-user');
+  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare() {
+    return { bind(uid) { return { first: async () => ({ online: 1, visible: 1, last_seen: now - 5000 }) }; } };
+  } } };
+  assert.equal((await call('/v1/presence/me', env)).status, 401);
+  const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
+  assert.equal(me.status, 200);
+  const body = await me.json();
+  assert.equal(body.uid, 'verified-user');
+  assert.equal(body.online, true);
+  const contact = await call('/v1/presence/contact/peer-1', env, { Authorization: 'Bearer test' }, 'GET', app);
+  assert.equal(contact.status, 200);
+  assert.equal((await contact.json()).uid, 'peer-1');
+  assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
 });

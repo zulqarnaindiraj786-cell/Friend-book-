@@ -80,3 +80,9 @@ local APK. Other static paths resolve normally; missing assets remain 404.
 Worker API routing, never an HTML fallback. Unknown API routes remain JSON 404,
 invalid Firebase tokens remain 401, and API writes remain disabled. No schema,
 D1 row, Firebase login or Cloudinary upload changes accompany this routing fix.
+
+## Disabled hybrid interaction pilot
+
+See `docs/testing/hybrid-interactions.md` for the guarded likes/comments backend
+and its release blockers. Android remains on Firebase; do not enable the new
+flag merely because the Worker builds successfully. No production copy is run.

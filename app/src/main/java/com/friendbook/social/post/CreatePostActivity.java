@@ -54,7 +54,7 @@ public class CreatePostActivity extends Activity {
 
     private EditText text;
     private java.util.List<java.util.Map<String,Object>> submittingMentions = new java.util.ArrayList<>();
-    private TextView privacyBtn, feelingBtn, postBtn, mediaLabel;
+    private TextView privacyBtn, feelingBtn, postBtn, mediaLabel, openVideoEditorBtn;
     private ImageView preview;
     private VideoView videoPreview;
     private LinearLayout previewWrap, multiThumbs;
@@ -87,6 +87,10 @@ public class CreatePostActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         Ui.statusBarBlue(this);
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) {
+            finish();
+            return;
+        }
         editId = getIntent().getStringExtra("edit_id");
         groupId = getIntent().getStringExtra("group_id");
         groupNeedsApproval = getIntent().getBooleanExtra("group_needs_approval", false);
@@ -187,6 +191,20 @@ public class CreatePostActivity extends Activity {
         mediaLabel.setGravity(Gravity.CENTER);
         Ui.pad(mediaLabel, 0, 4, 0, 4);
         previewWrap.addView(mediaLabel);
+        openVideoEditorBtn = Ui.roundChip(this, "🎬 Edit Video / Add Text & Overlay", Ui.BLUE, Color.WHITE, 12.5f);
+        Ui.pad(openVideoEditorBtn, 14, 7, 14, 7);
+        openVideoEditorBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams oelp = new LinearLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL);
+        oelp.bottomMargin = Ui.dp(this, 6);
+        openVideoEditorBtn.setOnClickListener(v -> {
+            if (!mediaUris.isEmpty()) {
+                Intent ri = new Intent(this, com.friendbook.social.reels.AddReelActivity.class);
+                ri.setData(mediaUris.get(0));
+                ri.putExtra("video_uri", mediaUris.get(0).toString());
+                startActivity(ri);
+            }
+        });
+        previewWrap.addView(openVideoEditorBtn, oelp);
         TextView remove = Ui.btnGrey(this, "✕ Remove media");
         remove.setMinHeight(Ui.dp(this, 32));
         remove.setOnClickListener(v -> clearMedia());
@@ -673,8 +691,10 @@ public class CreatePostActivity extends Activity {
             videoPreview.setVisibility(View.VISIBLE);
             videoPreview.setVideoURI(mediaUris.get(0));
             videoPreview.setOnPreparedListener(mp -> { mp.setLooping(true); videoPreview.start(); });
-            mediaLabel.setText("🎥 Video attached · 🛡 Safety verified");
+            mediaLabel.setText("🎥 Video attached");
+            if (openVideoEditorBtn != null) openVideoEditorBtn.setVisibility(View.VISIBLE);
         } else {
+            if (openVideoEditorBtn != null) openVideoEditorBtn.setVisibility(View.GONE);
             videoPreview.setVisibility(View.GONE);
             preview.setVisibility(View.VISIBLE);
             preview.setImageURI(mediaUris.get(0));
@@ -746,6 +766,7 @@ public class CreatePostActivity extends Activity {
     // ---------- submit ----------
     private void submit() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String content = text.getText().toString().trim();
         submittingMentions = com.friendbook.social.core.Mentions.capture(text);
         boolean hasPoll = !pollOptions.isEmpty();
@@ -795,6 +816,9 @@ public class CreatePostActivity extends Activity {
         postBtn.setText("Uploading " + (done.size() + 1) + "/" + mediaUris.size() + "…");
         com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
+                    if ("video".equals(mediaType)) {
+                        com.friendbook.social.reels.ReelVideoCache.seedLocalUriToCache(getApplicationContext(), uri, url);
+                    }
                     done.add(url.toString());
                     uploadAll(content, done);
                 })
@@ -843,7 +867,11 @@ public class CreatePostActivity extends Activity {
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
-            Fb.db().collection("posts").document(editId).update(m);
+            if (com.friendbook.social.core.CloudflareStore.enabled()) {
+                com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
+            } else {
+                Fb.db().collection("posts").document(editId).update(m);
+            }
             Ui.toast(this, "Post updated ✓");
             finish();
             return;
@@ -908,13 +936,18 @@ public class CreatePostActivity extends Activity {
             com.friendbook.social.core.FastCache.prependFeedPost(this, optimistic);
         }
 
-        docRef.set(m).addOnSuccessListener(v -> {
+        Runnable afterPostSaved = () -> {
             if(com.friendbook.social.core.Mentions.hasBulk(submittingMentions)) com.friendbook.social.push.FCMPush.bulkMention(docRef.getId(), "");
             if ((groupId == null || groupId.isEmpty()) && (pageId == null || pageId.isEmpty())
                     && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());
-        }).addOnFailureListener(e ->
-                android.util.Log.e("CreatePost", "Background sync failed: " + e));
+        };
+        if (com.friendbook.social.core.CloudflareStore.enabled()) {
+            com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
+        } else {
+            docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
+                    android.util.Log.e("CreatePost", "Background sync failed: " + e));
+        }
         Prefs.setPostDraft(this, "");
         if (groupId != null && groupNeedsApproval) {
             Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");

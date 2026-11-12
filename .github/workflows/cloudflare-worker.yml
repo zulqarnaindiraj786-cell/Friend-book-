@@ -1,10 +1,10 @@
 name: Validate Cloudflare Worker
 on:
   pull_request:
-    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml']
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'scripts/admin/prepare_d1_copy.py', 'docs/**', '.github/workflows/cloudflare-worker.yml']
   push:
     branches: [main, 'arena/**']
-    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml']
+    paths: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'scripts/admin/prepare_d1_copy.py', 'docs/**', '.github/workflows/cloudflare-worker.yml']
 permissions:
   contents: read
 jobs:
@@ -19,6 +19,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: python3 cloudflare/test/schema_test.py
+      - run: python3 cloudflare/test/migration_test.py
       - name: Bundle only — no deployment or remote migrations
         run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
         env:

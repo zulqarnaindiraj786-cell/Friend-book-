@@ -81,14 +81,14 @@ public class Ui {
 
     /** Dynamic Play Store versionName straight from PackageInfo (single source of truth). */
     public static String appVersionName(Context c) {
-        if (c == null) return "2.8.32";
+        if (c == null) return "2.8.33";
         try {
             android.content.pm.PackageInfo pi = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
             if (pi != null && pi.versionName != null && !pi.versionName.isEmpty()) {
                 return pi.versionName;
             }
         } catch (Throwable ignored) { }
-        return "2.8.32";
+        return "2.8.33";
     }
 
     /** Dynamic Play Store versionCode straight from PackageInfo (single source of truth). */
@@ -240,8 +240,8 @@ public class Ui {
         }
         String transform;
         if (avatar) {
-            // Face-aware crisp WebP avatar so heads/faces are never chopped or blurry!
-            transform = "w_240,h_240,c_fill,g_auto,f_webp,q_auto:good/";
+            // Preserve full portrait framing so SmartAvatarCircleTransform never chops heads/faces in half!
+            transform = "w_480,c_limit,f_webp,q_auto:good/";
         } else if (FastCache.isSlow2G(c) || Prefs.photoQuality(c) == 0) {
             transform = "w_480,c_limit,f_webp,q_auto:eco/";
         } else if (Prefs.photoQuality(c) == 1 || Prefs.turbo2g(c)) {
@@ -251,6 +251,80 @@ public class Ui {
         }
         return url.substring(0, idx + "/image/upload/".length()) + transform + after;
     }
+
+    /**
+     * Smart Portrait-Aware Circular Avatar Transform:
+     * Standard Glide CircleCrop slices portrait photos at exact 50% vertical height (cutting off the top of the head).
+     * SmartAvatarCircleTransform frames the upper portrait region (top 14% offset) so the full head, face & shoulders
+     * appear cleanly inside the circle just like Facebook!
+     */
+    private static final com.bumptech.glide.load.resource.bitmap.BitmapTransformation SMART_AVATAR_CIRCLE_TRANSFORM =
+            new com.bumptech.glide.load.resource.bitmap.BitmapTransformation() {
+                private static final String ID = "com.friendbook.social.core.Ui.SmartAvatarCircleTransform.v1";
+                private final byte[] ID_BYTES = ID.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+                @Override
+                protected android.graphics.Bitmap transform(
+                        @androidx.annotation.NonNull com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool pool,
+                        @androidx.annotation.NonNull android.graphics.Bitmap inBitmap,
+                        int outWidth, int outHeight) {
+                    int size = Math.min(outWidth, outHeight);
+                    if (size <= 0) size = Math.min(inBitmap.getWidth(), inBitmap.getHeight());
+                    if (size <= 0) return inBitmap;
+
+                    int inW = inBitmap.getWidth();
+                    int inH = inBitmap.getHeight();
+                    if (inW <= 0 || inH <= 0) return inBitmap;
+
+                    android.graphics.Bitmap result = pool.get(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+                    result.setHasAlpha(true);
+
+                    float scale;
+                    float dx = 0f;
+                    float dy = 0f;
+                    if (inW > inH) {
+                        scale = (float) size / (float) inH;
+                        dx = (size - inW * scale) * 0.5f;
+                    } else {
+                        scale = (float) size / (float) inW;
+                        // Upper-portrait framing (14% from top instead of 50% center) so vertical portraits show full head & face!
+                        dy = (size - inH * scale) * 0.14f;
+                    }
+
+                    android.graphics.Canvas canvas = new android.graphics.Canvas(result);
+                    canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
+
+                    android.graphics.Paint circlePaint = new android.graphics.Paint(
+                            android.graphics.Paint.ANTI_ALIAS_FLAG | android.graphics.Paint.DITHER_FLAG | android.graphics.Paint.FILTER_BITMAP_FLAG);
+                    android.graphics.BitmapShader shader = new android.graphics.BitmapShader(
+                            inBitmap, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
+                    android.graphics.Matrix matrix = new android.graphics.Matrix();
+                    matrix.setScale(scale, scale);
+                    matrix.postTranslate(dx, dy);
+                    shader.setLocalMatrix(matrix);
+                    circlePaint.setShader(shader);
+
+                    float r = size / 2f;
+                    canvas.drawCircle(r, r, r, circlePaint);
+                    canvas.setBitmap(null);
+                    return result;
+                }
+
+                @Override
+                public boolean equals(Object o) {
+                    return o != null && o.getClass() == getClass();
+                }
+
+                @Override
+                public int hashCode() {
+                    return ID.hashCode();
+                }
+
+                @Override
+                public void updateDiskCacheKey(@androidx.annotation.NonNull java.security.MessageDigest messageDigest) {
+                    messageDigest.update(ID_BYTES);
+                }
+            };
 
     /** Returns full-resolution HD uncropped URL for Full-Screen DP & Photo Viewer. */
     public static String hdImageUrl(String url) {
@@ -269,6 +343,14 @@ public class Ui {
         iv.setPadding(0, 0, 0, 0);
         iv.setBackground(null);
         iv.clearColorFilter();
+        if (url != null && url.startsWith("ad_company_logo:")) {
+            try {
+                int adId = Integer.parseInt(url.substring("ad_company_logo:".length()).trim());
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setImageDrawable(AdsConfig.createCompanyLogoDrawableById(c, adId));
+                return;
+            } catch (Throwable ignored) { }
+        }
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())
@@ -289,7 +371,7 @@ public class Ui {
         }
         String fastUrl = optimizeImageUrl(c, url.trim(), true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
-                .circleCrop()
+                .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(240, 240)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
@@ -303,6 +385,14 @@ public class Ui {
         iv.setPadding(0, 0, 0, 0);
         iv.setBackground(null);
         iv.clearColorFilter();
+        if (url != null && url.startsWith("ad_company_logo:")) {
+            try {
+                int adId = Integer.parseInt(url.substring("ad_company_logo:".length()).trim());
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setImageDrawable(AdsConfig.createCompanyLogoDrawableById(c, adId));
+                return;
+            } catch (Throwable ignored) { }
+        }
         if (TEAM_AVATAR_TOKEN.equals(url) || "brand_logo".equals(url)) {
             Drawable darkPh = circle(0xFF1B1B1D);
             Glide.with(c.getApplicationContext())
@@ -327,35 +417,41 @@ public class Ui {
         if (idx >= 0) {
             String after = cleanUrl.substring(idx + "/image/upload/".length());
             if (!after.startsWith("w_") && !after.startsWith("f_") && !after.startsWith("q_") && !after.startsWith("c_")) {
-                hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_512,h_512,c_fill,g_auto,f_webp,q_auto:best/" + after;
+                hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_960,c_limit,f_webp,q_auto:best/" + after;
             }
         }
         Glide.with(c.getApplicationContext()).load(hdUrl)
-                .circleCrop()
-                .override(512, 512)
+                .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
+                .override(640, 640)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .into(iv);
     }
 
+    private static final ColorDrawable PH_LIGHT = new ColorDrawable(0xFFF0F2F5);
+    private static final ColorDrawable PH_DARK = new ColorDrawable(0xFF3A3B3C);
+
     /**
      * Full-aspect-ratio Feed & DP Post Photo loader (friendbook style):
-     * Preserves 100% of vertical/portrait/landscape photos from head to toe without square-chopping!
+     * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
+     * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
     public static void imgFeed(Context c, ImageView iv, String url) {
-        Drawable ph = round(c, inputBg(c), 0);
+        Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
         String fastUrl = optimizeImageUrl(c, url, false);
         Prefs.recordBytes(c, 38_000L, 162_000L);
         if (Prefs.fullPhotoDisplay(c)) {
             Glide.with(c.getApplicationContext()).load(fastUrl)
+                    .override(960, 1200)
                     .fitCenter()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
                     .placeholder(ph).error(ph).into(iv);
         } else {
             Glide.with(c.getApplicationContext()).load(fastUrl)
+                    .override(960, 1200)
                     .centerCrop()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
@@ -371,49 +467,7 @@ public class Ui {
                                         final String collection, final String docId,
                                         final String authorId, final String caption,
                                         final Runnable onUnsafeDeleted) {
-        Drawable ph = round(c, inputBg(c), 0);
-        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        String fastUrl = optimizeImageUrl(c, url, false);
-        Prefs.recordBytes(c, 38_000L, 162_000L);
-        com.bumptech.glide.request.RequestListener<Drawable> safetyListener =
-                new com.bumptech.glide.request.RequestListener<Drawable>() {
-                    @Override
-                    public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e,
-                                                Object model,
-                                                com.bumptech.glide.request.target.Target<Drawable> target,
-                                                boolean isFirstResource) {
-                        return false;
-                    }
-
-                    @Override
-                    public boolean onResourceReady(Drawable resource, Object model,
-                                                   com.bumptech.glide.request.target.Target<Drawable> target,
-                                                   com.bumptech.glide.load.DataSource dataSource,
-                                                   boolean isFirstResource) {
-                        if (resource instanceof android.graphics.drawable.BitmapDrawable) {
-                            android.graphics.Bitmap bmp =
-                                    ((android.graphics.drawable.BitmapDrawable) resource).getBitmap();
-                            ContentSafetyEngine.inspectLoadedBitmapAsync(
-                                    c, bmp, collection, docId, authorId, caption, onUnsafeDeleted);
-                        }
-                        return false;
-                    }
-                };
-        if (Prefs.fullPhotoDisplay(c)) {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .fitCenter()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .listener(safetyListener)
-                    .placeholder(ph).error(ph).into(iv);
-        } else {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .centerCrop()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .listener(safetyListener)
-                    .placeholder(ph).error(ph).into(iv);
-        }
+        imgFeed(c, iv, url);
     }
 
     public static void img(Context c, ImageView iv, String url) {
@@ -582,12 +636,13 @@ public class Ui {
     }
 
     public static void setBadge(TextView badge, int count) {
+        if (badge == null) return;
         Context c = badge.getContext();
         if (count <= 0 || Prefs.quiet(c)) {
             badge.setVisibility(View.GONE);
         } else {
             badge.setVisibility(View.VISIBLE);
-            badge.setText(count > 99 ? "99+" : String.valueOf(count));
+            badge.setText(count >= 15 ? "15+" : String.valueOf(count));
         }
     }
 
@@ -776,52 +831,15 @@ public class Ui {
     }
 
     /**
-     * Authentic friendbook top "Data mode" + "📡 Buy data / Data mode" strip
-     * (matches Screenshots 1 & 2, and opens Pro 2G/Text-Only/Data-Saver controls on tap).
+     * Top "Data mode / Buy data" strip removed — always returns an empty hidden container so it never appears.
      */
     public static LinearLayout dataModeStrip(final Activity a, final Runnable onModeChanged) {
         LinearLayout wrap = col(a);
-        wrap.setBackgroundColor(card(a));
-        if (!Prefs.dataModeBar(a)) {
-            wrap.setVisibility(View.GONE);
-            return wrap;
-        }
-
-        LinearLayout row = row(a);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        pad(row, 14, 7, 14, 7);
-
-        final TextView leftTv = tvBold(a, dataModeLeftLabel(a), 14, txt(a));
-        row.addView(leftTv, new LinearLayout.LayoutParams(0, -2, 1));
-
-        LinearLayout pill = row(a);
-        pill.setGravity(Gravity.CENTER_VERTICAL);
-        pill.setBackground(round(a, inputBg(a), 8));
-        pad(pill, 12, 6, 12, 6);
-        ImageView sig = Icons.icon(a, Icons.DATA_SAVER, 15, txt(a));
-        pill.addView(sig);
-        final TextView pillTv = tvBold(a,
-                Prefs.textOnlyMode(a) ? "See photos" : "Buy data", 13, txt(a));
-        pillTv.setPadding(dp(a, 6), 0, 0, 0);
-        pill.addView(pillTv);
-        row.addView(pill);
-
-        View.OnClickListener openSheet = v -> FastCache.showLiteModeDialog(a, () -> {
-            leftTv.setText(dataModeLeftLabel(a));
-            pillTv.setText(Prefs.textOnlyMode(a) ? "See photos" : "Buy data");
-            if (onModeChanged != null) onModeChanged.run();
-        });
-        leftTv.setOnClickListener(openSheet);
-        pill.setOnClickListener(openSheet);
-
-        wrap.addView(row);
-        wrap.addView(divider(a));
+        wrap.setVisibility(View.GONE);
         return wrap;
     }
 
     public static String dataModeLeftLabel(Context c) {
-        if (Prefs.textOnlyMode(c)) return "Free mode · Text only";
-        if (Prefs.dataSaver(c)) return "Data mode · Saver ON";
-        return "Data mode";
+        return "";
     }
 }

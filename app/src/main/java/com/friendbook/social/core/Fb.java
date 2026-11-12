@@ -1,7 +1,6 @@
 package com.friendbook.social.core;
 
 import android.content.Context;
-import android.net.Uri;
 
 import androidx.annotation.Nullable;
 
@@ -18,9 +17,6 @@ import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.PersistentCacheSettings;
 import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.firestore.Source;
-import com.google.firebase.storage.FirebaseStorage;
-import com.google.firebase.storage.StorageReference;
-import com.google.firebase.storage.UploadTask;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -82,10 +78,6 @@ public class Fb {
         return rtdb;
     }
 
-    public static StorageReference storage() {
-        return FirebaseStorage.getInstance().getReference();
-    }
-
     @Nullable
     public static String uid() {
         return auth().getCurrentUser() != null ? auth().getCurrentUser().getUid() : null;
@@ -96,16 +88,6 @@ public class Fb {
     /** Canonical 1:1 chat id (same scheme as the Flutter app). */
     public static String chatId(String a, String b) {
         return a.compareTo(b) < 0 ? a + "_" + b : b + "_" + a;
-    }
-
-    /** Upload a local file and resolve its download URL. */
-    public static Task<Uri> upload(String path, Uri file) {
-        StorageReference ref = storage().child(path);
-        UploadTask up = ref.putFile(file);
-        return up.continueWithTask(t -> {
-            if (!t.isSuccessful()) throw t.getException();
-            return ref.getDownloadUrl();
-        });
     }
 
     /** Start (or restart) the live listener that keeps {@link #me} fresh. */
@@ -141,6 +123,7 @@ public class Fb {
                     Models.User u = Models.User.fromDoc(doc);
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
+                    syncProfileToCloudflare(u);
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
@@ -188,6 +171,7 @@ public class Fb {
     public static void patchMe(Map<String, Object> fields) {
         String uid = uid();
         if (uid == null) return;
+        CloudflareStore.put("users", uid, fields);
         db().collection("users").document(uid).set(fields, SetOptions.merge());
     }
 
@@ -226,6 +210,34 @@ public class Fb {
                 })
                 .addOnFailureListener(e -> fetchUserNetwork(uid, tcs));
         return tcs.getTask();
+    }
+
+    private static String lastCloudflareProfileKey = "";
+    private static final java.util.concurrent.ExecutorService CF_PROFILE_IO =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    private static void syncProfileToCloudflare(Models.User u) {
+        if (!com.friendbook.social.BuildConfig.D1_INTERACTIONS_ENABLED || u == null || u.uid == null) return;
+        String dn = u.displayName != null ? u.displayName : "";
+        String ph = u.photoUrl != null ? u.photoUrl : "";
+        String key = u.uid + "|" + dn + "|" + ph;
+        if (key.equals(lastCloudflareProfileKey)) return;
+        lastCloudflareProfileKey = key;
+        try {
+            com.google.firebase.auth.FirebaseUser user = auth().getCurrentUser();
+            if (user == null) return;
+            user.getIdToken(false).addOnSuccessListener(res -> {
+                String token = res != null ? res.getToken() : null;
+                if (token == null || token.isEmpty()) return;
+                CF_PROFILE_IO.execute(() -> {
+                    try {
+                        D1HttpTransport.send(
+                                new java.net.URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me"),
+                                "PUT", token, D1Client.object("displayName", dn, "photoUrl", ph));
+                    } catch (Throwable ignored) { }
+                });
+            });
+        } catch (Throwable ignored) { }
     }
 
     private static void fetchUserNetwork(String uid, TaskCompletionSource<Models.User> tcs) {

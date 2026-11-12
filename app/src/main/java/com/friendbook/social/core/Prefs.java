@@ -504,9 +504,9 @@ public class Prefs {
     public static String commentSort(Context c) { return p(c).getString("commentSort", "all"); }
     public static void setCommentSort(Context c, String v) { p(c).edit().putString("commentSort", v == null ? "all" : v).apply(); }
 
-    /** Top friendbook "Data mode / Buy data" strip (ON by default, toggleable in Settings). */
-    public static boolean dataModeBar(Context c) { return p(c).getBoolean("dataModeBar", true); }
-    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", v).apply(); }
+    /** Top "Data mode / Buy data" strip permanently disabled so it never shows at the top of any screen. */
+    public static boolean dataModeBar(Context c) { return false; }
+    public static void setDataModeBar(Context c, boolean v) { p(c).edit().putBoolean("dataModeBar", false).apply(); }
 
     /** Undo hiding a post via the ✕ button on post cards. */
     public static void unhidePost(Context c, String postId) {
@@ -517,11 +517,24 @@ public class Prefs {
     }
 
     /** Record exact used & saved bytes from WebP/2G compression. */
+    private static long memBytesUsed = 0L;
+    private static long memBytesSaved = 0L;
+    private static long lastBytesFlushMs = 0L;
+
     public static void recordBytes(Context c, long used, long saved) {
+        memBytesUsed += Math.max(0L, used);
+        memBytesSaved += Math.max(0L, saved);
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastBytesFlushMs < 30_000L) return;
+        lastBytesFlushMs = now;
+        long flushUsed = memBytesUsed;
+        long flushSaved = memBytesSaved;
+        memBytesUsed = 0L;
+        memBytesSaved = 0L;
         SharedPreferences sp = p(c);
         sp.edit()
-                .putLong("dataBytesUsed", sp.getLong("dataBytesUsed", 0L) + Math.max(0L, used))
-                .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + Math.max(0L, saved))
+                .putLong("dataBytesUsed", sp.getLong("dataBytesUsed", 0L) + flushUsed)
+                .putLong("dataBytesSaved", sp.getLong("dataBytesSaved", 0L) + flushSaved)
                 .apply();
     }
 
@@ -602,5 +615,15 @@ public class Prefs {
     public static void setNotifBadgeClearedAt(Context c, String uid, long tsMs) {
         if (uid == null || uid.isEmpty()) return;
         p(c).edit().putLong("notifBadgeClearedAt_" + uid, tsMs).apply();
+    }
+
+    public static long reelsBadgeClearedAt(Context c, String uid) {
+        if (uid == null || uid.isEmpty()) return 0L;
+        return p(c).getLong("reelsBadgeClearedAt_" + uid, 0L);
+    }
+
+    public static void setReelsBadgeClearedAt(Context c, String uid, long tsMs) {
+        if (uid == null || uid.isEmpty()) return;
+        p(c).edit().putLong("reelsBadgeClearedAt_" + uid, tsMs).apply();
     }
 }

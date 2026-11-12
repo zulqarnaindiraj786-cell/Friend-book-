@@ -191,6 +191,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     private DocumentReference remoteMediaRef;
     private ListenerRegistration signalReg;
     private ListenerRegistration remoteMediaReg;
+    private com.google.firebase.database.DatabaseReference myRtdbMediaRef;
+    private com.google.firebase.database.DatabaseReference remoteRtdbMediaRef;
+    private com.google.firebase.database.ValueEventListener remoteRtdbListener;
 
     private final AtomicLong localVideoSeq = new AtomicLong(0);
     private final AtomicLong localAudioSeq = new AtomicLong(0);
@@ -770,6 +773,41 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void attachRemoteMediaListener() {
         if (remoteMediaReg != null || remoteMediaRef == null) return;
+        try {
+            com.google.firebase.database.FirebaseDatabase rtdb = Fb.rtdb();
+            if (rtdb != null && callId != null && !callId.isEmpty()) {
+                String mySide = isCaller ? "a" : "b";
+                String remSide = isCaller ? "b" : "a";
+                myRtdbMediaRef = rtdb.getReference("call_streams").child(callId).child(mySide);
+                remoteRtdbMediaRef = rtdb.getReference("call_streams").child(callId).child(remSide);
+                remoteRtdbListener = new com.google.firebase.database.ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull com.google.firebase.database.DataSnapshot snap) {
+                        if (ended || isFinishing() || !snap.exists() || engine == null) return;
+                        Long aSeq = snap.child("audioSeq").getValue(Long.class);
+                        String aChunk = snap.child("audioChunk").getValue(String.class);
+                        if (aChunk != null && !aChunk.isEmpty()) {
+                            engine.enqueueRemoteAudio(aChunk, aSeq != null ? aSeq : 0L, false);
+                        }
+                        Boolean remCamOff = snap.child("camOff").getValue(Boolean.class);
+                        if (Boolean.TRUE.equals(remCamOff)) {
+                            remoteVideoView.setVisibility(View.GONE);
+                            centerProfileBox.setVisibility(View.VISIBLE);
+                        } else {
+                            Long vSeq = snap.child("videoSeq").getValue(Long.class);
+                            String vFrame = snap.child("videoFrame").getValue(String.class);
+                            if (vFrame != null && !vFrame.isEmpty()) {
+                                engine.decodeRemoteFrame(vFrame, vSeq != null ? vSeq : 0L, false);
+                            }
+                        }
+                    }
+                    @Override
+                    public void onCancelled(@NonNull com.google.firebase.database.DatabaseError error) { }
+                };
+                remoteRtdbMediaRef.addValueEventListener(remoteRtdbListener);
+            }
+        } catch (Throwable ignored) { }
+
         remoteMediaReg = remoteMediaRef.addSnapshotListener((snap, err) -> {
             if (ended || isFinishing() || snap == null || !snap.exists() || engine == null) return;
 
@@ -799,14 +837,18 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     public void onEncodedVideoFrame(String base64Webp, int width, int height) {
         if (!connected || ended || !cameraEnabled || myMediaRef == null) return;
         long now = System.currentTimeMillis();
-        if (now - lastVideoPushMs < 320L) return;
+        if (now - lastVideoPushMs < 280L) return;
         lastVideoPushMs = now;
+        long vSeq = localVideoSeq.incrementAndGet();
 
         Map<String, Object> m = new HashMap<>();
-        m.put("videoSeq", localVideoSeq.incrementAndGet());
+        m.put("videoSeq", vSeq);
         m.put("videoFrame", base64Webp);
         m.put("camOff", false);
         m.put("updatedAt", now);
+        if (myRtdbMediaRef != null) {
+            try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
+        }
         myMediaRef.set(m, SetOptions.merge());
     }
 
@@ -814,14 +856,17 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
         if (!connected || ended || micMuted || myMediaRef == null) return;
         long now = System.currentTimeMillis();
-        if (now - lastAudioPushMs < 200L) return;
         lastAudioPushMs = now;
+        long aSeq = localAudioSeq.incrementAndGet();
 
         Map<String, Object> m = new HashMap<>();
-        m.put("audioSeq", localAudioSeq.incrementAndGet());
+        m.put("audioSeq", aSeq);
         m.put("audioChunk", base64Ulaw);
         m.put("voiceLevel", voiceLevel);
         m.put("updatedAt", now);
+        if (myRtdbMediaRef != null) {
+            try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
+        }
         myMediaRef.set(m, SetOptions.merge());
     }
 
@@ -880,6 +925,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.setCameraPaused(false);
                 if (connected) engine.startBroadcasting(true);
             }
+            if (myRtdbMediaRef != null) {
+                try { myRtdbMediaRef.child("camOff").setValue(false); } catch (Throwable ignored) { }
+            }
             if (myMediaRef != null) {
                 Map<String, Object> m = new HashMap<>();
                 m.put("camOff", false);
@@ -890,6 +938,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             btnFlipCam.setVisibility(View.GONE);
             if (engine != null) {
                 engine.setCameraPaused(true);
+            }
+            if (myRtdbMediaRef != null) {
+                try { myRtdbMediaRef.child("camOff").setValue(true); } catch (Throwable ignored) { }
             }
             if (myMediaRef != null) {
                 Map<String, Object> m = new HashMap<>();
@@ -1041,6 +1092,14 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         if (signalReg != null) {
             try { signalReg.remove(); } catch (Throwable ignored) { }
             signalReg = null;
+        }
+        if (remoteRtdbMediaRef != null && remoteRtdbListener != null) {
+            try { remoteRtdbMediaRef.removeEventListener(remoteRtdbListener); } catch (Throwable ignored) { }
+            remoteRtdbListener = null;
+        }
+        if (myRtdbMediaRef != null) {
+            try { myRtdbMediaRef.removeValue(); } catch (Throwable ignored) { }
+            myRtdbMediaRef = null;
         }
         if (remoteMediaReg != null) {
             try { remoteMediaReg.remove(); } catch (Throwable ignored) { }

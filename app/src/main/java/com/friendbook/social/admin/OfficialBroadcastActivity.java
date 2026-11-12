@@ -9,7 +9,6 @@ import android.provider.OpenableColumns;
 import android.widget.*;
 import com.friendbook.social.core.*;
 import com.google.firebase.firestore.*;
-import com.google.firebase.storage.*;
 import java.util.*;
 
 /** Admin-only composer: one shared upload, image/video + linked text in official Team chats. */
@@ -22,7 +21,7 @@ public final class OfficialBroadcastActivity extends Activity {
     private String mediaType = "", mediaUrl = "", uploadPath = "", jobId;
     private boolean busy;
     private ListenerRegistration listener;
-    private com.google.android.gms.tasks.Task<Uri> pendingUpload;
+    private com.google.android.gms.tasks.Task<String> pendingUpload;
     private String uploadingText, uploadingUid;
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -55,7 +54,7 @@ public final class OfficialBroadcastActivity extends Activity {
         body.addView(preview, new LinearLayout.LayoutParams(-1, Ui.dp(this, 200)));
         TextView remove = Ui.btnGrey(this, "Remove attachment"); body.addView(remove);
         remove.setOnClickListener(v -> { if (!busy) { selected = null; mediaUrl = ""; mediaType = ""; uploadPath = ""; renderAttachment(); } });
-        status = Ui.tv(this, "Image limit 20 MB; video limit 100 MB. Storage must be enabled on your Firebase project.", 13, Ui.sub(this));
+        status = Ui.tv(this, "Images: Cloudinary (20 MB). Videos: 480p, R2 Save Forever (99 MB per upload).", 13, Ui.sub(this));
         body.addView(status);
         send = Ui.btn(this, "Send to everyone"); body.addView(send); send.setOnClickListener(v -> send());
         ScrollView scroll = new ScrollView(this); scroll.addView(body); setContentView(scroll);
@@ -85,7 +84,7 @@ public final class OfficialBroadcastActivity extends Activity {
         try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) size = cursor.getLong(0);
         } catch (Exception ignored) {}
-        long limit = mime.startsWith("image/") ? 20L * 1024 * 1024 : 100L * 1024 * 1024;
+        long limit = mime.startsWith("image/") ? 20L * 1024 * 1024 : 99_000_000L;
         if (size < 0 || size > limit) { Ui.toast(this, "Cannot determine file size, or attachment exceeds the size limit"); return; }
         try { getContentResolver().takePersistableUriPermission(uri, data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION); }
         catch (SecurityException | IllegalArgumentException ignored) {}
@@ -99,28 +98,28 @@ public final class OfficialBroadcastActivity extends Activity {
         if (text.length() > 20000) { Ui.toast(this, "Message must be under 20,000 characters"); return; }
         busy = true; send.setEnabled(false); message.setEnabled(false);
         if (selected == null || !mediaUrl.isEmpty()) { queue(text, uid); return; }
-        if (uploadPath.isEmpty()) uploadPath = "official_broadcasts/" + uid + "/" + jobId;
-        String mime = getContentResolver().getType(selected);
-        StorageReference ref = Fb.storage().child(uploadPath);
-        status.setText("Uploading attachment…");
+        // Legacy queued jobs/URLs stay readable. New attachments never use Firebase Storage.
+        uploadPath = "";
+        status.setText("Uploading attachment to Cloudinary…");
         uploadingText = text; uploadingUid = uid;
         try {
-        pendingUpload = ref.putFile(selected, new StorageMetadata.Builder().setContentType(mime).build())
-                .addOnProgressListener(this, snapshot -> status.setText("Uploading: " + (snapshot.getBytesTransferred() * 100 / Math.max(1, snapshot.getTotalByteCount())) + "%"))
-                .continueWithTask(task -> { if (!task.isSuccessful()) throw task.getException(); return ref.getDownloadUrl(); });
+        pendingUpload = Cloudinary.uploadWithProgress(getApplicationContext(), selected,
+                (percent, sentBytes, totalBytes) -> {
+                    if (!isFinishing() && !isDestroyed()) status.setText("Uploading: " + percent + "%");
+                });
         observeUpload();
         } catch (Exception error) { fail("Could not read attachment. Pick the file again before sending."); }
     }
     private void observeUpload() {
         if (pendingUpload == null) return;
-        com.google.android.gms.tasks.Task<Uri> task = pendingUpload;
+        com.google.android.gms.tasks.Task<String> task = pendingUpload;
         task.addOnSuccessListener(this, url -> {
             if (pendingUpload != task) return;
-            pendingUpload = null; mediaUrl = url.toString(); queue(uploadingText, uploadingUid);
+            pendingUpload = null; mediaUrl = url; queue(uploadingText, uploadingUid);
         }).addOnFailureListener(this, error -> {
             if (pendingUpload != task) return;
             pendingUpload = null;
-            fail("Upload failed. Check Firebase Storage availability and deployed admin rules; nothing was broadcast.");
+            fail("Cloudinary upload failed. Nothing was broadcast; retry the attachment.");
         });
     }
     @Override protected void onStart() { super.onStart(); observeUpload(); }
@@ -130,6 +129,10 @@ public final class OfficialBroadcastActivity extends Activity {
         Map<String, Object> spec = new HashMap<>();
         spec.put("adminId", uid); spec.put("text", text); spec.put("mediaUrl", mediaUrl);
         spec.put("mediaType", mediaType); spec.put("storagePath", uploadPath);
+        if (mediaUrl.startsWith("https://res.cloudinary.com/")) spec.put("mediaProvider", "cloudinary");
+        else if (mediaUrl.startsWith("https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/videos/")) {
+            spec.put("mediaProvider", "r2"); spec.put("mediaRetention", "forever");
+        }
         spec.put("createdAt", FieldValue.serverTimestamp()); spec.put("status", "queued"); spec.put("processed", 0);
         Fb.db().runTransaction(tx -> { if (!tx.get(ref).exists()) tx.set(ref, spec); return null; })
                 .addOnSuccessListener(v -> {

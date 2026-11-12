@@ -235,7 +235,15 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
     @Override public void createStory() { }
     @Override public void openStoryGroup(com.friendbook.social.story.StoriesAdapter.Group g) { }
     @Override public void loadMore() {
-        if(loading || !more) return;
+        if(loading) return;
+        if(!more) {
+            if(adapter!=null && !adapter.getPosts().isEmpty() && adapter.getPosts().size()<1200) {
+                List<Models.Post> cur=adapter.getPosts();
+                int n=Math.min(10,cur.size());
+                adapter.addPosts(new ArrayList<>(cur.subList(0,n)));
+            }
+            return;
+        }
         loading=true; final int request=generation; final String actor=Fb.uid();
         com.google.firebase.firestore.Query query=Fb.db().collection("posts").whereEqualTo("mediaType","video");
         boolean first=cursor==null; if(cursor!=null) query=query.startAfter(cursor);

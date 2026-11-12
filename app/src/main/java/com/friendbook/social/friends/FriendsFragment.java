@@ -57,6 +57,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private int requestBoundary=-1,suggestionHeader=-1;
     private boolean started;
     private String pageActor;
+    private final Set<Integer> loadedSections=new HashSet<>();
     private final Set<String> checkingUsers=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
     private final Map<String,String> sentIds=new HashMap<>();
     private final Set<String> cancelledRequestIds=new HashSet<>(),removedFriendIds=new HashSet<>(),requestWrites=new HashSet<>();
@@ -149,11 +150,16 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     @Override public void onStop(){started=false;closePage();super.onStop();}
 
     private void startSection(){
-        closePage();String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden())return;
-        if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();}
+        String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
+        boolean pullRefresh=swipe!=null && swipe.isRefreshing();
+        if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
+        if(!pullRefresh && loadedSections.contains(section)){
+            pageLoading=false;suggestionLoading=false;render();return;
+        }
+        closePage();
         pageActor=me;final int token=generation, selected=section;
-        checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();
-        pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=selected==SEC_REQUESTS;suggestionError="";
+        if(pullRefresh){checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();}
+        pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=selected==SEC_REQUESTS && suggestions.isEmpty();suggestionError="";
         Query query;
         if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
@@ -163,6 +169,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(!current(token,me) || section!=selected)return;
             pageMore=more;pageLoading=loading;pageError=error;
             if(loading){requestRender();return;}
+            loadedSections.add(selected);
+            if(swipe!=null)swipe.setRefreshing(false);
             if(selected==SEC_REQUESTS){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
                 if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);ensureUser(req.fromUid);}}
                 tabs[SEC_REQUESTS].setText("Requests");
@@ -172,7 +180,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             else consumeSuggestions(docs,me,token);
             render();
         });render();activePager.start();
-        if(selected==SEC_REQUESTS){
+        if(selected==SEC_REQUESTS && (pullRefresh || suggestions.isEmpty())){
             suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
                 if(!current(token,me) || section!=SEC_REQUESTS)return;
                 suggestionMore=more;suggestionLoading=loading;suggestionError=error;
@@ -379,9 +387,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         WriteBatch batch = Fb.db().batch();
         batch.update(Fb.db().collection("friend_requests").document(rid),
                 "status", "accepted");
-        batch.set(Fb.db().collection("friends").document(), Fb.map(
+        com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
+        Map<String, Object> friendDoc = Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
-                "createdAt", FieldValue.serverTimestamp()));
+                "createdAt", FieldValue.serverTimestamp());
+        com.friendbook.social.core.CloudflareStore.put("friends", friendDocRef.getId(), friendDoc);
+        batch.set(friendDocRef, friendDoc);
         batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
         batch.commit().addOnSuccessListener(x -> {

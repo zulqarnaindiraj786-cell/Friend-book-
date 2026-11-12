@@ -36,8 +36,10 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
 
     private String reelId, author, collection, commentsKey;
     private RecyclerView rv;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout commentSwipe;
     private CommentsAdapter adapter;
     private CommentsEngine.Handle commentsHandle;
+    private boolean initialLoaded;
     private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, countHeader;
@@ -89,6 +91,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             updateCommentPager();
         });
         bar.addView(older);
+        if(com.friendbook.social.core.D1Client.enabled(collection)){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,collection,reelId));bar.addView(drafts);}
         root.addView(bar);
         root.addView(Ui.divider(this));
 
@@ -102,7 +105,14 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         adapter.sortMode = Prefs.commentSort(this);
         rv.setAdapter(adapter);
         com.friendbook.social.core.NearEndPaging.attachComments(rv,()->adapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        commentSwipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        commentSwipe.setColorSchemeColors(Ui.BLUE);
+        commentSwipe.addView(rv);
+        commentSwipe.setOnRefreshListener(() -> {
+            initialLoaded = false;
+            loadComments();
+        });
+        root.addView(commentSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Composer + Quick Emoji Strip
         LinearLayout wrap = Ui.col(this);
@@ -184,9 +194,18 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     protected void onStart() {
         super.onStart();
+        if (!initialLoaded) {
+            loadComments();
+        }
+    }
+
+    private void loadComments() {
+        initialLoaded = true;
+        if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         commentsHandle = CommentsEngine.watch(collection, reelId, commentsKey, (all, pinnedId) -> {
             updateCommentPager();
             if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentSwipe!=null)commentSwipe.setRefreshing(false);
             rawComments.clear();
             rawComments.addAll(all);
             adapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
@@ -205,7 +224,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     protected void onStop() {
         super.onStop();
-        if (commentsHandle != null) commentsHandle.remove();
+        if (isFinishing() && commentsHandle != null) commentsHandle.remove();
     }
 
     @Override
@@ -231,6 +250,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
 
     private void send() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
         if (text.isEmpty()) return;
         String me = Fb.uid();
@@ -266,6 +286,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
             rv.scrollToPosition(Math.max(0, adapter.getItemCount() - 1));
         } else {
             busy = false;
+            if(com.friendbook.social.core.D1Client.enabled(collection))com.friendbook.social.core.Mentions.restore(input,text,mentions);
         }
     }
 }

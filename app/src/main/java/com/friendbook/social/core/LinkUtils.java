@@ -53,6 +53,13 @@ public final class LinkUtils {
         void restore(TextView v) { v.setClickable(clickable); v.setLongClickable(longClickable); v.setFocusable(focusable); }
     }
     private static void link(Spannable text) {
+        if (text == null || text.length() == 0) return;
+        String raw = text.toString();
+        if (raw.indexOf('.') < 0 && raw.indexOf(':') < 0) {
+            URLSpan[] old = text.getSpans(0, text.length(), URLSpan.class);
+            for (URLSpan span : old) text.removeSpan(span);
+            return;
+        }
         Linkify.addLinks(text, Linkify.WEB_URLS);
         for (URLSpan span : text.getSpans(0, text.length(), URLSpan.class)) {
             int start = text.getSpanStart(span), end = text.getSpanEnd(span), flags = text.getSpanFlags(span);

@@ -15,6 +15,25 @@ public class Models {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
         public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
         public boolean isOnline, isAdmin, isModerator, banned, isVerified;
+        public long suspendedUntil;
+        public boolean suspendedLifetime;
+
+        public boolean isSuspendedNow() {
+            if (com.friendbook.social.core.Admin.isOwnerEmail(email) || isAdmin) return false;
+            if (suspendedLifetime || suspendedUntil > 4_000_000_000_000L) return true;
+            return suspendedUntil > System.currentTimeMillis();
+        }
+
+        public String suspensionStatusLabel() {
+            if (!isSuspendedNow()) return "";
+            if (suspendedLifetime || suspendedUntil > 4_000_000_000_000L) return "Lifetime";
+            long remMs = Math.max(0L, suspendedUntil - System.currentTimeMillis());
+            long days = remMs / (24L * 3600_000L);
+            long hours = (remMs % (24L * 3600_000L)) / 3600_000L;
+            if (days >= 1) return days + (days == 1 ? " day" : " days") + (hours > 0 ? " " + hours + "h" : "");
+            if (hours >= 1) return hours + (hours == 1 ? " hour" : " hours");
+            return Math.max(1L, remMs / 60_000L) + " min";
+        }
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
         public boolean showActiveStatus = true;
@@ -87,6 +106,12 @@ public class Models {
             u.isAdmin = Format.boolOf(m, "isAdmin");
             u.isModerator = Format.boolOf(m, "isModerator");
             u.banned = Format.boolOf(m, "banned");
+            u.suspendedLifetime = Format.boolOf(m, "suspendedLifetime");
+            if (m != null && m.get("suspendedUntil") instanceof Number) {
+                u.suspendedUntil = ((Number) m.get("suspendedUntil")).longValue();
+            } else {
+                u.suspendedUntil = Format.ts(m == null ? null : m.get("suspendedUntil"));
+            }
             u.isVerified = Format.boolOf(m, "isVerified");
             u.deactivated = Format.boolOf(m, "deactivated");
             u.loginAlerts = Format.boolOf(m, "loginAlerts");
@@ -153,7 +178,7 @@ public class Models {
         public String pageId, pageName, pagePhoto;
         public boolean archived;
         public long trashedAt;
-        public int likes, comments, shares;
+        public int likes, comments, shares, views;
         public int bgColor; // 0 = none, or ARGB / Backgrounds index
         public long createdAt;
         public List<String> savedBy = new ArrayList<>();
@@ -188,11 +213,14 @@ public class Models {
         public boolean isQa() { return qaPrompt != null && !qaPrompt.isEmpty(); }
         public boolean isQna() { return "qna".equals(postType) || isQa(); }
 
-        @SuppressWarnings("unchecked")
         public static Post fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        @SuppressWarnings("unchecked")
+        public static Post fromMap(String id, Map<String, Object> m) {
             Post p = new Post();
-            Map<String, Object> m = d.getData();
-            p.id = d.getId();
+            p.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
             p.authorId = Format.str(m, "authorId");
             p.authorName = Format.strOr(m, "authorName", "User");
             p.authorPhoto = Format.str(m, "authorPhotoUrl");
@@ -226,6 +254,7 @@ public class Models {
             p.likes = Format.intOf(m, "likes");
             p.comments = Format.intOf(m, "comments");
             p.shares = Format.intOf(m, "shares");
+            p.views = Format.intOf(m, "views");
             p.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             p.authorVerified = Format.boolOf(m, "authorVerified");
             p.authorTickLevel = Format.strOr(m, "authorTickLevel", p.authorVerified ? "blue" : "none");
@@ -471,9 +500,25 @@ public class Models {
 
     public static class Reel {
         public String id, authorId, authorName, authorPhoto, videoUrl, thumbUrl, caption;
-        public int likes, comments, shares, durationSec;
+        public int likes, comments, shares, favorites, views, durationSec;
         public long createdAt;
         public boolean isFromPost; // true when sourced from posts (mediaType == "video")
+        public boolean mirrorHorizontal = false; // true when recorded with front camera so face stays on same side
+        public String overlayText = "";
+        public int overlayColor = 0xFFFFFFFF;
+        public int overlayBgColor = 0xCC000000;
+        public float overlayX = 0.5f, overlayY = 0.24f;
+        public String stickerText = "";
+        public float stickerX = 0.78f, stickerY = 0.32f, stickerScale = 1.0f;
+        public String filterPreset = "none";
+        public int filterOverlayColor = 0;
+        public int beautyLevel = 0; // 4K UHD face grade the creator previewed while recording
+        public float playbackSpeed = 1.0f;
+        public boolean muteOriginalAudio = false;
+        public String audioTitle = "";
+        public String audioUrl = "";
+        public String soundAuthorPhoto = "";
+        public int trimStartMs = 0, trimEndMs = 0;
         public List<String> likedBy = new ArrayList<>();
         public List<String> savedBy = new ArrayList<>();
         public Map<String, String> reactions = new HashMap<>();
@@ -484,9 +529,12 @@ public class Models {
         }
 
         public static Reel fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        public static Reel fromMap(String id, Map<String, Object> m) {
             Reel r = new Reel();
-            Map<String, Object> m = d.getData();
-            r.id = d.getId();
+            r.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
             r.authorId = Format.str(m, "authorId");
             r.authorName = Format.strOr(m, "authorName", "User");
             r.authorPhoto = Format.str(m, "authorPhotoUrl");
@@ -496,10 +544,14 @@ public class Models {
             r.likes = Format.intOf(m, "likes");
             r.comments = Format.intOf(m, "comments");
             r.shares = Format.intOf(m, "shares");
+            r.favorites = Format.intOf(m, "favorites");
+            r.views = Format.intOf(m, "views");
             r.durationSec = Format.intOf(m, "durationSec");
+            r.mirrorHorizontal = m != null && Boolean.TRUE.equals(m.get("mirrorHorizontal"));
             r.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             r.likedBy = Format.listOf(m, "likedBy");
             r.savedBy = Format.listOf(m, "savedBy");
+            if (r.savedBy.size() > r.favorites) r.favorites = r.savedBy.size();
             Object rx = m == null ? null : m.get("reactions");
             if (rx instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) rx).entrySet()) {
@@ -531,6 +583,30 @@ public class Models {
             }
             r.inlineComments = Comment.parseEmbeddedComments(r.id, m, null);
             if (r.inlineComments.size() > r.comments) r.comments = r.inlineComments.size();
+            if (m != null) {
+                r.overlayText = Format.str(m, "overlayText");
+                if (m.get("overlayColor") instanceof Number) r.overlayColor = ((Number) m.get("overlayColor")).intValue();
+                if (m.get("overlayBgColor") instanceof Number) r.overlayBgColor = ((Number) m.get("overlayBgColor")).intValue();
+                if (m.get("overlayX") instanceof Number) r.overlayX = ((Number) m.get("overlayX")).floatValue();
+                if (m.get("overlayY") instanceof Number) r.overlayY = ((Number) m.get("overlayY")).floatValue();
+                r.stickerText = Format.str(m, "stickerText");
+                if (m.get("stickerX") instanceof Number) r.stickerX = ((Number) m.get("stickerX")).floatValue();
+                if (m.get("stickerY") instanceof Number) r.stickerY = ((Number) m.get("stickerY")).floatValue();
+                if (m.get("stickerScale") instanceof Number) r.stickerScale = ((Number) m.get("stickerScale")).floatValue();
+                r.filterPreset = Format.strOr(m, "filterPreset", "none");
+                if (m.get("filterOverlayColor") instanceof Number) r.filterOverlayColor = ((Number) m.get("filterOverlayColor")).intValue();
+                r.beautyLevel = Format.intOf(m, "beautyLevel");
+                if (m.get("playbackSpeed") instanceof Number) {
+                    float sp = ((Number) m.get("playbackSpeed")).floatValue();
+                    if (sp >= 0.25f && sp <= 3.0f) r.playbackSpeed = sp;
+                }
+                r.muteOriginalAudio = Boolean.TRUE.equals(m.get("muteOriginalAudio"));
+                r.audioTitle = Format.str(m, "audioTitle");
+                r.audioUrl = Format.str(m, "audioUrl");
+                r.soundAuthorPhoto = Format.str(m, "soundAuthorPhoto");
+                r.trimStartMs = Format.intOf(m, "trimStartMs");
+                r.trimEndMs = Format.intOf(m, "trimEndMs");
+            }
             return r;
         }
 
@@ -546,8 +622,10 @@ public class Models {
             r.likes = Math.max(0, p.likes);
             r.comments = p.comments;
             r.shares = p.shares;
+            r.views = Math.max(0, p.views);
             r.createdAt = p.createdAt;
             r.savedBy = p.savedBy != null ? new ArrayList<>(p.savedBy) : new ArrayList<>();
+            r.favorites = r.savedBy.size();
             r.inlineComments = p.inlineComments != null ? new ArrayList<>(p.inlineComments) : new ArrayList<>();
             if (p.reactionsMap != null) {
                 for (Map.Entry<String, Map<String, Object>> e : p.reactionsMap.entrySet()) {
@@ -567,6 +645,8 @@ public class Models {
 
     public static class Message {
         public String id, senderId, senderName, senderPhoto, receiverId, text, imageUrl, videoUrl, type, voiceUrl;
+        public String broadcastId = "";
+        public String liveId = "", liveHostId = "", liveHostName = "", liveHostPhoto = "", liveTitle = "";
         public String replyToText, replyToSender;
         public String callType, callStatus;
         public int callDurationSec;
@@ -575,6 +655,17 @@ public class Models {
         public boolean isSeen, isDelivered, isDeleted;
         public long createdAt;
         public Map<String, String> reactions = new HashMap<>(); // uid → emoji
+        public Map<String, String> reactorNames = new HashMap<>(); // uid → displayName
+        public Map<String, String> reactorPhotos = new HashMap<>(); // uid → photoUrl
+
+        public String sharedTeamReactionDocId() {
+            if (broadcastId != null && !broadcastId.isEmpty()) return "broadcast_" + broadcastId;
+            if (id != null && id.startsWith("broadcast_")) return id;
+            String sig = (text == null ? "" : text.trim()) + "|"
+                    + (imageUrl == null ? "" : imageUrl) + "|"
+                    + (videoUrl == null ? "" : videoUrl);
+            return "team_msg_" + Integer.toHexString(sig.hashCode());
+        }
 
         @SuppressWarnings("unchecked")
         public static Message fromDoc(DocumentSnapshot d) {
@@ -589,6 +680,12 @@ public class Models {
             m0.imageUrl = Format.str(m, "imageUrl");
             m0.videoUrl = Format.str(m, "videoUrl");
             m0.voiceUrl = Format.str(m, "voiceUrl");
+            m0.broadcastId = Format.str(m, "broadcastId");
+            m0.liveId = Format.str(m, "liveId");
+            m0.liveHostId = Format.str(m, "liveHostId");
+            m0.liveHostName = Format.str(m, "liveHostName");
+            m0.liveHostPhoto = Format.str(m, "liveHostPhoto");
+            m0.liveTitle = Format.str(m, "liveTitle");
             m0.replyToText = Format.str(m, "replyToText");
             m0.replyToSender = Format.str(m, "replyToSender");
             m0.callType = Format.str(m, "callType");
@@ -615,23 +712,48 @@ public class Models {
                                 v instanceof String ? (String) v : "❤️");
                 }
             }
+            m0.reactorNames = new HashMap<>();
+            Object rn = m == null ? null : m.get("reactorNames");
+            if (rn instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rn).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof String) {
+                        m0.reactorNames.put(String.valueOf(e.getKey()), (String) e.getValue());
+                    }
+                }
+            }
+            m0.reactorPhotos = new HashMap<>();
+            Object rp = m == null ? null : m.get("reactorPhotos");
+            if (rp instanceof Map) {
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) rp).entrySet()) {
+                    if (e.getKey() != null && e.getValue() instanceof String) {
+                        m0.reactorPhotos.put(String.valueOf(e.getKey()), (String) e.getValue());
+                    }
+                }
+            }
             return m0;
         }
 
-        /** grouped display like "❤️2 👍1". */
+        /** Like-style reaction summary with total count: e.g. "👍 1", "👍 4", "👍 ❤️ 5". */
         public String reactionSummary() {
-            if (reactions.isEmpty()) return "";
-            Map<String, Integer> agg = new HashMap<>();
+            if (reactions == null || reactions.isEmpty()) return "";
+            Map<String, Integer> agg = new java.util.LinkedHashMap<>();
             for (String e : reactions.values()) {
+                if (e == null || e.trim().isEmpty()) continue;
                 Integer x = agg.get(e);
                 agg.put(e, x == null ? 1 : x + 1);
             }
+            if (agg.isEmpty()) return "";
+            List<Map.Entry<String, Integer>> sorted = new ArrayList<>(agg.entrySet());
+            java.util.Collections.sort(sorted, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
             StringBuilder sb = new StringBuilder();
-            for (Map.Entry<String, Integer> e : agg.entrySet()) {
+            int shown = 0;
+            for (Map.Entry<String, Integer> e : sorted) {
+                if (shown >= 3) break;
+                if (shown > 0) sb.append(" ");
                 sb.append(e.getKey());
-                if (e.getValue() > 1) sb.append(e.getValue());
-                sb.append(" ");
+                shown++;
             }
+            sb.append(" ").append(reactions.size());
             return sb.toString().trim();
         }
     }

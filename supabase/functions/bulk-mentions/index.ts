@@ -30,7 +30,13 @@ async function bulkMention(body: any, actor: string, token: string, rest: any,
   const [post,sender]=await Promise.all([get(`posts/${body.post_id}`),get(`users/${actor}`)]);
   if(!post || !sender || sender.banned || String(post.privacy).toLowerCase()!=="public" || post.groupId || post.pageId || post.isDeleted || post.safetyFlagged)
     return json({error:"BULK_PUBLIC_POST_REQUIRED"},403);
-  const source=body.comment_id ? (await get(`posts/${body.post_id}/comments/${body.comment_id}`) || (post.commentsMap||{})[body.comment_id]) : post;
+  let source;
+  if(body.comment_id && body.comment_backend==="d1") {
+    const r=await fetch(`https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/posts/${encodeURIComponent(body.post_id)}/comments?id=${encodeURIComponent(body.comment_id)}`,
+      {headers,signal:AbortSignal.timeout(10000)});
+    if(!r.ok) return json({error:"D1_SOURCE_UNAVAILABLE"},503);
+    source=(await r.json()).comment;
+  } else source=body.comment_id ? (await get(`posts/${body.post_id}/comments/${body.comment_id}`) || (post.commentsMap||{})[body.comment_id]) : post;
   if(!source || source.authorId!==actor) return json({error:"BULK_SOURCE_FORBIDDEN"},403);
   const text=String(source.content||"");
   const tags=new Set((Array.isArray(source.mentions)?source.mentions:[]).filter((m:any)=>

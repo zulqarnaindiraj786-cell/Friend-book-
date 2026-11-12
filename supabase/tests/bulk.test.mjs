@@ -13,6 +13,7 @@ function mock(options={}) {
  const calls=[]; const saved=new Map();
  globalThis.fetch=async(url,init={})=>{
   url=String(url);const body=init.body?JSON.parse(init.body):null;calls.push({url,init,body});
+  if(url.includes('.workers.dev/v1/engagement/'))return options.d1 ? Response.json({comment:options.d1}) : new Response('',{status:503});
   if(url.endsWith('/posts/post1'))return document(post);
   if(url.endsWith('/posts/post1/comments/comment1'))return options.comment ? document(options.comment) : new Response('',{status:404});
   if(url.endsWith('/users/alice'))return document({displayName:'Alice',followers:options.followers||['bob'],...options.sender});
@@ -77,4 +78,13 @@ test('canonical-only comments preserve bulk authorization and legacy fallback',a
  const calls=mock({comment:{...source,authorId:'mallory'},post:{commentsMap:{comment1:source}}});
  const rejected=await handleRequest(request({action:'bulk_mention',post_id:'post1',comment_id:'comment1'}),verify);
  assert.equal(rejected.status,403);assert.equal(calls.filter(c=>c.init.method==='PATCH').length,0);
+});
+
+test('D1 bulk mentions validate persisted Worker source and never fall back to Firestore',async()=>{
+ const source={authorId:'alice',content:'@followers',mentions:[{uid:'bulk:followers',label:'@followers',start:0,end:10}],createdAt:Date.now()};
+ for(const [d1,status] of [[source,200],[{...source,authorId:'mallory'},403],[null,503]]){
+  const calls=mock({d1,comment:source});const r=await handleRequest(request({action:'bulk_mention',post_id:'post1',comment_id:'comment1',comment_backend:'d1'}),verify);
+  assert.equal(r.status,status);assert.ok(calls.some(c=>c.url.includes('.workers.dev/v1/engagement/')));
+  assert.equal(calls.filter(c=>c.url.endsWith('/posts/post1/comments/comment1')).length,0);
+ }
 });

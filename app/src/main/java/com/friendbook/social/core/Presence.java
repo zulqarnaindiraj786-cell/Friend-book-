@@ -26,6 +26,8 @@ public class Presence {
     public static final long HEARTBEAT_INTERVAL_MS = 25_000L;
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS;
     private static final Handler H = new Handler(Looper.getMainLooper());
+    private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
+    private static CloudPresenceSocket cloudSocket;
     private static DatabaseReference statusRef;
     private static ValueEventListener connListener;
     private static String boundUid;
@@ -64,15 +66,21 @@ public class Presence {
             H.postDelayed(this, HEARTBEAT_INTERVAL_MS);
         }
     };
+    private static synchronized CloudPresenceSocket ensureCloudSocket() {
+        if (cloudSocket == null) cloudSocket = new CloudPresenceSocket(Fb.auth());
+        return cloudSocket;
+    }
     public static void init() {
         String uid = Fb.uid();
         if (uid == null) { goOffline(); return; }
         Context c = com.friendbook.social.App.instance;
         if (c != null && !Prefs.activeStatus(c)) {
+            if (cloudSocket != null) cloudSocket.activeStatus(false);
             goOffline(); writeOfflineInternal(uid); return;
         }
         if (boundUid != null && !uid.equals(boundUid)) goOffline();
         foregroundActive = true;
+        try { ensureCloudSocket().foreground(true); } catch (Throwable ignored) { }
         writeFirestore(uid, true);
         H.removeCallbacks(HEARTBEAT); H.postDelayed(HEARTBEAT, HEARTBEAT_INTERVAL_MS);
         if (uid.equals(boundUid) && connListener != null) return;
@@ -106,19 +114,32 @@ public class Presence {
         Fb.rtdb().getReference(".info/connected").addValueEventListener(connListener);
     }
     private static void writeFirestore(@NonNull String uid, boolean online) {
+        long attempt = 0;
         try {
             Context ctx = com.friendbook.social.App.instance;
             boolean allowed = ctx == null || Prefs.activeStatus(ctx);
+            final boolean active = online && allowed;
+            final long ticket = FIRESTORE_WRITES.begin(uid, active, android.os.SystemClock.elapsedRealtime());
+            if (ticket == 0) return;
+            attempt = ticket;
             Map<String, Object> m = new HashMap<>();
-            m.put("isOnline", online && allowed); m.put("isActive", online && allowed);
+            m.put("isOnline", active); m.put("isActive", active);
             m.put("showActiveStatus", allowed);
             m.put("lastSeenMs", now()); m.put("lastSeen", FieldValue.serverTimestamp());
-            Fb.db().collection("users").document(uid).set(m, SetOptions.merge());
-        } catch (Exception e) { android.util.Log.w("FriendBookPresence", "Presence write could not be queued"); }
+            Fb.db().collection("users").document(uid).set(m, SetOptions.merge())
+                    .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()))
+                    .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));
+        } catch (Exception e) {
+            if (attempt != 0) FIRESTORE_WRITES.complete(attempt, false, android.os.SystemClock.elapsedRealtime());
+            android.util.Log.w("FriendBookPresence", "Presence write could not be queued");
+        }
     }
     public static void goOffline() {
         foregroundActive = false; disconnectArmed = false; generation++;
         H.removeCallbacks(HEARTBEAT);
+        if (cloudSocket != null) {
+            try { cloudSocket.background(); } catch (Throwable ignored) { }
+        }
         String uid = boundUid != null ? boundUid : Fb.uid();
         if (Fb.rtdb() != null && connListener != null)
             Fb.rtdb().getReference(".info/connected").removeEventListener(connListener);
@@ -247,9 +268,52 @@ public class Presence {
                     emit.run();
                 });
 
-        h.ticker = emit;
+        h.ticker = () -> {
+            if (!h.closed) emit.run();
+        };
         emit.run();
         return h;
+    }
+
+    private static final String CF_PRESENCE_BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence";
+    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final android.util.LruCache<String, Long> CF_PRESENCE_FETCH_AT = new android.util.LruCache<>(256);
+
+    private static void fetchCloudflarePresence(String uid, Handle h, boolean[] rtdbSeen, boolean[] rtdbOnline,
+                                                long[] rtdbLastChanged, long[] rtdbBestSeen, Runnable emit) {
+        if (!com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null) return;
+        long nowMs = android.os.SystemClock.elapsedRealtime();
+        Long lastFetch = CF_PRESENCE_FETCH_AT.get(uid);
+        if (lastFetch != null && (nowMs - lastFetch) < 300_000L) return;
+        CF_PRESENCE_FETCH_AT.put(uid, nowMs);
+        try {
+            com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
+            if (user == null) return;
+            user.getIdToken(false).addOnSuccessListener(res -> {
+                String token = res != null ? res.getToken() : null;
+                if (token == null || token.isEmpty() || h.closed) return;
+                CF_IO.execute(() -> {
+                    try {
+                        String route = uid.equals(user.getUid()) ? "/me" : ("/contact/" + android.net.Uri.encode(uid));
+                        org.json.JSONObject data = D1HttpTransport.send(new java.net.URL(CF_PRESENCE_BASE + route), "GET", token, null);
+                        boolean cfOnline = data.optBoolean("online", false);
+                        long cfSeen = data.optLong("lastSeen", 0L);
+                        H.post(() -> {
+                            if (h.closed) return;
+                            if (cfOnline || cfSeen > 0L) {
+                                rtdbSeen[0] = true;
+                                rtdbOnline[0] = cfOnline;
+                                if (cfSeen > 0L) {
+                                    rtdbBestSeen[0] = Math.max(rtdbBestSeen[0], cfSeen);
+                                    rtdbLastChanged[0] = cfOnline ? cfSeen : rtdbBestSeen[0];
+                                }
+                                emit.run();
+                            }
+                        });
+                    } catch (Throwable ignored) { }
+                });
+            });
+        } catch (Throwable ignored) { }
     }
 
     private static boolean firestoreActive(DocumentSnapshot data) {
@@ -292,6 +356,25 @@ public class Presence {
                 }
             } catch (Throwable ignored) { }
         }
+    }
+
+    private static void sendCloudflareTyping(String chatId, boolean typing) {
+        if (!com.friendbook.social.BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || chatId == null || chatId.isEmpty()) return;
+        try {
+            com.google.firebase.auth.FirebaseUser user = Fb.auth().getCurrentUser();
+            if (user == null) return;
+            user.getIdToken(false).addOnSuccessListener(res -> {
+                String token = res != null ? res.getToken() : null;
+                if (token == null || token.isEmpty()) return;
+                CF_IO.execute(() -> {
+                    try {
+                        D1HttpTransport.send(
+                                new java.net.URL(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId)),
+                                "PUT", token, D1Client.object("typing", typing));
+                    } catch (Throwable ignored) { }
+                });
+            });
+        } catch (Throwable ignored) { }
     }
 
     /** Watch whether any OTHER participant in a chat is typing. */

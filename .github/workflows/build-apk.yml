@@ -1,16 +1,18 @@
-name: Build FriendBook APK & Publish Website
+name: Build FriendBook Signed APK and AAB
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
     # Worker-only changes must not rebuild/re-upload the existing Android release.
-    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', '.github/workflows/cloudflare-worker.yml']
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
+
+concurrency:
+  group: friendbook-apk-release
+  cancel-in-progress: true
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   build:
@@ -53,6 +55,14 @@ jobs:
             tail -25 emulator-tests.log
           fi
           exit "$RESULT"
+
+      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
+        run: |
+          mkdir -p "$RUNNER_TEMP/presence-coordinators"
+          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
 
       - name: Ensure Android SDK 36
         run: |
@@ -98,9 +108,30 @@ jobs:
         id: rel
         run: |
           set +e
+          for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
+            DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
+            JAR="$DIR/android-all-instrumented-$VER.jar"
+            if [ ! -s "$JAR" ]; then
+              mkdir -p "$DIR"
+              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
+                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            fi
+          done
           gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "Retrying Gradle build after transient artifact fetch..."
+            sleep 5
+            gradle testReleaseUnitTest bundleRelease assembleRelease --rerun-tasks --console=plain > build-release.log 2>&1
+            RC=$?
+          fi
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: Surface bounded unit-test failure details
+        if: steps.rel.outputs.exit != '0'
+        run: python3 scripts/ci/report_android_failure.py
 
       - name: Surface compiler errors as annotations
         if: steps.rel.outputs.exit != '0'
@@ -128,7 +159,16 @@ jobs:
         if: steps.rel.outputs.exit != '0'
         run: exit 1
 
-      - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping) & Website Bundle
+      - name: Require actual Android presence test results, not source-only checks
+        run: python3 scripts/ci/verify_presence_android_tests.py
+
+      - name: Mark branch artifacts as migration candidates, not a production capacity pass
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
         run: |
           ls -lh app/build/outputs/bundle/release/
           ls -lh app/build/outputs/apk/release/
@@ -137,31 +177,38 @@ jobs:
           cp app/build/outputs/mapping/release/mapping.txt friendbook-mapping.txt
           unzip -l friendbook-playstore.aab | grep "proguard.map"
           test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
-          cp friendbook.apk docs/friendbook.apk
-          (cd docs && zip -r ../friendbook-website.zip .)
-          ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip
+          ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
 
       - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-playstore-aab
           path: friendbook-playstore.aab
+          retention-days: 1
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-release-apk
           path: friendbook.apk
+          retention-days: 1
 
-      - name: Upload Standalone Website + APK ZIP
+      - name: Upload R8 Deobfuscation Mapping
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
-          name: FriendBook-Website-Bundle-ZIP
-          path: friendbook-website.zip
+          name: FriendBook-release-mapping
+          path: friendbook-mapping.txt
+          retention-days: 1
 
+      # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           publish() {
             local OUTPUT CODE
@@ -179,32 +226,11 @@ jobs:
           TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
           NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --clobber
-            publish release edit "$TAG" --latest --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES"
+            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber
+            publish release edit "$TAG" --latest --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
           else
-            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt friendbook-website.zip --target "$GITHUB_SHA" \
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$TARGET_SHA" \
               --latest \
               --title "$TITLE" \
               --notes "$NOTES"
           fi
-
-      - name: Upload Website Pages Artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./docs
-
-  deploy-website:
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - name: Deploy Website to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4

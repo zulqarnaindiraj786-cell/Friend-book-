@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
     private final ImageView[] slotIcons = new ImageView[6];
     private final View[] slotIndicators = new View[6];
     private final Fragment[] tabFragments = new Fragment[5];
-    private TextView homeBadge, msgBadge, notifBadge, friendsBadge;
+    private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;
         // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
@@ -95,11 +96,7 @@ public class MainActivity extends Activity {
         LinearLayout root = findViewById(R.id.mainContentRoot);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Authentic friendbook Top "Data mode" + "[ 📡 Buy data ]" Strip
-        dataStripWrap = Ui.dataModeStrip(this, this::refreshLiteUi);
-        root.addView(dataStripWrap);
-
-        // 2. Crisp White Brand & Circular Action Header: friendbook   [ ＋ ] [ 🔍 ] [ ☰ ]
+        // 1. Crisp White Brand & Circular Action Header: friendbook   [ ＋ ] [ 🔍 ] [ ☰ ]
         brandBar = Ui.row(this);
         brandBar.setBackgroundColor(Ui.card(this));
         brandBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -162,6 +159,11 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
                 fp.topMargin = Ui.dp(this, 3);
                 iconWrap.addView(msgBadge, fp);
+            } else if (s == 3) {
+                reelsBadge = Ui.badge(this);
+                FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+                fp.topMargin = Ui.dp(this, 3);
+                iconWrap.addView(reelsBadge, fp);
             } else if (s == 4) {
                 notifBadge = Ui.badge(this);
                 FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
@@ -204,16 +206,14 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK for Real Native Advanced Ads
+        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 5 Feed Ads on app open!
+        AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
         ConsentManager.gatherConsentAndInitAds(this, () -> {
+            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
         });
-
-        // 7. Silently pre-warm top Reels onto SSD cache after Home renders so first Reels tap plays in ~15ms!
-        container.postDelayed(() ->
-                com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()), 900L);
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
@@ -222,6 +222,9 @@ public class MainActivity extends Activity {
             startBadgeListeners();
             watchReferralsForFreeTick();
             AdsConfig.startWatching();
+            notificationPermissionHandler.postDelayed(
+                    () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
+                    2000L);
             try {
                 com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
                         com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
@@ -267,6 +270,7 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(this, ConversationsActivity.class));
                 break;
             case 3:
+                clearReelsBadgeNow();
                 select(TAB_REELS);
                 break;
             case 4:
@@ -276,6 +280,15 @@ public class MainActivity extends Activity {
             case 5:
                 CreatorDashboardDialog.show(this, null);
                 break;
+        }
+    }
+
+    /** Switches directly to the Reels tab when the user taps the Featured Reels card on the Home Feed. */
+    public void openReelsTabFromFeed(com.friendbook.social.models.Models.Reel featuredReel) {
+        clearReelsBadgeNow();
+        select(TAB_REELS);
+        if (featuredReel != null && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
+            ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).focusFeaturedReel(featuredReel);
         }
     }
 
@@ -333,7 +346,7 @@ public class MainActivity extends Activity {
     public void refreshLiteUi() {
         Ui.statusBarLight(this);
         if (dataStripWrap != null) {
-            dataStripWrap.setVisibility(Prefs.dataModeBar(this) ? View.VISIBLE : View.GONE);
+            dataStripWrap.setVisibility(View.GONE);
         }
         if (modeStrip != null) {
             if (FastCache.isOffline(this)) {
@@ -365,6 +378,11 @@ public class MainActivity extends Activity {
      * Keeps fragments alive in memory via add + hide/show instead of destroying & recreating!
      */
     public void select(int tab) {
+        if (tab == TAB_REELS) {
+            AdsConfig.preloadReelsBatchNow(this, AdsConfig.AD_POOL_SIZE);
+        } else if (tab == TAB_HOME) {
+            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
+        }
         if (tab == active) {
             if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
@@ -400,8 +418,10 @@ public class MainActivity extends Activity {
         else if (tab == TAB_FRIENDS) {
             activeSlot = 1;
             clearFriendsBadgeNow();
-        } else if (tab == TAB_REELS) activeSlot = 3;
-        else if (tab == TAB_NOTIFS) {
+        } else if (tab == TAB_REELS) {
+            activeSlot = 3;
+            clearReelsBadgeNow();
+        } else if (tab == TAB_NOTIFS) {
             activeSlot = 4;
             clearNotificationsBadgeNow();
         }
@@ -452,6 +472,16 @@ public class MainActivity extends Activity {
         if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.notifBadge, 0));
         if (me == null || ctx == null) return;
         Prefs.setNotifBadgeClearedAt(ctx, me, System.currentTimeMillis());
+    }
+
+    /** Dismiss ONLY the top Video/Reels badge. */
+    public static void clearReelsBadgeNow() {
+        String me = Fb.uid();
+        MainActivity inst = activeInstance;
+        android.content.Context ctx = inst != null ? inst : App.instance;
+        if (inst != null) inst.runOnUiThread(() -> Ui.setBadge(inst.reelsBadge, 0));
+        if (me == null || ctx == null) return;
+        Prefs.setReelsBadgeClearedAt(ctx, me, System.currentTimeMillis());
     }
 
     private void watchReferralsForFreeTick() {
@@ -583,6 +613,29 @@ public class MainActivity extends Activity {
                     }
                     Ui.setBadge(friendsBadge, count);
                 });
+
+        // Video / Reels badge (capped at 15+ via Ui.setBadge)
+        Fb.db().collection("reels")
+                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .limit(16)
+                .get()
+                .addOnSuccessListener(snap -> {
+                    if (Prefs.quiet(this) || active == TAB_REELS) {
+                        Ui.setBadge(reelsBadge, 0);
+                        return;
+                    }
+                    long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
+                    int unseen = 0;
+                    if (snap != null) {
+                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
+                            if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
+                                unseen++;
+                            }
+                        }
+                    }
+                    Ui.setBadge(reelsBadge, unseen);
+                });
     }
 
     private final android.os.Handler notificationPermissionHandler =
@@ -648,9 +701,6 @@ public class MainActivity extends Activity {
         if (freshSession) {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onWarmSessionResume();
-            }
-            if (tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment && active != TAB_REELS) {
-                ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
         }
         if (getIntent().getBooleanExtra("push_friends", false)) {

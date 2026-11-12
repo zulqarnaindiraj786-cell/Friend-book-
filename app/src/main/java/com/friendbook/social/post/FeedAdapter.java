@@ -58,6 +58,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean isLoadingMore(){return false;}
         default boolean hasPageError(){return false;}
         default void openFindFriends() { }
+        default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
         default boolean hasMoreStories() { return false; }
     }
@@ -71,10 +72,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public boolean showHeader = true;
     public boolean showFooter = true;
     public boolean showInlineComments = true;
+    /** When >= 0 (in PostDetailActivity for a Sponsored Ad), renders ONLY that 1 real AdVH and ZERO PostVH! */
+    public int standaloneAdSlotOrdinal = -1;
 
     public FeedAdapter(Activity a, Host h) {
         this.activity = a;
         this.host = h;
+        setHasStableIds(true);
+        com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
+        com.friendbook.social.core.AdsConfig.warmUpPools(a);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        if (showHeader && position == 0) return -100L;
+        if (showFooter && position == getItemCount() - 1) return -200L;
+        int slot = position - offset();
+        if (isAdSlot(slot)) {
+            int adSlotOrdinal = standaloneAdSlotOrdinal >= 0
+                    ? standaloneAdSlotOrdinal
+                    : Math.max(0, slot / NATIVE_AD_STEP);
+            return -1000L - adSlotOrdinal;
+        }
+        int idx = postIndexForSlot(slot);
+        if (idx >= 0 && idx < posts.size()) {
+            Models.Post p = posts.get(idx);
+            if (p != null && p.id != null && !p.id.isEmpty()) {
+                return (((long) p.id.hashCode()) << 20) ^ idx;
+            }
+        }
+        return position;
     }
 
     public void setPosts(List<Models.Post> list) {
@@ -143,6 +170,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** ⚡ 0.0ms optimistic reaction refresh for a single post slot (payload-only — ZERO height/scroll jump!). */
     public void onFastReactionUpdate(String postId, String mine, int total) {
         if (postId == null) return;
+        if (standaloneAdSlotOrdinal >= 0 && postId.startsWith("sponsored_ad_")) {
+            notifyItemChanged(0);
+            return;
+        }
         String me = Fb.uid();
         for (int i = 0; i < posts.size(); i++) {
             Models.Post p = posts.get(i);
@@ -179,10 +210,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    public List<Models.Post> getPosts() {
+        return posts;
+    }
+
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
+        int oldItemCount = getItemCount();
         posts.addAll(list);
-        notifyDataSetChanged();
+        int newItemCount = getItemCount();
+        if (newItemCount > oldItemCount) {
+            int insertStart = Math.max(0, oldItemCount - footerCount());
+            notifyItemRangeInserted(insertStart, newItemCount - oldItemCount);
+            if (showFooter) notifyItemChanged(newItemCount - 1, "paging");
+        } else {
+            notifyDataSetChanged();
+        }
     }
 
     public void setStories(List<StoriesAdapter.Group> groups) {
@@ -190,18 +233,51 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (showHeader) notifyItemChanged(0);
     }
 
-    // ---- live + PYMK rows for the header ----
+    // ---- live + PYMK + Featured Reels rows ----
     private final java.util.List<Models.User> pymkUsers = new ArrayList<>();
+    private final java.util.List<Models.Reel> featuredReels = new ArrayList<>();
+    private static int featuredReelRotationCursor = (int) ((System.currentTimeMillis() / 1000L) & 0x3FFF);
     private final java.util.List<java.util.Map<String, Object>> activeLives = new ArrayList<>();
     private android.speech.tts.TextToSpeech tts;
 
+    public void advanceFeaturedReelRotation() {
+        featuredReelRotationCursor++;
+        if (showHeader && !posts.isEmpty()) {
+            notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+        }
+    }
+
     public void setPymk(java.util.List<Models.User> users) {
+        if ((users == null || users.isEmpty()) && pymkUsers.isEmpty()) return;
         pymkUsers.clear();
         if (users != null) pymkUsers.addAll(users);
-        if (showHeader) notifyItemChanged(0);
+        if (showHeader) {
+            if (!posts.isEmpty()) {
+                notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+            }
+            notifyItemChanged(0);
+        }
+    }
+
+    /**
+     * Sets the featured Reel pool for the Home Feed showcase card.
+     *
+     * The Home Feed performs ZERO view-counter work on purpose: no views request, no D1 read, no D1
+     * write, no KV read or write - not on load, not on scroll, not on re-bind. The card shows the
+     * Reel, its author and the watch prompt; it does not show a view number. Likes, comments, posts
+     * and Reel playback are untouched.
+     */
+    public void setFeaturedReels(java.util.List<Models.Reel> reels) {
+        if ((reels == null || reels.isEmpty()) && featuredReels.isEmpty()) return;
+        featuredReels.clear();
+        if (reels != null) featuredReels.addAll(reels);
+        if (showHeader && !posts.isEmpty()) {
+            notifyItemChanged(offset() + slotForPostIndex(0), "DISCOVERY_SECTION");
+        }
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
+        if ((lives == null || lives.isEmpty()) && activeLives.isEmpty()) return;
         activeLives.clear();
         if (lives != null) activeLives.addAll(lives);
         if (showHeader) notifyItemChanged(0);
@@ -211,8 +287,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private int footerCount() { return showFooter ? 1 : 0; }
 
     // ---- 📢 Google AdMob Feed Native Ad Slots (`ca-app-pub-3387480177023669/4957447582`) ----
-    private static final int NATIVE_AD_EVERY_N_POSTS = 4;
-    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 4 posts + 1 Native Ad = 5
+    private static final int NATIVE_AD_EVERY_N_POSTS = 3;
+    private static final int NATIVE_AD_STEP = NATIVE_AD_EVERY_N_POSTS + 1; // 3 posts + 1 Native Ad = 4
 
     private String nativeAdUnitId = com.friendbook.social.core.AdsConfig.feedNativeId();
     private boolean adsEnabled = com.friendbook.social.core.AdsConfig.nativeAdsEnabled();
@@ -223,15 +299,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
         boolean nextEnabled = enabled && !cleanId.isEmpty();
         if (cleanId.equals(nativeAdUnitId) && nextEnabled == adsEnabled) {
-            return; // unchanged — avoid full RecyclerView redraw!
+            notifyAdSlotsOnly();
+            return;
         }
         nativeAdUnitId = cleanId;
         adsEnabled = nextEnabled;
         notifyDataSetChanged();
     }
 
-    /** Triggers fresh Native Ad requests on Feed refresh — never reuses old or failed ads. */
+    /** Never rebind or resize Ad slots mid-scroll — slots bind cleanly inside onBindViewHolder with zero layout jump! */
+    public void notifyAdSlotsOnly() {
+        // Intentional no-op during feed scroll to prevent mid-scroll height jumps & NativeAdView rebind stalls.
+    }
+
+    /** Triggers fresh Native Ad requests on Feed refresh — rotates in preloaded ads from pool. */
     public void refreshSponsoredAds() {
+        com.friendbook.social.core.AdsConfig.clearFeedSlotAds(null);
         notifyDataSetChanged();
     }
 
@@ -246,17 +329,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private int adCount() {
-        if (!adsActive() || posts.isEmpty()) return 0;
-        if (posts.size() < NATIVE_AD_EVERY_N_POSTS) return 1;
+        if (standaloneAdSlotOrdinal >= 0) return 1;
+        if (!adsActive() || posts.size() < NATIVE_AD_EVERY_N_POSTS) return 0;
         return posts.size() / NATIVE_AD_EVERY_N_POSTS;
     }
 
-    /** Does this feed slot (after the header) hold a Native Ad? */
+    /** Does this feed slot (after the header) hold a Native Ad (after every 3 posts)? */
     private boolean isAdSlot(int slot) {
-        if (!adsActive() || posts.isEmpty()) return false;
-        if (posts.size() < NATIVE_AD_EVERY_N_POSTS) {
-            return slot == posts.size();
-        }
+        if (standaloneAdSlotOrdinal >= 0) return slot == 0;
+        if (!adsActive() || posts.size() < NATIVE_AD_EVERY_N_POSTS) return false;
         return ((slot + 1) % NATIVE_AD_STEP == 0)
                 && ((slot / NATIVE_AD_STEP) < adCount());
     }
@@ -266,14 +347,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return slot - ((slot + 1) / NATIVE_AD_STEP);
     }
 
-    private int slotCount() { return posts.size() + adCount(); }
+    private int slotCount() {
+        if (standaloneAdSlotOrdinal >= 0) return 1;
+        return posts.size() + adCount();
+    }
 
     @Override public int getItemCount() { return offset() + slotCount() + footerCount(); }
 
     @Override public int getItemViewType(int position) {
         if (showHeader && position == 0) return VT_HEADER;
         if (showFooter && position == getItemCount() - 1) return VT_FOOTER;
-        if (isAdSlot(position - offset())) return VT_AD;
+        int slot = position - offset();
+        if (isAdSlot(slot)) {
+            int adSlotOrdinal = standaloneAdSlotOrdinal >= 0
+                    ? standaloneAdSlotOrdinal
+                    : Math.max(0, slot / NATIVE_AD_STEP);
+            return VT_AD + (adSlotOrdinal % 16);
+        }
         return VT_POST;
     }
 
@@ -283,7 +373,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Context c = parent.getContext();
         if (viewType == VT_HEADER) return new HeaderVH(c);
         if (viewType == VT_FOOTER) return new FooterVH(c);
-        if (viewType == VT_AD) return new AdVH(parent);
+        if (viewType >= VT_AD) return new AdVH(parent);
         return new PostVH(c);
     }
 
@@ -297,6 +387,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (idx >= 0 && idx < posts.size()) {
                 Models.Post p = posts.get(idx);
                 PostVH vh = (PostVH) h;
+                if (payloads.contains("DISCOVERY_SECTION")) {
+                    bindFirstPostDiscoverySection(activity, vh, idx);
+                    if (payloads.size() == 1) return;
+                }
                 Reactions.hydrateFromPostInstant(p);
                 int totalLikes = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 String myReact = Reactions.resolveCurrentUserReaction(p);
@@ -340,10 +434,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             hh.liveBox.setVisibility(View.VISIBLE);
             hh.liveCards.removeAllViews();
             hh.liveCards.setVisibility(activeLives.isEmpty() ? View.GONE : View.VISIBLE);
-            // 👥 People You May Know horizontal rail (friendbook signature widget)
-            hh.pymkBox.setVisibility(pymkUsers.isEmpty() ? View.GONE : View.VISIBLE);
+            // 👥 People You May Know is shown right AFTER Post #1 on the Home Feed (only fallback here if feed has 0 posts)
+            boolean showHeaderPymk = posts.isEmpty() && !pymkUsers.isEmpty();
+            hh.pymkBox.setVisibility(showHeaderPymk ? View.VISIBLE : View.GONE);
             hh.pymkCards.removeAllViews();
-            for (final Models.User u : pymkUsers) {
+            if (showHeaderPymk) for (final Models.User u : pymkUsers) {
                 LinearLayout card = Ui.col(activity);
                 card.setGravity(Gravity.CENTER_HORIZONTAL);
                 card.setBackground(Ui.roundStroke(activity, Ui.card(activity), 12, Ui.div(activity), 1));
@@ -392,8 +487,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 nm.setPadding(0, Ui.dp(activity, 3), 0, Ui.dp(activity, 2));
                 card.addView(nm);
                 int vCnt = Math.max(1, Math.max(Format.intOf(live, "viewers"), Format.intOf(live, "viewerCount")));
-                card.addView(Ui.roundChip(activity, "🔴 " + Format.count(vCnt),
-                        0xFFE41E3F, 0xFFFFFFFF, 9));
+                card.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(activity, "dot", Format.count(vCnt),
+                        9f, 0xFFE41E3F, 0xFFFFFFFF, 0xFFFFFFFF));
                 final String lid = Format.str(live, "_id");
                 final String hostId = Format.str(live, "hostId");
                 card.setOnClickListener(v -> {
@@ -420,8 +515,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     : "You're all caught up 🎉");
             fh.more.setOnClickListener(v -> { if (host != null) host.loadMore(); });
         } else if (h instanceof AdVH) {
-            int adSlotOrdinal = Math.max(0, (position - offset()) / NATIVE_AD_STEP);
-            ((AdVH) h).loadFreshFeedNativeAd(nativeAdUnitId, adSlotOrdinal);
+            int adSlotOrdinal = standaloneAdSlotOrdinal >= 0
+                    ? standaloneAdSlotOrdinal
+                    : Math.max(0, (position - offset()) / NATIVE_AD_STEP);
+            ((AdVH) h).loadFreshFeedNativeAd(nativeAdUnitId, adSlotOrdinal, standaloneAdSlotOrdinal >= 0);
         } else {
             // Guard: realtime list swaps between measure & bind must not crash the feed.
             // A broken post gets a small placeholder card — NEVER an invisible one
@@ -433,12 +530,173 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             try {
                 bindPost((PostVH) h, posts.get(idx));
+                bindFirstPostDiscoverySection(activity, (PostVH) h, idx);
             } catch (Throwable t) {
                 android.util.Log.e("HomeFeed", "bindPost failed for "
                         + (idx < posts.size() ? String.valueOf(posts.get(idx).id) : idx) + ": " + t);
                 showBrokenCard((PostVH) h, posts.get(idx));
             }
         }
+    }
+
+    /**
+     * One-time Facebook-style Discovery Section right AFTER Post #1 on the Home Feed (`idx == 0`):
+     *   1. "People You May Know" horizontal suggestion cards with `👤+ Add friend` & `See all ›`
+     *   2. "🎬 Reels" tall vertical rounded video preview card with centered `▶` play button & `👁` view counter
+     *      (tapping opens the Reels tab!).
+     * Never repeats on subsequent posts (`idx > 0`).
+     */
+    private void bindFirstPostDiscoverySection(Context c, PostVH vh, int postIdx) {
+        if (vh == null || vh.firstPostDiscoveryBox == null) return;
+        if (!showHeader || standaloneAdSlotOrdinal >= 0 || postIdx != 0) {
+            vh.firstPostDiscoveryBox.setVisibility(View.GONE);
+            return;
+        }
+        vh.firstPostDiscoveryBox.setVisibility(View.VISIBLE);
+
+        // 1. Bind Facebook-Style "People You May Know" horizontal cards
+        vh.firstPostPymkRow.removeAllViews();
+        if (!pymkUsers.isEmpty()) {
+            for (final Models.User u : pymkUsers) {
+                if (u == null) continue;
+                LinearLayout card = Ui.col(c);
+                card.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
+                card.setClipToOutline(true);
+
+                ImageView photoIv = new ImageView(c);
+                photoIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                photoIv.setBackgroundColor(Ui.inputBg(c));
+                if (Ui.hasRealPhoto(u.photoUrl)) {
+                    Ui.img(c, photoIv, u.photoUrl);
+                } else {
+                    Ui.avatar(c, photoIv, u.photoUrl);
+                }
+                card.addView(photoIv, new LinearLayout.LayoutParams(-1, Ui.dp(c, 144)));
+
+                LinearLayout infoBox = Ui.col(c);
+                Ui.pad(infoBox, 10, 8, 10, 10);
+                TextView nm = Ui.tvBold(c, u.displayName == null || u.displayName.isEmpty() ? "User" : u.displayName, 14, Ui.txt(c));
+                nm.setSingleLine(true);
+                nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                infoBox.addView(nm);
+
+                TextView sub = Ui.tv(c, "Suggested for you", 11.5f, Ui.sub(c));
+                sub.setSingleLine(true);
+                sub.setPadding(0, Ui.dp(c, 2), 0, Ui.dp(c, 8));
+                infoBox.addView(sub);
+
+                final TextView addBtn = Ui.tvBold(c, "👤+  Add friend", 13, Ui.BLUE);
+                addBtn.setGravity(Gravity.CENTER);
+                addBtn.setBackground(Ui.roundStroke(c, Ui.isDark(c) ? 0x221877F2 : 0xFFE7F3FF, 8, Ui.BLUE, 1));
+                Ui.pad(addBtn, 10, 7, 10, 7);
+                addBtn.setOnClickListener(v -> sendQuickFriendRequest(u, addBtn));
+                infoBox.addView(addBtn, new LinearLayout.LayoutParams(-1, -2));
+
+                card.addView(infoBox, new LinearLayout.LayoutParams(-1, -2));
+                View.OnClickListener openProf = v -> { if (host != null) host.openProfile(u.uid); };
+                photoIv.setOnClickListener(openProf);
+                nm.setOnClickListener(openProf);
+
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Ui.dp(c, 162), -2);
+                cp.setMargins(Ui.dp(c, 5), Ui.dp(c, 2), Ui.dp(c, 5), Ui.dp(c, 4));
+                vh.firstPostPymkRow.addView(card, cp);
+            }
+        } else {
+            LinearLayout findCard = Ui.col(c);
+            findCard.setGravity(Gravity.CENTER);
+            findCard.setBackground(Ui.roundStroke(c, Ui.card(c), 12, Ui.div(c), 1));
+            Ui.pad(findCard, 18, 16, 18, 16);
+            TextView title = Ui.tvBold(c, "Discover People You May Know", 13.5f, Ui.txt(c));
+            findCard.addView(title);
+            TextView findBtn = Ui.tvBold(c, "👤+  Find friends", 13, Ui.BLUE);
+            findBtn.setGravity(Gravity.CENTER);
+            findBtn.setBackground(Ui.roundStroke(c, Ui.isDark(c) ? 0x221877F2 : 0xFFE7F3FF, 8, Ui.BLUE, 1));
+            Ui.pad(findBtn, 14, 7, 14, 7);
+            LinearLayout.LayoutParams fbp = new LinearLayout.LayoutParams(-2, -2);
+            fbp.topMargin = Ui.dp(c, 8);
+            findBtn.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            findCard.addView(findBtn, fbp);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(Ui.dp(c, 240), -2);
+            cp.setMargins(Ui.dp(c, 6), Ui.dp(c, 2), Ui.dp(c, 6), Ui.dp(c, 4));
+            vh.firstPostPymkRow.addView(findCard, cp);
+        }
+
+        // 2. Bind Facebook-Style "🎬 Reels" Vertical Video Showcase Card (rotates viral & fresh Reels; no view number, no counter read)
+        final Models.Reel featured = pickFeaturedReel();
+        String posterUrl = resolveFeaturedReelPosterUrl(featured);
+        if (posterUrl != null && !posterUrl.isEmpty()) {
+            vh.firstPostReelThumbIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            Ui.img(c, vh.firstPostReelThumbIv, posterUrl);
+        } else {
+            try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.firstPostReelThumbIv); } catch (Throwable ignored) {}
+            vh.firstPostReelThumbIv.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
+        }
+        // No view number on the Home Feed card: showing one would need a counter read, and the Home
+        // Feed must cost nothing (no API call, no D1, no KV). The Reel still rotates to a fresh viral
+        // video - pickFeaturedReel() scores the stored model fields already in memory.
+        if (featured != null && featured.authorName != null && !featured.authorName.isEmpty()) {
+            vh.firstPostReelCaptionTv.setText(featured.authorName + "  ·  Watch Reels ›");
+        } else {
+            vh.firstPostReelCaptionTv.setText("Tap to watch Reels ›");
+        }
+        View.OnClickListener openReelsClick = v -> {
+            if (host != null) host.openReelsTab(featured);
+        };
+        vh.firstPostReelCard.setOnClickListener(openReelsClick);
+        vh.firstPostReelPreviewBox.setOnClickListener(openReelsClick);
+    }
+
+    private Models.Reel pickFeaturedReel() {
+        java.util.List<Models.Reel> pool = new ArrayList<>();
+        java.util.Set<String> seenIds = new java.util.HashSet<>();
+        for (Models.Reel r : featuredReels) {
+            if (r != null && r.id != null && !r.id.isEmpty() && r.videoUrl != null && !r.videoUrl.isEmpty()
+                    && seenIds.add(r.id)) {
+                pool.add(r);
+            }
+        }
+        for (Models.Post p : posts) {
+            if (p != null && p.id != null && "video".equals(p.mediaType)
+                    && p.mediaUrl != null && !p.mediaUrl.isEmpty() && seenIds.add(p.id)) {
+                pool.add(Models.Reel.fromVideoPost(p));
+            }
+        }
+        if (pool.isEmpty()) return null;
+        // Sort by viral engagement (real views + likes + comments + shares + favorites) + recency
+        java.util.Collections.sort(pool, (a, b) -> {
+            long scoreA = (long) a.views * 3L + (long) a.likes * 5L + (long) a.comments * 6L
+                    + (long) a.shares * 8L + (long) a.favorites * 6L;
+            long scoreB = (long) b.views * 3L + (long) b.likes * 5L + (long) b.comments * 6L
+                    + (long) b.shares * 8L + (long) b.favorites * 6L;
+            if (scoreB != scoreA) return Long.compare(scoreB, scoreA);
+            return Long.compare(b.createdAt, a.createdAt);
+        });
+        int idx = Math.abs(featuredReelRotationCursor) % pool.size();
+        return pool.get(idx);
+    }
+
+    private String resolveFeaturedReelPosterUrl(Models.Reel r) {
+        if (r != null) {
+            String derived = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(
+                    r.videoUrl == null ? "" : r.videoUrl,
+                    r.thumbUrl == null ? "" : r.thumbUrl);
+            if (derived != null && !derived.isEmpty()) return derived;
+            if (Ui.hasRealPhoto(r.authorPhoto)) return r.authorPhoto;
+        }
+        for (int i = 1; i < posts.size(); i++) {
+            Models.Post p = posts.get(i);
+            if (p == null) continue;
+            if (p.mediaUrls != null && !p.mediaUrls.isEmpty() && Ui.hasRealPhoto(p.mediaUrls.get(0))) {
+                return p.mediaUrls.get(0);
+            }
+            if ("image".equals(p.mediaType) && Ui.hasRealPhoto(p.mediaUrl)) {
+                return p.mediaUrl;
+            }
+        }
+        if (!posts.isEmpty() && posts.get(0) != null && Ui.hasRealPhoto(posts.get(0).authorPhoto)) {
+            return posts.get(0).authorPhoto;
+        }
+        return "";
     }
 
     /** Renders a minimal "something went wrong with this post" card instead of hiding it. */
@@ -451,6 +709,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.pageBadge.setVisibility(View.GONE);
             vh.mediaWrap.setVisibility(View.GONE);
             if (vh.specialBox != null) vh.specialBox.setVisibility(View.GONE);
+            if (vh.firstPostDiscoveryBox != null) vh.firstPostDiscoveryBox.setVisibility(View.GONE);
             vh.pollBox.setVisibility(View.GONE);
             vh.sharedBox.setVisibility(View.GONE);
             vh.tick.setVisibility(View.GONE);
@@ -507,24 +766,31 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     static CharSequence styleHashtags(Context ctx, String text) {
-        if (text == null) return "";
+        if (text == null || text.isEmpty()) return "";
+        if (text.indexOf('#') < 0 && text.indexOf('@') < 0 && text.indexOf('.') < 0 && text.indexOf(':') < 0) {
+            return text;
+        }
         try {
             android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
-            java.util.regex.Matcher m = tagPattern().matcher(text);
-            while (m.find()) {
-                sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
-                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
-                        m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            if (text.indexOf('#') >= 0 || text.indexOf('@') >= 0) {
+                java.util.regex.Matcher m = tagPattern().matcher(text);
+                while (m.find()) {
+                    sb.setSpan(new android.text.style.ForegroundColorSpan(Ui.BLUE), m.start(), m.end(),
+                            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                            m.start(), m.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
             }
-            java.util.regex.Matcher um = android.util.Patterns.WEB_URL.matcher(text);
-            while (um.find()) {
-                final String url = um.group();
-                sb.setSpan(new android.text.style.ClickableSpan() {
-                    @Override public void onClick(@NonNull View widget) {
-                        Ui.openUrl(ctx, url.startsWith("http") ? url : "https://" + url);
-                    }
-                }, um.start(), um.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            if (text.indexOf('.') >= 0 || text.indexOf(':') >= 0) {
+                java.util.regex.Matcher um = android.util.Patterns.WEB_URL.matcher(text);
+                while (um.find()) {
+                    final String url = um.group();
+                    sb.setSpan(new android.text.style.ClickableSpan() {
+                        @Override public void onClick(@NonNull View widget) {
+                            Ui.openUrl(ctx, url.startsWith("http") ? url : "https://" + url);
+                        }
+                    }, um.start(), um.end(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
             }
             return sb;
         } catch (Throwable t) {
@@ -721,7 +987,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setMinHeight(Ui.dp(c, 180));
             clp.setMargins(Ui.dp(c, 12), Ui.dp(c, 4), Ui.dp(c, 12), Ui.dp(c, 8));
             Ui.pad(vh.content, 20, 26, 20, 26);
-            vh.content.setText(p.content);
+            vh.content.setText(com.friendbook.social.core.Mentions.styled(p.content, p.mentions));
         } else {
             vh.content.setBackground(null);
             vh.content.setTextColor(Ui.txt(c));
@@ -731,10 +997,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.content.setMinHeight(0);
             clp.setMargins(0, 0, 0, 0);
             Ui.pad(vh.content, 12, 2, 12, 8);
-            vh.content.setText(hasText ? styleHashtags(c, p.content) : "");
+            CharSequence styled = hasText
+                    ? com.friendbook.social.core.Mentions.styled(styleHashtags(c, p.content), p.mentions)
+                    : "";
+            vh.content.setText(styled);
         }
-        vh.content.setText(com.friendbook.social.core.Mentions.styled(vh.content.getText(), p.mentions));
-        com.friendbook.social.core.LinkUtils.makeLinksClickable(vh.content);
         vh.content.setLayoutParams(clp);
 
         // ---------- poll (unchanged logic, simple gray rows) ----------
@@ -807,16 +1074,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final boolean textOnlyPhotoHidden = fImg != null && Prefs.textOnlyMode(c)
                 && !com.friendbook.social.core.FastCache.isPhotoRevealed(p.id);
 
-        vh.image.setImageDrawable(null);
+        vh.boundPhotoPost = p;
+        vh.boundPhotoUrl = fImg;
         vh.image.setOnClickListener(null);
+        vh.image.setOnTouchListener(null);
         vh.mediaWrap.setOnClickListener(null);
         vh.playBadge.setVisibility(View.GONE);
         vh.playBadge.setTextSize(44);
         vh.pageBadge.setVisibility(View.GONE);
+        int targetMediaH = textOnlyPhotoHidden ? Ui.dp(c, 92)
+                : (isVideo ? Ui.dp(c, 240) : (fImg != null ? Ui.dp(c, 420) : 0));
         ViewGroup.LayoutParams wp = vh.mediaWrap.getLayoutParams();
-        wp.height = textOnlyPhotoHidden ? Ui.dp(c, 92)
-                : (isVideo ? Ui.dp(c, 240) : ViewGroup.LayoutParams.WRAP_CONTENT);
-        vh.mediaWrap.setLayoutParams(wp);
+        if (wp.height != targetMediaH) {
+            wp.height = targetMediaH;
+            vh.mediaWrap.setLayoutParams(wp);
+        }
+        vh.mediaWrap.setBackgroundColor(Ui.isDark(c) ? 0xFF141518 : 0xFFF0F2F5);
         vh.mediaWrap.setVisibility((fImg != null || isVideo) ? View.VISIBLE : View.GONE);
 
         if (textOnlyPhotoHidden) {
@@ -828,14 +1101,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setTextSize(14);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             vh.playBadge.setText(album > 1
-                    ? "🖼 Tap to view " + album + " photos (~14 KB each)"
-                    : "🖼 Tap to view photo (~14 KB)");
+                    ? "Tap to view " + album + " photos (~14 KB each)"
+                    : "Tap to view photo (~14 KB)");
             vh.mediaWrap.setOnClickListener(v -> {
                 com.friendbook.social.core.FastCache.revealPhoto(p.id);
                 ViewGroup.LayoutParams nwp = vh.mediaWrap.getLayoutParams();
-                nwp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                nwp.height = Ui.dp(c, 420);
                 vh.mediaWrap.setLayoutParams(nwp);
                 vh.playBadge.setVisibility(View.GONE);
+                vh.image.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 Ui.imgFeed(c, vh.image, fImg);
                 vh.image.setOnClickListener(iv -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
@@ -848,60 +1122,32 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
         } else if (fImg != null) {
             vh.image.setVisibility(View.VISIBLE);
+            vh.image.setScaleType(Prefs.fullPhotoDisplay(c)
+                    ? ImageView.ScaleType.FIT_CENTER
+                    : ImageView.ScaleType.CENTER_CROP);
             vh.playBadge.setBackgroundColor(0x99000000);
-            Ui.imgFeedModerated(c, vh.image, fImg, "posts", p.id, p.authorId, p.content, () -> {
-                removePostById(p.id);
-                Ui.toast(c, "🛡 Unsafe post automatically deleted");
-            });
+            Ui.imgFeedModerated(c, vh.image, fImg, "posts", p.id, p.authorId, p.content, null);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
-                vh.pageBadge.setText("📷 " + album + " photos");
+                vh.pageBadge.setText(album + " photos");
             }
-            android.view.GestureDetector gd = new android.view.GestureDetector(c,
-                    new android.view.GestureDetector.SimpleOnGestureListener() {
-                        @Override public boolean onDown(android.view.MotionEvent e) { return true; }
-                        @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e) {
-                            Intent i = new Intent(c, FullscreenMediaActivity.class);
-                            i.putExtra("type", "image");
-                            i.putExtra("url", fImg);
-                            i.putExtra("post_id", p.id);
-                            i.putExtra("title", p.authorName);
-                            c.startActivity(i);
-                            return true;
-                        }
-                        @Override public boolean onDoubleTap(android.view.MotionEvent e) {
-                            if (Prefs.doubleTapToLike(c)) {
-                                Ui.haptic(vh.image);
-                                String curRx = Reactions.resolveCurrentUserReaction(p);
-                                if (!"love".equals(curRx)) {
-                                    Reactions.apply(c, p, "love");
-                                }
-                                renderReactionBar(c, vh, p,
-                                        Reactions.resolveCurrentUserReaction(p),
-                                        com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
-                                animateLikePop(vh);
-                                Ui.toast(c, "❤️ Loved!");
-                                return true;
-                            }
-                            return false;
-                        }
-                    });
-            vh.image.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
+            vh.image.setOnTouchListener(vh.photoTouchListener);
         } else if (isVideo) {
-            // Video posts: instant poster frame + background SSD prefetch -> 0.0ms Reels player on tap!
+            // Video posts: instant poster frame without decoding .mp4 files or doing disk I/O during scroll!
             vh.image.setVisibility(View.VISIBLE);
             String vThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(p.mediaUrl, "");
             if (!vThumb.isEmpty()) {
                 Ui.imgFeed(c, vh.image, vThumb);
             } else {
+                try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.image); } catch (Throwable ignored) {}
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
             // Poster only. Full media is requested by the user's tap, never by feed binding.
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
-            vh.playBadge.setText("▶ Tap to watch Reel");
+            vh.playBadge.setText("Tap to watch Reel");
             vh.mediaWrap.setOnClickListener(v -> {
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
@@ -934,88 +1180,72 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /**
      * 💬 Authentic friendbook Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
+     * Uses pre-built ViewHolder rows (ZERO removeAllViews() / ZERO new View() during scroll!).
      */
     private void bindInlineComments(Context c, PostVH vh, Models.Post p) {
         if (vh.inlineCommentsBox == null) return;
-        vh.inlineCommentsBox.removeAllViews();
         if (!showInlineComments || !Prefs.inlineFeedComments(c)) {
             vh.inlineCommentsBox.setVisibility(View.GONE);
             return;
         }
         vh.inlineCommentsBox.setVisibility(View.VISIBLE);
-        vh.inlineCommentsBox.addView(Ui.divider(c));
 
-        List<Models.Comment> list = p.inlineComments != null ? p.inlineComments : new ArrayList<>();
+        List<Models.Comment> list = p.inlineComments != null ? p.inlineComments : java.util.Collections.emptyList();
         int total = Math.max(p.comments, list.size());
 
         // Show "View all X comments" link when more than 2 comments exist or comments need full open
         if (total > 2 || (total > 0 && list.isEmpty())) {
-            TextView viewAll = Ui.tvBold(c, "View all " + total + (total == 1 ? " comment…" : " comments…"), 13, Ui.sub(c));
-            Ui.pad(viewAll, 12, 8, 12, 4);
-            viewAll.setOnClickListener(v -> { if (host != null) host.openComments(p); });
-            vh.inlineCommentsBox.addView(viewAll);
+            vh.inlineViewAll.setText("View all " + total + (total == 1 ? " comment…" : " comments…"));
+            vh.inlineViewAll.setOnClickListener(v -> { if (host != null) host.openComments(p); });
+            vh.inlineViewAll.setVisibility(View.VISIBLE);
+        } else {
+            vh.inlineViewAll.setVisibility(View.GONE);
         }
 
-        // Show up to the latest 2 comments from ALL users directly on the feed card!
-        int startIdx = Math.max(0, list.size() - 2);
-        for (int i = startIdx; i < list.size(); i++) {
-            final Models.Comment cm = list.get(i);
-            if (cm == null) continue;
-            LinearLayout row = Ui.row(c);
-            row.setGravity(Gravity.TOP);
-            Ui.pad(row, 12, 5, 12, 4);
+        // Show up to the latest 2 comments using pre-built rows!
+        int count = Math.min(2, list.size());
+        int startIdx = list.size() - count;
+        for (int slot = 0; slot < 2; slot++) {
+            if (slot < count) {
+                final Models.Comment cm = list.get(startIdx + slot);
+                if (cm != null) {
+                    vh.inlineRows[slot].setVisibility(View.VISIBLE);
+                    Models.User cachedU = com.friendbook.social.core.FastCache.getUser(cm.authorId);
+                    String uPhoto = (cachedU != null && cachedU.photoUrl != null && !cachedU.photoUrl.isEmpty())
+                            ? cachedU.photoUrl : cm.authorPhoto;
+                    String uName = (cachedU != null && cachedU.displayName != null && !cachedU.displayName.isEmpty())
+                            ? cachedU.displayName : (cm.authorName == null || cm.authorName.isEmpty() ? "friendbook User" : cm.authorName);
+                    Ui.avatar(c, vh.inlineAvs[slot], uPhoto);
+                    vh.inlineAvs[slot].setOnClickListener(v -> { if (host != null) host.openProfile(cm.authorId); });
 
-            ImageView av = new ImageView(c);
-            int s = Ui.dp(c, 28);
-            row.addView(av, new LinearLayout.LayoutParams(s, s));
-            Models.User cachedU = com.friendbook.social.core.FastCache.getUser(cm.authorId);
-            String uPhoto = (cachedU != null && cachedU.photoUrl != null && !cachedU.photoUrl.isEmpty())
-                    ? cachedU.photoUrl : cm.authorPhoto;
-            String uName = (cachedU != null && cachedU.displayName != null && !cachedU.displayName.isEmpty())
-                    ? cachedU.displayName : (cm.authorName == null || cm.authorName.isEmpty() ? "friendbook User" : cm.authorName);
-            Ui.avatar(c, av, uPhoto);
-            av.setOnClickListener(v -> { if (host != null) host.openProfile(cm.authorId); });
+                    TextView authorT = vh.inlineAuthors[slot];
+                    String authorLabel = (cm.pinned ? "📌 " : "") + uName;
+                    if (cm.authorId != null && cm.authorId.equals(p.authorId)) {
+                        authorT.setText(authorLabel + "  ◆ Creator");
+                        authorT.setTextColor(0xFF1A73E8);
+                    } else {
+                        authorT.setText(authorLabel);
+                        authorT.setTextColor(Ui.txt(c));
+                    }
+                    authorT.setOnClickListener(v -> { if (host != null) host.openProfile(cm.authorId); });
 
-            LinearLayout bubble = Ui.col(c);
-            bubble.setBackground(Ui.round(c, Ui.inputBg(c), 14));
-            Ui.pad(bubble, 10, 6, 10, 6);
-            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
-            bp.leftMargin = Ui.dp(c, 8);
-
-            TextView authorT = Ui.tvBold(c, (cm.pinned ? "📌 " : "") + uName, 12.5f, Ui.txt(c));
-            if(cm.authorId!=null && cm.authorId.equals(p.authorId)) {
-                authorT.append("  ◆ Creator"); authorT.setTextColor(0xFF1A73E8);
+                    String bodyTxt = cm.content != null && !cm.content.isEmpty()
+                            ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
+                    vh.inlineBodies[slot].setText(com.friendbook.social.core.Mentions.styled(bodyTxt, cm.mentions));
+                    vh.inlineBubbles[slot].setOnClickListener(v -> { if (host != null) host.openComments(p); });
+                    continue;
+                }
             }
-            authorT.setOnClickListener(v -> { if(host!=null) host.openProfile(cm.authorId); });
-            bubble.addView(authorT);
-            String bodyTxt = cm.content != null && !cm.content.isEmpty()
-                    ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
-            TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
-            bodyT.setText(com.friendbook.social.core.Mentions.styled(bodyTxt,cm.mentions));
-            com.friendbook.social.core.LinkUtils.makeLinksClickable(bodyT);
-            bodyT.setMaxLines(3);
-            bubble.addView(bodyT);
-            bubble.setOnClickListener(v -> { if (host != null) host.openComments(p); });
-            row.addView(bubble, bp);
-            vh.inlineCommentsBox.addView(row);
+            vh.inlineRows[slot].setVisibility(View.GONE);
         }
 
-        // Quick "Write a comment…" pill right below every post (friendbook signature!)
-        LinearLayout quickRow = Ui.row(c);
-        quickRow.setGravity(Gravity.CENTER_VERTICAL);
-        Ui.pad(quickRow, 12, 6, 12, 9);
-        ImageView myAv = new ImageView(c);
-        int ms = Ui.dp(c, 26);
-        quickRow.addView(myAv, new LinearLayout.LayoutParams(ms, ms));
-        Ui.avatar(c, myAv, Fb.myPhoto());
-        TextView hintPill = Ui.tv(c, "Write a comment…", 13, Ui.sub(c));
-        hintPill.setBackground(Ui.round(c, Ui.inputBg(c), 18));
-        Ui.pad(hintPill, 12, 6, 12, 6);
-        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(0, -2, 1);
-        hlp.leftMargin = Ui.dp(c, 8);
-        quickRow.addView(hintPill, hlp);
-        quickRow.setOnClickListener(v -> { if (host != null) host.openComments(p); });
-        vh.inlineCommentsBox.addView(quickRow);
+        // Quick "Write a comment…" pill right below every post
+        String myPhoto = Fb.myPhoto();
+        if (vh.boundMyAvUrl == null || !vh.boundMyAvUrl.equals(myPhoto)) {
+            vh.boundMyAvUrl = myPhoto;
+            Ui.avatar(c, vh.inlineMyAv, myPhoto);
+        }
+        vh.inlineQuickRow.setOnClickListener(v -> { if (host != null) host.openComments(p); });
     }
 
     private static void animateLikePop(PostVH vh) {
@@ -1316,14 +1546,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("View post insights")) {
                 int rxCount = com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes);
                 int cmCount = Math.max(p.comments, p.inlineComments != null ? p.inlineComments.size() : 0);
-                int reach = Math.max(12, rxCount * 11 + cmCount * 14 + p.shares * 22 + 18);
+                // 100% real counters only - never a fabricated/estimated reach number, and no
+                // network call from the Home Feed: the views shown here are the post's own stored
+                // value, already in memory with the document.
+                int viewCount = Math.max(0, p.views);
                 new android.app.AlertDialog.Builder(c)
-                        .setTitle("📊 Post Insights")
-                        .setMessage("👁 Estimated Reach: " + Format.count(reach) + " people\n\n"
-                                + "👍 Total Reactions: " + rxCount + "\n"
-                                + "💬 Total Comments: " + cmCount + "\n"
-                                + "↗ Total Shares: " + p.shares + "\n"
-                                + "🔖 Total Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
+                        .setTitle("Post Insights")
+                        .setMessage("Views: " + Format.count(viewCount) + "\n\n"
+                                + "Reactions: " + rxCount + "\n"
+                                + "Comments: " + cmCount + "\n"
+                                + "Shares: " + p.shares + "\n"
+                                + "Saves: " + (p.savedBy != null ? p.savedBy.size() : 0))
                         .setPositiveButton("Who Reacted", (d2, w2) -> Reactions.showWhoReacted(activity, p.id))
                         .setNeutralButton("All Comments", (d2, w2) -> { if (host != null) host.openComments(p); })
                         .setNegativeButton("Close", null)
@@ -1721,17 +1954,17 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             gap.setBackgroundColor(Ui.bg(c));
             col.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
 
-            // 🔴 GO LIVE + 🎬 UPLOAD REEL + Live Hub strip (friendbook style)
+            // Go Live + Upload Reel + Live Hub strip (2026 vector chips, friendbook style)
             liveBox = Ui.col(c);
             liveBox.setBackgroundColor(Ui.card(c));
             LinearLayout liveTop = Ui.row(c);
             liveTop.setGravity(Gravity.CENTER_VERTICAL);
             Ui.pad(liveTop, 12, 8, 12, 6);
-            goLiveBtn = Ui.roundChip(c, "🔴 Go Live", 0xFFE41E3F, 0xFFFFFFFF, 12);
+            goLiveBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "dot", "Go Live", 12f, 0xFFE41E3F, 0xFFFFFFFF, 0xFFFFFFFF);
             Ui.pad(goLiveBtn, 12, 7, 12, 7);
             liveTop.addView(goLiveBtn);
 
-            TextView uploadReelChip = Ui.roundChip(c, "🎬 + Upload Reel", Ui.BLUE, 0xFFFFFFFF, 12);
+            TextView uploadReelChip = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "play", "Upload Reel", 12f, Ui.BLUE, 0xFFFFFFFF, 0xFFFFFFFF);
             Ui.pad(uploadReelChip, 12, 7, 12, 7);
             LinearLayout.LayoutParams urlp = new LinearLayout.LayoutParams(-2, -2);
             urlp.leftMargin = Ui.dp(c, 8);
@@ -1740,7 +1973,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             liveTop.addView(uploadReelChip, urlp);
 
             liveTop.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
-            TextView hubBtn = Ui.roundChip(c, "📺 Live Hub ›", Ui.inputBg(c), Ui.BLUE, 11);
+            TextView hubBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(c, "camera", "Live Hub", 11f, Ui.inputBg(c), Ui.BLUE, Ui.BLUE);
             Ui.pad(hubBtn, 10, 6, 10, 6);
             hubBtn.setOnClickListener(v -> c.startActivity(
                     new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
@@ -1818,13 +2051,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final com.google.android.gms.ads.nativead.MediaView mediaView;
         final android.widget.Button ctaButton;
         final LinearLayout ctaBar;
+        final LinearLayout adShowcaseBanner, adInlineCommentsCol;
+        final TextView adBannerBadgeTv, adBannerTitleTv, adBannerSubTv;
+        final LinearLayout summaryRow, reactSummaryWrap, like, comment, share;
+        final ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
+        final TextView extraReactsTv, tagSummary, commentsSummary, likeEmojiTv, likeTxt, commentTxt, shareTxt;
         com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+        com.google.android.gms.ads.nativead.NativeAd boundNativeAdViewTarget;
         int requestSeq = 0;
+        int boundSlotOrdinal = -1;
+        boolean adRequestInFlight = false;
+        boolean inDetailScreen = false;
 
         AdVH(ViewGroup parent) {
             super(android.view.LayoutInflater.from(parent.getContext())
                     .inflate(com.friendbook.social.R.layout.native_ad_layout, parent, false));
-            Context c = parent.getContext();
+            final Context c = parent.getContext();
             nativeAdView = (com.google.android.gms.ads.nativead.NativeAdView) itemView;
             nativeAdView.setBackground(Ui.roundStroke(c, Ui.card(c), 10, Ui.div(c), 1));
 
@@ -1852,6 +2094,163 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             ctaButton.setBackground(Ui.round(c, Ui.BLUE, 8));
             mediaView.setImageScaleType(ImageView.ScaleType.CENTER_CROP);
 
+            LinearLayout cardInner = nativeAdView.findViewById(com.friendbook.social.R.id.native_ad_card_inner);
+
+            // Vibrant Unseen-Ad Visual Banner
+            adShowcaseBanner = Ui.col(c);
+            adShowcaseBanner.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(adShowcaseBanner, 18, 22, 18, 22);
+            adBannerBadgeTv = Ui.roundChip(c, "SPONSORED", 0x33FFFFFF, 0xFFFFFFFF, 10.5f);
+            Ui.pad(adBannerBadgeTv, 10, 4, 10, 4);
+            adShowcaseBanner.addView(adBannerBadgeTv, new LinearLayout.LayoutParams(-2, -2));
+
+            adBannerTitleTv = Ui.tvBold(c, "", 20f, 0xFFFFFFFF);
+            adBannerTitleTv.setPadding(0, Ui.dp(c, 10), 0, Ui.dp(c, 4));
+            adShowcaseBanner.addView(adBannerTitleTv);
+
+            adBannerSubTv = Ui.tv(c, "", 13f, 0xEEFFFFFF);
+            adShowcaseBanner.addView(adBannerSubTv);
+            adShowcaseBanner.setVisibility(View.GONE);
+
+            // ---- 100% Identical to PostVH: Clickable Summary Row ([🔵👍 / ❤️😂] "You and X others" | "X comments") ----
+            summaryRow = Ui.row(c);
+            summaryRow.setGravity(Gravity.CENTER_VERTICAL);
+            summaryRow.setMinimumHeight(Ui.dp(c, 32));
+            Ui.pad(summaryRow, 12, 6, 12, 4);
+            summaryRow.setVisibility(View.GONE);
+
+            reactSummaryWrap = Ui.row(c);
+            reactSummaryWrap.setGravity(Gravity.CENTER_VERTICAL);
+            reactSummaryWrap.setMinimumHeight(Ui.dp(c, 22));
+            reactSummaryWrap.setPadding(0, 0, Ui.dp(c, 12), 0);
+
+            reactBadgeIv = new ImageView(c);
+            reactBadgeIv.setImageResource(com.friendbook.social.R.drawable.ic_reaction_like_badge);
+            int badgeSz = Ui.dp(c, 18);
+            reactSummaryWrap.addView(reactBadgeIv, new LinearLayout.LayoutParams(badgeSz, badgeSz));
+
+            extraReactsTv = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            extraReactsTv.setIncludeFontPadding(false);
+            extraReactsTv.setGravity(Gravity.CENTER_VERTICAL);
+            extraReactsTv.setPadding(Ui.dp(c, 2), 0, 0, 0);
+            extraReactsTv.setVisibility(View.GONE);
+            reactSummaryWrap.addView(extraReactsTv, new LinearLayout.LayoutParams(-2, Ui.dp(c, 20)));
+
+            tagSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
+            tagSummary.setIncludeFontPadding(false);
+            tagSummary.setGravity(Gravity.CENTER_VERTICAL);
+            tagSummary.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            reactSummaryWrap.addView(tagSummary);
+
+            summaryRow.addView(reactSummaryWrap);
+            summaryRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1));
+            commentsSummary = Ui.tv(c, "", 13.5f, Ui.sub(c));
+            commentsSummary.setIncludeFontPadding(false);
+            commentsSummary.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            summaryRow.addView(commentsSummary);
+
+            // ---- 100% Identical to PostVH: 3 Rounded Pill Capsule Buttons (Like · Comment · Share) ----
+            LinearLayout actions = Ui.row(c);
+            Ui.pad(actions, 10, 6, 10, 10);
+
+            like = Ui.row(c);
+            like.setGravity(Gravity.CENTER);
+            like.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            like.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            likeIcon = new ImageView(c);
+            likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+            like.addView(likeIcon, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            likeEmojiTv = Ui.tv(c, "", 15.5f, Ui.txt(c));
+            likeEmojiTv.setIncludeFontPadding(false);
+            likeEmojiTv.setGravity(Gravity.CENTER);
+            likeEmojiTv.setVisibility(View.GONE);
+            like.addView(likeEmojiTv, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            likeTxt = Ui.tv(c, "Like", 13.5f, Ui.sub(c));
+            likeTxt.setIncludeFontPadding(false);
+            likeTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            like.addView(likeTxt);
+
+            comment = Ui.row(c);
+            comment.setGravity(Gravity.CENTER);
+            comment.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            comment.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            commentIcon = new ImageView(c);
+            commentIcon.setImageResource(com.friendbook.social.R.drawable.ic_comment_bubble_outline);
+            comment.addView(commentIcon, new LinearLayout.LayoutParams(Ui.dp(c, 19), Ui.dp(c, 19)));
+            commentTxt = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            commentTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            commentTxt.setVisibility(View.GONE);
+            comment.addView(commentTxt);
+
+            share = Ui.row(c);
+            share.setGravity(Gravity.CENTER);
+            share.setBackground(Ui.round(c, Ui.inputBg(c), 20));
+            share.setPadding(Ui.dp(c, 10), 0, Ui.dp(c, 10), 0);
+            shareIcon = new ImageView(c);
+            shareIcon.setImageResource(com.friendbook.social.R.drawable.ic_share_curved_outline);
+            share.addView(shareIcon, new LinearLayout.LayoutParams(Ui.dp(c, 20), Ui.dp(c, 20)));
+            shareTxt = Ui.tv(c, "", 13.5f, Ui.txt(c));
+            shareTxt.setPadding(Ui.dp(c, 6), 0, 0, 0);
+            shareTxt.setVisibility(View.GONE);
+            share.addView(shareTxt);
+
+            int pillH = Ui.dp(c, 38);
+            LinearLayout.LayoutParams a1 = new LinearLayout.LayoutParams(0, pillH, 1);
+            a1.rightMargin = Ui.dp(c, 8);
+            LinearLayout.LayoutParams a2 = new LinearLayout.LayoutParams(0, pillH, 1);
+            a2.rightMargin = Ui.dp(c, 8);
+            LinearLayout.LayoutParams a3 = new LinearLayout.LayoutParams(0, pillH, 1);
+            actions.addView(like, a1);
+            actions.addView(comment, a2);
+            actions.addView(share, a3);
+
+            // ---- 100% Identical to PostVH: Inline Comments + Circular Avatar + "Write a comment…" Bar ----
+            adInlineCommentsCol = Ui.col(c);
+            adInlineCommentsCol.setBackgroundColor(Ui.card(c));
+
+            if (cardInner != null) {
+                int ctaIndex = cardInner.indexOfChild(ctaBar);
+                if (ctaIndex >= 0) {
+                    cardInner.addView(adShowcaseBanner, ctaIndex, new LinearLayout.LayoutParams(-1, Ui.dp(c, 168)));
+                } else {
+                    cardInner.addView(adShowcaseBanner, new LinearLayout.LayoutParams(-1, Ui.dp(c, 168)));
+                }
+                cardInner.addView(summaryRow);
+                cardInner.addView(actions);
+                cardInner.addView(adInlineCommentsCol);
+            }
+
+            like.setOnClickListener(v -> {
+                Ui.haptic(v);
+                View popTarget = likeIcon.getVisibility() == View.VISIBLE ? likeIcon : likeEmojiTv;
+                popTarget.setScaleX(0.78f);
+                popTarget.setScaleY(0.78f);
+                popTarget.animate().scaleX(1.16f).scaleY(1.16f).setDuration(110L)
+                        .withEndAction(() -> popTarget.animate().scaleX(1f).scaleY(1f).setDuration(90L).start())
+                        .start();
+                com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
+                        c, boundSlotOrdinal, null, () -> refreshAdSocialUi(c));
+            });
+            like.setOnLongClickListener(v -> {
+                Reactions.show(like, picked ->
+                        com.friendbook.social.core.AdsConfig.setOrToggleAdReaction(
+                                c, boundSlotOrdinal, picked, () -> refreshAdSocialUi(c)));
+                return true;
+            });
+            View.OnClickListener openCmts = v -> {
+                if (inDetailScreen) return;
+                com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c));
+            };
+            comment.setOnClickListener(openCmts);
+            commentsSummary.setOnClickListener(openCmts);
+            reactSummaryWrap.setOnClickListener(v ->
+                    com.friendbook.social.core.AdsConfig.showWhoReactedToAd(c, boundSlotOrdinal));
+            share.setOnClickListener(v ->
+                    com.friendbook.social.core.AdsConfig.shareSponsoredAd(
+                            c, boundSlotOrdinal, headlineView.getText(), bodyView.getText(),
+                            () -> refreshAdSocialUi(c)));
+
             // Register all clickable NativeAdView asset views
             nativeAdView.setHeadlineView(headlineView);
             nativeAdView.setBodyView(bodyView);
@@ -1864,11 +2263,243 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             nativeAdView.setMediaView(mediaView);
         }
 
-        private void destroyCurrentAd() {
-            if (currentNativeAd != null) {
-                try { currentNativeAd.destroy(); } catch (Throwable ignored) {}
-                currentNativeAd = null;
+        private void refreshAdSocialUi(Context c) {
+            com.friendbook.social.core.AdsConfig.resolveUniqueAdId(c, boundSlotOrdinal);
+            Models.Post adPost = com.friendbook.social.core.AdsConfig.getOrCreateAdPost(boundSlotOrdinal);
+            String mine = com.friendbook.social.core.AdsConfig.getAdMyReaction(c, boundSlotOrdinal);
+            if (Fb.uid() == null || Fb.uid().isEmpty()) mine = "";
+            boolean iReacted = mine != null && !mine.isEmpty();
+            int total = com.friendbook.social.core.AdsConfig.getAdLikeCount(c, boundSlotOrdinal);
+            int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
+            int cmts = com.friendbook.social.core.AdsConfig.getAdCommentCount(c, boundSlotOrdinal);
+            int shares = com.friendbook.social.core.AdsConfig.getAdShareCount(c, boundSlotOrdinal);
+
+            // 1. Reaction Summary Row (100% identical to PostVH.renderReactionBar!)
+            if (effectiveTotal > 0) {
+                List<String> activeTypes = com.friendbook.social.core.FastCache.getReactionTypes(adPost.id);
+                if (activeTypes.isEmpty() && adPost.reactionsMap != null && !adPost.reactionsMap.isEmpty()) {
+                    activeTypes = Reactions.computeTopTypesFromMap(adPost.reactionsMap);
+                }
+                List<String> displayTypes = new ArrayList<>(activeTypes);
+                if (iReacted && !displayTypes.contains(mine)) displayTypes.add(0, mine);
+                if (displayTypes.isEmpty()) displayTypes.add(iReacted ? mine : "like");
+
+                boolean showThumbBadge = displayTypes.contains("like");
+                StringBuilder extraEmojis = new StringBuilder();
+                int emojiCount = showThumbBadge ? 1 : 0;
+                for (String rType : displayTypes) {
+                    if ("like".equals(rType)) continue;
+                    if (emojiCount >= 3) break;
+                    extraEmojis.append(Reactions.emojiFor(rType));
+                    emojiCount++;
+                }
+                reactBadgeIv.setVisibility(showThumbBadge ? View.VISIBLE : View.GONE);
+                if (extraEmojis.length() > 0) {
+                    extraReactsTv.setText(extraEmojis.toString());
+                    extraReactsTv.setPadding(showThumbBadge ? Ui.dp(c, 2) : 0, 0, 0, 0);
+                    extraReactsTv.setVisibility(View.VISIBLE);
+                } else {
+                    extraReactsTv.setText("");
+                    extraReactsTv.setVisibility(View.GONE);
+                }
+
+                String summaryLabel;
+                if (iReacted) {
+                    if (effectiveTotal == 1) summaryLabel = "You";
+                    else if (effectiveTotal == 2) summaryLabel = "You and 1 other";
+                    else summaryLabel = "You and " + Format.count(effectiveTotal - 1) + " others";
+                } else {
+                    summaryLabel = Format.count(effectiveTotal);
+                }
+                tagSummary.setText(summaryLabel);
+                tagSummary.setVisibility(View.VISIBLE);
+                reactSummaryWrap.setVisibility(View.VISIBLE);
+            } else {
+                reactSummaryWrap.setVisibility(View.GONE);
             }
+
+            StringBuilder right = new StringBuilder();
+            if (cmts > 0) right.append(Format.count(cmts)).append(cmts == 1 ? " comment" : " comments");
+            if (shares > 0) {
+                if (right.length() > 0) right.append(" · ");
+                right.append(Format.count(shares)).append(shares == 1 ? " share" : " shares");
+            }
+            commentsSummary.setText(right);
+            commentsSummary.setVisibility(right.length() > 0 ? View.VISIBLE : View.GONE);
+            summaryRow.setVisibility((effectiveTotal > 0 || cmts > 0 || shares > 0) ? View.VISIBLE : View.GONE);
+
+            // 2. Three Rounded Pill Capsule Buttons (100% identical to PostVH!)
+            int pillBg = Ui.inputBg(c);
+            int iconTint = Ui.txt(c);
+            int neutralTint = Ui.sub(c);
+
+            if (!iReacted) {
+                like.setBackground(Ui.round(c, pillBg, 20));
+                likeIcon.setVisibility(View.VISIBLE);
+                likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
+                likeIcon.setColorFilter(neutralTint);
+                likeEmojiTv.setVisibility(View.GONE);
+                likeTxt.setText("Like");
+                likeTxt.setTextColor(neutralTint);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT);
+                likeTxt.setVisibility(View.VISIBLE);
+            } else if ("like".equals(mine)) {
+                like.setBackground(Ui.roundStroke(c, 0x1A1877F2, 20, 0x551877F2, 1));
+                likeIcon.setVisibility(View.VISIBLE);
+                likeIcon.setImageResource(com.friendbook.social.R.drawable.ic_like_filled);
+                likeIcon.clearColorFilter();
+                likeEmojiTv.setVisibility(View.GONE);
+                likeTxt.setText("Like");
+                likeTxt.setTextColor(Ui.BLUE);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                likeTxt.setVisibility(View.VISIBLE);
+            } else {
+                int rxColor = Reactions.colorFor(mine);
+                int tintBg = (rxColor & 0x00FFFFFF) | 0x1A000000;
+                int tintStroke = (rxColor & 0x00FFFFFF) | 0x55000000;
+                like.setBackground(Ui.roundStroke(c, tintBg, 20, tintStroke, 1));
+                likeIcon.setVisibility(View.GONE);
+                likeEmojiTv.setText(Reactions.emojiFor(mine));
+                likeEmojiTv.setVisibility(View.VISIBLE);
+                likeTxt.setText(Reactions.labelFor(mine));
+                likeTxt.setTextColor(rxColor);
+                likeTxt.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                likeTxt.setVisibility(View.VISIBLE);
+            }
+
+            comment.setBackground(Ui.round(c, pillBg, 20));
+            commentIcon.setColorFilter(iconTint);
+            if (cmts > 0) {
+                commentTxt.setText(Format.count(cmts));
+                commentTxt.setTextColor(iconTint);
+                commentTxt.setVisibility(View.VISIBLE);
+            } else {
+                commentTxt.setText("");
+                commentTxt.setVisibility(View.GONE);
+            }
+
+            share.setBackground(Ui.round(c, pillBg, 20));
+            shareIcon.setColorFilter(iconTint);
+            if (shares > 0) {
+                shareTxt.setText(Format.count(shares));
+                shareTxt.setTextColor(iconTint);
+                shareTxt.setVisibility(View.VISIBLE);
+            } else {
+                shareTxt.setText("");
+                shareTxt.setVisibility(View.GONE);
+            }
+
+            // 3. Inline Comments + Circular Avatar + "Write a comment…" Bar (100% identical to PostVH!)
+            adInlineCommentsCol.removeAllViews();
+            if (inDetailScreen) {
+                adInlineCommentsCol.setVisibility(View.GONE);
+                return;
+            }
+            adInlineCommentsCol.setVisibility(View.VISIBLE);
+            adInlineCommentsCol.addView(Ui.divider(c));
+
+            List<Models.Comment> list = adPost.inlineComments != null ? adPost.inlineComments : new ArrayList<>();
+            if (cmts > 2 || (cmts > 0 && list.isEmpty())) {
+                TextView viewAll = Ui.tvBold(c, "View all " + cmts + (cmts == 1 ? " comment…" : " comments…"), 13, Ui.sub(c));
+                Ui.pad(viewAll, 12, 8, 12, 4);
+                viewAll.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+                adInlineCommentsCol.addView(viewAll);
+            }
+
+            int startIdx = Math.max(0, list.size() - 2);
+            for (int i = startIdx; i < list.size(); i++) {
+                final Models.Comment cm = list.get(i);
+                if (cm == null) continue;
+                LinearLayout row = Ui.row(c);
+                row.setGravity(Gravity.TOP);
+                Ui.pad(row, 12, 5, 12, 4);
+
+                ImageView av = new ImageView(c);
+                int s = Ui.dp(c, 28);
+                row.addView(av, new LinearLayout.LayoutParams(s, s));
+                Models.User cachedU = com.friendbook.social.core.FastCache.getUser(cm.authorId);
+                String uPhoto = (cachedU != null && cachedU.photoUrl != null && !cachedU.photoUrl.isEmpty())
+                        ? cachedU.photoUrl : cm.authorPhoto;
+                String uName = (cachedU != null && cachedU.displayName != null && !cachedU.displayName.isEmpty())
+                        ? cachedU.displayName : (cm.authorName == null || cm.authorName.isEmpty() ? "friendbook User" : cm.authorName);
+                Ui.avatar(c, av, uPhoto);
+
+                LinearLayout bubble = Ui.col(c);
+                bubble.setBackground(Ui.round(c, Ui.inputBg(c), 14));
+                Ui.pad(bubble, 10, 6, 10, 6);
+                LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
+                bp.leftMargin = Ui.dp(c, 8);
+                bubble.addView(Ui.tvBold(c, uName, 12.5f, Ui.txt(c)));
+                String bodyTxt = cm.content != null && !cm.content.isEmpty()
+                        ? cm.content : (cm.imageUrl != null && !cm.imageUrl.isEmpty() ? "📷 Sent a photo" : "");
+                TextView bodyT = Ui.tv(c, bodyTxt, 13.5f, Ui.txt(c));
+                bodyT.setText(com.friendbook.social.core.Mentions.styled(bodyTxt, cm.mentions));
+                bodyT.setMaxLines(3);
+                bubble.addView(bodyT);
+                bubble.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                        c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+                row.addView(bubble, bp);
+                adInlineCommentsCol.addView(row);
+            }
+
+            LinearLayout quickRow = Ui.row(c);
+            quickRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(quickRow, 12, 6, 12, 9);
+            ImageView myAv = new ImageView(c);
+            int ms = Ui.dp(c, 26);
+            quickRow.addView(myAv, new LinearLayout.LayoutParams(ms, ms));
+            Ui.avatar(c, myAv, Fb.myPhoto());
+            TextView hintPill = Ui.tv(c, "Write a comment…", 13, Ui.sub(c));
+            hintPill.setBackground(Ui.round(c, Ui.inputBg(c), 18));
+            Ui.pad(hintPill, 12, 6, 12, 6);
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(0, -2, 1);
+            hlp.leftMargin = Ui.dp(c, 8);
+            quickRow.addView(hintPill, hlp);
+            quickRow.setOnClickListener(v -> com.friendbook.social.core.AdsConfig.openFeedAdPostDetail(
+                    c, boundSlotOrdinal, () -> refreshAdSocialUi(c)));
+            adInlineCommentsCol.addView(quickRow);
+        }
+
+        private void populateShowcaseFallback(Context c, int slotOrdinal) {
+            com.friendbook.social.core.AdsConfig.SponsoredCreative cr =
+                    com.friendbook.social.core.AdsConfig.getCreativeForSlot(c, slotOrdinal);
+            headlineView.setText(cr.headline);
+            advertiserView.setText(cr.advertiser + " · Sponsored");
+            advertiserView.setVisibility(View.VISIBLE);
+            bodyView.setText(cr.body);
+            bodyView.setVisibility(View.VISIBLE);
+            ctaButton.setText(cr.cta);
+            ctaButton.setVisibility(View.VISIBLE);
+            iconView.setImageDrawable(com.friendbook.social.core.AdsConfig.createCompanyLogoDrawable(c, cr));
+            iconView.setVisibility(View.VISIBLE);
+            mediaView.setVisibility(View.GONE);
+
+            android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    new int[]{cr.bannerColorStart, cr.bannerColorEnd});
+            gd.setCornerRadius(0f);
+            adShowcaseBanner.setBackground(gd);
+            adBannerBadgeTv.setText(cr.bannerBadge);
+            adBannerTitleTv.setText(cr.bannerBigTitle);
+            adBannerSubTv.setText(cr.bannerSubTitle);
+            adShowcaseBanner.setVisibility(View.VISIBLE);
+
+            starsView.setRating(cr.stars);
+            starsView.setVisibility(View.VISIBLE);
+            storeView.setText(cr.storeOrPrice);
+            storeView.setVisibility(View.VISIBLE);
+            priceView.setText("Verified Partner");
+            priceView.setVisibility(View.VISIBLE);
+        }
+
+        private void destroyCurrentAd() {
+            if (currentNativeAd != null && !inDetailScreen && boundSlotOrdinal >= 0) {
+                com.friendbook.social.core.AdsConfig.disposeShownSlotAd(
+                        itemView.getContext(), boundSlotOrdinal, currentNativeAd);
+            }
+            currentNativeAd = null;
+            boundNativeAdViewTarget = null;
         }
 
         private void collapse() {
@@ -1905,105 +2536,71 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
 
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal) {
+            loadFreshFeedNativeAd(rawUnitId, slotOrdinal, false);
+        }
+
+        /**
+         * Binds a preloaded NativeAd from the 5-ad Feed Pool (`AdsConfig.getOrPollFeedAd`).
+         * NEVER calls `loadAd` inside `onBindViewHolder` and NEVER blocks feed scrolling!
+         * If no ad is ready (or if ad loading failed), collapses cleanly so posts show without an ad.
+         */
+        void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal, final boolean preserveExistingSlotAd) {
+            this.inDetailScreen = preserveExistingSlotAd;
+            final Context ctx = itemView.getContext();
+            if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
+                if (boundNativeAdViewTarget != currentNativeAd) {
+                    expand(ctx);
+                    populateNativeAdView(currentNativeAd, ctx);
+                    refreshAdSocialUi(ctx);
+                }
+                return;
+            }
+
             final int mySeq = ++requestSeq;
             destroyCurrentAd();
-            collapse();
+            this.boundSlotOrdinal = slotOrdinal;
+            this.adRequestInFlight = false;
 
-            final Context ctx = itemView.getContext();
-            final String unitId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(rawUnitId)
-                    ? rawUnitId.trim()
-                    : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
-
-            com.friendbook.social.core.ConsentManager.ensureInitialized(ctx);
-            com.friendbook.social.core.AdsConfig.recordAdRequest(ctx);
-            android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                    "[FeedNative] Requesting fresh NativeAd slot=" + slotOrdinal + " unitId=" + unitId);
-
-            try {
-                com.google.android.gms.ads.VideoOptions videoOptions =
-                        new com.google.android.gms.ads.VideoOptions.Builder()
-                                .setStartMuted(true)
-                                .build();
-                com.google.android.gms.ads.nativead.NativeAdOptions adOptions =
-                        new com.google.android.gms.ads.nativead.NativeAdOptions.Builder()
-                                .setAdChoicesPlacement(
-                                        com.google.android.gms.ads.nativead.NativeAdOptions.ADCHOICES_TOP_RIGHT)
-                                .setVideoOptions(videoOptions)
-                                .build();
-
-                com.google.android.gms.ads.AdLoader adLoader =
-                        new com.google.android.gms.ads.AdLoader.Builder(ctx, unitId)
-                                .forNativeAd(nativeAd -> {
-                                    if (mySeq != requestSeq) {
-                                        try { nativeAd.destroy(); } catch (Throwable ignored) {}
-                                        return;
-                                    }
-                                    destroyCurrentAd();
-                                    currentNativeAd = nativeAd;
-                                    com.friendbook.social.core.AdsConfig.onNativeAdLoaded(ctx);
-                                    nativeAd.setOnPaidEventListener(adValue ->
-                                            com.friendbook.social.core.AdsConfig.recordPaidEvent(ctx, adValue));
-
-                                    // Expand BEFORE setNativeAd so Google Mobile Ads viewability registers impression
-                                    expand(ctx);
-                                    populateNativeAdView(nativeAd, ctx);
-                                    nativeAdView.requestLayout();
-                                })
-                                .withAdListener(new com.google.android.gms.ads.AdListener() {
-                                    @Override
-                                    public void onAdLoaded() {
-                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                                                "[FeedNative] Ad loaded successfully (slot=" + slotOrdinal
-                                                        + ", unitId=" + unitId + ")");
-                                    }
-
-                                    @Override
-                                    public void onAdImpression() {
-                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                                                "[FeedNative] Ad impression recorded (slot=" + slotOrdinal
-                                                        + ", unitId=" + unitId + ")");
-                                        com.friendbook.social.core.AdsConfig.recordAdImpression(ctx);
-                                    }
-
-                                    @Override
-                                    public void onAdClicked() {
-                                        android.util.Log.i(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                                                "[FeedNative] Ad clicked (slot=" + slotOrdinal
-                                                        + ", unitId=" + unitId + ")");
-                                        com.friendbook.social.core.AdsConfig.recordAdClick(ctx);
-                                    }
-
-                                    @Override
-                                    public void onAdFailedToLoad(@NonNull com.google.android.gms.ads.LoadAdError adError) {
-                                        android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                                                "[FeedNative] Ad failed to load! errorCode=" + adError.getCode()
-                                                        + ", message=" + adError.getMessage()
-                                                        + ", domain=" + adError.getDomain()
-                                                        + ", slot=" + slotOrdinal
-                                                        + ", unitId=" + unitId
-                                                        + ", responseInfo=" + adError.getResponseInfo());
-                                        com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, adError.getCode());
-                                        if (mySeq == requestSeq) {
-                                            destroyCurrentAd();
-                                            collapse();
-                                        }
-                                    }
-                                })
-                                .withNativeAdOptions(adOptions)
-                                .build();
-
-                // Fresh production AdRequest — zero test IDs, zero cached ad reuse
-                adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-            } catch (Throwable t) {
-                android.util.Log.e(com.friendbook.social.core.AdsConfig.LOG_TAG,
-                        "[FeedNative] Exception loading ad (unitId=" + unitId + "): " + t.getMessage(), t);
-                com.friendbook.social.core.AdsConfig.onNativeAdFailed(ctx, -1);
-                destroyCurrentAd();
-                collapse();
+            com.friendbook.social.core.AdsConfig.resolveUniqueAdId(ctx, slotOrdinal);
+            com.google.android.gms.ads.nativead.NativeAd preloaded =
+                    com.friendbook.social.core.AdsConfig.getOrPollFeedAd(ctx, slotOrdinal);
+            if (preloaded != null) {
+                currentNativeAd = preloaded;
+                expand(ctx);
+                populateNativeAdView(preloaded, ctx);
+                refreshAdSocialUi(ctx);
+                com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
+                    if (mySeq == requestSeq && currentNativeAd != null) refreshAdSocialUi(ctx);
+                });
+                return;
             }
+
+            // No preloaded ad ready yet — collapse immediately so feed scrolling is 100% non-blocking
+            // and posts display without an ad if loading fails (no retry loop).
+            collapse();
+            adRequestInFlight = true;
+            com.friendbook.social.core.AdsConfig.registerFeedSlotWaiter(slotOrdinal, readyAd -> {
+                if (mySeq != requestSeq) return;
+                adRequestInFlight = false;
+                if (readyAd == null || currentNativeAd != null) {
+                    collapse();
+                    return;
+                }
+                currentNativeAd = readyAd;
+                expand(ctx);
+                populateNativeAdView(readyAd, ctx);
+                refreshAdSocialUi(ctx);
+                com.friendbook.social.core.AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal, () -> {
+                    if (mySeq == requestSeq && currentNativeAd != null) refreshAdSocialUi(ctx);
+                });
+            });
+            com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(ctx);
         }
 
         private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
+            if (boundNativeAdViewTarget == ad) return;
+            boundNativeAdViewTarget = ad;
+            adShowcaseBanner.setVisibility(View.GONE);
             headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
 
             if (ad.getMediaContent() != null) {
@@ -2027,7 +2624,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 ctaButton.setText(ad.getCallToAction());
             }
 
-            if (ad.getIcon() == null) {
+            if (ad.getIcon() == null || ad.getIcon().getDrawable() == null) {
                 iconView.setVisibility(View.GONE);
             } else {
                 iconView.setImageDrawable(ad.getIcon().getDrawable());
@@ -2069,11 +2666,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         void onRecycled() {
             requestSeq++;
-            destroyCurrentAd();
+            adRequestInFlight = false;
+            if (!inDetailScreen && boundSlotOrdinal >= 0) {
+                com.friendbook.social.core.AdsConfig.disposeShownSlotAd(
+                        itemView.getContext(), boundSlotOrdinal, currentNativeAd);
+            }
+            currentNativeAd = null;
+            boundNativeAdViewTarget = null;
+            collapse();
         }
     }
 
-    static class PostVH extends RecyclerView.ViewHolder {
+    class PostVH extends RecyclerView.ViewHolder {
         ImageView avatar, image, tick;
         ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
         TextView name, meta, more, closeBtn, content;
@@ -2082,6 +2686,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout like, comment, share, reactSummaryWrap;
         LinearLayout specialBox, sharedBox, pollBox, summaryRow, inlineCommentsBox;
+        TextView inlineViewAll;
+        final LinearLayout[] inlineRows = new LinearLayout[2];
+        final ImageView[] inlineAvs = new ImageView[2];
+        final LinearLayout[] inlineBubbles = new LinearLayout[2];
+        final TextView[] inlineAuthors = new TextView[2];
+        final TextView[] inlineBodies = new TextView[2];
+        LinearLayout inlineQuickRow;
+        ImageView inlineMyAv;
+        TextView inlineHintPill;
+        LinearLayout firstPostDiscoveryBox, firstPostPymkCard, firstPostPymkRow, firstPostReelCard;
+        FrameLayout firstPostReelPreviewBox;
+        ImageView firstPostReelThumbIv;
+        TextView firstPostReelCaptionTv;
+        String boundMyAvUrl;
+        Models.Post boundPhotoPost;
+        String boundPhotoUrl;
+        View.OnTouchListener photoTouchListener;
         FrameLayout mediaWrap;
         ListenerRegistration reactReg;
 
@@ -2131,6 +2752,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // ---- content: 16sp text OR Colored Background Card ----
             content = Ui.tv(c, "", 16, Ui.txt(c));
             Ui.pad(content, 12, 2, 12, 8);
+            com.friendbook.social.core.LinkUtils.makeLinksClickable(content);
             card.addView(content, new LinearLayout.LayoutParams(-1, -2));
 
             // ---- poll rows ----
@@ -2152,15 +2774,44 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             sharedBox.addView(sharedContent);
             card.addView(sharedBox);
 
-            // ---- media: single full-width edge-to-edge image (video via ▶ overlay) ----
+            // ---- media: single full-width edge-to-edge image with fixed height (zero scroll height jump!) ----
             mediaWrap = new FrameLayout(c);
-            card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, -2));
+            mediaWrap.setBackgroundColor(Ui.isDark(c) ? 0xFF141518 : 0xFFF0F2F5);
+            card.addView(mediaWrap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 420)));
             image = new ImageView(c);
-            image.setAdjustViewBounds(true);
             image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            image.setMaxHeight(Ui.dp(c, 680));
-            mediaWrap.addView(image, new FrameLayout.LayoutParams(-1, -2));
-            playBadge = Ui.tv(c, "▶", 44, 0xEEFFFFFF);
+            mediaWrap.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            final GestureDetector gd = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
+                @Override public boolean onDown(MotionEvent e) { return true; }
+                @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                    if (boundPhotoPost == null || boundPhotoUrl == null) return false;
+                    Intent i = new Intent(c, FullscreenMediaActivity.class);
+                    i.putExtra("type", "image");
+                    i.putExtra("url", boundPhotoUrl);
+                    i.putExtra("post_id", boundPhotoPost.id);
+                    i.putExtra("title", boundPhotoPost.authorName);
+                    c.startActivity(i);
+                    return true;
+                }
+                @Override public boolean onDoubleTap(MotionEvent e) {
+                    if (boundPhotoPost != null && Prefs.doubleTapToLike(c)) {
+                        Ui.haptic(image);
+                        String curRx = Reactions.resolveCurrentUserReaction(boundPhotoPost);
+                        if (!"love".equals(curRx)) {
+                            Reactions.apply(c, boundPhotoPost, "love");
+                        }
+                        renderReactionBar(c, PostVH.this, boundPhotoPost,
+                                Reactions.resolveCurrentUserReaction(boundPhotoPost),
+                                com.friendbook.social.core.FastCache.getReactionTotal(boundPhotoPost.id, boundPhotoPost.likes));
+                        animateLikePop(PostVH.this);
+                        Ui.toast(c, "❤️ Loved!");
+                        return true;
+                    }
+                    return false;
+                }
+            });
+            photoTouchListener = (v, ev) -> gd.onTouchEvent(ev);
+            playBadge = Ui.tv(c, "", 14, 0xEEFFFFFF);
             playBadge.setGravity(Gravity.CENTER);
             playBadge.setBackgroundColor(0x99000000);
             playBadge.setVisibility(View.GONE);
@@ -2260,16 +2911,179 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             actions.addView(share, a3);
             card.addView(actions);
 
-            // ---- Inline Multi-User Comments Preview + Quick Comment Bar (friendbook Pro!) ----
+            // ---- Pre-built Inline Multi-User Comments Preview + Quick Comment Bar (ZERO scroll allocations!) ----
             inlineCommentsBox = Ui.col(c);
             inlineCommentsBox.setBackgroundColor(Ui.card(c));
             inlineCommentsBox.setVisibility(View.GONE);
+            inlineCommentsBox.addView(Ui.divider(c));
+
+            inlineViewAll = Ui.tvBold(c, "", 13, Ui.sub(c));
+            Ui.pad(inlineViewAll, 12, 8, 12, 4);
+            inlineViewAll.setVisibility(View.GONE);
+            inlineCommentsBox.addView(inlineViewAll);
+
+            for (int i = 0; i < 2; i++) {
+                LinearLayout row = Ui.row(c);
+                row.setGravity(Gravity.TOP);
+                Ui.pad(row, 12, 5, 12, 4);
+                row.setVisibility(View.GONE);
+
+                ImageView av = new ImageView(c);
+                int avSz = Ui.dp(c, 28);
+                row.addView(av, new LinearLayout.LayoutParams(avSz, avSz));
+
+                LinearLayout bubble = Ui.col(c);
+                bubble.setBackground(Ui.round(c, Ui.inputBg(c), 14));
+                Ui.pad(bubble, 10, 6, 10, 6);
+                LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
+                bp.leftMargin = Ui.dp(c, 8);
+
+                TextView authorT = Ui.tvBold(c, "", 12.5f, Ui.txt(c));
+                bubble.addView(authorT);
+
+                TextView bodyT = Ui.tv(c, "", 13.5f, Ui.txt(c));
+                com.friendbook.social.core.LinkUtils.makeLinksClickable(bodyT);
+                bodyT.setMaxLines(3);
+                bubble.addView(bodyT);
+
+                row.addView(bubble, bp);
+                inlineCommentsBox.addView(row);
+
+                inlineRows[i] = row;
+                inlineAvs[i] = av;
+                inlineBubbles[i] = bubble;
+                inlineAuthors[i] = authorT;
+                inlineBodies[i] = bodyT;
+            }
+
+            inlineQuickRow = Ui.row(c);
+            inlineQuickRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(inlineQuickRow, 12, 6, 12, 9);
+            inlineMyAv = new ImageView(c);
+            int ms = Ui.dp(c, 26);
+            inlineQuickRow.addView(inlineMyAv, new LinearLayout.LayoutParams(ms, ms));
+            inlineHintPill = Ui.tv(c, "Write a comment…", 13, Ui.sub(c));
+            inlineHintPill.setBackground(Ui.round(c, Ui.inputBg(c), 18));
+            Ui.pad(inlineHintPill, 12, 6, 12, 6);
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(0, -2, 1);
+            hlp.leftMargin = Ui.dp(c, 8);
+            inlineQuickRow.addView(inlineHintPill, hlp);
+            inlineCommentsBox.addView(inlineQuickRow);
+
             card.addView(inlineCommentsBox, new LinearLayout.LayoutParams(-1, -2));
 
             // friendbook gap between posts
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
             card.addView(gap, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
+
+            // ---- One-Time Top Discovery Sequence right after Post #1: People You May Know -> Featured Reels Card ----
+            firstPostDiscoveryBox = Ui.col(c);
+            firstPostDiscoveryBox.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.setVisibility(View.GONE);
+
+            // 1. Facebook-Style "People You May Know" Card
+            firstPostPymkCard = Ui.col(c);
+            firstPostPymkCard.setBackgroundColor(Ui.card(c));
+
+            LinearLayout pymkHead = Ui.row(c);
+            pymkHead.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(pymkHead, 14, 12, 12, 8);
+            pymkHead.addView(Icons.icon(c, Icons.FRIENDS, 20, Ui.txt(c)));
+            TextView pymkTitle = Ui.tvBold(c, "People You May Know", 15.5f, Ui.txt(c));
+            pymkTitle.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            pymkHead.addView(pymkTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView pymkDots = Ui.tvBold(c, "•••", 16, Ui.sub(c));
+            pymkDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4));
+            pymkDots.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            pymkHead.addView(pymkDots);
+            firstPostPymkCard.addView(pymkHead);
+
+            android.widget.HorizontalScrollView pymkScroll = new android.widget.HorizontalScrollView(c);
+            pymkScroll.setHorizontalScrollBarEnabled(false);
+            firstPostPymkRow = Ui.row(c);
+            Ui.pad(firstPostPymkRow, 8, 2, 8, 6);
+            pymkScroll.addView(firstPostPymkRow);
+            firstPostPymkCard.addView(pymkScroll, new LinearLayout.LayoutParams(-1, -2));
+
+            TextView seeAllBtn = Ui.tvBold(c, "See all  ›", 14, Ui.sub(c));
+            seeAllBtn.setGravity(Gravity.CENTER);
+            Ui.pad(seeAllBtn, 12, 10, 12, 12);
+            seeAllBtn.setOnClickListener(v -> { if (host != null) host.openFindFriends(); });
+            firstPostPymkCard.addView(seeAllBtn, new LinearLayout.LayoutParams(-1, -2));
+
+            firstPostDiscoveryBox.addView(firstPostPymkCard, new LinearLayout.LayoutParams(-1, -2));
+
+            View gapMid = new View(c);
+            gapMid.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.addView(gapMid, new LinearLayout.LayoutParams(-1, Ui.dp(c, 8)));
+
+            // 2. Facebook-Style "🎬 Reels" Vertical Video Showcase Card (tap to open Reels tab)
+            firstPostReelCard = Ui.col(c);
+            firstPostReelCard.setBackgroundColor(Ui.card(c));
+
+            LinearLayout reelHead = Ui.row(c);
+            reelHead.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(reelHead, 14, 12, 12, 10);
+            reelHead.addView(Icons.icon(c, Icons.VIDEO, 22, Ui.txt(c)));
+            TextView reelTitle = Ui.tvBold(c, "Reels", 17, Ui.txt(c));
+            reelTitle.setPadding(Ui.dp(c, 8), 0, 0, 0);
+            reelHead.addView(reelTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+            ImageView reelDots = com.friendbook.social.core.StudioVectorIcons.iconView(c, "more", 18, Ui.sub(c));
+            reelDots.setPadding(Ui.dp(c, 8), Ui.dp(c, 8), Ui.dp(c, 4), Ui.dp(c, 8));
+            reelDots.setOnClickListener(v -> { if (host != null) host.openReelsTab(pickFeaturedReel()); });
+            reelHead.addView(reelDots, new LinearLayout.LayoutParams(Ui.dp(c, 30), Ui.dp(c, 30)));
+            firstPostReelCard.addView(reelHead);
+
+            firstPostReelPreviewBox = new FrameLayout(c);
+            firstPostReelPreviewBox.setBackground(Ui.round(c, 0xFF18191A, 16));
+            firstPostReelPreviewBox.setClipToOutline(true);
+            LinearLayout.LayoutParams rpp = new LinearLayout.LayoutParams(-1, Ui.dp(c, 430));
+            rpp.setMargins(Ui.dp(c, 12), 0, Ui.dp(c, 12), Ui.dp(c, 14));
+
+            firstPostReelThumbIv = new ImageView(c);
+            firstPostReelThumbIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            firstPostReelPreviewBox.addView(firstPostReelThumbIv, new FrameLayout.LayoutParams(-1, -1));
+
+            // Subtle dark gradient scrim at bottom so view count & play button pop cleanly
+            View bottomScrim = new View(c);
+            android.graphics.drawable.GradientDrawable scrimGd = new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{0x18000000, 0x33000000, 0x99000000});
+            bottomScrim.setBackground(scrimGd);
+            firstPostReelPreviewBox.addView(bottomScrim, new FrameLayout.LayoutParams(-1, -1));
+
+            // Center Circular Play Button (translucent dark circle + white border + white ▶ icon)
+            FrameLayout playCircle = new FrameLayout(c);
+            playCircle.setBackground(Ui.roundStroke(c, 0x66000000, 34, 0xEEFFFFFF, 2));
+            ImageView playTriangle = com.friendbook.social.core.StudioVectorIcons.iconView(c, "play", 26, 0xFFFFFFFF);
+            int triSz = Ui.dp(c, 28);
+            FrameLayout.LayoutParams triLp = new FrameLayout.LayoutParams(triSz, triSz, Gravity.CENTER);
+            triLp.leftMargin = Ui.dp(c, 3);
+            playCircle.addView(playTriangle, triLp);
+            int playSz = Ui.dp(c, 68);
+            firstPostReelPreviewBox.addView(playCircle, new FrameLayout.LayoutParams(playSz, playSz, Gravity.CENTER));
+
+            // Bottom row: watch prompt only. The view-count chip is gone on purpose - the Home Feed
+            // shows no view number, so it never needs to read one.
+            LinearLayout bottomMetaRow = Ui.row(c);
+            bottomMetaRow.setGravity(Gravity.CENTER_VERTICAL);
+            Ui.pad(bottomMetaRow, 14, 10, 14, 12);
+            bottomMetaRow.addView(new View(c), new LinearLayout.LayoutParams(0, 1, 1f));
+            firstPostReelCaptionTv = Ui.tvBold(c, "Tap to watch Reels ›", 12.5f, 0xEEFFFFFF);
+            firstPostReelCaptionTv.setShadowLayer(4f, 0f, 1f, 0xCC000000);
+            bottomMetaRow.addView(firstPostReelCaptionTv);
+            firstPostReelPreviewBox.addView(bottomMetaRow,
+                    new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+
+            firstPostReelCard.addView(firstPostReelPreviewBox, rpp);
+            firstPostDiscoveryBox.addView(firstPostReelCard, new LinearLayout.LayoutParams(-1, -2));
+
+            View gapAfterReel = new View(c);
+            gapAfterReel.setBackgroundColor(Ui.bg(c));
+            firstPostDiscoveryBox.addView(gapAfterReel, new LinearLayout.LayoutParams(-1, Ui.dp(c, 6)));
+
+            card.addView(firstPostDiscoveryBox, new LinearLayout.LayoutParams(-1, -2));
         }
 
         private static View cardRoot(Context c) {

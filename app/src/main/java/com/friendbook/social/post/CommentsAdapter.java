@@ -67,6 +67,10 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private RecyclerView attachedList;
     private boolean showEmptyWhenNone = true;
     /** Collection holding the parent counter ("posts" or "reels"), and its document id. */
+    private void showReactors(Models.Comment c){
+        if(com.friendbook.social.core.D1Client.enabled(counterCollection))D1Reactions.show(activity,counterCollection,counterId!=null?counterId:c.postId,c.id);
+        else Reactions.showCommentReactors(activity,c);
+    }
     public String counterCollection = "posts";
     public String counterId;
     public String postAuthorId = "";
@@ -390,7 +394,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
             if (emojiSet.length() == 0) emojiSet.append("👍");
             h.likesCount.setText(emojiSet + " " + Format.count(totalLikes));
-            h.likesCount.setOnClickListener(v -> Reactions.showCommentReactors(activity, c));
+            h.likesCount.setOnClickListener(v -> showReactors(c));
         } else {
             h.likesCount.setVisibility(View.GONE);
             h.likesCount.setOnClickListener(null);
@@ -465,7 +469,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                     in.putExtra("title", finalDispName + "'s Profile Picture");
                     activity.startActivity(in);
                 } else if (it.getItemId() == 5) {
-                    Reactions.showCommentReactors(activity, c);
+                    showReactors(c);
                 } else if (it.getItemId() == 1) {
                     editDialog(c);
                 } else if (it.getItemId() == 2) {

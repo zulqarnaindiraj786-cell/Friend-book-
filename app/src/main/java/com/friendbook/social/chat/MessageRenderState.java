@@ -25,6 +25,7 @@ final class MessageRenderState {
             out.add(Arrays.asList(m.id, m.senderId, m.senderName, m.senderPhoto, m.receiverId,
                     m.text, m.imageUrl, m.videoUrl, m.type, m.voiceUrl, m.replyToText, m.replyToSender,
                     m.callType, m.callStatus, m.callDurationSec, m.forwarded, m.voiceDurationSec,
+                    m.liveId, m.liveHostId, m.liveHostName, m.liveHostPhoto, m.liveTitle,
                     m.isSeen, m.isDelivered, m.isDeleted, m.createdAt,
                     m.reactions == null ? Collections.emptyMap() : new HashMap<>(m.reactions),
                     i > 0 && grouped(rows.get(i - 1), m),

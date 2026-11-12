@@ -97,7 +97,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private View coverCamBtn, avatarCamBtn;
     private LinearLayout ownActionsCol, visitorActionsRow, moneyRow;
     private TextView creatorDashBtn, addStoryBtn;
-    private TextView primaryBtn, messageVisitorBtn, secondaryBtn;
+    private TextView primaryBtn, messageVisitorBtn, secondaryBtn, modSuspendBtn;
     private TextView subscribeBtn, tickBtn;
     private ListenerRegistration subReg;
     private boolean subscribedActive;
@@ -138,10 +138,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
 
-        // 1. Optional friendbook "Data mode / Buy data" top strip
-        root.addView(Ui.dataModeStrip(this, null));
-
-        // 2. Crisp White friendbook Profile Header: [ ← ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
+        // Crisp White friendbook Profile Header: [ ← ]  User Name   [ ✏️ ] [ 🔍 ] [ ••• ]
         LinearLayout topBar = Ui.row(this);
         topBar.setBackgroundColor(Ui.card(this));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -204,13 +201,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         });
         LinearLayout body = Ui.col(this);
         body.setClipChildren(false);
+        body.setClipToPadding(false);
 
-        // 3. Cover Photo + Bottom-Right Circular Camera Button
+        // 3. Unified Hero Stack: Cover Photo (196dp) + White Name Strip + Full Unclipped 136dp Circular Avatar!
+        // Using a single FrameLayout with explicit minimumHeight guarantees 100% of the circular
+        // profile picture is inside [0..height] bounds and NEVER gets clipped or overlapped by infoCard!
+        int coverHeight = Ui.dp(this, 196);
+        int avSize = Ui.dp(this, 136);
+        int innerAv = Ui.dp(this, 128);
+        int belowCoverMinH = (avSize / 2) + Ui.dp(this, 16);
+
+        FrameLayout heroTopStack = new FrameLayout(this);
+        heroTopStack.setBackgroundColor(Ui.card(this));
+        heroTopStack.setMinimumHeight(coverHeight + belowCoverMinH);
+        heroTopStack.setClipChildren(false);
+        heroTopStack.setClipToPadding(false);
+
         FrameLayout coverFrame = new FrameLayout(this);
         cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        cover.setBackgroundColor(0xFF90949C);
-        coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, Ui.dp(this, 168)));
+        cover.setBackground(new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
+        coverFrame.addView(cover, new FrameLayout.LayoutParams(-1, coverHeight));
 
         FrameLayout coverCamWrap = new FrameLayout(this);
         coverCamWrap.setBackground(Ui.roundStroke(this, Ui.card(this), 19, Ui.div(this), 1));
@@ -220,27 +233,49 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         cclp.setMargins(0, 0, Ui.dp(this, 12), Ui.dp(this, 10));
         coverCamBtn = coverCamWrap;
         coverFrame.addView(coverCamWrap, cclp);
-        body.addView(coverFrame, new LinearLayout.LayoutParams(-1, Ui.dp(this, 168)));
+        heroTopStack.addView(coverFrame, new FrameLayout.LayoutParams(-1, coverHeight, Gravity.TOP));
 
-        // 4. Hero Info Card: Left Overlapping Circular Avatar + Right Name, Tick & Bold Stats!
-        LinearLayout infoCard = Ui.col(this);
-        infoCard.setBackgroundColor(Ui.card(this));
-        infoCard.setClipChildren(false);
-        Ui.pad(infoCard, 14, 0, 14, 14);
+        // White Name & Stats Strip directly below Cover Photo (right of the 136dp circular avatar)
+        LinearLayout rightNameCol = Ui.col(this);
+        rightNameCol.setBackgroundColor(Ui.card(this));
+        rightNameCol.setMinimumHeight(belowCoverMinH);
+        rightNameCol.setPadding(Ui.dp(this, 160), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
+        FrameLayout.LayoutParams rncLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        rncLp.topMargin = coverHeight;
 
-        LinearLayout avatarAndNameRow = Ui.row(this);
-        avatarAndNameRow.setClipChildren(false);
-        avatarAndNameRow.setGravity(Gravity.TOP);
+        LinearLayout nameRow = Ui.row(this);
+        nameRow.setGravity(Gravity.CENTER_VERTICAL);
+        nameT = Ui.tvBold(this, "", 20.5f, Ui.txt(this));
+        nameRow.addView(nameT);
+        nameTick = new ImageView(this);
+        nameTick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
+        nameTick.setVisibility(View.GONE);
+        int nts = Ui.dp(this, 18);
+        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
+        ntp.leftMargin = Ui.dp(this, 5);
+        nameRow.addView(nameTick, ntp);
+        rightNameCol.addView(nameRow);
 
-        // Left-aligned overlapping 106dp circular avatar with 4dp white ring + 📷 badge
+        statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
+        statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
+        rightNameCol.addView(statsT);
+
+        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
+        presenceT.setVisibility(View.GONE);
+        rightNameCol.addView(presenceT);
+        heroTopStack.addView(rightNameCol, rncLp);
+
+        // Full 114dp Circular Profile Picture overlapping bottom-left of Cover Photo & top-left of Name Strip
         FrameLayout avWrap = new FrameLayout(this);
-        int avSize = Ui.dp(this, 106);
-        LinearLayout.LayoutParams avWrapLp = new LinearLayout.LayoutParams(avSize, avSize);
-        avWrapLp.topMargin = Ui.dp(this, -34);
+        avWrap.setClipChildren(false);
+        avWrap.setClipToPadding(false);
+        avWrap.setElevation(Ui.dp(this, 6));
+        FrameLayout.LayoutParams avWrapLp = new FrameLayout.LayoutParams(avSize, avSize, Gravity.TOP | Gravity.START);
+        avWrapLp.leftMargin = Ui.dp(this, 14);
+        avWrapLp.topMargin = coverHeight - (avSize / 2);
 
         FrameLayout whiteRing = new FrameLayout(this);
         whiteRing.setBackground(Ui.circle(Ui.card(this)));
-        int innerAv = Ui.dp(this, 98);
         avatar = new ImageView(this);
         Ui.avatarLarge(this, avatar, null);
         whiteRing.addView(avatar, new FrameLayout.LayoutParams(innerAv, innerAv, Gravity.CENTER));
@@ -262,37 +297,16 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         FrameLayout.LayoutParams gblp = new FrameLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28), Gravity.BOTTOM | Gravity.START);
         gblp.setMargins(Ui.dp(this, 2), 0, 0, Ui.dp(this, 2));
         avWrap.addView(guardBadge, gblp);
-        avatarAndNameRow.addView(avWrap, avWrapLp);
+        heroTopStack.addView(avWrap, avWrapLp);
+        avWrap.bringToFront();
+        body.addView(heroTopStack, new LinearLayout.LayoutParams(-1, -2));
 
-        // Right of Avatar: Bold Name + Scalloped Blue Tick + Bold Stats ("8 followers · 0 following · 8 posts")
-        LinearLayout rightNameCol = Ui.col(this);
-        LinearLayout.LayoutParams rncLp = new LinearLayout.LayoutParams(0, -2, 1);
-        rncLp.leftMargin = Ui.dp(this, 14);
-        rncLp.topMargin = Ui.dp(this, 10);
-
-        LinearLayout nameRow = Ui.row(this);
-        nameRow.setGravity(Gravity.CENTER_VERTICAL);
-        nameT = Ui.tvBold(this, "", 20, Ui.txt(this));
-        nameRow.addView(nameT);
-        nameTick = new ImageView(this);
-        nameTick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
-        nameTick.setVisibility(View.GONE);
-        int nts = Ui.dp(this, 18);
-        LinearLayout.LayoutParams ntp = new LinearLayout.LayoutParams(nts, nts);
-        ntp.leftMargin = Ui.dp(this, 5);
-        nameRow.addView(nameTick, ntp);
-        rightNameCol.addView(nameRow);
-
-        statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
-        statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
-        rightNameCol.addView(statsT);
-
-        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
-        presenceT.setVisibility(View.GONE);
-        rightNameCol.addView(presenceT);
-
-        avatarAndNameRow.addView(rightNameCol, rncLp);
-        infoCard.addView(avatarAndNameRow);
+        // 4. Hero Info Card (Bio + Action Buttons below the Avatar & Name Strip)
+        LinearLayout infoCard = Ui.col(this);
+        infoCard.setBackgroundColor(Ui.card(this));
+        infoCard.setClipChildren(false);
+        infoCard.setClipToPadding(false);
+        Ui.pad(infoCard, 14, 2, 14, 14);
 
         // Category ("🎬 Digital creator") + Bio
         categoryT = Ui.tv(this, "🎬 Digital creator", 14, Ui.txt(this));
@@ -356,6 +370,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         visitorActionsRow.addView(secondaryBtn, vb3);
         visitorActionsRow.addView(visitorMore, vb4);
         infoCard.addView(visitorActionsRow);
+
+        // Direct 1-tap Suspend / Unsuspend ID button for Admin & Moderator on user profile
+        modSuspendBtn = Ui.tvBold(this, "⏳ Suspend ID", 13.5f, Color.WHITE);
+        modSuspendBtn.setGravity(Gravity.CENTER);
+        modSuspendBtn.setBackground(Ui.round(this, 0xFFD97706, 8));
+        Ui.pad(modSuspendBtn, 12, 9, 12, 9);
+        modSuspendBtn.setVisibility(View.GONE);
+        LinearLayout.LayoutParams msLp = new LinearLayout.LayoutParams(-1, -2);
+        msLp.topMargin = Ui.dp(this, 8);
+        modSuspendBtn.setOnClickListener(v -> {
+            if (user != null) Admin.showSuspendUserDialog(this, user, this::bindUser);
+        });
+        infoCard.addView(modSuspendBtn, msLp);
 
         // Creator Monetization / Tick / Subscribe Quick Strip
         moneyRow = Ui.row(this);
@@ -583,21 +610,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         // Cover & Avatar taps + Direct Camera Upload Buttons!
         View.OnClickListener coverClick = v -> {
+            String currentCover = (user != null && Ui.hasRealPhoto(user.coverUrl))
+                    ? user.coverUrl
+                    : (user != null && Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
             if (mine && !viewAsPublic) {
                 Ui.choose(this, "Cover photo", new String[]{
                         "👁 View full cover photo (HD)",
                         "🖼 Upload new cover photo"
                 }, w -> {
-                    if (w == 0) openFullscreenImage(user != null ? user.coverUrl : null, "Cover Photo", false);
+                    if (w == 0) openFullscreenImage(currentCover, "Cover Photo", false);
                     else pickImage(REQ_PICK_COVER);
                 });
             } else {
-                openFullscreenImage(user != null ? user.coverUrl : null,
+                openFullscreenImage(currentCover,
                         (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false);
             }
         };
-        cover.setOnClickListener(v -> openFullscreenImage(user != null ? user.coverUrl : null,
-                (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false));
+        cover.setOnClickListener(v -> {
+            String currentCover = (user != null && Ui.hasRealPhoto(user.coverUrl))
+                    ? user.coverUrl
+                    : (user != null && Ui.hasRealPhoto(user.photoUrl) ? user.photoUrl : null);
+            openFullscreenImage(currentCover,
+                    (user != null ? user.displayName + "'s Cover Photo" : "Cover Photo"), false);
+        });
         coverCamBtn.setOnClickListener(coverClick);
 
         avatar.setOnClickListener(v -> {
@@ -908,6 +943,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void renderVisiblePhotos() {
         List<String> media=new ArrayList<>();
+        if (user != null) {
+            if (Ui.hasRealPhoto(user.photoUrl) && !media.contains(user.photoUrl)) media.add(user.photoUrl);
+            if (Ui.hasRealPhoto(user.coverUrl) && !media.contains(user.coverUrl)) media.add(user.coverUrl);
+        }
         for(Models.Post post:allLoadedPosts){if(!canSee(post))continue;
             if(post.mediaUrls!=null)for(String url:post.mediaUrls)if(!media.contains(url))media.add(url);
             if(post.mediaUrl!=null && !post.mediaUrl.isEmpty() && !media.contains(post.mediaUrl))media.add(post.mediaUrl);
@@ -1009,8 +1048,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             Ui.img(this, cover, user.coverUrl);
         } else {
             try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
-            cover.setImageDrawable(new android.graphics.drawable.ColorDrawable(0xFF90949C));
+            cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
         }
+        renderVisiblePhotos();
 
         coverCamBtn.setVisibility(mine && !viewAsPublic ? View.VISIBLE : View.GONE);
         avatarCamBtn.setVisibility(mine && !viewAsPublic ? View.VISIBLE : View.GONE);
@@ -1036,6 +1078,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (mine && !viewAsPublic) {
             ownActionsCol.setVisibility(View.VISIBLE);
             visitorActionsRow.setVisibility(View.GONE);
+            if (modSuspendBtn != null) modSuspendBtn.setVisibility(View.GONE);
             boolean showTick = user.tickRank() < 3;
             moneyRow.setVisibility(showTick ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(View.GONE);
@@ -1043,6 +1086,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         } else {
             ownActionsCol.setVisibility(View.GONE);
             visitorActionsRow.setVisibility(View.VISIBLE);
+            if (modSuspendBtn != null) {
+                boolean canSuspendTarget = !mine && Admin.canModerate()
+                        && !Admin.isOwnerEmail(user.email)
+                        && (Admin.isAdmin() || !Admin.isProtectedStaff(user));
+                modSuspendBtn.setVisibility(canSuspendTarget ? View.VISIBLE : View.GONE);
+                if (canSuspendTarget) {
+                    boolean susp = user.isSuspendedNow();
+                    modSuspendBtn.setText(susp
+                            ? ("✅ Unsuspend ID (Suspended: " + user.suspensionStatusLabel() + ")")
+                            : "⏳ Suspend ID (1d · 1w · 30d · 60d · Lifetime)");
+                    modSuspendBtn.setBackground(Ui.round(this, susp ? 0xFF059669 : 0xFFD97706, 8));
+                }
+            }
             tickBtn.setVisibility(View.GONE);
             moneyRow.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
             subscribeBtn.setVisibility(user.subscriptionsEnabled ? View.VISIBLE : View.GONE);
@@ -1403,9 +1459,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             boolean isRestr = Fb.me != null && Fb.me.restrictedUids != null
                     && Fb.me.restrictedUids.contains(uid);
             pm.getMenu().add(isRestr ? "🔓 Remove from Restricted list" : "🙈 Add to Restricted list");
-            pm.getMenu().add("📱 Show QR code");
             if (Admin.isAdmin()) {
                 pm.getMenu().add("🛡 ✓ Tick level (admin)…");
+                pm.getMenu().add(user != null && user.isSuspendedNow()
+                        ? ("🛡 ✅ Unsuspend / Change Suspension (" + user.suspensionStatusLabel() + ")…")
+                        : "🛡 ⏳ Suspend ID (1d / 1w / 30d / 60d / Lifetime)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user" : "🛡 🚫 Ban user");
                 pm.getMenu().add(user != null && user.isModerator
@@ -1414,7 +1472,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 pm.getMenu().add("🛡 📢 Send official message (admin)…");
                 pm.getMenu().add("🛡 📊 User stats (admin)…");
             } else if (Admin.isModerator() && !Admin.isProtectedStaff(user)) {
-                // Global Moderator ONLY gets Ban/Unban — NEVER full Admin controls!
+                pm.getMenu().add(user != null && user.isSuspendedNow()
+                        ? ("🛡 ✅ Unsuspend / Change Suspension (" + user.suspensionStatusLabel() + ")…")
+                        : "🛡 ⏳ Suspend ID (1d / 1w / 30d / 60d / Lifetime)…");
                 pm.getMenu().add(user != null && user.banned
                         ? "🛡 ✓ Unban user (Moderator)" : "🛡 🚫 Ban user (Moderator)");
             }
@@ -1427,7 +1487,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
             pm.getMenu().add("📦 Archive & Recycle Bin");
             pm.getMenu().add("🔗 Copy profile link");
-            pm.getMenu().add("📱 My Profile QR code");
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
         }
@@ -1458,6 +1517,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 boolean make = user == null || !user.isModerator;
                 Admin.setGlobalModerator(this, uid, user != null ? user.displayName : "user", make);
                 if (user != null) user.isModerator = make;
+            } else if (t.contains("Suspend ID") || t.contains("Unsuspend / Change Suspension")) {
+                if (user != null) Admin.showSuspendUserDialog(this, user, this::bindUser);
             } else if (t.contains("Ban user") || t.contains("Unban user")) {
                 if (!Admin.isAdmin() && Admin.isProtectedStaff(user)) {
                     Ui.toast(this, "Admin accounts cannot be modified");
@@ -1487,9 +1548,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Fb.db().collection("users").document(Fb.uid())
                         .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
                 Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list");
-            } else if (t.contains("QR code")) {
-                Ui.showQrDialog(this, user != null ? user.displayName : "friendbook",
-                        com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
             } else if (t.contains("View as Public")) {
                 viewAsPublic = true;
                 viewAsBanner.setVisibility(View.VISIBLE);
@@ -1861,8 +1919,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         @Override public void onBindViewHolder(@NonNull RVH h, int position) {
             Models.Reel r = reels.get(position);
-            if (r.videoUrl != null && !r.videoUrl.isEmpty()) {
-                Ui.img(ProfileActivity.this, h.thumb, r.videoUrl);
+            String rThumb = com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(r.videoUrl, r.thumbUrl);
+            if (!rThumb.isEmpty()) {
+                Ui.img(ProfileActivity.this, h.thumb, rThumb);
+            } else {
+                h.thumb.setImageDrawable(Ui.round(ProfileActivity.this, 0xFF18191A, 0));
             }
             h.countTv.setText("▶ " + Format.count(Math.max(1, r.likes + r.comments)));
             h.itemView.setOnClickListener(v -> {

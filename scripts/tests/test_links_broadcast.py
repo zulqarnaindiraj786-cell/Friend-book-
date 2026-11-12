@@ -31,5 +31,8 @@ class LinksBroadcastTest(unittest.TestCase):
         self.assertIn('match /official_broadcasts/', rule)
         self.assertIn('fullAdmin()',rule)
         self.assertIn('match /officialBroadcasts/',(ROOT/'firebase/firestore.rules').read_text())
-        self.assertIn('official_broadcasts/',(JAVA/'admin/OfficialBroadcastActivity.java').read_text())
+        # Keep legacy Storage rules; new app attachments follow the owner's Cloudinary-only scope.
+        composer = (JAVA/'admin/OfficialBroadcastActivity.java').read_text()
+        self.assertIn('Cloudinary.uploadWithProgress', composer)
+        self.assertNotIn('Fb.storage()', composer)
 if __name__ == '__main__': unittest.main()

@@ -51,8 +51,11 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private FeedAdapter postAdapter;
     private CommentsAdapter commentsAdapter;
     private RecyclerView mainRv;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout commentSwipe;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
+    private boolean initialLoaded;
+    private String retryD1Media="";
     private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, sortLabel, whoReactedChip;
@@ -113,19 +116,39 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postAdapter.showHeader = false;
         postAdapter.showFooter = false;
         postAdapter.showInlineComments = false; // Full comment thread is rendered directly below!
+        final boolean isSponsoredAdDetail = postId.startsWith("sponsored_ad_");
+        final int adSlotOrdinal = getIntent().getIntExtra("ad_slot_ordinal", 0);
+        if (isSponsoredAdDetail) {
+            // Render ONLY the 1 real AdMob AdVH card — NEVER render a fake PostVH card above it!
+            postAdapter.standaloneAdSlotOrdinal = Math.max(0, adSlotOrdinal);
+        } else {
+            // Regular user post detail: render ONLY the user's PostVH card (no extra AdVH inside header)
+            postAdapter.setAdsConfig("", false);
+        }
         postRv.setAdapter(postAdapter);
         headerBox.addView(postRv, new LinearLayout.LayoutParams(-1, -2));
 
-        // 0ms instant preload from FastCache if post is already in RAM!
-        for (Models.Post cached : FastCache.getFeed()) {
-            if (cached != null && postId.equals(cached.id)) {
-                post = cached;
-                postAdapter.setPosts(Collections.singletonList(post));
+        // 0ms instant preload from FastCache or AdsConfig if post is already in RAM!
+        if (!isSponsoredAdDetail) {
+            for (Models.Post cached : FastCache.getFeed()) {
+                if (cached != null && postId.equals(cached.id)) {
+                    post = cached;
+                    postAdapter.setPosts(Collections.singletonList(post));
+                    if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
+                        rawComments.addAll(post.inlineComments);
+                    }
+                    break;
+                }
+            }
+        } else {
+            Models.Post adCached = com.friendbook.social.core.AdsConfig.findCachedAdPostById(postId);
+            if (adCached != null) {
+                post = adCached;
                 if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
                     rawComments.addAll(post.inlineComments);
                 }
-                break;
             }
+            postAdapter.notifyDataSetChanged();
         }
 
         // Comments Filter & Count Bar
@@ -156,6 +179,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             updateCommentPager();
         });
         cHeader.addView(older);
+        if(com.friendbook.social.core.D1Client.enabled("posts")){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
 
         TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
         seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
@@ -180,7 +204,14 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }
         mainRv.setAdapter(commentsAdapter);
         com.friendbook.social.core.NearEndPaging.attachComments(mainRv,()->commentsAdapter.sortMode,()->{if(commentsHandle!=null && commentsHandle.hasMore())commentsHandle.loadMore();});
-        root.addView(mainRv, new LinearLayout.LayoutParams(-1, 0, 1));
+        commentSwipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        commentSwipe.setColorSchemeColors(Ui.BLUE);
+        commentSwipe.addView(mainRv);
+        commentSwipe.setOnRefreshListener(() -> {
+            initialLoaded = false;
+            loadPostAndComments(true);
+        });
+        root.addView(commentSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
 
         // Bottom Comment Composer Bar
         LinearLayout composerWrap = Ui.col(this);
@@ -302,12 +333,31 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
+        if (!initialLoaded) {
+            loadPostAndComments(false);
+        }
+    }
+
+    private void loadPostAndComments(final boolean forceHeader) {
+        initialLoaded = true;
+        if (postReg != null) { postReg.remove(); postReg = null; }
+        if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
+        final boolean[] headerRendered = {!forceHeader && post != null};
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
-            if (d == null || !d.exists()) { finish(); return; }
+            if (d == null || !d.exists()) {
+                if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
+                finish();
+                return;
+            }
             post = Models.Post.fromDoc(d);
             commentsAdapter.postAuthorId = post.authorId;
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
-            postAdapter.setPosts(Collections.singletonList(post));
+            if (postId != null && postId.startsWith("sponsored_ad_")) {
+                postAdapter.notifyDataSetChanged();
+            } else if (!headerRendered[0]) {
+                headerRendered[0] = true;
+                postAdapter.setPosts(Collections.singletonList(post));
+            }
             int likes = FastCache.getReactionTotal(postId, post.likes);
             whoReactedChip.setText(likes > 0
                     ? (likes + (likes == 1 ? " reaction · See all" : " reactions · See all"))
@@ -318,12 +368,12 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
             updateCommentPager();
             if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentSwipe!=null)commentSwipe.setRefreshing(false);
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-
         });
     }
 
@@ -338,20 +388,24 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     protected void onStop() {
         super.onStop();
         FastCache.removeReactionObserver(reactionObserver);
-        if (postReg != null) postReg.remove();
-        if (commentsHandle != null) commentsHandle.remove();
+        if (isFinishing()) {
+            if (postReg != null) postReg.remove();
+            if (commentsHandle != null) commentsHandle.remove();
+        }
     }
 
     private void send() {
         if (busy) return;
+        if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
-        if (text.isEmpty() && pendingPhotoUri == null) return;
+        if (text.isEmpty() && pendingPhotoUri == null && retryD1Media.isEmpty()) return;
         String me = Fb.uid();
         if (me == null) return;
         busy = true;
         final List<Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
 
-        if (pendingPhotoUri != null) {
+        if(com.friendbook.social.core.D1Client.enabled("posts") && pendingPhotoUri==null && !retryD1Media.isEmpty()){String media=retryD1Media;retryD1Media="";writeCommentDoc(me,text,media,mentions);}
+        else if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
             Ui.toast(this, "Uploading comment photo…");
             String path = "comments/" + me + "_" + System.currentTimeMillis() + ".jpg";
@@ -408,6 +462,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             mainRv.scrollToPosition(Math.max(0, commentsAdapter.getItemCount() - 1));
         } else {
             busy = false;
+            if(com.friendbook.social.core.D1Client.enabled("posts")){com.friendbook.social.core.Mentions.restore(input,text,mentions);retryD1Media=mediaUrl;}
         }
     }
 

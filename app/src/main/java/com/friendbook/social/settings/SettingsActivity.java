@@ -169,11 +169,6 @@ public class SettingsActivity extends Activity {
                 "Photo: " + Prefs.photoQualityLabel(this).split(" ")[0]
                         + " · Autoplay: " + Prefs.autoplayModeLabel(this),
                 this::mediaAndDataDialog));
-        body.addView(switchRowI(Icons.DATA_SAVER, "Show top 'Data mode' strip",
-                Prefs.dataModeBar(this), (btn, on) -> {
-                    Prefs.setDataModeBar(this, on);
-                    Ui.toast(this, on ? "Top Data mode strip enabled ✓" : "Top Data mode strip hidden");
-                }));
         body.addView(rowI(Icons.MESSAGES, "Default comments filter",
                 "Current: " + Prefs.commentSort(this).toUpperCase() + " (All comments / Newest / Relevant)",
                 () -> Ui.choose(this, "Default comments filter", new String[]{
@@ -466,6 +461,7 @@ public class SettingsActivity extends Activity {
         final String appVerName = Ui.appVersionName(this);
         final int appVerCode = Ui.appVersionCode(this);
         final String appPkg = getPackageName();
+        body.addView(rowI(Icons.INFO, "Check for APK update", "Official signed Android release", () -> com.friendbook.social.core.AppUpdates.check(this,true)));
         body.addView(rowI(Icons.INFO, "About", "Version " + appVerName + " · " + appPkg, () -> Ui.info(this,
                 "About friendbook",
                 "friendbook for Android\nVersion " + appVerName + " (Build " + appVerCode + ")\nPackage: " + appPkg + "\n\n"

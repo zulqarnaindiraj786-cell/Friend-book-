@@ -27,6 +27,9 @@ public class ReelPlayerActivity extends Activity {
         if (savedInstanceState == null) {
             ReelsFragment frag = new ReelsFragment();
             Bundle args = new Bundle();
+            if (getIntent() != null && getIntent().getExtras() != null) {
+                args.putAll(getIntent().getExtras());
+            }
             args.putString("initial_reel_id", getIntent().getStringExtra("reel_id"));
             args.putBoolean("show_back", true);
             frag.setArguments(args);

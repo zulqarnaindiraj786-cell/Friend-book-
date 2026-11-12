@@ -146,11 +146,14 @@ public final class FeedAlgorithm {
         pendingPostImpressions.add(postId);
     }
 
-    /** Record that the user watched a Reel / Video (takes effect on NEXT refresh / reopen). */
+    /** Record that the user watched a Reel / Video (flushed on pause/refresh for zero scroll jank!). */
     public static synchronized void recordVideoImpression(Context c, String reelOrPostId) {
         if (reelOrPostId == null || reelOrPostId.isEmpty()) return;
         ensureLoaded(c);
         pendingVideoImpressions.add(reelOrPostId);
+        videoLastEpoch.put(reelOrPostId, currentEpoch);
+        videoSeenCount.put(reelOrPostId, getOrZero(videoSeenCount, reelOrPostId) + 1);
+        lastTopReelId = reelOrPostId;
     }
 
     /** Optional user control in Feed Preferences: clear seen history so everything feels brand new. */
@@ -403,6 +406,7 @@ public final class FeedAlgorithm {
         Set<String> favs = (Fb.me != null && Fb.me.favoriteUids != null)
                 ? new HashSet<>(Fb.me.favoriteUids) : Collections.emptySet();
 
+        long freshSalt = mix64(currentSeed ^ System.nanoTime() ^ (currentEpoch * 0x517CC1B727220A95L));
         List<ScoredReel> scored = new ArrayList<>(input.size());
         for (Models.Reel r : input) {
             if (r == null || r.id == null) continue;
@@ -415,13 +419,13 @@ public final class FeedAlgorithm {
             if (me != null && me.equals(r.authorId) && ageMs < 45_000L && seen == 0) {
                 s = 10_000.0;
             } else {
-                // 2. Unseen Discovery Boost
-                if (seen == 0) s += 235.0;
+                // 2. TikTok Unwatched Discovery Priority: unwatched videos ALWAYS outrank watched ones!
+                if (seen == 0) s += 2500.0;
 
                 // 3. Smooth Time-Decay Freshness + Breaking Upload Boost
                 double ageHours = ageMs / 3_600_000.0;
                 s += 130.0 / (1.0 + ageHours / 12.0);
-                if (ageHours < 2.0 && seen == 0) s += 60.0;
+                if (ageHours < 2.0 && seen == 0) s += 80.0;
 
                 // 4. Social Graph + Post/Reel Cross-Affinity (Favorites, Following, Creator Engagement, Verified)
                 if (r.authorId != null) {
@@ -449,18 +453,18 @@ public final class FeedAlgorithm {
                 s += Math.log1p(eng) * 18.0;
                 s += Math.min(55.0, (eng / (ageHours + 2.0)) * 3.2);
 
-                // 7. Impression Cool-Down Penalty
+                // 7. Strong TikTok-Style Watched Cool-Down & Anti-Repeat Penalty
                 if (seen > 0) {
                     int epAgo = Math.max(1, currentEpoch - lastEp);
-                    if (epAgo == 1) s -= 310.0;
-                    else if (epAgo == 2) s -= 160.0;
-                    else if (epAgo == 3) s -= 75.0;
-                    s -= Math.min(seen, 8) * 38.0;
+                    if (epAgo == 1) s -= 650.0;
+                    else if (epAgo == 2) s -= 320.0;
+                    else if (epAgo == 3) s -= 150.0;
+                    s -= Math.min(seen, 12) * 420.0;
                 }
-                if (r.id.equals(lastTopReelId)) s -= 250.0;
+                if (r.id.equals(lastTopReelId)) s -= 1800.0;
 
-                // 8. Per-Epoch Exploration Jitter
-                s += jitter01(currentSeed ^ 0x517CC1B727220A95L, r.id) * 112.0;
+                // 8. High-Entropy TikTok For-You Exploration Shuffle (guarantees a fresh video every time!)
+                s += jitter01(freshSalt, r.id) * 680.0;
             }
             scored.add(new ScoredReel(r, s));
         }

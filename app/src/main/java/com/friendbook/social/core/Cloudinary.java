@@ -21,8 +21,6 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -42,7 +40,91 @@ public class Cloudinary {
     private static final String PRESET = "Myapp_upload";
     private static final String ENDPOINT =
             "https://api.cloudinary.com/v1_1/" + CLOUD_NAME + "/auto/upload";
+    private static final String R2_PHOTO_ENDPOINT =
+            "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/photos";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    private static String sha256Hex(byte[] data) throws Exception {
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(data);
+        StringBuilder sb = new StringBuilder(64);
+        for (byte b : hash) sb.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xFF));
+        return sb.toString();
+    }
+
+    /**
+     * Uploads photo/audio bytes directly to Cloudflare R2 bucket `friendbook` ("Save Forever").
+     * Returns https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/photos/<owner>/<id>.jpg
+     */
+    private static String uploadBytesToR2(byte[] data, String mime, final ProgressListener progressListener) throws Exception {
+        if (data == null || data.length == 0) throw new IllegalArgumentException("Empty photo bytes");
+        com.google.firebase.auth.FirebaseUser user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) throw new IllegalStateException("Not signed in");
+        String token = com.google.android.gms.tasks.Tasks.await(
+                user.getIdToken(false), 20, java.util.concurrent.TimeUnit.SECONDS).getToken();
+        if (token == null || token.isEmpty()) throw new IllegalStateException("Missing auth token");
+        String photoId = sha256Hex(data);
+        String cleanMime = (mime == null || mime.isEmpty()) ? "image/jpeg" : mime;
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(R2_PHOTO_ENDPOINT).openConnection();
+        try {
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(90000);
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setFixedLengthStreamingMode(data.length);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("X-Photo-Id", photoId);
+            conn.setRequestProperty("X-Photo-Mime", cleanMime);
+            conn.setRequestProperty("Content-Type", cleanMime);
+
+            int chunk = 16 * 1024;
+            try (OutputStream out = new BufferedOutputStream(conn.getOutputStream(), chunk)) {
+                int offset = 0;
+                int lastPct = -1;
+                while (offset < data.length) {
+                    int len = Math.min(chunk, data.length - offset);
+                    out.write(data, offset, len);
+                    offset += len;
+                    if (progressListener != null) {
+                        final int pct = Math.min(96, (int) ((offset * 96L) / data.length));
+                        if (pct != lastPct) {
+                            lastPct = pct;
+                            final long sentNow = offset;
+                            final long totalNow = data.length;
+                            MAIN.post(() -> progressListener.onProgress(pct, sentNow, totalNow));
+                        }
+                    }
+                }
+                out.flush();
+            }
+
+            int code = conn.getResponseCode();
+            InputStream rs = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+            StringBuilder sb = new StringBuilder();
+            if (rs != null) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(rs))) {
+                    String line;
+                    while ((line = br.readLine()) != null) sb.append(line);
+                }
+            }
+            if (code >= 200 && code < 300) {
+                JSONObject json = new JSONObject(sb.toString());
+                String url = json.optString("url", "");
+                if (url.startsWith(R2VideoClient.ORIGIN + "/photos/")) {
+                    if (progressListener != null) {
+                        final long totalNow = data.length;
+                        MAIN.post(() -> progressListener.onProgress(100, totalNow, totalNow));
+                    }
+                    return url;
+                }
+            }
+            throw new java.io.IOException("R2 photo upload HTTP " + code);
+        } finally {
+            conn.disconnect();
+        }
+    }
 
     public interface ProgressListener {
         void onProgress(int percent, long sentBytes, long totalBytes);
@@ -53,6 +135,7 @@ public class Cloudinary {
         public int durationSec;
         public int width;
         public int height;
+        public int frameRate;
         public byte[] posterJpeg;
     }
 
@@ -81,6 +164,26 @@ public class Cloudinary {
             } else {
                 meta.width = vw;
                 meta.height = vh;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                String fpsStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE);
+                if (fpsStr != null && !fpsStr.trim().isEmpty()) {
+                    try {
+                        meta.frameRate = Math.round(Float.parseFloat(fpsStr.trim()));
+                    } catch (Throwable ignored) { }
+                }
+            }
+            if (meta.frameRate <= 0 && android.os.Build.VERSION.SDK_INT >= 28) {
+                String frameCountStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT);
+                if (frameCountStr != null && dur != null) {
+                    try {
+                        long frames = Long.parseLong(frameCountStr.trim());
+                        long ms = Long.parseLong(dur.trim());
+                        if (frames > 0 && ms > 0) {
+                            meta.frameRate = Math.round((frames * 1000f) / ms);
+                        }
+                    } catch (Throwable ignored) { }
+                }
             }
             Bitmap frame = mmr.getFrameAtTime(150_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame == null) frame = mmr.getFrameAtTime(0L);
@@ -186,6 +289,13 @@ public class Cloudinary {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
+                try {
+                    String r2Url = uploadBytesToR2(jpegBytes, "image/jpeg", null);
+                    if (r2Url != null && !r2Url.isEmpty()) {
+                        tcs.setResult(r2Url);
+                        return;
+                    }
+                } catch (Throwable ignored) { }
                 String boundary = "fbthumb" + System.currentTimeMillis();
                 conn = (HttpURLConnection) new URL(ENDPOINT).openConnection();
                 conn.setRequestMethod("POST");
@@ -217,7 +327,10 @@ public class Cloudinary {
                 br.close();
 
                 if (code >= 200 && code < 300) {
-                    String secure = new JSONObject(sb.toString()).optString("secure_url", "");
+                    JSONObject asset = new JSONObject(sb.toString());
+                    if ("video".equals(asset.optString("resource_type")) && asset.has("video"))
+                        throw new java.io.IOException("Video requires R2 processing; choose a recognized video file");
+                    String secure = asset.optString("secure_url", "");
                     if (!secure.isEmpty()) tcs.setResult(secure);
                     else tcs.setException(new Exception("No secure_url"));
                 } else {
@@ -239,14 +352,46 @@ public class Cloudinary {
     public static Task<String> uploadWithProgress(final Context ctx, final Uri uri,
                                                   final ProgressListener progressListener) {
         final TaskCompletionSource<String> tcs = new TaskCompletionSource<>();
+        final String uploadActor = Fb.uid();
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
                 String mime = ctx.getContentResolver().getType(uri);
+                if (R2VideoClient.isVideo(ctx, uri, mime)) {
+                    tcs.setResult(R2VideoClient.uploadBlocking(ctx, uri, uploadActor, progressListener));
+                    return; // No direct Cloudinary video upload/playback fallback.
+                }
                 if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
 
                 byte[] compressedImg = compressImageFor2G(ctx, uri, mime);
                 boolean isVideo = mime.startsWith("video/");
+                if (!isVideo) {
+                    try {
+                        byte[] r2Payload = compressedImg;
+                        String r2Mime = compressedImg != null ? "image/jpeg" : mime;
+                        if (r2Payload == null) {
+                            try (InputStream rawIn = ctx.getContentResolver().openInputStream(uri);
+                                 ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                                if (rawIn != null) {
+                                    byte[] tmp = new byte[16 * 1024];
+                                    int r;
+                                    while ((r = rawIn.read(tmp)) != -1) {
+                                        if (bos.size() + r > 25_000_000) break;
+                                        bos.write(tmp, 0, r);
+                                    }
+                                    r2Payload = bos.toByteArray();
+                                }
+                            }
+                        }
+                        if (r2Payload != null && r2Payload.length > 0) {
+                            String r2Url = uploadBytesToR2(r2Payload, r2Mime, progressListener);
+                            if (r2Url != null && !r2Url.isEmpty()) {
+                                tcs.setResult(r2Url);
+                                return;
+                            }
+                        }
+                    } catch (Throwable ignored) { }
+                }
                 String ext = "bin";
                 if (compressedImg != null) {
                     mime = "image/jpeg";
@@ -338,7 +483,10 @@ public class Cloudinary {
                 br.close();
 
                 if (code >= 200 && code < 300) {
-                    String secure = new JSONObject(sb.toString()).optString("secure_url", "");
+                    JSONObject asset = new JSONObject(sb.toString());
+                    if ("video".equals(asset.optString("resource_type")) && asset.has("video"))
+                        throw new java.io.IOException("Video requires R2 processing; choose a recognized video file");
+                    String secure = asset.optString("secure_url", "");
                     if (!secure.isEmpty()) {
                         if (progressListener != null) {
                             final long finalBytes = totalBytes > 0 ? totalBytes : sent;
@@ -362,8 +510,9 @@ public class Cloudinary {
     }
 
     /**
-     * Upload to Cloudinary (compressed for 2G!), and if that fails fall back to
-     * Firebase Storage using the compressed temp file if available.
+     * Compatibility entry point for existing callers. Media stays on Cloudinary;
+     * a failed upload is returned to the caller, never silently sent to Firebase.
+     * The legacy path argument is not a Cloudinary public ID or a deletion key.
      */
     public static Task<String> uploadOrFirebase(final Context ctx, final String path, final Uri uri) {
         return uploadOrFirebaseWithProgress(ctx, path, uri, null);
@@ -372,54 +521,6 @@ public class Cloudinary {
     public static Task<String> uploadOrFirebaseWithProgress(final Context ctx, final String path,
                                                             final Uri uri,
                                                             final ProgressListener progressListener) {
-        final TaskCompletionSource<String> tcs = new TaskCompletionSource<>();
-        uploadWithProgress(ctx, uri, progressListener).addOnCompleteListener(t -> {
-            if (t.isSuccessful()) { tcs.setResult(t.getResult()); return; }
-            android.util.Log.w("Cloudinary", "cloudinary failed, trying Firebase: " + t.getException());
-            new Thread(() -> {
-                Uri fallbackUri = uri;
-                File tempFile = null;
-                try {
-                    String mime = ctx.getContentResolver().getType(uri);
-                    byte[] compressed = compressImageFor2G(ctx, uri, mime);
-                    if (compressed != null) {
-                        tempFile = new File(ctx.getCacheDir(), "up_" + System.currentTimeMillis() + ".jpg");
-                        FileOutputStream fos = new FileOutputStream(tempFile);
-                        fos.write(compressed);
-                        fos.close();
-                        fallbackUri = Uri.fromFile(tempFile);
-                    }
-                } catch (Throwable ignored) { }
-                final File toClean = tempFile;
-                final long totalLen = queryUriLength(ctx, fallbackUri);
-                com.google.firebase.storage.StorageReference ref =
-                        com.google.firebase.storage.FirebaseStorage.getInstance().getReference().child(path);
-                com.google.firebase.storage.UploadTask ut = ref.putFile(fallbackUri);
-                if (progressListener != null) {
-                    ut.addOnProgressListener(snap -> {
-                        long sent = snap.getBytesTransferred();
-                        long tot = snap.getTotalByteCount() > 0 ? snap.getTotalByteCount() : totalLen;
-                        int pct = tot > 0 ? Math.min(99, (int) ((sent * 99L) / tot)) : 50;
-                        MAIN.post(() -> progressListener.onProgress(pct, sent, tot));
-                    });
-                }
-                ut.continueWithTask(task -> {
-                    if (!task.isSuccessful() && task.getException() != null) throw task.getException();
-                    return ref.getDownloadUrl();
-                }).addOnCompleteListener(fb -> {
-                    if (toClean != null) { try { toClean.delete(); } catch (Throwable ignored) { } }
-                    if (fb.isSuccessful() && fb.getResult() != null) {
-                        if (progressListener != null) {
-                            MAIN.post(() -> progressListener.onProgress(100, totalLen, totalLen));
-                        }
-                        tcs.setResult(fb.getResult().toString());
-                    } else {
-                        tcs.setException(fb.getException() != null ? fb.getException()
-                                : new Exception("Upload failed"));
-                    }
-                });
-            }, "fb-upload-fallback").start();
-        });
-        return tcs.getTask();
+        return uploadWithProgress(ctx, uri, progressListener);
     }
 }

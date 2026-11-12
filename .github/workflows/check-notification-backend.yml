@@ -1,0 +1,37 @@
+name: Check D1 notification preparation (no user traffic)
+on:
+  push:
+    branches: ['arena/15a53658-friend-book']
+    paths: ['.github/workflows/check-notification-backend.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test backend routing with mocked providers only
+        run: |
+          npm ci --prefix supabase --ignore-scripts
+          npm test --prefix supabase
+      - name: Verify deployed bulk-mention handler rejects anonymous requests without side effects
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          url='https://iqtccjgpbtnfavbkbogr.supabase.co/functions/v1/bulk-mentions'
+          for method, expected, message in [('POST',401,'AUTH_REQUIRED'),('GET',405,'POST_REQUIRED')]:
+              request=urllib.request.Request(url,method=method,data=b'{}' if method=='POST' else None)
+              try:
+                  response=urllib.request.urlopen(request,timeout=30)
+                  status=response.status; body=response.read()
+              except urllib.error.HTTPError as error:
+                  status=error.code; body=error.read()
+              assert status==expected, f'Unexpected anonymous {method} status: {status}'
+              assert json.loads(body).get('error')==message, 'Deployed handler response mismatch'
+              print(f'Anonymous {method} rejected by application handler ({status}); no user credentials or recipients.')
+          PY
