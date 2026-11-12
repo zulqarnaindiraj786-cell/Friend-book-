@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * TikTok-Style Live Overlays, Gift Drawer, PK Matchmaking Drawer, Invite Friends Sheet,
@@ -1209,8 +1210,7 @@ public final class LivePkAndGiftsUi {
         Ui.confirm(a, "Block " + targetName + "?",
                 targetName + " will be removed from your Live immediately and blocked across friendbook.",
                 "Block", () -> {
-                    Fb.db().collection("users").document(me)
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(targetUid)), SetOptions.merge());
+                    D1Write.write("users", me, Fb.map("blockedUsersAdd", targetUid), null, null, () -> Fb.db().collection("users").document(me) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(targetUid)), SetOptions.merge()));
                     if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(targetUid)) {
                         Fb.me.blocked.add(targetUid);
                     }

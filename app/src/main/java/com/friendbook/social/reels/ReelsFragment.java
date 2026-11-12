@@ -62,6 +62,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⚡ friendbook Ultra-Fast Pro Reels Player:
@@ -2949,7 +2950,9 @@ public class ReelsFragment extends Fragment {
                                 "likes", 0, "comments", 0, "shares", 0,
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(postMap);
+                        D1Write.add("posts", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto(), "authorVerified", Fb.me != null && Fb.me.isVerified, "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none", "content", reel.caption != null && !reel.caption.isEmpty()
+                                        ? ("Shared a Reel by " + reel.authorName + ": " + reel.caption)
+                                        : ("Shared a Reel by " + reel.authorName), "mediaType", "video", "mediaUrl", reel.videoUrl, "privacy", "Public", "likes", 0, "comments", 0, "shares", 0, "savedBy", new ArrayList<String>()), null, null, () -> Fb.db().collection("posts").add(postMap));
                         Ui.toast(a, "Reel shared to your News Feed");
                     } else if (which == 1) {
                         Map<String, Object> s = new HashMap<>();
@@ -2963,7 +2966,8 @@ public class ReelsFragment extends Fragment {
                         s.put("createdAt", FieldValue.serverTimestamp());
                         s.put("expiresAt", new com.google.firebase.Timestamp(
                                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                        Fb.db().collection("stories").add(s);
+                        D1Write.add("stories", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto(), "mediaUrl", reel.videoUrl, "mediaType", "video", "caption", "Reel by " + reel.authorName, "viewedBy", new ArrayList<String>(), "expiresAt", new com.google.firebase.Timestamp(
+                                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L))), null, null, () -> Fb.db().collection("stories").add(s));
                         Ui.toast(a, "Added Reel to your Story");
                     } else if (which == 2) {
                         Intent i = new Intent(Intent.ACTION_SEND);
@@ -3057,13 +3061,7 @@ public class ReelsFragment extends Fragment {
                         };
                         Ui.choose(a, "Report Reel", reasons, w -> {
                             String reason = reasons[w];
-                            Fb.db().collection("reports").add(Fb.map(
-                                    "reelId", reel.id,
-                                    "authorId", reel.authorId,
-                                    "reason", reason,
-                                    "reportedBy", Fb.uid(),
-                                    "type", "reel",
-                                    "createdAt", FieldValue.serverTimestamp()));
+                            D1Write.add("reports", Fb.map("reelId", reel.id, "authorId", reel.authorId, "reason", reason, "reportedBy", Fb.uid(), "type", "reel"), null, null, () -> Fb.db().collection("reports").add(Fb.map( "reelId", reel.id, "authorId", reel.authorId, "reason", reason, "reportedBy", Fb.uid(), "type", "reel", "createdAt", FieldValue.serverTimestamp())));
                             Prefs.hidePost(a, reel.id);
                             if (w == 0 || w == 1 || w == 2) {
                                 ContentSafetyEngine.autoDeleteContent(
@@ -3081,8 +3079,7 @@ public class ReelsFragment extends Fragment {
                             Ui.confirm(a, "Block " + reel.authorName + "?",
                                     "You won't see their reels, posts, stories, or messages anymore.",
                                     "Block", () -> {
-                                        Fb.db().collection("users").document(myUid)
-                                                .set(Fb.map("blockedUsers", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge());
+                                        D1Write.write("users", myUid, Fb.map("blockedUsersAdd", reel.authorId), null, null, () -> Fb.db().collection("users").document(myUid) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge()));
                                         if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(reel.authorId)) {
                                             Fb.me.blocked.add(reel.authorId);
                                         }

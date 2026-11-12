@@ -21,6 +21,7 @@ import com.google.firebase.firestore.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ✓ Verification Badges (100% Free Community & Creator Milestones — Google Play Compliant):
@@ -160,10 +161,7 @@ public class BlueTickActivity extends Activity {
         req.put("status", "pending");
         req.put("screenshotUrl", Fb.myPhoto());
         req.put("date", FieldValue.serverTimestamp());
-        Fb.db().collection("payments").add(req)
-                .addOnSuccessListener(x -> Ui.info(this, "✓ Free Verification Submitted",
-                        "Your free " + Admin.tickLabel(level) + " verification request has been submitted to our community review team."))
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't submit request right now"));
+        D1Write.create("payments", Fb.map("userId", uid, "userEmail", email == null ? "" : email, "type", "tick_" + level, "amount", 0, "currency", "FREE", "status", "pending", "screenshotUrl", Fb.myPhoto()), null, null, () -> Fb.db().collection("payments").add(req) .addOnSuccessListener(x -> Ui.info(this, "✓ Free Verification Submitted", "Your free " + Admin.tickLabel(level) + " verification request has been submitted to our community review team.")) .addOnFailureListener(e -> Ui.toast(this, "Couldn't submit request right now")));
     }
 
     @Override

@@ -62,6 +62,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * Authentic friendbook v525 Pro Profile & Creator Hub:
@@ -759,7 +760,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                 "likes", 0, "comments", 0, "shares", 0,
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(dpPost);
+                        D1Write.add("posts", Fb.map("authorId", uid, "authorName", Fb.myName(), "authorPhotoUrl", isAvatar ? url : Fb.myPhoto(), "authorVerified", Fb.me != null && Fb.me.isVerified, "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none", "content", "", "feeling", isAvatar ? "updated their profile picture" : "updated their cover photo", "mediaType", "image", "mediaUrl", url, "privacy", "Public", "likes", 0, "comments", 0, "shares", 0, "savedBy", new ArrayList<String>()), null, null, () -> Fb.db().collection("posts").add(dpPost));
                     }
                     Ui.toast(ProfileActivity.this, isAvatar
                             ? "Profile picture updated & shared in full HD ✓"
@@ -1344,13 +1345,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         sub.put("createdAt", FieldValue.serverTimestamp());
         sub.put("expiry", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L)));
-        Fb.db().collection("subscriptions").document(uid + "_" + me).set(sub)
-                .addOnSuccessListener(x -> {
-                    subscribedActive = true;
-                    updateSubscribeButton();
-                    Ui.toast(this, "Joined " + user.displayName + "'s VIP Fan Club ⭐");
-                })
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't join right now"));
+        D1Write.write("subscriptions", uid + "_" + me, Fb.map("creatorId", uid, "subscriberId", me, "status", "active", "expiry", new com.google.firebase.Timestamp(
+                new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L))), null, null, () -> Fb.db().collection("subscriptions").document(uid + "_" + me).set(sub) .addOnSuccessListener(x -> { subscribedActive = true; updateSubscribeButton(); Ui.toast(this, "Joined " + user.displayName + "'s VIP Fan Club ⭐"); }) .addOnFailureListener(e -> Ui.toast(this, "Couldn't join right now")));
     }
 
     private void watchSubscription() {
@@ -1418,19 +1414,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
                     if (incomingRequestId == null) return;
                     if (w == 0) {
-                        WriteBatch batch = Fb.db().batch();
-                        batch.update(Fb.db().collection("friend_requests").document(incomingRequestId), "status", "accepted");
-                        batch.set(Fb.db().collection("friends").document(), Fb.map(
-                                "participants", java.util.Arrays.asList(Fb.uid(), uid),
-                                "createdAt", FieldValue.serverTimestamp()));
-                        batch.update(Fb.db().collection("users").document(Fb.uid()), "friendsCount", FieldValue.increment(1));
-                        batch.update(Fb.db().collection("users").document(uid), "friendsCount", FieldValue.increment(1));
-                        batch.commit().addOnSuccessListener(x -> {
+                        // WRITE = Cloudflare: friendship row, answered request and both counters.
+                        String me0 = Fb.uid();
+                        String friendId = me0.compareTo(uid) < 0 ? me0 + "_" + uid : uid + "_" + me0;
+                        D1Write.write("friends", friendId, Fb.map(
+                                "participants", java.util.Arrays.asList(me0, uid),
+                                "createdAt", System.currentTimeMillis()), null, null, null);
+                        D1Write.write("friend_requests", incomingRequestId,
+                                Fb.map("status", "accepted"), null, null, null);
+                        D1Write.write("users", me0, Fb.map("friendsCountDelta", 1), null, null, null);
+                        D1Write.write("users", uid, Fb.map("friendsCountDelta", 1), () -> {
                             Notify.send(uid, "friend_accept", "accepted your friend request");
                             Ui.toast(this, "You're now friends 🎉");
-                        });
+                        }, null, null);
                     } else {
-                        Fb.db().collection("friend_requests").document(incomingRequestId).delete();
+                        D1Write.delete("friend_requests", incomingRequestId, null, null,
+                                () -> Fb.db().collection("friend_requests").document(incomingRequestId).delete());
                     }
                 });
                 break;
@@ -1439,10 +1438,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         "fromUid", Fb.uid(), "toUid", uid,
                         "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
                         "status", "pending", "createdAt", FieldValue.serverTimestamp());
-                Fb.db().collection("friend_requests").add(m).addOnSuccessListener(x -> {
+                D1Write.create("friend_requests", m, () -> {
                     Notify.send(uid, "friend_request", "sent you a friend request");
                     Ui.toast(this, "Friend request sent ✓");
-                });
+                }, null, null);
                 break;
         }
     }
@@ -1475,8 +1474,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             if (parts.contains(uid)) {
                                 d.getReference().delete();
-                                Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
-                                Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1));
+                                D1Write.write("users", me, Fb.map("friendsCountDelta", -1), null, null, () -> Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1)));
+                                D1Write.write("users", uid, Fb.map("friendsCountDelta", -1), null, null, () -> Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1)));
+                                // WRITE = Cloudflare: a counter is a stored number the Worker adjusts, so
+                                // two unfriends at the same moment can never lose an increment.
+                                for (String who : new String[]{me, uid}) {
+                                    java.util.Map<String,Object> delta = new java.util.HashMap<>();
+                                    delta.put("friendsCount", -1L);
+                                    com.friendbook.social.core.CloudflareDocs.write("users", who, delta, null, null);
+                                }
                             }
                         }
                     });
@@ -1546,10 +1552,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Ui.toast(this, next ? "Professional Mode ON 🎬" : "Professional Mode OFF");
             } else if (t.contains("Poke")) PokesActivity.sendPoke(
                     this, uid, user != null ? user.displayName : "them");
-            else if (t.contains("Unblock")) Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayRemove(uid)));
+            else if (t.contains("Unblock")) Fb.patchMeList("blockedUsers", uid, false);
             else if (t.contains("Block") && !t.contains("Unblock")) {
                 Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->
-                        Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
+                        Fb.patchMeList("blockedUsers", uid, true));
             } else if (t.contains("See friendship")) showFriendship();
             else if (t.contains("Copy profile link")) {
                 Ui.copy(this, com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
@@ -1591,8 +1597,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             else if (t.contains("Favorites")) toggleFavorite();
             else if (t.contains("Restricted list")) {
                 boolean rem = Fb.me != null && Fb.me.restrictedUids != null && Fb.me.restrictedUids.contains(uid);
-                Fb.db().collection("users").document(Fb.uid())
-                        .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
+                D1Write.write("users", Fb.uid(), (rem ? Fb.map("restrictedUidsRemove", uid) : Fb.map("restrictedUidsAdd", uid)), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid)));
                 Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list");
             } else if (t.contains("View as Public")) {
                 viewAsPublic = true;
@@ -1606,8 +1611,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             } else if (t.contains("Archive & Recycle Bin")) {
                 startActivity(new Intent(this, ArchiveTrashActivity.class));
             } else if (t.contains("Report")) {
-                Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
-                        "type", "profile", "createdAt", FieldValue.serverTimestamp()));
+                D1Write.add("reports", Fb.map("uid", uid, "reportedBy", Fb.uid(), "type", "profile"), null, null, () -> Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(), "type", "profile", "createdAt", FieldValue.serverTimestamp())));
                 Ui.toast(this, "Reported");
             } else if (t.contains("Change profile photo")) {
                 pickImage(REQ_PICK_AVATAR);
@@ -1624,18 +1628,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void toggleFavorite() {
         if (Fb.me == null) return;
         boolean removing = Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(uid);
-        Fb.db().collection("users").document(Fb.uid())
-                .update("favoriteUids", removing
-                        ? FieldValue.arrayRemove(uid)
-                        : FieldValue.arrayUnion(uid))
-                .addOnSuccessListener(x -> {
-                    if (removing) Fb.me.favoriteUids.remove(uid);
-                    else Fb.me.favoriteUids.add(uid);
-                    Ui.toast(this, removing ? "Removed from Favorites"
-                            : "⭐ Favorites — " + firstOnly(user != null ? user.displayName : "")
-                            + "'s posts show first");
-                })
-                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+        D1Write.write("users", Fb.uid(), (removing
+                        ? Fb.map("favoriteUidsRemove", uid) : Fb.map("favoriteUidsAdd", uid)), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .update("favoriteUids", removing ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid)) .addOnSuccessListener(x -> { if (removing) Fb.me.favoriteUids.remove(uid); else Fb.me.favoriteUids.add(uid); Ui.toast(this, removing ? "Removed from Favorites" : "⭐ Favorites — " + firstOnly(user != null ? user.displayName : "") + "'s posts show first"); }) .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
     }
 
     private void adminAdjustStars() {
@@ -1658,14 +1652,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         Ui.toast(this, "Enter a number like 50 or -20"); return;
                     }
                     if (delta == 0) return;
-                    Fb.db().collection("users").document(uid)
-                            .update("stars", FieldValue.increment(delta))
-                            .addOnSuccessListener(x -> {
-                                if (user != null) user.stars += delta;
-                                Notify.send(uid, "stars", "⭐ " + delta + " Stars adjusted on your account.", null);
-                                Ui.toast(this, "Stars updated ✓ (" + (cur + delta) + ")");
-                            })
-                            .addOnFailureListener(err -> Ui.toast(this, err.getMessage()));
+                    D1Write.write("users", uid, Fb.map("starsDelta", delta), null, null, () -> Fb.db().collection("users").document(uid) .update("stars", FieldValue.increment(delta)) .addOnSuccessListener(x -> { if (user != null) user.stars += delta; Notify.send(uid, "stars", "⭐ " + delta + " Stars adjusted on your account.", null); Ui.toast(this, "Stars updated ✓ (" + (cur + delta) + ")"); }) .addOnFailureListener(err -> Ui.toast(this, err.getMessage())));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

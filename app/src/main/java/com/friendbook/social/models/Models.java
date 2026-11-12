@@ -673,9 +673,15 @@ public class Models {
 
         @SuppressWarnings("unchecked")
         public static Message fromDoc(DocumentSnapshot d) {
+            Map<String, Object> raw = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
+            // A Cloudflare D1 row has no Firestore timestamp type: the moment is already millis.
+            return fromMap(d.getId(), raw);
+        }
+
+        /** One message from a plain map - the same code paths for a D1 row and a legacy document. */
+        public static Message fromMap(String id, Map<String, Object> m) {
             Message m0 = new Message();
-            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
-            m0.id = d.getId();
+            m0.id = id;
             m0.senderId = Format.str(m, "senderId");
             m0.senderName = Format.str(m, "senderName");
             m0.senderPhoto = Format.str(m, "senderPhoto");

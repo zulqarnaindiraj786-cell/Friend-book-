@@ -70,6 +70,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * Full Real-Time Live Video & Audio Broadcast Studio + Viewer Room (`v2.6.0`):
@@ -347,7 +348,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 hb.put("viewerCount", Math.max(1, currentViewers));
                 hb.put("peakViewers", peakViewers);
                 hb.put("likesCount", totalLikes);
-                Fb.db().collection("lives").document(liveId).update(hb);
+                D1Write.write("lives", liveId, Fb.map("lastHeartbeatMs", System.currentTimeMillis(), "viewerIds", new ArrayList<>(activeViewerIds), "viewerCount", Math.max(1, currentViewers), "peakViewers", peakViewers, "likesCount", totalLikes), null, null, () -> Fb.db().collection("lives").document(liveId).update(hb));
                 uiHandler.postDelayed(this, 8000L);
             }
         }
@@ -1430,8 +1431,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
         // Update `viewers` (100% allowed by deployed firestore.rules!) + post join packet in `chat`!
         viewerCountJoined = true;
-        Fb.db().collection("lives").document(liveId)
-                .update("viewers", FieldValue.increment(1));
+        D1Write.write("lives", liveId, Fb.map("viewersDelta", 1), null, null, () -> Fb.db().collection("lives").document(liveId) .update("viewers", FieldValue.increment(1)));
 
         Map<String, Object> joinPkt = new HashMap<>();
         joinPkt.put("type", "join");
@@ -1521,7 +1521,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("frameTs", now);
             upd.put("cameraPaused", false);
             upd.put("filterIndex", currentFilterIdx);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            D1Write.write("lives", liveId, Fb.map("liveFrameB64", base64Webp, "frameSeq", seq, "frameTs", now, "cameraPaused", false, "filterIndex", currentFilterIdx), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
 
             // Also publish to shared 2-User PK Battle Media Channel when PK is active!
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
@@ -1536,7 +1536,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 if (pkRef != null) {
                     try { pkRef.updateChildren(pkV); } catch (Throwable ignored) { }
                 }
-                Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge());
+                D1Write.write("chats", mediaDocId, Fb.map("v", base64Webp, "vs", seq, "camOff", false, "ts", now), null, null, () -> Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge()));
             }
         }
     }
@@ -1556,7 +1556,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("audioB64", base64Ulaw);
             upd.put("audioSeq", seq);
             upd.put("audioLevel", voiceLevel);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            D1Write.write("lives", liveId, Fb.map("audioB64", base64Ulaw, "audioSeq", seq, "audioLevel", voiceLevel), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
 
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
                 String sideKey = "B".equals(pkRole) ? "b" : "a";
@@ -1568,7 +1568,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 if (pkRef != null) {
                     try { pkRef.updateChildren(pkA); } catch (Throwable ignored) { }
                 }
-                Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge());
+                D1Write.write("chats", mediaDocId, Fb.map("a", base64Ulaw, "as", seq), null, null, () -> Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge()));
             }
         }
     }
@@ -1906,7 +1906,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         Map<String, Object> lu = new HashMap<>();
                         lu.put("pkActive", false);
                         lu.put("pkBattleId", "");
-                        Fb.db().collection("lives").document(liveId).update(lu);
+                        D1Write.write("lives", liveId, Fb.map("pkActive", false, "pkBattleId", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(lu));
                     }
                     if (pkBattleActive) {
                         teardownPkStageUi();
@@ -1923,7 +1923,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     cu.put("coHostName", "");
                     cu.put("coHostFrameB64", "");
                     cu.put("coHostAudioB64", "");
-                    Fb.db().collection("lives").document(liveId).update(cu);
+                    D1Write.write("lives", liveId, Fb.map("coHostUid", "", "coHostName", "", "coHostFrameB64", "", "coHostAudioB64", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(cu));
                     if (rtdbStreamRef != null) {
                         try {
                             Map<String, Object> rClear = new HashMap<>();
@@ -1975,7 +1975,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                             relay.put("coHostAudioSeq", seq);
                         }
                         if (!relay.isEmpty()) {
-                            Fb.db().collection("lives").document(liveId).update(relay);
+                            D1Write.write("lives", liveId, Fb.map("coHostFrameB64", cf, "coHostFrameSeq", seq, "coHostAudioB64", ca, "coHostAudioSeq", seq), null, null, () -> Fb.db().collection("lives").document(liveId).update(relay));
                         }
                     }
                 }
@@ -2143,14 +2143,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 Map<String, Object> upd = new HashMap<>();
                 upd.put("coHostUid", req.uid);
                 upd.put("coHostName", req.name);
-                Fb.db().collection("lives").document(liveId).update(upd);
+                D1Write.write("lives", liveId, Fb.map("coHostUid", req.uid, "coHostName", req.name), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
                 postSystemChat(req.name + " joined as Co-Host!");
             });
         }
         labels.add(coHostAllowed ? "Turn OFF Co-Host Requests" : "Turn ON Co-Host Requests");
         actions.add(() -> {
             coHostAllowed = !coHostAllowed;
-            if (liveId != null) Fb.db().collection("lives").document(liveId).update("coHostAllowed", coHostAllowed);
+            if (liveId != null) D1Write.write("lives", liveId, Fb.map("coHostAllowed", coHostAllowed), null, null, () -> Fb.db().collection("lives").document(liveId).update("coHostAllowed", coHostAllowed));
             Ui.toast(this, coHostAllowed ? "Co-Host requests enabled" : "Co-Host requests disabled");
         });
 
@@ -2165,7 +2165,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("coHostName", "");
             upd.put("coHostFrameB64", "");
             upd.put("coHostAudioB64", "");
-            Fb.db().collection("lives").document(liveId).update(upd);
+            D1Write.write("lives", liveId, Fb.map("coHostUid", "", "coHostName", "", "coHostFrameB64", "", "coHostAudioB64", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
             if (rtdbStreamRef != null) {
                 try {
                     Map<String, Object> rClear = new HashMap<>();
@@ -2241,7 +2241,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("pollId", pid);
             upd.put("pollQuestion", q);
             upd.put("pollOptions", opts);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            D1Write.write("lives", liveId, Fb.map("pollId", pid, "pollQuestion", q, "pollOptions", opts), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
             postSystemChat("Host started a Live Poll: " + q);
         });
         if (!activePollId.isEmpty()) {
@@ -2249,7 +2249,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 Map<String, Object> upd = new HashMap<>();
                 upd.put("pollId", "");
                 upd.put("pollQuestion", "");
-                Fb.db().collection("lives").document(liveId).update(upd);
+                D1Write.write("lives", liveId, Fb.map("pollId", "", "pollQuestion", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
             });
         }
         b.setNegativeButton("Cancel", null);
@@ -2274,7 +2274,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 Map<String, Object> upd = new HashMap<>();
                 upd.put("pollId", "");
                 upd.put("pollQuestion", "");
-                Fb.db().collection("lives").document(liveId).update(upd);
+                D1Write.write("lives", liveId, Fb.map("pollId", "", "pollQuestion", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
             });
             head.addView(endP);
         }
@@ -2372,13 +2372,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     } else {
                         ChatItem picked = qaItems.get(which);
                         String banner = "Q&A · @" + picked.name + ": " + picked.text;
-                        Fb.db().collection("lives").document(liveId).update("spotlightQa", banner);
+                        D1Write.write("lives", liveId, Fb.map("spotlightQa", banner), null, null, () -> Fb.db().collection("lives").document(liveId).update("spotlightQa", banner));
                     }
                 });
     }
 
     private void clearSpotlightQa() {
-        if (liveId != null) Fb.db().collection("lives").document(liveId).update("spotlightQa", "");
+        if (liveId != null) D1Write.write("lives", liveId, Fb.map("spotlightQa", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update("spotlightQa", ""));
     }
 
     // ==================== CHAT, REACTIONS, STAR GIFTS & MODERATION ====================
@@ -2462,8 +2462,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
         if (liveId == null || isEnded) return;
         // `likesCount` is explicitly allowed for any signed-in viewer in deployed firestore.rules!
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
+        D1Write.write("lives", liveId, Fb.map("likesCountDelta", 1), null, null, () -> Fb.db().collection("lives").document(liveId) .update("likesCount", FieldValue.increment(1)));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2480,8 +2479,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         spawnFloatingEmoji(emoji);
         if (liveId == null || isEnded) return;
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
+        D1Write.write("lives", liveId, Fb.map("likesCountDelta", 1), null, null, () -> Fb.db().collection("lives").document(liveId) .update("likesCount", FieldValue.increment(1)));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2560,8 +2558,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                             ? pkHostBName : nameA;
 
                     if (recipientLiveId != null && !recipientLiveId.isEmpty()) {
-                        Fb.db().collection("lives").document(recipientLiveId)
-                                .update("stars", FieldValue.increment(coins));
+                        D1Write.write("lives", recipientLiveId, Fb.map("starsDelta", coins), null, null, () -> Fb.db().collection("lives").document(recipientLiveId) .update("stars", FieldValue.increment(coins)));
                     }
 
                     // Boost PK Battle Score Bar in real time across BOTH rooms!
@@ -2580,7 +2577,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     giftDoc.put("giftId", gift.id);
                     giftDoc.put("giftName", gift.name);
                     giftDoc.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("gifts").add(giftDoc);
+                    D1Write.add("gifts", Fb.map("senderId", Fb.uid(), "senderName", Fb.myName(), "toUid", recipientUid, "liveId", recipientLiveId, "stars", coins, "giftId", gift.id, "giftName", gift.name), null, null, () -> Fb.db().collection("gifts").add(giftDoc));
 
                     Map<String, Object> chatGift = new HashMap<>();
                     chatGift.put("type", "gift");
@@ -2629,8 +2626,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             opts.add("Hide / Delete comment");
             acts.add(() -> {
                 deletedMsgIds.add(item.id);
-                Fb.db().collection("lives").document(liveId)
-                        .update("deletedMsgIds", new ArrayList<>(deletedMsgIds));
+                D1Write.write("lives", liveId, Fb.map("deletedMsgIds", new ArrayList<>(deletedMsgIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("deletedMsgIds", new ArrayList<>(deletedMsgIds)));
             });
 
             if (!item.uid.equals(Fb.uid())) {
@@ -2639,8 +2635,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 acts.add(() -> {
                     if (muted) mutedUserIds.remove(item.uid);
                     else mutedUserIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                    D1Write.write("lives", liveId, Fb.map("mutedUserIds", new ArrayList<>(mutedUserIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("mutedUserIds", new ArrayList<>(mutedUserIds)));
                     Ui.toast(this, muted ? "Unmuted " + item.name : "Muted " + item.name);
                 });
 
@@ -2649,8 +2644,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 acts.add(() -> {
                     if (isMod) moderatorIds.remove(item.uid);
                     else moderatorIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("moderatorIds", new ArrayList<>(moderatorIds));
+                    D1Write.write("lives", liveId, Fb.map("moderatorIds", new ArrayList<>(moderatorIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("moderatorIds", new ArrayList<>(moderatorIds)));
                     postSystemChat(isMod ? (item.name + " is no longer moderator")
                             : (item.name + " is now a Live Moderator!"));
                 });
@@ -2664,7 +2658,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     Map<String, Object> upd = new HashMap<>();
                     upd.put("coHostUid", item.uid);
                     upd.put("coHostName", item.name);
-                    Fb.db().collection("lives").document(liveId).update(upd);
+                    D1Write.write("lives", liveId, Fb.map("coHostUid", item.uid, "coHostName", item.name), null, null, () -> Fb.db().collection("lives").document(liveId).update(upd));
                     if (Fb.uid() != null) {
                         LivePkAndGiftsUi.sendDirectLiveInviteToUser(
                                 Fb.uid(), item.uid,
@@ -2676,8 +2670,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 opts.add("Remove / Kick " + item.name + " from Live");
                 acts.add(() -> {
                     kickedUserIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                    D1Write.write("lives", liveId, Fb.map("kickedUserIds", new ArrayList<>(kickedUserIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("kickedUserIds", new ArrayList<>(kickedUserIds)));
                     Ui.toast(this, "Removed " + item.name + " from broadcast");
                 });
             }
@@ -2692,7 +2685,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     Map<String, Object> modUpd = new HashMap<>();
                     modUpd.put("mutedUserIds", new ArrayList<>(mutedUserIds));
                     modUpd.put("kickedUserIds", new ArrayList<>(kickedUserIds));
-                    Fb.db().collection("lives").document(liveId).update(modUpd);
+                    D1Write.write("lives", liveId, Fb.map("mutedUserIds", new ArrayList<>(mutedUserIds), "kickedUserIds", new ArrayList<>(kickedUserIds)), null, null, () -> Fb.db().collection("lives").document(liveId).update(modUpd));
                 }
             }));
         }
@@ -2703,7 +2696,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void updatePinnedComment(String text) {
         if (liveId == null) return;
         if (isHost) {
-            Fb.db().collection("lives").document(liveId).update("pinnedComment", text);
+            D1Write.write("lives", liveId, Fb.map("pinnedComment", text), null, null, () -> Fb.db().collection("lives").document(liveId).update("pinnedComment", text));
         } else {
             postSystemChat("Moderator pinned: " + text);
         }
@@ -2777,8 +2770,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 try { pkRtdbBRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
             }
             if (!pkBattleId.isEmpty()) {
-                Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b")
-                        .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+                D1Write.write("chats", "pkmedia_" + pkBattleId + "_b", Fb.map("camOff", nextPaused), null, null, () -> Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b") .set(Fb.map("camOff", nextPaused), SetOptions.merge()));
             }
             Ui.toast(this, nextPaused ? "PK camera OFF (Voice still live)" : "PK camera ON");
             return;
@@ -2809,7 +2801,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             try { rtdbStreamRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
         }
         if (liveId != null && isLiveStarted) {
-            Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused);
+            D1Write.write("lives", liveId, Fb.map("cameraPaused", nextPaused), null, null, () -> Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused));
         }
         if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
             String sideKey = "B".equals(pkRole) ? "b" : "a";
@@ -2817,8 +2809,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (pkRef != null) {
                 try { pkRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
             }
-            Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_" + sideKey)
-                    .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+            D1Write.write("chats", "pkmedia_" + pkBattleId + "_" + sideKey, Fb.map("camOff", nextPaused), null, null, () -> Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_" + sideKey) .set(Fb.map("camOff", nextPaused), SetOptions.merge()));
         }
         Ui.toast(this, nextPaused ? "Camera OFF (Voice still live)" : "Camera ON");
     }
@@ -2863,7 +2854,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         currentFilterIdx = (currentFilterIdx + 1) % FILTER_NAMES.length;
         applyLiveVisualGrade();
         if (isHost && isLiveStarted && liveId != null) {
-            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+            D1Write.write("lives", liveId, Fb.map("filterIndex", currentFilterIdx), null, null, () -> Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx));
         }
         Ui.toast(this, "Filter: " + FILTER_NAMES[currentFilterIdx]);
     }
@@ -2904,7 +2895,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         currentFilterIdx = filterIndex;
                         applyLiveVisualGrade();
                         if (isHost && isLiveStarted && liveId != null) {
-                            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+                            D1Write.write("lives", liveId, Fb.map("filterIndex", currentFilterIdx), null, null, () -> Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx));
                         }
                     }
                     @Override
@@ -2975,8 +2966,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                                 public void onUnmuteUser(@NonNull String uid) {
                                     mutedUserIds.remove(uid);
                                     if (liveId != null) {
-                                        Fb.db().collection("lives").document(liveId)
-                                                .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                                        D1Write.write("lives", liveId, Fb.map("mutedUserIds", new ArrayList<>(mutedUserIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("mutedUserIds", new ArrayList<>(mutedUserIds)));
                                     }
                                     Ui.toast(LiveActivity.this, "Unmuted viewer");
                                 }
@@ -2984,8 +2974,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                                 public void onUnkickUser(@NonNull String uid) {
                                     kickedUserIds.remove(uid);
                                     if (liveId != null) {
-                                        Fb.db().collection("lives").document(liveId)
-                                                .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                                        D1Write.write("lives", liveId, Fb.map("kickedUserIds", new ArrayList<>(kickedUserIds)), null, null, () -> Fb.db().collection("lives").document(liveId) .update("kickedUserIds", new ArrayList<>(kickedUserIds)));
                                     }
                                     Ui.toast(LiveActivity.this, "Viewer allowed back");
                                 }
@@ -3013,7 +3002,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void syncHostSetting(String field, Object value) {
         if (isHost && isLiveStarted && liveId != null) {
-            Fb.db().collection("lives").document(liveId).update(field, value);
+            D1Write.write("lives", liveId, Fb.map(field, value), null, null, () -> Fb.db().collection("lives").document(liveId).update(field, value));
         }
         Ui.toast(this, "Updated " + field);
     }
@@ -3033,7 +3022,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     liveTitleStr = t;
                     titleInput.setText(t);
                     if (isLiveStarted && liveId != null) {
-                        Fb.db().collection("lives").document(liveId).update("title", t);
+                        D1Write.write("lives", liveId, Fb.map("title", t), null, null, () -> Fb.db().collection("lives").document(liveId).update("title", t));
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -3144,7 +3133,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 post.put("commentsCount", 0);
                 post.put("sharesCount", 0);
                 post.put("createdAt", FieldValue.serverTimestamp());
-                Fb.db().collection("posts").add(post);
+                D1Write.add("posts", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto() == null ? "" : Fb.myPhoto(), "text", "Watching LIVE right now: " + liveTitleStr + " — Join us in friendbook Live!", "bgColor", "#FFE41E3F", "privacy", "public", "likesCount", 0, "commentsCount", 0, "sharesCount", 0), null, null, () -> Fb.db().collection("posts").add(post));
                 Ui.toast(this, "Shared Live invite to Home Feed!");
             } else {
                 Intent s = new Intent(Intent.ACTION_SEND);
@@ -3176,7 +3165,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             rep.put("reporterId", Fb.uid());
             rep.put("reason", reasons[which]);
             rep.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(rep);
+            D1Write.add("reports", Fb.map("targetType", "live", "targetId", liveId, "targetOwnerId", hostId, "reporterId", Fb.uid(), "reason", reasons[which]), null, null, () -> Fb.db().collection("reports").add(rep));
             Ui.toast(this, "Thank you — our moderation team received your report.");
         });
     }
@@ -3271,7 +3260,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkDoc.put("scoreB", 0);
         pkDoc.put("createdAtMs", System.currentTimeMillis());
 
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        D1Write.write("chats", "pkbattle_" + newPkId, Fb.map("pkBattleId", newPkId, "status", "invited", "hostAUid", me, "hostAName", hostNameStr, "hostAPhoto", hostPhotoStr, "liveIdA", liveId, "hostBUid", targetHostUid, "hostBName", targetHostName, "hostBPhoto", targetHostPhoto, "liveIdB", targetLiveId, "durationSec", durationSec, "scoreA", 0, "scoreB", 0, "createdAtMs", System.currentTimeMillis()), null, null, () -> Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc));
         subscribeToPkBattle(newPkId);
 
         Map<String, Object> inv = new HashMap<>();
@@ -3318,7 +3307,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkDoc.put("scoreB", 0);
         pkDoc.put("createdAtMs", System.currentTimeMillis());
 
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        D1Write.write("chats", "pkbattle_" + newPkId, Fb.map("pkBattleId", newPkId, "status", "invited", "hostAUid", me, "hostAName", hostNameStr, "hostAPhoto", hostPhotoStr, "liveIdA", liveId, "hostBUid", targetUid, "hostBName", targetName, "hostBPhoto", targetPhoto, "liveIdB", liveId, "durationSec", durationSec, "scoreA", 0, "scoreB", 0, "createdAtMs", System.currentTimeMillis()), null, null, () -> Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc));
         subscribeToPkBattle(newPkId);
 
         Map<String, Object> inv = new HashMap<>();
@@ -3371,14 +3360,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (isHost && liveId != null) {
             upd.put("liveIdB", liveId);
         }
-        Fb.db().collection("chats").document("pkbattle_" + incomingPkId).set(upd, SetOptions.merge());
+        D1Write.write("chats", "pkbattle_" + incomingPkId, Fb.map("status", "active", "startedAtMs", now, "endsAtMs", ends, "scoreA", 0, "scoreB", 0, "liveIdB", liveId), null, null, () -> Fb.db().collection("chats").document("pkbattle_" + incomingPkId).set(upd, SetOptions.merge()));
         subscribeToPkBattle(incomingPkId);
 
         if (isHost && liveId != null) {
             Map<String, Object> liveUpd = new HashMap<>();
             liveUpd.put("pkActive", true);
             liveUpd.put("pkBattleId", incomingPkId);
-            Fb.db().collection("lives").document(liveId).update(liveUpd);
+            D1Write.write("lives", liveId, Fb.map("pkActive", true, "pkBattleId", incomingPkId), null, null, () -> Fb.db().collection("lives").document(liveId).update(liveUpd));
         }
     }
 
@@ -3505,7 +3494,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 Map<String, Object> lu = new HashMap<>();
                 lu.put("pkActive", false);
                 lu.put("pkBattleId", "");
-                Fb.db().collection("lives").document(liveId).update(lu);
+                D1Write.write("lives", liveId, Fb.map("pkActive", false, "pkBattleId", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(lu));
             }
             teardownPkStageUi();
             return;
@@ -3549,7 +3538,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             Map<String, Object> lu = new HashMap<>();
             lu.put("pkActive", true);
             lu.put("pkBattleId", pkBattleId);
-            Fb.db().collection("lives").document(liveId).update(lu);
+            D1Write.write("lives", liveId, Fb.map("pkActive", true, "pkBattleId", pkBattleId), null, null, () -> Fb.db().collection("lives").document(liveId).update(lu));
             engine.startSpeakerPlayback();
             postSystemChat("PK BATTLE STARTED: " + pkHostAName + " VS " + pkHostBName + "!");
         }
@@ -3722,7 +3711,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         reset.put("scoreB", 0);
         reset.put("startedAtMs", now);
         reset.put("endsAtMs", now + pkDurationSec * 1000L);
-        Fb.db().collection("chats").document("pkbattle_" + pkBattleId).set(reset, SetOptions.merge());
+        D1Write.write("chats", "pkbattle_" + pkBattleId, Fb.map("status", "active", "scoreA", 0, "scoreB", 0, "startedAtMs", now, "endsAtMs", now + pkDurationSec * 1000L), null, null, () -> Fb.db().collection("chats").document("pkbattle_" + pkBattleId).set(reset, SetOptions.merge()));
         postSystemChat("PK REMATCH STARTED!");
     }
 
@@ -3742,14 +3731,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endDoc.put("status", "ended");
             endDoc.put("endedByUid", Fb.uid() == null ? "" : Fb.uid());
             endDoc.put("endedByName", Fb.myName());
-            Fb.db().collection("chats").document("pkbattle_" + oldPkId)
-                    .set(endDoc, SetOptions.merge());
+            D1Write.write("chats", "pkbattle_" + oldPkId, Fb.map("status", "ended", "endedByUid", Fb.uid() == null ? "" : Fb.uid(), "endedByName", Fb.myName()), null, null, () -> Fb.db().collection("chats").document("pkbattle_" + oldPkId) .set(endDoc, SetOptions.merge()));
         }
         if (isHost && liveId != null) {
             Map<String, Object> lu = new HashMap<>();
             lu.put("pkActive", false);
             lu.put("pkBattleId", "");
-            Fb.db().collection("lives").document(liveId).update(lu);
+            D1Write.write("lives", liveId, Fb.map("pkActive", false, "pkBattleId", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(lu));
         }
         Map<String, Object> leavePkt = new HashMap<>();
         leavePkt.put("type", "pk_leave");
@@ -3840,7 +3828,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             pkt.put("a", aB64);
             pkt.put("as", seq);
         }
-        Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b").set(pkt, SetOptions.merge());
+        D1Write.write("chats", "pkmedia_" + pkBattleId + "_b", Fb.map("v", vB64, "vs", seq, "camOff", false, "a", aB64, "as", seq), null, null, () -> Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b").set(pkt, SetOptions.merge()));
     }
 
     private void stopLocalPkGuestStreaming() {
@@ -3930,7 +3918,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endMap.put("pkBattleId", "");
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
-            Fb.db().collection("lives").document(liveId).update(endMap);
+            D1Write.write("lives", liveId, Fb.map("status", "ended", "durationSec", durSec, "peakViewers", peakViewers, "pkActive", false, "pkBattleId", "", "liveFrameB64", "", "audioB64", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(endMap));
             if (rtdbStreamRef != null) {
                 try { rtdbStreamRef.removeValue(); } catch (Throwable ignored) { }
             }
@@ -3975,7 +3963,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         post.put("commentsCount", 0);
         post.put("sharesCount", 0);
         post.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("posts").add(post);
+        D1Write.create("posts", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto() == null ? "" : Fb.myPhoto(), "text", String.format(Locale.US,
+                "Just finished a %02d:%02d Live Broadcast: \"%s\"!\nThank you to %d viewers & everyone who sent %d Stars!",
+                durSec / 60, durSec % 60, liveTitleStr, totalUniqueViewers, totalStarsReceived), "privacy", privacyFriendsOnly ? "friends" : "public", "likesCount", 0, "commentsCount", 0, "sharesCount", 0), null, null, () -> Fb.db().collection("posts").add(post));
         Ui.toast(this, "Live recap shared to Feed!");
     }
 
@@ -4040,11 +4030,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endMap.put("pkBattleId", "");
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
-            Fb.db().collection("lives").document(liveId).update(endMap);
+            D1Write.write("lives", liveId, Fb.map("status", "ended", "pkActive", false, "pkBattleId", "", "liveFrameB64", "", "audioB64", ""), null, null, () -> Fb.db().collection("lives").document(liveId).update(endMap));
         } else if (!isHost && viewerCountJoined && liveId != null) {
             viewerCountJoined = false;
-            Fb.db().collection("lives").document(liveId)
-                    .update("viewers", FieldValue.increment(-1));
+            D1Write.write("lives", liveId, Fb.map("viewersDelta", -1), null, null, () -> Fb.db().collection("lives").document(liveId) .update("viewers", FieldValue.increment(-1)));
             Map<String, Object> leave = new HashMap<>();
             leave.put("type", "leave");
             leave.put("uid", Fb.uid());

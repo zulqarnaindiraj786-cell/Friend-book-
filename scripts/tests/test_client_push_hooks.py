@@ -6,9 +6,11 @@ JAVA = Path(__file__).resolve().parents[2] / 'app/src/main/java/com/friendbook/s
 class ClientPushHooksTest(unittest.TestCase):
     def test_social_notification_after_successful_write(self):
         source = (JAVA/'core/Notify.java').read_text()
-        self.assertIn('collection("notifications").add(n).addOnSuccessListener', source)
+        # The notification is a D1 row now; the push is dispatched from the write's success callback,
+        # and a follow only notifies after the D1 write of the following list landed.
+        self.assertIn('CloudflareDocs.writeDocument("notifications", notifId, n, () -> {', source)
         self.assertIn('if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification', source)
-        self.assertIn('batch.commit().addOnSuccessListener', source)
+        self.assertIn('D1Write.write("users", me,\n                Fb.map(following ? "followingAdd"', source)
         for file in ['profile/ProfileActivity.java', 'post/FeedAdapter.java', 'reels/ReelsFragment.java', 'live/LiveActivity.java']:
             self.assertIn('Notify.follow(', (JAVA/file).read_text(), file)
 
@@ -29,7 +31,8 @@ class ClientPushHooksTest(unittest.TestCase):
         for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'if (!tx.get(ref).exists()) tx.set(ref, n)']:
             self.assertIn(part, worker)
         chat = (JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId())'), 3)
+        # Every send path (text, image, voice, sticker) announces the message after its D1 write.
+        self.assertEqual(chat.count('FCMPush.message(chatId, msgId)'), 3)
         self.assertIn('FCMPush.friendPost(docRef.getId())', (JAVA/'post/CreatePostActivity.java').read_text())
 
     def test_gateway_is_authenticated_and_legacy_devices_do_not_need_fgs(self):

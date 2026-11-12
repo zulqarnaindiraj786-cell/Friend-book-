@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 📄 PageDetailActivity — Full friendbook Page experience:
@@ -255,8 +256,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
     private void toggleFollow() {
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("pages").document(pageId).update("followers",
-                following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+        D1Write.write("pages", pageId, (following ? Fb.map("followersRemove", me) : Fb.map("followersAdd", me)), null, null, () -> Fb.db().collection("pages").document(pageId).update("followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)));
     }
 
     private void editPageDialog() {
@@ -287,12 +287,11 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     upd.put("category", cIn.getText().toString().trim());
                     upd.put("website", wIn.getText().toString().trim());
                     upd.put("about", aIn.getText().toString().trim());
-                    Fb.db().collection("pages").document(pageId).update(upd)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓"));
+                    D1Write.write("pages", pageId, Fb.map("name", nIn.getText().toString().trim(), "category", cIn.getText().toString().trim(), "website", wIn.getText().toString().trim(), "about", aIn.getText().toString().trim()), null, null, () -> Fb.db().collection("pages").document(pageId).update(upd) .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓")));
                 })
                 .setNeutralButton("🗑 Delete Page", (d, w) -> Ui.confirm(this, "Delete Page?",
                         "This removes the Page permanently.", "Delete", () -> {
-                            Fb.db().collection("pages").document(pageId).delete();
+                            D1Write.delete("pages", pageId, null, null, () -> Fb.db().collection("pages").document(pageId).delete());
                             finish();
                         }))
                 .setNegativeButton("Cancel", null)

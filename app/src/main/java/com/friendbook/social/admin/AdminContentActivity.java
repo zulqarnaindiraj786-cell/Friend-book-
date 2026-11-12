@@ -23,6 +23,7 @@ import com.google.firebase.firestore.Query;
 
 import java.util.ArrayList;
 import java.util.List;
+import com.friendbook.social.core.D1Write;
 
 /** Admin content moderation: review & delete posts, reels, stories, comments. */
 public class AdminContentActivity extends Activity {
@@ -144,7 +145,9 @@ public class AdminContentActivity extends Activity {
     private void deleteItem(Item it) {
         Ui.confirm(this, "Delete this " + tab.substring(0, tab.length() - 1) + "?",
                 it.title + "\n" + it.sub, "Delete", () -> {
-                    Fb.db().collection(tab).document(it.id).delete();
+                    // WRITE = Cloudflare: moderation deletes the D1 row of whichever tab is open.
+                    D1Write.delete(tab, it.id, null, null,
+                            () -> Fb.db().collection(tab).document(it.id).delete());
                     if ("posts".equals(tab)) {
                         com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
                                 .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));

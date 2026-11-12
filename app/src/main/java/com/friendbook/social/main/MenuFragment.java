@@ -533,7 +533,9 @@ public class MenuFragment extends Fragment {
                     upd.put("stars", FieldValue.increment(bonus));
                     upd.put("dailyStreak", newStreak);
                     upd.put("lastBonusAt", now);
-                    Fb.db().collection("users").document(me).update(upd)
+                    // WRITE = Cloudflare (own profile row), pre-migration only when it is off.
+                    com.friendbook.social.core.CloudflareDocs.writeDocument("users", me, upd, null, null,
+                            () -> Fb.db().collection("users").document(me).update(upd))
                             .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
                                     "+" + bonusF + " ⭐ added to your balance!\n\n"
                                             + "🔥 Streak: " + newStreak + " day(s)\n"

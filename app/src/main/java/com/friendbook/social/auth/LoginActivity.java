@@ -25,6 +25,7 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.SetOptions;
 
 import java.util.List;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🔐 friendbook Login Screen:
@@ -264,8 +265,7 @@ public class LoginActivity extends Activity {
 
     private void completePostLogin(String uid, String em, DocumentSnapshot d) {
         if (Boolean.TRUE.equals(d.getBoolean("deactivated"))) {
-            Fb.db().collection("users").document(uid)
-                    .set(Fb.map("deactivated", false), SetOptions.merge());
+            D1Write.write("users", uid, Fb.map("deactivated", false), null, null, () -> Fb.db().collection("users").document(uid) .set(Fb.map("deactivated", false), SetOptions.merge()));
             Ui.toast(this, "Welcome back! Your account has been reactivated 👋");
         }
         if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {

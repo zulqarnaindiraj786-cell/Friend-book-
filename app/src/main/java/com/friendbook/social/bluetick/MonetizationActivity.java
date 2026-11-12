@@ -16,6 +16,7 @@ import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⭐ Creator Hub & Community Milestones (100% Free — Google Play Compliant):
@@ -164,8 +165,7 @@ public class MonetizationActivity extends Activity {
     }
 
     private void toggleSubs(CompoundButton btn, boolean on) {
-        Fb.db().collection("users").document(Fb.uid())
-                .set(Fb.map("subscriptionsEnabled", on), SetOptions.merge());
+        D1Write.write("users", Fb.uid(), Fb.map("subscriptionsEnabled", on), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .set(Fb.map("subscriptionsEnabled", on), SetOptions.merge()));
         Ui.toast(this, on ? "Free VIP Fan Club ON ⭐" : "VIP Fan Club turned off");
     }
 

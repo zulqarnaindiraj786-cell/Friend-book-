@@ -13,7 +13,8 @@ class ChatAutoplayUx(unittest.TestCase):
         self.assertIn('if(oldKeys.equals(newKeys))return;',adapter)
         live=chat.split('.limitToLast(40)',1)[1].split('private void loadOlderMessages()',1)[0]
         self.assertLess(live.index('markVisibleReceipts();\n'),live.index('adapter.setData(list)'))
-        for token in ['!chatVisible','receiptInFlight.contains(m.id)','receiptFailed.contains(m.id)','batch.update(', 'receiptFailed.addAll(claimed)']:
+        for token in ['!chatVisible','receiptInFlight.contains(m.id)','receiptFailed.contains(m.id)',
+                      'D1Write.write("messages", chatId + "_" + m.id, patch', 'receiptInFlight.removeAll(claimed)']:
             self.assertIn(token,chat)
     def test_history_restores_id_anchor_and_does_not_clear_on_each_resume(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text()

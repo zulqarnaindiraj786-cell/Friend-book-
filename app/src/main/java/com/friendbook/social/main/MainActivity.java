@@ -39,6 +39,7 @@ import com.google.firebase.firestore.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⚡ Authentic friendbook v525 Pro Home Shell:
@@ -672,7 +673,7 @@ public class MainActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-android");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
+                    D1Write.add("feedback", Fb.map("uid", Fb.uid(), "name", Fb.myName(), "text", txt, "app", "friendbook-android"), null, null, () -> Fb.db().collection("feedback").add(m));
                     Ui.toast(this, "Thanks for your feedback!");
                 })
                 .setNegativeButton("Cancel", null)

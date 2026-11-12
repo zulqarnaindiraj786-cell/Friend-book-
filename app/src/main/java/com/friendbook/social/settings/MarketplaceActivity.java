@@ -43,6 +43,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🛒 MarketplaceActivity — Full friendbook Marketplace:
@@ -303,9 +304,7 @@ public class MarketplaceActivity extends Activity {
         m.put("shares", 0);
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("posts").add(m)
-                .addOnSuccessListener(x -> Ui.toast(this, "Listed on Marketplace ✓"))
-                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+        D1Write.create("posts", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto(), "authorVerified", Fb.me != null && Fb.me.isVerified, "authorTickLevel", Fb.me != null ? Fb.me.tickLevel : "none", "postType", "marketplace", "marketTitle", title, "marketPrice", price, "marketCategory", cat, "marketSold", false, "location", loc, "content", desc.isEmpty() ? ("Selling " + title + " — " + price + " #forsale") : desc, "mediaUrl", photoUrl, "mediaType", photoUrl.isEmpty() ? "none" : "image", "privacy", "Public", "likes", 0, "comments", 0, "shares", 0, "savedBy", new ArrayList<String>()), null, null, () -> Fb.db().collection("posts").add(m) .addOnSuccessListener(x -> Ui.toast(this, "Listed on Marketplace ✓")) .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
     }
 
     private void openItemSheet(Models.Post p) {
@@ -368,7 +367,7 @@ public class MarketplaceActivity extends Activity {
         AlertDialog.Builder ab = new AlertDialog.Builder(this).setView(sv);
         if (p.authorId.equals(Fb.uid())) {
             ab.setPositiveButton(p.marketSold ? "Mark Available" : "✓ Mark as Sold", (dlg, w) -> {
-                Fb.db().collection("posts").document(p.id).update("marketSold", !p.marketSold);
+                D1Write.write("posts", p.id, Fb.map("marketSold", !p.marketSold), null, null, () -> Fb.db().collection("posts").document(p.id).update("marketSold", !p.marketSold));
                 Ui.toast(this, !p.marketSold ? "Marked as SOLD" : "Marked available again");
             });
             ab.setNeutralButton("🗑 Delete", (dlg, w) ->
@@ -378,8 +377,7 @@ public class MarketplaceActivity extends Activity {
             boolean saved = Fb.uid() != null && p.savedBy.contains(Fb.uid());
             ab.setNeutralButton(saved ? "Saved ✓" : "🔖 Save item", (dlg, w) -> {
                 if (Fb.uid() == null) return;
-                Fb.db().collection("posts").document(p.id).update("savedBy",
-                        saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                D1Write.write("posts", p.id, (saved ? Fb.map("savedByRemove", Fb.uid()) : Fb.map("savedByAdd", Fb.uid())), null, null, () -> Fb.db().collection("posts").document(p.id).update("savedBy", saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid())));
                 Ui.toast(this, saved ? "Removed from Saved" : "Saved ✓");
             });
         }
@@ -405,19 +403,19 @@ public class MarketplaceActivity extends Activity {
                 "isSeen", false, "isDelivered", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
-        batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
+        // WRITE = Cloudflare: the room row and the first message, both in D1.
+        final String msgId = D1Write.newId();
+        msg.put("chatId", chatId);
+        D1Write.write("chats", chatId, Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,
-                "lastMessageTimeMs", now,
-                "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
-        batch.commit().addOnSuccessListener(x -> {
+                "lastMessageTimeMs", now), null, null, null);
+        D1Write.write("messages", chatId + "_" + msgId, msg, () -> {
             Intent i = new Intent(this, ChatActivity.class);
             i.putExtra("uid", p.authorId);
             i.putExtra("name", p.authorName);
             startActivity(i);
-        });
+        }, null, null);
     }
 
     class Adapter extends RecyclerView.Adapter<Adapter.VH> {

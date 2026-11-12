@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
+import com.friendbook.social.core.D1Write;
 
 /** Birthdays tab: friends whose birthday is today or coming up. */
 public class BirthdaysActivity extends Activity {
@@ -225,7 +226,9 @@ public class BirthdaysActivity extends Activity {
                                 "comments", 0,
                                 "shares", 0,
                                 "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").document().set(post);
+                        // WRITE = Cloudflare: a birthday wish is a new post document.
+                        D1Write.put("posts",
+                                D1Write.newId(), post, null);
                         com.friendbook.social.core.Notify.send(r.user.uid, "birthday",
                                 "wished you a Happy Birthday 🎂🎉", "");
                         Ui.toast(BirthdaysActivity.this, "🎂 Birthday wish posted!");

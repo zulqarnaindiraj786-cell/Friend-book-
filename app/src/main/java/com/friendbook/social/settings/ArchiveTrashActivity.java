@@ -28,6 +28,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 📦 Archive & Trash — friendbook 525 full content lifecycle manager:
@@ -238,10 +239,20 @@ public class ArchiveTrashActivity extends Activity {
     private void toggleHighlight(Models.Story s, boolean currentlyHighlighted) {
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("users").document(me).update("highlightStoryIds",
-                currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id))
-                .addOnSuccessListener(x -> Ui.toast(this, currentlyHighlighted
-                        ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨"));
+        // WRITE = Cloudflare: the highlighted list is stored on the D1 profile row, computed here
+        // because D1 has no array-add primitive - the previous value is read first.
+        if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+            com.friendbook.social.core.CloudflareDocs.get("users", me, row -> {
+                java.util.List<Object> list = new java.util.ArrayList<>();
+                Object existing = row == null ? null : row.get("highlightStoryIds");
+                if (existing instanceof java.util.List) list.addAll((java.util.List<?>) existing);
+                if (currentlyHighlighted) list.remove(s.id); else if (!list.contains(s.id)) list.add(s.id);
+                java.util.Map<String, Object> patch = new java.util.HashMap<>();
+                patch.put("highlightStoryIds", list);
+                com.friendbook.social.core.CloudflareDocs.write("users", me, patch, null, null);
+            });
+        }
+        D1Write.write("users", me, (currentlyHighlighted ? Fb.map("highlightStoryIdsRemove", s.id) : Fb.map("highlightStoryIdsAdd", s.id)), null, null, () -> Fb.db().collection("users").document(me).update("highlightStoryIds", currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id)) .addOnSuccessListener(x -> Ui.toast(this, currentlyHighlighted ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨")));
     }
 
     private void reshareStory(Models.Story s) {
@@ -257,8 +268,7 @@ public class ArchiveTrashActivity extends Activity {
         m.put("viewedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
         m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-        Fb.db().collection("stories").add(m)
-                .addOnSuccessListener(x -> Ui.toast(this, "Story re-shared for 24h 📖"));
+        D1Write.create("stories", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto(), "mediaUrl", s.mediaUrl == null ? "" : s.mediaUrl, "mediaType", s.mediaType == null ? "text" : s.mediaType, "caption", s.caption == null ? "" : s.caption, "bgColor", s.bgColor, "musicMood", s.musicMood == null ? "" : s.musicMood, "viewedBy", new ArrayList<String>(), "expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L))), null, null, () -> Fb.db().collection("stories").add(m) .addOnSuccessListener(x -> Ui.toast(this, "Story re-shared for 24h 📖")));
     }
 
     private void renderArchivedPosts() {
@@ -312,8 +322,7 @@ public class ArchiveTrashActivity extends Activity {
             Map<String, Object> upd = new HashMap<>();
             upd.put("archived", false);
             upd.put("trashedAt", 0L);
-            Fb.db().collection("posts").document(p.id).update(upd)
-                    .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");});
+            D1Write.write("posts", p.id, Fb.map("archived", false, "trashedAt", 0L), null, null, () -> Fb.db().collection("posts").document(p.id).update(upd) .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");}));
         });
         btns.addView(restore);
 
@@ -347,7 +356,7 @@ public class ArchiveTrashActivity extends Activity {
                 "Only the loaded Recycle Bin items will be permanently deleted. Load more first to include more items. This cannot be undone.",
                 "Delete loaded items", () -> {
                     for (Models.Post p : new ArrayList<>(myPosts)) {
-                        if (p.trashedAt > 0) Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(x->{myPosts.remove(p);render();});
+                        if (p.trashedAt > 0) D1Write.delete("posts", p.id, null, null, () -> Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(x->{myPosts.remove(p);render();}));
                     }
                     Ui.toast(this, "Loaded trash items deleted");
                 });

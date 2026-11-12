@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /** Create / edit post: text, photos (multi), video, feeling, background, poll, check-in, audience. */
 public class CreatePostActivity extends Activity {
@@ -874,7 +875,7 @@ public class CreatePostActivity extends Activity {
                         com.friendbook.social.core.CloudflareOutbox.enqueue(
                                 this, "posts", editId, com.friendbook.social.core.CloudflareDocs.sanitize(m)));
             } else {
-                Fb.db().collection("posts").document(editId).update(m);
+                D1Write.write("posts", editId, Fb.map("content", content, "mentions", submittingMentions, "feeling", feeling, "privacy", privacy, "location", location == null ? "" : location, "postType", postType, "lifeEventIcon", lifeEventIcon, "lifeEventTitle", lifeEventTitle, "marketTitle", marketTitle, "marketPrice", marketPrice, "marketCategory", marketCategory, "marketSold", false, "pageId", pageId, "pageName", pageName == null ? "" : pageName, "pagePhoto", pagePhoto == null ? "" : pagePhoto, "mediaUrl", uploadedUrl, "mediaType", mediaType, "mediaUrls", new ArrayList<>(allUrls), "mediaUrl", "", "mediaType", "none", "mediaUrls", new ArrayList<String>(), "bgColor", (long) (bgColor & 0xFFFFFFFFL), "mediaType", "none", "mediaUrl", "", "pollOptions", new ArrayList<>(pollOptions)), null, null, () -> Fb.db().collection("posts").document(editId).update(m));
             }
             Ui.toast(this, "Post updated ✓");
             finish();

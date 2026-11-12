@@ -42,6 +42,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /** The feed: header (stories rail + composer), post cards, load-more footer. */
 public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
@@ -1426,8 +1427,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (p.pollVotes == null) p.pollVotes = new HashMap<>();
             p.pollVotes.put(me, (long) idx);
         }
-        Fb.db().collection("posts").document(p.id).update(upd)
-                .addOnFailureListener(e -> Ui.toast(activity, "Vote failed: " + e.getMessage()));
+        // WRITE = Cloudflare: a poll vote is this voter's entry in the post's votes map.
+        java.util.Map<String, Object> vote = new java.util.HashMap<>();
+        vote.put("pollVotes", java.util.Collections.singletonMap(me, (long) idx));
+        D1Write.write("posts", p.id, vote, null,
+                reason -> Ui.toast(activity, "Vote failed: " + reason), null);
         notifyDataSetChanged();
     }
 
@@ -1489,9 +1493,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
         s.put("expiresAt", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-        Fb.db().collection("stories").add(s)
-                .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖"))
-                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage()));
+        D1Write.create("stories", Fb.map("authorId", Fb.uid(), "authorName", Fb.myName(), "authorPhotoUrl", Fb.myPhoto(), "mediaUrl", hasImg ? p.mediaUrl : "", "mediaType", hasImg ? "image" : "text", "caption", "📌 " + p.authorName + (cap.isEmpty() ? "" : ": " + cap), "sharedPostId", p.id, "viewedBy", new ArrayList<String>(), "expiresAt", new com.google.firebase.Timestamp(
+                new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L))), null, null, () -> Fb.db().collection("stories").add(s) .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖")) .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage())));
     }
 
     // ---------- post overflow menu ----------
@@ -1572,19 +1575,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("notifications for this post")) {
                 if (Fb.uid() != null) {
-                    Fb.db().collection("posts").document(p.id).update("subscribedBy",
-                            subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                    D1Write.write("posts", p.id, (subscribed ? Fb.map("subscribedByRemove", Fb.uid()) : Fb.map("subscribedByAdd", Fb.uid())), null, null, () -> Fb.db().collection("posts").document(p.id).update("subscribedBy", subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid())));
                     Ui.toast(activity, subscribed ? "Post notifications OFF" : "Post notifications ON 🔔");
                 }
             }
             else if (t.contains("Move to Archive")) {
-                Fb.db().collection("posts").document(p.id).update("archived", true);
+                D1Write.write("posts", p.id, Fb.map("archived", true), null, null, () -> Fb.db().collection("posts").document(p.id).update("archived", true));
                 posts.remove(p);
                 notifyDataSetChanged();
                 Ui.toast(activity, "Moved to Archive 📦 (Settings → Archive & Trash)");
             }
             else if (t.contains("Move to Recycle Bin")) {
-                Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis());
+                D1Write.write("posts", p.id, Fb.map("trashedAt", System.currentTimeMillis()), null, null, () -> Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis()));
                 posts.remove(p);
                 notifyDataSetChanged();
                 Ui.toast(activity, "Moved to Recycle Bin for 30 days 🗑");
@@ -1677,7 +1679,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
         String[] vals = {"Public", "Friends", "Only me"};
         Ui.choose(activity, "Who can see this post?", opts, w -> {
-            Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
+            D1Write.write("posts", p.id, Fb.map("privacy", vals[w]), null, null, () -> Fb.db().collection("posts").document(p.id).update("privacy", vals[w]));
             p.privacy = vals[w];
             notifyDataSetChanged();
             Ui.toast(activity, "Privacy updated: " + vals[w]);
@@ -1687,14 +1689,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void toggleSave(Models.Post p, boolean unsave) {
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("posts").document(p.id)
-                .update("savedBy", unsave ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))
-                .addOnSuccessListener(x -> Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓"));
+        D1Write.write("posts", p.id, (unsave ? Fb.map("savedByRemove", me) : Fb.map("savedByAdd", me)), null, null, () -> Fb.db().collection("posts").document(p.id) .update("savedBy", unsave ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)) .addOnSuccessListener(x -> Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓")));
     }
 
     private void deletePost(Models.Post p) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
-            Fb.db().collection("posts").document(p.id).delete();
+            D1Write.delete("posts", p.id, null, null, () -> Fb.db().collection("posts").document(p.id).delete());
             com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",p.id))
                     .addOnFailureListener(e->Ui.toast(activity,"Post removed; some old comments could not be cleaned up."));
             com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("posts").document(p.id).collection("reactions"))
@@ -1722,8 +1722,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 "Block", () -> {
                     String me = Fb.uid();
                     if (me == null) return;
-                    Fb.db().collection("users").document(me)
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(uid)), SetOptions.merge());
+                    D1Write.write("users", me, Fb.map("blockedUsersAdd", uid), null, null, () -> Fb.db().collection("users").document(me) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(uid)), SetOptions.merge()));
                     Ui.toast(activity, "Blocked");
                 });
     }
@@ -1745,7 +1744,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     "reportedBy", Fb.uid(),
                     "authorId", p.authorId,
                     "createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(m);
+            D1Write.add("reports", Fb.map("postId", p.id, "type", "post", "reason", reason, "reportedBy", Fb.uid(), "authorId", p.authorId), null, null, () -> Fb.db().collection("reports").add(m));
             Prefs.hidePost(activity, p.id);
             removePostById(p.id);
             com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
@@ -1806,8 +1805,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "sharedFromMediaUrl", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaUrl : (p.mediaUrl == null ? "" : p.mediaUrl),
                             "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("posts").add(m);
-                    Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
+                    D1Write.add("posts", Fb.map("postId", p.id, "type", "post", "reason", reason, "reportedBy", Fb.uid(), "authorId", p.authorId), null, null, () -> Fb.db().collection("posts").add(m));
+                    D1Write.write("posts", p.id, Fb.map("sharesDelta", 1), null, null, () -> Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1)));
                     Notify.send(p.authorId, "share", "shared your post", p.id);
                     Ui.toast(c, "Shared to your feed ✓");
                 })
@@ -1855,14 +1854,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 "fromUserPhotoUrl", Fb.myPhoto(),
                 "status", "pending",
                 "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("friend_requests").document(me + "_" + target.uid)
-                .set(req)
-                .addOnSuccessListener(x -> {
-                    btn.setText("Requested ✓");
-                    btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
-                    btn.setTextColor(Ui.sub(activity));
-                    Notify.send(target.uid, "friend_request", "sent you a friend request", "");
-                });
+        D1Write.write("friend_requests", me + "_" + target.uid, Fb.map("fromUid", me, "toUid", target.uid, "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(), "status", "pending"), null, null, () -> Fb.db().collection("friend_requests").document(me + "_" + target.uid) .set(req) .addOnSuccessListener(x -> { btn.setText("Requested ✓"); btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12)); btn.setTextColor(Ui.sub(activity)); Notify.send(target.uid, "friend_request", "sent you a friend request", ""); }));
     }
 
     // ================= ViewHolders (views built in constructors) =================

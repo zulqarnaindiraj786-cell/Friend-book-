@@ -10,10 +10,10 @@ final class D1HttpTransport {
     private D1HttpTransport(){}
     static JSONObject send(URL url,String method,String token,JSONObject body)throws Exception{
         byte[] bytes=body==null?null:body.toString().getBytes(StandardCharsets.UTF_8);
-        if(bytes!=null&&bytes.length>32768)throw new IOException("Comment request too large");
+        if(bytes!=null&&bytes.length>65536)throw new IOException("Request too large");
         HttpURLConnection connection=(HttpURLConnection)url.openConnection();
         try{
-            connection.setConnectTimeout(10000);connection.setReadTimeout(15000);
+            connection.setConnectTimeout(8000);connection.setReadTimeout(12000);
             connection.setInstanceFollowRedirects(false);connection.setRequestMethod(method);
             if(token!=null)connection.setRequestProperty("Authorization","Bearer "+token);
             connection.setRequestProperty("Accept","application/json");

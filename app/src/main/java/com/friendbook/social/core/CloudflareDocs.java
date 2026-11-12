@@ -52,8 +52,12 @@ public final class CloudflareDocs {
 
     private static final String BASE =
             "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/docs";
-    /** Mirrors are metadata only; anything bigger belongs in R2 or is a duplicate of an embed. */
-    private static final int MAX_MIRROR_BYTES = 24 * 1024;
+    /**
+     * The Worker refuses a document over 95 000 characters, and the transport over 64 KiB of UTF-8.
+     * A long post with a shared link is still far below this, so the client keeps the same ceiling as
+     * the server instead of a smaller "mirror" one that would silently drop a real write.
+     */
+    private static final int MAX_WRITE_BYTES = 60 * 1024;
     private static final int MAX_LIST_IDS = 50;
     private static final long READ_CACHE_TTL_MS = 30_000L;
 
@@ -191,7 +195,7 @@ public final class CloudflareDocs {
         final String path = '/' + collection + '/' + id;
         withToken(token -> {
             try {
-                if (body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_MIRROR_BYTES) {
+                if (body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_WRITE_BYTES) {
                     throw new IllegalStateException("too-large");
                 }
                 D1HttpTransport.send(new URL(BASE + path), "PUT", token, body);
@@ -206,6 +210,11 @@ public final class CloudflareDocs {
         }, () -> {
             if (onFailure != null) MAIN.post(() -> onFailure.accept("auth"));
         });
+    }
+
+    /** A document id generated on the device, for a write that has not reached any store yet. */
+    public static String newId() {
+        return java.util.UUID.randomUUID().toString();
     }
 
     /** Deletes one document from the store (the Worker refuses anything the caller does not own). */

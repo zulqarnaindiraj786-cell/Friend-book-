@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⭐ Feed preferences — Full friendbook Feed Controls:
@@ -125,8 +126,7 @@ public class FeedPreferencesActivity extends Activity {
         if (me == null) return;
         if (favorites.contains(u.uid)) favorites.remove(u.uid);
         else favorites.add(u.uid);
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("favoriteUids", new ArrayList<>(favorites)), SetOptions.merge());
+        D1Write.write("users", me, Fb.map("favoriteUids", new ArrayList<>(favorites)), null, null, () -> Fb.db().collection("users").document(me) .set(Fb.map("favoriteUids", new ArrayList<>(favorites)), SetOptions.merge()));
         render();
     }
 

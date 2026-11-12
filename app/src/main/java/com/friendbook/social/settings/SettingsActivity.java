@@ -39,6 +39,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⚙ Settings & privacy — Full friendbook v2.2.0 Settings Hub:
@@ -431,12 +432,7 @@ public class SettingsActivity extends Activity {
                                     .setPositiveButton("Submit Priority Report", (d, which) -> {
                                         String txt = details.getText().toString().trim();
                                         if (txt.isEmpty()) { Ui.toast(this, "Please enter report details"); return; }
-                                        Fb.db().collection("reports").add(Fb.map(
-                                                "type", "csae_priority_report",
-                                                "category", "csae",
-                                                "reason", txt,
-                                                "reportedBy", Fb.uid(),
-                                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp()));
+                                        D1Write.add("reports", Fb.map("type", "csae_priority_report", "category", "csae", "reason", txt, "reportedBy", Fb.uid()), null, null, () -> Fb.db().collection("reports").add(Fb.map( "type", "csae_priority_report", "category", "csae", "reason", txt, "reportedBy", Fb.uid(), "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp())));
                                         Ui.info(this, "Priority Report Submitted",
                                                 "Thank you. Our safety team prioritizes child safety reports immediately.");
                                     })
@@ -533,7 +529,9 @@ public class SettingsActivity extends Activity {
     private void patchUser(String key, Object val) {
         String uid = Fb.uid();
         if (uid == null) return;
-        Fb.db().collection("users").document(uid).set(Fb.map(key, val), SetOptions.merge());
+        // WRITE = Cloudflare: a preference toggled on this build is stored on the D1 profile row.
+        com.friendbook.social.core.CloudflareDocs.writeDocument("users", uid, Fb.map(key, val), null, null,
+                () -> Fb.db().collection("users").document(uid).set(Fb.map(key, val), SetOptions.merge()));
     }
 
     // ---------- UI builders ----------
@@ -633,11 +631,7 @@ public class SettingsActivity extends Activity {
                     upd.put("nameLower", n.toLowerCase(Locale.ROOT));
                     upd.put("pronouns", pronIn.getText().toString().trim());
                     upd.put("phone", phoneIn.getText().toString().trim());
-                    Fb.db().collection("users").document(Fb.uid()).set(upd, SetOptions.merge())
-                            .addOnSuccessListener(x -> {
-                                Ui.toast(this, "Personal info updated ✓");
-                                recreate();
-                            });
+                    D1Write.write("users", Fb.uid(), Fb.map("displayName", n, "nameLower", n.toLowerCase(Locale.ROOT), "pronouns", pronIn.getText().toString().trim(), "phone", phoneIn.getText().toString().trim()), null, null, () -> Fb.db().collection("users").document(Fb.uid()).set(upd, SetOptions.merge()) .addOnSuccessListener(x -> { Ui.toast(this, "Personal info updated ✓"); recreate(); }));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1226,7 +1220,7 @@ public class SettingsActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
                     m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
+                    D1Write.add("feedback", Fb.map("uid", Fb.uid(), "name", Fb.myName(), "text", txt, "app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")"), null, null, () -> Fb.db().collection("feedback").add(m));
                     Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
                 })
                 .setNegativeButton("Cancel", null)
@@ -1325,7 +1319,10 @@ public class SettingsActivity extends Activity {
                                         for (DocumentSnapshot d : snap) d.getReference().delete();
                                     });
                         }
-                        Fb.db().collection("users").document(uid).delete();
+                        D1Write.delete("users", uid, null, null, () -> Fb.db().collection("users").document(uid).delete());
+                        // The Cloudflare profile row is deleted as well: an account deletion must not
+                        // leave a readable profile in the store this build actually writes to.
+                        com.friendbook.social.core.CloudflareDocs.delete("users", uid, null, null);
                     }
                     Fb.auth().getCurrentUser().delete()
                             .addOnSuccessListener(x -> {

@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ✏️ EditProfileActivity — Full friendbook Profile & Intro Editor:
@@ -310,15 +311,6 @@ public class EditProfileActivity extends Activity {
         m.put("contactPrivacy", ep);
         m.put("contactInfoPrivacy", ep);
 
-        Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge())
-                .addOnSuccessListener(x -> {
-                    Ui.toast(this, "Profile & Intro updated ✓");
-                    finish();
-                })
-                .addOnFailureListener(e -> {
-                    busy = false;
-                    save.setText("Save changes");
-                    Ui.toast(this, e.getMessage());
-                });
+        D1Write.write("users", Fb.uid(), Fb.map("displayName", n, "pronouns", pronouns.getText().toString().trim(), "bio", bio.getText().toString().trim(), "work", work.getText().toString().trim(), "education", education.getText().toString().trim(), "currentCity", currentCity.getText().toString().trim(), "hometown", hometown.getText().toString().trim(), "relationship", relationship == null ? "" : relationship, "relationshipStatus", relationship == null ? "" : relationship, "website", website.getText().toString().trim(), "hobbies", hobbyList, "birthday", birthday == null ? "" : birthday, "emailPrivacy", ep, "contactPrivacy", ep, "contactInfoPrivacy", ep), null, null, () -> Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge()) .addOnSuccessListener(x -> { Ui.toast(this, "Profile & Intro updated ✓"); finish(); }) .addOnFailureListener(e -> { busy = false; save.setText("Save changes"); Ui.toast(this, e.getMessage()); }));
     }
 }

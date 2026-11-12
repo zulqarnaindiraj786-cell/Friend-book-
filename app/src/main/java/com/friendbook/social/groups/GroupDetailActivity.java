@@ -47,6 +47,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 👥 Full Pro Community Group Detail Screen:
@@ -479,22 +480,20 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                         up.put("members", FieldValue.arrayRemove(me));
                         up.put("adminIds", FieldValue.arrayRemove(me));
                         up.put("moderatorIds", FieldValue.arrayRemove(me));
-                        Fb.db().collection("groups").document(id).update(up);
+                        D1Write.write("groups", id, Fb.map("membersRemove", me, "adminIdsRemove", me, "moderatorIdsRemove", me), null, null, () -> Fb.db().collection("groups").document(id).update(up));
                         Ui.toast(this, "You left " + group.name);
                     });
         } else if (isPending) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayRemove(me));
+            D1Write.write("groups", id, Fb.map("pendingMemberIdsRemove", me), null, null, () -> Fb.db().collection("groups").document(id) .update("pendingMemberIds", FieldValue.arrayRemove(me)));
             Ui.toast(this, "Join request cancelled");
         } else if (!isInvited && ("Private".equalsIgnoreCase(group.privacy) || group.requireJoinApproval)) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayUnion(me));
+            D1Write.write("groups", id, Fb.map("pendingMemberIdsAdd", me), null, null, () -> Fb.db().collection("groups").document(id) .update("pendingMemberIds", FieldValue.arrayUnion(me)));
             Ui.toast(this, "⏳ Join request sent to Group Admins & Moderators");
         } else {
             Map<String, Object> up = new HashMap<>();
             up.put("members", FieldValue.arrayUnion(me));
             up.put("invitedUids", FieldValue.arrayRemove(me));
-            Fb.db().collection("groups").document(id).update(up);
+            D1Write.write("groups", id, Fb.map("membersAdd", me, "invitedUidsRemove", me), null, null, () -> Fb.db().collection("groups").document(id).update(up));
             Ui.toast(this, "Joined " + group.name + " 🎉");
         }
     }
@@ -555,8 +554,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setView(sv)
                 .setPositiveButton("Send Invites", (d, w) -> {
                     if (selected.isEmpty()) return;
-                    Fb.db().collection("groups").document(id)
-                            .update("invitedUids", FieldValue.arrayUnion(selected.toArray()));
+                    D1Write.write("groups", id, Fb.map("invitedUidsAdd", selected.toArray()), null, null, () -> Fb.db().collection("groups").document(id) .update("invitedUids", FieldValue.arrayUnion(selected.toArray())));
                     for (String toUid : selected) {
                         Notify.sendGroupInvite(toUid, id, group.name);
                     }
@@ -629,11 +627,14 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             else if (sel.startsWith("🗑")) {
                 Ui.confirm(this, "Delete \"" + group.name + "\"?",
                         "This permanently deletes the group.", "Delete Group", () ->
-                                Fb.db().collection("groups").document(id).delete()
-                                        .addOnSuccessListener(x -> {
+                                D1Write.delete("groups", id, () -> {
                                             Ui.toast(this, "Group deleted");
                                             finish();
-                                        }));
+                                        }, null,
+                                        () -> Fb.db().collection("groups").document(id).delete().addOnSuccessListener(x -> {
+                                            Ui.toast(this, "Group deleted");
+                                            finish();
+                                        })));
             }
         });
     }
@@ -672,7 +673,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView appr = Ui.btn(this, "✓ Approve");
             Ui.pad(appr, 12, 6, 12, 6);
             appr.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved");
+                D1Write.write("posts", p.id, Fb.map("groupApprovalStatus", "approved"), null, null, () -> Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved"));
                 Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Post approved ✓");
@@ -682,7 +683,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             decl.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
+                D1Write.delete("posts", p.id, null, null, () -> Fb.db().collection("posts").document(p.id).delete());
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Post declined & removed");
             });
@@ -726,7 +727,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 Map<String, Object> up = new HashMap<>();
                 up.put("pendingMemberIds", FieldValue.arrayRemove(reqUid));
                 up.put("members", FieldValue.arrayUnion(reqUid));
-                Fb.db().collection("groups").document(id).update(up);
+                D1Write.write("groups", id, Fb.map("pendingMemberIdsRemove", reqUid, "membersAdd", reqUid), null, null, () -> Fb.db().collection("groups").document(id).update(up));
                 Notify.sendGroupInvite(reqUid, id, group.name);
                 row.setVisibility(View.GONE);
                 Ui.toast(this, "Approved ✓");
@@ -737,8 +738,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-2, -2);
             nlp.leftMargin = Ui.dp(this, 6);
             no.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id)
-                        .update("pendingMemberIds", FieldValue.arrayRemove(reqUid));
+                D1Write.write("groups", id, Fb.map("pendingMemberIdsRemove", reqUid), null, null, () -> Fb.db().collection("groups").document(id) .update("pendingMemberIds", FieldValue.arrayRemove(reqUid)));
                 row.setVisibility(View.GONE);
             });
             row.addView(ok);
@@ -790,7 +790,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView pinB = Ui.btnOutline(this, pinned ? "Unpin" : "📌 Pin to Featured", Ui.BLUE);
             Ui.pad(pinB, 10, 5, 10, 5);
             pinB.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id);
+                D1Write.write("groups", id, Fb.map("pinnedPostId", pinned ? "" : p.id), null, null, () -> Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id));
                 dlg.dismiss();
                 Ui.toast(this, pinned ? "Unpinned" : "Pinned to Featured 📌");
             });
@@ -800,7 +800,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             delB.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
+                D1Write.delete("posts", p.id, null, null, () -> Fb.db().collection("posts").document(p.id).delete());
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Removed from group 🗑");
             });
@@ -834,8 +834,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView unban = Ui.btnOutline(this, "Unban", Ui.GREEN);
             Ui.pad(unban, 10, 5, 10, 5);
             unban.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id)
-                        .update("bannedMemberIds", FieldValue.arrayRemove(bUid));
+                D1Write.write("groups", id, Fb.map("bannedMemberIdsRemove", bUid), null, null, () -> Fb.db().collection("groups").document(id) .update("bannedMemberIds", FieldValue.arrayRemove(bUid)));
                 row.setVisibility(View.GONE);
                 Ui.toast(this, "Unbanned ✓");
             });
@@ -906,8 +905,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                     up.put("postPermission", postPerm[0]);
                     up.put("requirePostApproval", swPostAppr.isChecked());
                     up.put("requireJoinApproval", swJoinAppr.isChecked());
-                    Fb.db().collection("groups").document(id).set(up, SetOptions.merge())
-                            .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓"));
+                    D1Write.write("groups", id, Fb.map("name", n, "category", catIn.getText().toString().trim(), "about", aboutIn.getText().toString().trim(), "rules", rulesIn.getText().toString().trim(), "privacy", priv[0], "postPermission", postPerm[0], "requirePostApproval", swPostAppr.isChecked(), "requireJoinApproval", swJoinAppr.isChecked()), null, null, () -> Fb.db().collection("groups").document(id).set(up, SetOptions.merge()) .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓")));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1043,19 +1041,17 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             if (act == 1) {
                 startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", targetUid));
             } else if (act == 2) {
-                Fb.db().collection("groups").document(id).update("adminIds",
-                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                D1Write.write("groups", id, (targetAdmin ? Fb.map("adminIdsRemove", targetUid) : Fb.map("adminIdsAdd", targetUid)), null, null, () -> Fb.db().collection("groups").document(id).update("adminIds", targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid)));
                 Ui.toast(this, targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
             } else if (act == 3) {
-                Fb.db().collection("groups").document(id).update("moderatorIds",
-                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                D1Write.write("groups", id, (targetMod ? Fb.map("moderatorIdsRemove", targetUid) : Fb.map("moderatorIdsAdd", targetUid)), null, null, () -> Fb.db().collection("groups").document(id).update("moderatorIds", targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid)));
                 Ui.toast(this, targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");
             } else if (act == 4) {
                 Map<String, Object> up = new HashMap<>();
                 up.put("members", FieldValue.arrayRemove(targetUid));
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
-                Fb.db().collection("groups").document(id).update(up);
+                D1Write.write("groups", id, Fb.map("membersRemove", targetUid, "adminIdsRemove", targetUid, "moderatorIdsRemove", targetUid), null, null, () -> Fb.db().collection("groups").document(id).update(up));
                 Ui.toast(this, "Removed " + targetName);
             } else if (act == 5) {
                 Map<String, Object> up = new HashMap<>();
@@ -1063,7 +1059,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
                 up.put("bannedMemberIds", FieldValue.arrayUnion(targetUid));
-                Fb.db().collection("groups").document(id).update(up);
+                D1Write.write("groups", id, Fb.map("membersRemove", targetUid, "adminIdsRemove", targetUid, "moderatorIdsRemove", targetUid, "bannedMemberIdsAdd", targetUid), null, null, () -> Fb.db().collection("groups").document(id).update(up));
                 Ui.toast(this, "Banned " + targetName + " from group 🚫");
             }
             return true;

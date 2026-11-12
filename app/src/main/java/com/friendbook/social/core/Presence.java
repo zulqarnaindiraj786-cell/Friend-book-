@@ -19,6 +19,7 @@ import com.google.firebase.firestore.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /** RTDB onDisconnect presence, per-install connections, bounded freshness and privacy-aware readers. */
 public class Presence {
@@ -126,9 +127,15 @@ public class Presence {
             m.put("isOnline", active); m.put("isActive", active);
             m.put("showActiveStatus", allowed);
             m.put("lastSeenMs", now()); m.put("lastSeen", FieldValue.serverTimestamp());
-            Fb.db().collection("users").document(uid).set(m, SetOptions.merge())
-                    .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()))
-                    .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));
+            // WRITE = Cloudflare: the presence row of a user on this build is written to D1, and the
+            // pre-migration write only happens when Cloudflare is switched off.
+            if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+                com.friendbook.social.core.CloudflareDocs.write("users", uid, m,
+                        () -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()),
+                        error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));
+            } else {
+                D1Write.write("users", uid, Fb.map("isOnline", active, "isActive", active, "showActiveStatus", allowed, "lastSeenMs", now()), null, null, () -> Fb.db().collection("users").document(uid).set(m, SetOptions.merge()) .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime())) .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime())));
+            }
         } catch (Exception e) {
             if (attempt != 0) FIRESTORE_WRITES.complete(attempt, false, android.os.SystemClock.elapsedRealtime());
             android.util.Log.w("FriendBookPresence", "Presence write could not be queued");
@@ -338,7 +345,9 @@ public class Presence {
     public static void setTyping(String chatId, boolean typing) {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
-        Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
+        // WRITE = Cloudflare: who is typing is a map field on the room row.
+        D1Write.write("chats", chatId,
+                Fb.map("typing", java.util.Collections.singletonMap(uid, typing)), null, null, null);
 
         if (Fb.rtdb() != null) {
             try {
@@ -349,7 +358,9 @@ public class Presence {
                 if (typing) {
                     Runnable clear = () -> {
                         try { ref.setValue(false); } catch (Throwable ignored) { }
-                        Fb.db().collection("chats").document(chatId).update("typing." + uid, false);
+                        D1Write.write("chats", chatId,
+                                Fb.map("typing", java.util.Collections.singletonMap(uid, false)),
+                                null, null, null);
                     };
                     typingClear.put(chatId, clear);
                     H.postDelayed(clear, 4000);

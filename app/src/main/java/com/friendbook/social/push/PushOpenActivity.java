@@ -6,6 +6,7 @@ import android.os.Bundle;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.main.MainActivity;
+import com.friendbook.social.core.D1Write;
 
 /** Internal notification router. Pending target survives sign-in and the app PIN screen. */
 public class PushOpenActivity extends Activity {
@@ -43,7 +44,7 @@ public class PushOpenActivity extends Activity {
             target.putExtra("uid", getIntent().getStringExtra("fromUserId"));
         }
         String nid = getIntent().getStringExtra("notificationId");
-        if (nid != null && !nid.isEmpty()) Fb.db().collection("notifications").document(nid).update("isRead", true);
+        if (nid != null && !nid.isEmpty()) D1Write.write("notifications", nid, Fb.map("isRead", true), null, null, () -> Fb.db().collection("notifications").document(nid).update("isRead", true));
         startActivities(new Intent[]{new Intent(this, MainActivity.class), target});
         finish();
     }

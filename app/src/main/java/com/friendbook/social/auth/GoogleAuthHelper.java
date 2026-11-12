@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🔐 3-Layer Bulletproof Direct Google Login & Sign-Up Engine (`com.friendbook.social`):
@@ -415,7 +416,26 @@ public final class GoogleAuthHelper {
                                                String displayName, String googlePhoto,
                                                String referralInput, View btnView, TextView labelTv) {
         Map<String, Object> u = buildDefaultGoogleUserMap(uid, email, displayName, googlePhoto);
-        Fb.db().collection("users").document(uid).set(u, SetOptions.merge())
+        // WRITE = Cloudflare: the profile of a user who signs in on this build is a D1 row, in the
+        // same store every read of this build already looks at first.
+        com.friendbook.social.core.CloudflareDocs.writeDocument("users", uid, u, () -> {
+                    sAuthInFlight = false;
+                    recordReferralIfPresent(a, uid, displayName, googlePhoto, referralInput);
+                    Prefs.saveAccount(a, uid, email, displayName, googlePhoto);
+                    Prefs.setUnlockedSession(a, true);
+                    SessionsActivity.record();
+                    openMain(a);
+                }, reason -> {
+                    sAuthInFlight = false;
+                    // The account exists in Firebase Auth; the profile row is retried, never lost.
+                    com.friendbook.social.core.CloudflareOutbox.enqueue(a, "users", uid,
+                            com.friendbook.social.core.CloudflareDocs.sanitize(u));
+                    Prefs.saveAccount(a, uid, email, displayName, googlePhoto);
+                    Prefs.setUnlockedSession(a, true);
+                    SessionsActivity.record();
+                    openMain(a);
+                },
+                () -> Fb.db().collection("users").document(uid).set(u, SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     sAuthInFlight = false;
                     recordReferralIfPresent(a, uid, displayName, googlePhoto, referralInput);
@@ -428,7 +448,7 @@ public final class GoogleAuthHelper {
                     sAuthInFlight = false;
                     setBusy(btnView, labelTv, false);
                     Ui.toast(a, friendlyError(err != null ? err.getMessage() : null));
-                });
+                }));
     }
 
     public static Map<String, Object> buildDefaultGoogleUserMap(String uid, String email,
@@ -524,7 +544,9 @@ public final class GoogleAuthHelper {
             existingPhoto = googlePhoto;
         }
         if (!patch.isEmpty()) {
-            Fb.db().collection("users").document(uid).set(patch, SetOptions.merge());
+            // WRITE = Cloudflare (the profile row lives there for this build).
+            com.friendbook.social.core.CloudflareDocs.writeDocument("users", uid, patch, null, null,
+                    () -> Fb.db().collection("users").document(uid).set(patch, SetOptions.merge()));
         }
         if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
             Notify.send(uid, "security", "logged in with Google on " + android.os.Build.MODEL, "");
@@ -555,7 +577,7 @@ public final class GoogleAuthHelper {
             r.put("status", "completed");
             r.put("date", FieldValue.serverTimestamp());
             r.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r);
+            D1Write.write("referrals", refBy + "_" + newUid, Fb.map("refBy", refBy, "refTo", newUid, "status", "completed"), null, null, () -> Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r));
 
             Map<String, Object> n = new HashMap<>();
             n.put("toUserId", refBy);
@@ -566,7 +588,7 @@ public final class GoogleAuthHelper {
             n.put("text", "joined friendbook via your invite 🎉 (referral credit +1)");
             n.put("isRead", false);
             n.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("notifications").add(n);
+            D1Write.add("notifications", Fb.map("toUserId", refBy, "fromUserId", newUid, "fromUserName", newName, "fromUserPhotoUrl", newPhoto == null ? "" : newPhoto, "type", "referral", "text", "joined friendbook via your invite 🎉 (referral credit +1)", "isRead", false), null, null, () -> Fb.db().collection("notifications").add(n));
         });
     }
 

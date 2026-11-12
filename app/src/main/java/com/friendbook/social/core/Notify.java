@@ -10,6 +10,7 @@ import com.google.firebase.firestore.WriteBatch;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /** Writes realtime notifications and official friendbook Team messages (with Crown-F emblem). */
 public class Notify {
@@ -22,14 +23,14 @@ public class Notify {
     public static void follow(String toUid, boolean following) {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
-        WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("users").document(toUid),
-                Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
-        batch.set(Fb.db().collection("users").document(me),
-                Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
-        batch.commit().addOnSuccessListener(v -> {
-            if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
-        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
+        // WRITE = Cloudflare: a follow is one member of the follower list on each side, written as an
+        // add/remove so two people following at once cannot overwrite each other.
+        D1Write.write("users", toUid,
+                Fb.map(following ? "followersAdd" : "followersRemove", me), null, null, null);
+        D1Write.write("users", me,
+                Fb.map(following ? "followingAdd" : "followingRemove", toUid), () -> {
+                    if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
+                }, reason -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"), null);
     }
 
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
@@ -92,8 +93,15 @@ public class Notify {
         n.put("text", text);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
+        final String notifId = CloudflareDocs.newId();
+        D1Write.write("notifications", notifId,
+                Fb.map("toUserId", toUid, "fromUserId", Ui.TEAM_USER_ID,
+                        "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
+                        "type", type == null ? "team" : type, "text", text,
+                        "isRead", false, "createdAt", System.currentTimeMillis()),
+                () -> com.friendbook.social.push.FCMPush.notification(notifId,
+                        Fb.map("toUserId", toUid, "text", text)),
+                null, () -> Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> com.friendbook.social.push.FCMPush.notification(ref.getId(), n)));
 
         if (!alsoInChat) return;
         String chatId = "team_" + toUid;
@@ -115,7 +123,8 @@ public class Notify {
         room.put("lastMessageTime", FieldValue.serverTimestamp());
         room.put("lastMessageTimeMs", now);
         room.put("unreadCount", unread);
-        chatRef.set(room, SetOptions.merge());
+        // WRITE = Cloudflare: the team room row and the team message both live in D1.
+        D1Write.write("chats", chatId, room, null, null, () -> chatRef.set(room, SetOptions.merge()));
 
         Map<String, Object> msg = new HashMap<>();
         msg.put("senderId", Ui.TEAM_USER_ID);
@@ -126,9 +135,10 @@ public class Notify {
         msg.put("type", "text");
         msg.put("isDelivered", true);
         msg.put("isSeen", false);
-        msg.put("createdAt", FieldValue.serverTimestamp());
+        msg.put("createdAt", now);
         msg.put("createdAtMs", now);
-        chatRef.collection("messages").add(msg);
+        msg.put("chatId", chatId);
+        D1Write.write("messages", chatId + "_" + CloudflareDocs.newId(), msg, null, null, null);
     }
 
     /** Sends a Group invitation notification opening directly into GroupDetailActivity. */
@@ -145,8 +155,15 @@ public class Notify {
         n.put("text", "invited you to join group \"" + groupName + "\" 👥");
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
+        final String inviteId = CloudflareDocs.newId();
+        D1Write.write("notifications", inviteId,
+                Fb.map("toUserId", toUid, "fromUserId", me, "fromUserName", Fb.myName(),
+                        "fromUserPhotoUrl", Fb.myPhoto(), "type", "group_invite",
+                        "groupId", groupId, "text", "invited you to join group \"" + groupName + "\" 👥",
+                        "isRead", false, "createdAt", System.currentTimeMillis()),
+                () -> com.friendbook.social.push.FCMPush.notification(inviteId,
+                        Fb.map("toUserId", toUid, "text", "group invite")),
+                null, () -> Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> com.friendbook.social.push.FCMPush.notification(ref.getId(), n)));
     }
 
     /** Like/love/etc. on a post (respects local preference of the sender device). */
@@ -159,9 +176,12 @@ public class Notify {
     }
 
     public static void markAllRead(java.util.List<com.google.firebase.firestore.DocumentSnapshot> docs) {
-        WriteBatch b = Fb.db().batch();
-        for (com.google.firebase.firestore.DocumentSnapshot d : docs)
-            b.update(d.getReference(), "isRead", true);
-        b.commit();
+        if (docs == null || docs.isEmpty()) return;
+        // WRITE = Cloudflare: each notification row this build holds is marked read in D1.
+        for (com.google.firebase.firestore.DocumentSnapshot d : docs) {
+            if (d == null || d.getId() == null) continue;
+            D1Write.write("notifications", d.getId(), Fb.map("isRead", true), null, null,
+                    () -> d.getReference().update("isRead", true));
+        }
     }
 }

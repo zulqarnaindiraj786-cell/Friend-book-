@@ -15,6 +15,7 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
+import com.friendbook.social.core.D1Write;
 
 /** Application class: boots Firebase, presence, wellbeing timer and shake-to-report detector. */
 public class App extends Application implements SensorEventListener {
@@ -163,7 +164,8 @@ public class App extends Application implements SensorEventListener {
                 c.put("appVersionName", com.friendbook.social.core.Ui.appVersionName(this));
                 c.put("createdAt",
                         com.google.firebase.firestore.FieldValue.serverTimestamp());
-                Fb.db().collection("crashReports").add(c);
+                D1Write.add("crashReports", Fb.map("stack", stack, "thread", thread.getName(), "uid", Fb.uid(), "device", android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+                        + " · Android " + android.os.Build.VERSION.RELEASE, "appVersion", com.friendbook.social.core.Ui.appVersionCode(this), "appVersionName", com.friendbook.social.core.Ui.appVersionName(this)), null, null, () -> Fb.db().collection("crashReports").add(c));
                 Thread.sleep(500);
             } catch (Throwable ignored) { }
             if (sys != null) sys.uncaughtException(thread, ex);

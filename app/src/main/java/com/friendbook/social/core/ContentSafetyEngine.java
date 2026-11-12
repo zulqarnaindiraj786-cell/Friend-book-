@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🛡 ContentSafetyEngine — Automated On-Device Photo, Video & Text Safety Moderation:
@@ -513,7 +514,7 @@ public final class ContentSafetyEngine {
             audit.put("reason", reason == null ? "Automated content safety deletion" : reason);
             audit.put("reportedBy", Fb.uid() != null ? Fb.uid() : "auto_safety_engine");
             audit.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(audit);
+            D1Write.create("reports", Fb.map("targetId", docId, "collection", collection, "authorId", authorId == null ? "" : authorId, "type", "auto_safety_deleted", "category", category == null ? "policy_violation" : category, "reason", reason == null ? "Automated content safety deletion" : reason, "reportedBy", Fb.uid() != null ? Fb.uid() : "auto_safety_engine"), null, null, () -> Fb.db().collection("reports").add(audit));
         } catch (Throwable ignored) {}
     }
 }

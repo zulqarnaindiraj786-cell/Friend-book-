@@ -222,7 +222,28 @@ public class RegisterActivity extends Activity {
                     u.put("following", new ArrayList<String>());
                     u.put("blockedUsers", new ArrayList<String>());
                     u.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("users").document(uid).set(u)
+                    // WRITE = Cloudflare: a brand new account's profile is a D1 row.
+                    com.friendbook.social.core.CloudflareDocs.writeDocument("users", uid, u, () -> {
+                                GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",
+                                        refCode != null ? refCode.getText().toString() : null);
+                                Prefs.saveAccount(this, uid, e, n, "");
+                                Prefs.setUnlockedSession(this, true);
+                                SessionsActivity.record();
+                                Fb.startMeListener();
+                                Presence.init();
+                                startActivity(new Intent(this, MainActivity.class));
+                                finishAffinity();
+                            }, reason -> {
+                                com.friendbook.social.core.CloudflareOutbox.enqueue(this, "users", uid,
+                                        com.friendbook.social.core.CloudflareDocs.sanitize(u));
+                                Prefs.saveAccount(this, uid, e, n, "");
+                                Prefs.setUnlockedSession(this, true);
+                                SessionsActivity.record();
+                                Presence.init();
+                                startActivity(new Intent(this, MainActivity.class));
+                                finishAffinity();
+                            },
+                            () -> Fb.db().collection("users").document(uid).set(u)
                             .addOnSuccessListener(x -> {
                                 GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",
                                         refCode != null ? refCode.getText().toString() : null);
@@ -238,7 +259,7 @@ public class RegisterActivity extends Activity {
                                 btn.setText("Sign Up");
                                 btn.setEnabled(true);
                                 Ui.toast(this, err.getMessage());
-                            });
+                            }));
                 })
                 .addOnFailureListener(err -> {
                     btn.setText("Sign Up");

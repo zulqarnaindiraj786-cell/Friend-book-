@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /** Paged canonical comment history; legacy parent maps are read-only compatibility data. */
 public class CommentsEngine {
@@ -280,20 +281,17 @@ public class CommentsEngine {
             return local;
         }
 
-        // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
-        // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
-        com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
-        batch.set(parentRef.collection("comments").document(newId),commentMap);
+        // WRITE = Cloudflare (the branch above is the pre-migration path, kept only for a build with
+        // the Cloudflare flag off): the comment row and the parent's counter delta both go to D1.
         local.canonicalStored=true;
-        batch.set(Fb.db().collection("comments").document(newId),commentMap);
         Map<String,Object> patch=new HashMap<>();
-        patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));
+        patch.put("lastComment",commentMap); patch.put("commentsDelta",1L);
         patch.put("commentsStorageVersion",2);
-        batch.update(parentRef,patch);
-        batch.commit().addOnSuccessListener(v -> {
+        D1Write.write("comments", newId, commentMap, () -> {
             if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
             if(cb!=null) cb.onComplete(true,null);
-        }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
+        }, error -> { if(cb!=null) cb.onComplete(false,error); }, null);
+        D1Write.write(collection, docId, patch, null, null, null);
 
         return local;
     }
@@ -331,17 +329,10 @@ public class CommentsEngine {
     /** Existing canonical records keep offline queued edits/reactions. Legacy promotion is transactional
      * to avoid overwriting a newer canonical edit with a frozen legacy copy. */
     private static void mutateComment(String collection,String docId,Models.Comment c,Map<String,Object> patch) {
-        DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
-        DocumentReference mirror=Fb.db().collection("comments").document(c.id);
-        if(c.canonicalStored) {
-            com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
-            batch.set(canonical,patch,SetOptions.merge()); batch.set(mirror,patch,SetOptions.merge()); batch.commit();
-        } else {
-            Fb.db().runTransaction(tx -> {
-                if(!tx.get(canonical).exists()) tx.set(canonical,toMap(c,c.postId));
-                tx.set(canonical,patch,SetOptions.merge()); tx.set(mirror,patch,SetOptions.merge()); return null;
-            }).addOnSuccessListener(v -> c.canonicalStored=true);
-        }
+        // WRITE = Cloudflare: the comment is one row in D1 (the same id the root collection uses), so
+        // an edit or a reaction is a merge on that row. A flat store has no sub-collection.
+        D1Write.write("comments", c.id, patch, null, null, null);
+        c.canonicalStored = true;
     }
 
     /** Pins/unpins a comment on a post (Post Author feature!). */
@@ -350,7 +341,9 @@ public class CommentsEngine {
         if(d1(collection)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","pin","id",commentId,"pin",pin));return;}
         Map<String, Object> dot = new HashMap<>();
         dot.put("pinnedCommentId", pin ? commentId : "");
-        Fb.db().collection(collection).document(docId).update(dot);
+        // WRITE = Cloudflare: the pinned id is a field on the parent row (D1).
+        D1Write.write(collection, docId, dot, null, null,
+                () -> Fb.db().collection(collection).document(docId).update(dot));
     }
 
     /** Deletes a comment across parent doc `commentsMap`, subcollection, and root `comments`. */
@@ -362,9 +355,10 @@ public class CommentsEngine {
             dot.put("commentsMap." + c.id, FieldValue.delete());
             dot.put("comments", FieldValue.increment(-1));
             dot.put("lastComment", FieldValue.delete());
-            Fb.db().collection(collection).document(docId).update(dot);
-            Fb.db().collection(collection).document(docId).collection("comments").document(c.id).delete();
+            // WRITE = Cloudflare: the parent preview shrinks by one and the comment row goes.
+            D1Write.write(collection, docId, dot, null, null,
+                    () -> Fb.db().collection(collection).document(docId).update(dot));
         }
-        Fb.db().collection("comments").document(c.id).delete();
+        D1Write.delete("comments", c.id, null, null, () -> Fb.db().collection("comments").document(c.id).delete());
     }
 }

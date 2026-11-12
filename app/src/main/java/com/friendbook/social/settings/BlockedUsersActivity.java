@@ -94,7 +94,7 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
         Ui.confirm(this, "Unblock " + r.user.displayName + "?",
                 "They'll be able to see your posts and message you again.",
                 "Unblock", () -> {
-                    Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayRemove(r.user.uid)));
+                    Fb.patchMeList("blockedUsers", r.user.uid, false);
                     Ui.toast(this, "Unblocked ✓");
                 });
     }

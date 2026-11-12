@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 👥 friendbook Community Post Groups Hub:
@@ -322,12 +323,7 @@ public class GroupsActivity extends Activity {
                     m.put("photoUrl", "");
                     m.put("coverUrl", "");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("groups").add(m)
-                            .addOnSuccessListener(ref -> {
-                                Ui.toast(this, "Group created 🎉");
-                                startActivity(new Intent(this, GroupDetailActivity.class)
-                                        .putExtra("group_id", ref.getId()));
-                            });
+                    D1Write.add("groups", Fb.map("name", n, "about", about.getText().toString().trim(), "category", selectedCat[0], "rules", rules.getText().toString().trim(), "privacy", privacy[0], "requirePostApproval", apprSw.isChecked(), "requireJoinApproval", "Private".equals(privacy[0]), "postPermission", "Everyone", "adminId", me, "adminIds", Collections.singletonList(me), "moderatorIds", new ArrayList<String>(), "members", Collections.singletonList(me), "pendingMemberIds", new ArrayList<String>(), "bannedMemberIds", new ArrayList<String>(), "invitedUids", new ArrayList<String>(), "photoUrl", "", "coverUrl", ""), null, null, () -> Fb.db().collection("groups").add(m) .addOnSuccessListener(ref -> { Ui.toast(this, "Group created 🎉"); startActivity(new Intent(this, GroupDetailActivity.class) .putExtra("group_id", ref.getId())); }));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -424,18 +420,16 @@ public class GroupsActivity extends Activity {
                 if (in) {
                     openGroup(g.id);
                 } else if (pending) {
-                    Fb.db().collection("groups").document(g.id)
-                            .update("pendingMemberIds", FieldValue.arrayRemove(me));
+                    D1Write.write("groups", g.id, Fb.map("pendingMemberIdsRemove", me), null, null, () -> Fb.db().collection("groups").document(g.id) .update("pendingMemberIds", FieldValue.arrayRemove(me)));
                     Ui.toast(GroupsActivity.this, "Join request cancelled");
                 } else if (!invited && ("Private".equalsIgnoreCase(g.privacy) || g.requireJoinApproval)) {
-                    Fb.db().collection("groups").document(g.id)
-                            .update("pendingMemberIds", FieldValue.arrayUnion(me));
+                    D1Write.write("groups", g.id, Fb.map("pendingMemberIdsAdd", me), null, null, () -> Fb.db().collection("groups").document(g.id) .update("pendingMemberIds", FieldValue.arrayUnion(me)));
                     Ui.toast(GroupsActivity.this, "⏳ Join request sent to Group Admins");
                 } else {
                     Map<String, Object> up = new HashMap<>();
                     up.put("members", FieldValue.arrayUnion(me));
                     up.put("invitedUids", FieldValue.arrayRemove(me));
-                    Fb.db().collection("groups").document(g.id).update(up);
+                    D1Write.write("groups", g.id, Fb.map("membersAdd", me, "invitedUidsRemove", me), null, null, () -> Fb.db().collection("groups").document(g.id).update(up));
                     Ui.toast(GroupsActivity.this, "Joined " + g.name + " 🎉");
                 }
             });

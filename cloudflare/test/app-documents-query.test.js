@@ -330,3 +330,122 @@ test('a comment counter is a delta the database applies, never a client-computed
   assert.equal(post.body.document.comments, 10, 'the stored total is incremented, not replaced');
   assert.equal(post.body.document.content, 'count me', 'a delta must not touch the content');
 });
+
+test('any counter delta is applied to the stored number, so parallel devices cannot lose a write', async () => {
+  const { db } = createSqliteD1();
+  await seed(db);
+  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test', fetch: firestoreStub() };
+  async function put(uid, path, body) {
+    const w = createWorker(async () => uid);
+    return (await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)).status;
+  }
+  async function getOne(uid, path) {
+    const w = createWorker(async () => uid);
+    return (await (await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env)).json()).document;
+  }
+
+  assert.equal(await put('a1', 'posts/d1', { authorId: 'a1', content: 'x', privacy: 'Public', likes: 4 }), 200);
+  // Friend counters live on the user row and can go up and down.
+  assert.equal(await put('a2', 'users/a2', { displayName: 'Two' }), 200);
+  assert.equal(await put('a2', 'users/a2', { friendsCount: 1 }), 200);
+  assert.equal(await put('a9', 'users/a2', { friendsCountDelta: 1 }), 200);
+  assert.equal(await put('a3', 'users/a2', { friendsCountDelta: -1 }), 200);
+  const user = await getOne('a2', 'users/a2');
+  assert.equal(user.friendsCount, 1, 'up then down lands on the same number');
+  assert.equal(user.friendsCountDelta, undefined, 'a delta is never stored as a field');
+
+  // A delta can never be negative below zero and never exceeds a sane bound.
+  assert.equal(await put('a9', 'posts/d1', { likesDelta: -50 }), 200);
+  assert.equal((await getOne('a1', 'posts/d1')).likes, 0, 'a counter never goes below zero');
+  assert.equal(await put('a9', 'posts/d1', { likesDelta: 99999 }), 200);
+  assert.equal((await getOne('a1', 'posts/d1')).likes, 1000, 'a delta is bounded per request');
+});
+
+test('a chat message is read by its room, and only by somebody in that room', async () => {
+  const { db } = createSqliteD1();
+  await seed(db);
+  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test', fetch: firestoreStub() };
+  async function put(uid, path, body) {
+    const w = createWorker(async () => uid);
+    return (await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)).status;
+  }
+  async function get(uid, query) {
+    const w = createWorker(async () => uid);
+    const res = await w.fetch(new Request(`https://example.com/v1/docs?${query}`, {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env);
+    return { status: res.status, body: await res.json() };
+  }
+
+  // A room between a1 and a2, written the way the app now writes it: the room row first, then each
+  // message as a flat `messages/<chatId>_<messageId>` document that names its room.
+  assert.equal(await put('a1', 'chats/a1_a2', {
+    participants: ['a1', 'a2'], lastMessage: 'hello', lastMessageAt: 1000,
+  }), 200);
+  assert.equal(await put('a1', 'messages/a1_a2_m1', {
+    chatId: 'a1_a2', senderId: 'a1', receiverId: 'a2', text: 'hello', createdAtMs: 1000,
+  }), 200);
+  assert.equal(await put('a2', 'messages/a1_a2_m2', {
+    chatId: 'a1_a2', senderId: 'a2', receiverId: 'a1', text: 'hi there', createdAtMs: 2000,
+  }), 200);
+
+  // Both sides read the conversation through the room id, newest last.
+  for (const who of ['a1', 'a2']) {
+    const page = await get(who, 'collection=messages&where=chatId:eq:a1_a2&order=createdAtMs&dir=asc&limit=20');
+    assert.equal(page.status, 200);
+    assert.deepEqual(page.body.documents.map((d) => d.text), ['hello', 'hi there']);
+  }
+
+  // Somebody outside the room reads nothing at all.
+  const outsider = await get('a3', 'collection=messages&where=chatId:eq:a1_a2&limit=20');
+  assert.equal(outsider.status, 200);
+  assert.deepEqual(outsider.body.documents, [], 'a room is private to its participants');
+
+  // A message document is never readable by id from outside either.
+  const direct = await get('a3', 'collection=messages&limit=20');
+  assert.deepEqual(direct.body.documents, []);
+});
+
+test('a map field merges by key, so two people can react without erasing each other', async () => {
+  const { db } = createSqliteD1();
+  await seed(db);
+  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test', fetch: firestoreStub() };
+  async function put(uid, path, body) {
+    const w = createWorker(async () => uid);
+    return (await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)).status;
+  }
+  async function getOne(uid, path) {
+    const w = createWorker(async () => uid);
+    return (await (await w.fetch(new Request(`https://example.com/v1/docs/${path}`, {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env)).json()).document;
+  }
+
+  assert.equal(await put('a1', 'posts/r1', { authorId: 'a1', content: 'react to me', privacy: 'Public' }), 200);
+  // Two readers react with different emojis: each one only sends its own member.
+  assert.equal(await put('a2', 'posts/r1', { reactionsMap: { a2: '❤️' }, likesDelta: 1 }), 200);
+  assert.equal(await put('a3', 'posts/r1', { reactionsMap: { a3: '👍' }, likesDelta: 1 }), 200);
+  let post = await getOne('a1', 'posts/r1');
+  assert.deepEqual(post.reactionsMap, { a2: '❤️', a3: '👍' }, 'both reactions survive');
+  assert.equal(post.likes, 2);
+
+  // Taking one back deletes only that member, and the counter follows.
+  assert.equal(await put('a2', 'posts/r1', { reactionsMap: { a2: null }, likesDelta: -1 }), 200);
+  post = await getOne('a1', 'posts/r1');
+  assert.deepEqual(post.reactionsMap, { a3: '👍' }, 'a null member removes one key, not the map');
+  assert.equal(post.likes, 1);
+});

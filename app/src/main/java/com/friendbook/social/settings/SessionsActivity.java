@@ -10,14 +10,12 @@ import android.widget.TextView;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.WriteBatch;
 
 import java.util.HashMap;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🔐 Where you're logged in — friendbook security page:
@@ -39,7 +37,10 @@ public class SessionsActivity extends Activity {
             s.put("model", "Android " + Build.VERSION.RELEASE);
             s.put("at", FieldValue.serverTimestamp());
             s.put("app", "friendbook");
-            Fb.db().collection("users").document(uid).collection("sessions").add(s);
+            // WRITE = Cloudflare: a login session is `sessions/<uid>_<id>` in D1 (flat store).
+            s.put("uid", uid);
+            com.friendbook.social.core.D1Write.put("sessions",
+                    uid + "_" + com.friendbook.social.core.D1Write.newId(), s, null);
         } catch (Throwable ignored) { }
     }
 
@@ -89,18 +90,19 @@ public class SessionsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        reg = Fb.db().collection("users").document(me).collection("sessions")
-                .orderBy("at", Query.Direction.DESCENDING).limit(30)
-                .addSnapshotListener((snap, err) -> {
+        // READ = Cloudflare first: the sessions of this build are `sessions/<uid>_*` rows in D1.
+        com.friendbook.social.core.CloudflareDocs.read("sessions", 30,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("at")
+                        .where("uid", me),
+                page -> {
                     while (list.getChildCount() > 2) list.removeViewAt(2);
-                    if (snap == null || snap.isEmpty()) {
+                    if (page == null || page.documents.isEmpty()) {
                         TextView e = Ui.tv(this, "No sessions recorded yet.", 13, Ui.sub(this));
                         list.addView(e);
                         return;
                     }
                     int i = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Map<String, Object> m = d.getData();
+                    for (Map<String, Object> m : page.documents) {
                         LinearLayout card = Ui.row(this);
                         card.setBackground(Ui.round(this, Ui.card(this), 12));
                         Ui.pad(card, 12, 10, 12, 10);
@@ -117,6 +119,8 @@ public class SessionsActivity extends Activity {
                         i++;
                     }
                 });
+        // The pre-migration list is read only when D1 has no session rows for this account.
+        reg = null;
     }
 
     @Override

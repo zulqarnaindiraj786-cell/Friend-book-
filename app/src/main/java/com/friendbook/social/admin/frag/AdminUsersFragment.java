@@ -172,17 +172,26 @@ public class AdminUsersFragment extends Fragment {
             else if (sel.contains("Remove App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
             else if (sel.contains("Make FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", true);
+                com.friendbook.social.core.CloudflareDocs.writeDocument("users", u.uid,
+                java.util.Collections.<String,Object>singletonMap("isAdmin", true), null, null,
+                () -> Fb.db().collection("users").document(u.uid).update("isAdmin", true));
             else if (sel.contains("Remove FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", false);
+                com.friendbook.social.core.CloudflareDocs.writeDocument("users", u.uid,
+                java.util.Collections.<String,Object>singletonMap("isAdmin", false), null, null,
+                () -> Fb.db().collection("users").document(u.uid).update("isAdmin", false));
             else if (sel.contains("Unban"))
-                Fb.db().collection("users").document(u.uid).update("banned", false);
+                com.friendbook.social.core.CloudflareDocs.writeDocument("users", u.uid,
+                java.util.Collections.<String,Object>singletonMap("banned", false), null, null,
+                () -> Fb.db().collection("users").document(u.uid).update("banned", false));
             else if (sel.contains("Ban user"))
                 Ui.confirm(a, "Ban " + u.displayName + "?", "They'll be signed out and blocked.",
-                        "Ban", () -> Fb.db().collection("users").document(u.uid).update("banned", true));
+                        "Ban", () -> com.friendbook.social.core.CloudflareDocs.writeDocument("users", u.uid,
+                java.util.Collections.<String,Object>singletonMap("banned", true), null, null,
+                () -> Fb.db().collection("users").document(u.uid).update("banned", true)));
             else if (sel.contains("Delete user data"))
-                Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
-                        "Delete", () -> Fb.db().collection("users").document(u.uid).delete());
+                Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the profile document.",
+                        "Delete", () -> com.friendbook.social.core.CloudflareDocs.deleteDocument("users", u.uid,
+                                null, null, () -> Fb.db().collection("users").document(u.uid).delete()));
         });
     }
 }

@@ -24,7 +24,10 @@ class SoundEffectsTest(unittest.TestCase):
             self.assertFalse((ROOT/f'app/src/main/res/raw/{name}.wav').exists())
     def test_all_chat_sends_remain_immediate(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);\n        batch.commit()'),3)
+        # The sent sound still plays before the network work starts, on every send path: the write
+        # itself is now a D1 write (room row + message), dispatched after the sound.
+        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);'),3)
+        self.assertEqual(chat.count('writeRoomThenMessage('),4)  # 3 callers + the helper itself
         self.assertIn('SoundManager.playNewMessage(this)',chat)
         self.assertIn('MetadataChanges.INCLUDE',chat)
         self.assertIn('snap.getMetadata().hasPendingWrites()',chat)

@@ -7,6 +7,9 @@ const ALLOWED_COLLECTIONS = new Set([
   'users', 'posts', 'reels', 'stories', 'chats', 'messages', 'comments',
   'friends', 'friend_requests', 'follows', 'groups', 'pages', 'events',
   'notifications', 'official_broadcasts', 'lives', 'pokes',
+  // Everything else this build writes: moderation, money, sessions, marketplace, feedback.
+  'reports', 'sessions', 'payments', 'referrals', 'feedback', 'gifts', 'config',
+  'subscriptions', 'crashReports', 'broadcasts', 'activity',
 ]);
 
 function validSegment(value) {
@@ -170,6 +173,10 @@ export async function hasD1Friendship(db, uidA, uidB) {
 const ORDER_FIELDS = new Set([
   'createdAt', 'updatedAt', 'lastMessageTime', 'expiry', 'expiresAt', 'timestamp',
   'displayName', 'likes', 'comments', 'views', 'sharedAt', 'joinedAt',
+  // Fields the client's own rows are ordered by: a chat sorts by the millisecond of a message, a
+  // marketplace listing by price, a story by when it was posted.
+  'createdAtMs', 'lastMessageAt', 'updatedAtMs', 'at', 'ts', 'price', 'amount', 'postedAt',
+  'sentAt', 'seenAt', 'viewers',
 ]);
 const FILTER_OPS = new Set(['eq', 'in', 'contains', 'gt', 'gte', 'lt', 'lte', 'ne']);
 const MAX_FILTERS = 6;
@@ -180,12 +187,70 @@ const MAX_FILTERS = 6;
  * the privacy of a document can never be changed by somebody else.
  */
 const COUNTER_FIELDS = new Set([
-  'likes', 'comments', 'shares', 'views', 'reactions', 'savedBy', 'subscribedBy',
-  'reportedBy', 'hiddenBy', 'pollVotes', 'lastSeen',
-  // Deltas are how a reader bumps somebody else's counter (a comment, a like): the Worker applies
-  // them to the stored number, so they are counters, not content.
-  'commentsDelta', 'likesDelta', 'sharesDelta',
+  'likes', 'comments', 'shares', 'views', 'reactions', 'reactionsMap', 'savedBy', 'subscribedBy',
+  'reportedBy', 'hiddenBy', 'pollVotes', 'lastSeen', 'reactionTypes',
+  // Deltas are how a reader bumps somebody else's counter (a comment, a like, a friend): the Worker
+  // applies them to the stored number, so they are counters, not content.
+  'commentsDelta', 'likesDelta', 'sharesDelta', 'friendsCount', 'followersCount', 'viewsDelta',
 ]);
+
+/** Lists a reader may append to / remove themselves from on somebody else's document. */
+const SHARED_ARRAYS = new Set([
+  'likedBy', 'savedBy', 'viewedBy', 'subscribedBy', 'reportedBy', 'hiddenBy', 'reactions', 'voters',
+]);
+
+/** Lists only their owner may change (membership lists, blocks, saved ids on an own profile). */
+const OWNED_ARRAYS = new Set([
+  'blocked', 'blockedUsers', 'restrictedUids', 'friends', 'following', 'followers',
+  'participants', 'participantIds', 'members', 'memberIds', 'adminIds', 'moderatorIds',
+  'pendingMemberIds', 'invitedUids', 'bannedMemberIds', 'mutedUids', 'highlightStoryIds',
+  'savedReelIds', 'savedPostIds', 'pinnedPostIds', 'storyIds', 'reelIds', 'tags', 'hashtags',
+]);
+
+/** `fieldArray` request: `field` + `Add` or `Remove`, applied to the stored list by the database. */
+function arrayOp(key) {
+  if (typeof key !== 'string') return null;
+  for (const suffix of ['Add', 'Remove']) {
+    if (!key.endsWith(suffix)) continue;
+    const base = key.slice(0, -suffix.length);
+    if (!/^[A-Za-z0-9_]{1,48}$/.test(base)) return null;
+    if (!SHARED_ARRAYS.has(base) && !OWNED_ARRAYS.has(base)) return null;
+    return { base, add: suffix === 'Add' };
+  }
+  return null;
+}
+
+/** Recursive merge: objects merge key by key, `null` deletes a key, everything else replaces. */
+function deepMerge(target, patch) {
+  const out = { ...target };
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (value === null) { delete out[key]; continue; }
+    if (value && typeof value === 'object' && !Array.isArray(value)
+        && out[key] && typeof out[key] === 'object' && !Array.isArray(out[key])) {
+      out[key] = deepMerge(out[key], value);
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function asList(value) {
+  if (Array.isArray(value)) return value.filter((v) => v !== null && v !== undefined);
+  return value === null || value === undefined ? [] : [value];
+}
+
+/** Counters that other people legitimately move on somebody else's document. */
+function personalCounter(field) {
+  return field === 'friendsCount' || field === 'followersCount';
+}
+
+/** `field + "Delta"` request: the caller is asking for an adjustment of `field`, not a new value. */
+function deltaField(key) {
+  if (typeof key !== 'string' || !key.endsWith('Delta')) return null;
+  const base = key.slice(0, -'Delta'.length);
+  return /^[A-Za-z0-9_]{1,48}$/.test(base) && base !== 'is' ? base : null;
+}
 
 function jsonPath(field) {
   if (!/^[A-Za-z0-9_]{1,64}$/.test(field || '')) return null;
@@ -303,9 +368,13 @@ function queryPlan(url, collection, limit) {
  * so the Worker has to apply the same rules itself - from the STORED document and the STORED user
  * profile, never from anything the request claims. Firebase still only proves *who* is asking.
  */
+/**
+ * Collections whose documents more than one person reads. Everything not listed here is private to
+ * its owner: a `messages` row belongs to its chat, so it is read through the room, never by id.
+ */
 const SHARED_COLLECTIONS = new Set([
   'posts', 'reels', 'stories', 'users', 'groups', 'pages',
-  'official_broadcasts', 'lives', 'pokes', 'events',
+  'official_broadcasts', 'lives', 'pokes', 'events', 'messages', 'comments',
 ]);
 const OWNER_FIELDS = ['authorId', 'uid', 'senderId', 'ownerId', 'userId', 'recipientId', 'fromUid'];
 const MEMBER_FIELDS = ['participants', 'participantIds', 'members', 'memberIds', 'adminIds', 'moderatorIds'];
@@ -375,6 +444,17 @@ export async function canReadDocument(db, doc, uid, options = {}) {
   for (const field of MEMBER_FIELDS) {
     const list = stringList(doc?.[field]);
     if (list.length && !list.includes(uid)) return { allowed: false, reason: 'members' };
+  }
+
+  // A message belongs to its room, not to "everyone": the sender, the receiver, and the members of a
+  // group room may read it - nobody else.
+  if (options.collection === 'messages') {
+    if (doc.senderId === uid || doc.receiverId === uid) return { allowed: true };
+    const roomId = String(doc.chatId || '');
+    if (!roomId) return { allowed: false, reason: 'room' };
+    const room = await readProfile(db, `chats/${roomId}`, options.firestore, options.fetcher);
+    const members = [...stringList(room?.participants), ...stringList(room?.members)];
+    return members.includes(uid) ? { allowed: true } : { allowed: false, reason: 'room' };
   }
 
   const privacy = String(doc.privacy || 'Public').toLowerCase();
@@ -512,8 +592,15 @@ export async function appDocuments(request, env, identity) {
       let payload = incoming;
       if (existingOwner && existingOwner !== uid) {
         // Somebody else's document: only the shared counters may be written, never the content.
+        // A merge-write may carry a map field whose members are its own (`reactionsMap: { uid: emoji }`),
+        // so a nested object key is judged by its name, not rejected for being an object.
         const keys = Object.keys(incoming).filter((k) => k !== 'id');
-        if (keys.some((k) => !COUNTER_FIELDS.has(k))) {
+        // A friend counter is the one shared number another person may move (accepting a request),
+        // so its delta is allowed through the same door as likes and comments.
+        const allowed = (k) => COUNTER_FIELDS.has(k)
+          || (k.endsWith('Delta') && personalCounter(deltaField(k)))
+          || (arrayOp(k) !== null && SHARED_ARRAYS.has(arrayOp(k).base));
+        if (keys.some((k) => !allowed(k))) {
           return json({ error: 'Not your document' }, 403);
         }
         payload = Object.fromEntries(keys.map((k) => [k, incoming[k]]));
@@ -523,14 +610,38 @@ export async function appDocuments(request, env, identity) {
       }
       // A counter delta is not a stored value: it is applied to the stored number, by the database,
       // so two devices commenting at the same moment cannot overwrite each other's increment.
-      const hadDelta = Object.prototype.hasOwnProperty.call(payload, 'commentsDelta');
-      const delta = hadDelta ? Math.trunc(Number(payload.commentsDelta) || 0) : 0;
       const cleanPayload = { ...payload };
-      if (hadDelta) {
-        delete cleanPayload.commentsDelta;
-        cleanPayload.comments = Math.max(0, Number(existingPlain.comments || 0) + delta);
+      for (const key of Object.keys(payload)) {
+        const base = deltaField(key);
+        if (!base) continue;
+        const delta = Math.max(-1_000, Math.min(1_000, Math.trunc(Number(payload[key]) || 0)));
+        delete cleanPayload[key];
+        cleanPayload[base] = Math.max(0, Number(existingPlain[base] || 0) + delta);
       }
-      const merged = { ...existingPlain, ...cleanPayload, id: docId };
+      // A list membership change is expressed as `fieldAdd`/`fieldRemove` and applied to the stored
+      // list here, so two people liking the same post cannot overwrite each other's id.
+      for (const key of Object.keys(cleanPayload)) {
+        const op = arrayOp(key);
+        if (!op) continue;
+        delete cleanPayload[key];
+        const current = Array.isArray(existingPlain[op.base]) ? existingPlain[op.base].slice() : [];
+        const wanted = asList(payload[key]);
+        let next;
+        if (op.add) {
+          next = current.slice();
+          for (const item of wanted) if (!next.some((v) => JSON.stringify(v) === JSON.stringify(item))) next.push(item);
+        } else {
+          next = current.filter((v) => !wanted.some((item) => JSON.stringify(v) === JSON.stringify(item)));
+        }
+        cleanPayload[op.base] = next;
+      }
+      // A map field is merged key by key, the way a Firestore merge-write behaves: `reactionsMap.<uid>`
+      // adds one member without dropping the others, and a null member deletes just that key.
+      const merged = deepMerge({ ...existingPlain }, cleanPayload);
+      merged.id = docId;
+      // A profile row is owned by its own id: without this a `users/<uid>` document written without a
+      // `uid` field would read back as "unowned" and its own owner would get a 404.
+      if (collection === 'users' && !docOwner(merged)) merged.uid = docId;
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
       const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingOwner || uid);

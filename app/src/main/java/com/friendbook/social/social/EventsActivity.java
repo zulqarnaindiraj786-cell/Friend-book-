@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 📅 EventsActivity — Full friendbook Events Hub:
@@ -146,8 +147,7 @@ public class EventsActivity extends Activity {
                     m.put("hostId", Fb.uid());
                     m.put("hostName", Fb.myName());
                     m.put("interested", Collections.singletonList(Fb.uid()));
-                    Fb.db().collection("events").add(m)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Event created 📅"));
+                    D1Write.add("events", Fb.map("title", t, "where", where.getText().toString().trim(), "details", details.getText().toString().trim(), "startAt", cal.getTimeInMillis(), "hostId", Fb.uid(), "hostName", Fb.myName(), "interested", Collections.singletonList(Fb.uid())), null, null, () -> Fb.db().collection("events").add(m) .addOnSuccessListener(x -> Ui.toast(this, "Event created 📅")));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -265,8 +265,7 @@ public class EventsActivity extends Activity {
             h.btn.setOnClickListener(v -> {
                 String me = Fb.uid();
                 if (me == null) return;
-                Fb.db().collection("events").document(e.id).update("interested",
-                        going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                D1Write.write("events", e.id, (going ? Fb.map("interestedRemove", me) : Fb.map("interestedAdd", me)), null, null, () -> Fb.db().collection("events").document(e.id).update("interested", going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)));
             });
 
             h.calBtn.setOnClickListener(v -> {

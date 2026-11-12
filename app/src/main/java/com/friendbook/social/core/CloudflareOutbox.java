@@ -67,10 +67,13 @@ public final class CloudflareOutbox {
         public final String collection;
         public final String id;
         public final JSONObject fields;
-        Entry(String collection, String id, JSONObject fields) {
+        /** A delete is queued like a write: newest state wins, and the row goes when it replays. */
+        public final boolean delete;
+        Entry(String collection, String id, JSONObject fields, boolean delete) {
             this.collection = collection;
             this.id = id;
             this.fields = fields;
+            this.delete = delete;
         }
     }
 
@@ -91,11 +94,30 @@ public final class CloudflareOutbox {
             try {
                 List<Entry> entries = read(context);
                 entries.removeIf(e -> e.collection.equals(collection) && e.id.equals(id));
-                entries.add(new Entry(collection, id, fields));
+                entries.add(new Entry(collection, id, fields, false));
                 while (entries.size() > MAX_ENTRIES) entries.remove(0);
                 write(context, entries);
             } catch (Throwable ignored) {
                 // A write that cannot be parked is still not a crash: the caller already showed it.
+            }
+        }
+    }
+
+    /**
+     * Parks a delete. It replaces any pending write for the same document - the newest intention wins,
+     * so an item created and deleted while offline is never re-created by a stale queue entry.
+     */
+    public static void enqueueDelete(Context context, String collection, String id) {
+        if (context == null || collection == null || id == null || id.isEmpty()) return;
+        synchronized (LOCK) {
+            try {
+                List<Entry> entries = read(context);
+                entries.removeIf(e -> e.collection.equals(collection) && e.id.equals(id));
+                entries.add(new Entry(collection, id, new JSONObject(), true));
+                while (entries.size() > MAX_ENTRIES) entries.remove(0);
+                write(context, entries);
+            } catch (Throwable ignored) {
+                // Best-effort, exactly like a parked write.
             }
         }
     }
@@ -119,9 +141,15 @@ public final class CloudflareOutbox {
             for (Entry entry : entries) {
                 final boolean[] done = {false};
                 final boolean[] failed = {false};
-                CloudflareDocs.write(entry.collection, entry.id, toMap(entry.fields),
-                        () -> done[0] = true,
-                        reason -> failed[0] = true);
+                if (entry.delete) {
+                    CloudflareDocs.delete(entry.collection, entry.id,
+                            () -> done[0] = true,
+                            reason -> failed[0] = true);
+                } else {
+                    CloudflareDocs.write(entry.collection, entry.id, toMap(entry.fields),
+                            () -> done[0] = true,
+                            reason -> failed[0] = true);
+                }
                 // write() is async; wait for the outcome without blocking the main thread.
                 long deadline = System.currentTimeMillis() + 20_000L;
                 while (!done[0] && !failed[0] && System.currentTimeMillis() < deadline) {
@@ -149,8 +177,10 @@ public final class CloudflareOutbox {
                 String collection = item.optString("c", "");
                 String id = item.optString("id", "");
                 JSONObject fields = item.optJSONObject("f");
-                if (collection.isEmpty() || id.isEmpty() || fields == null) continue;
-                out.add(new Entry(collection, id, fields));
+                boolean delete = item.optBoolean("del", false);
+                if (collection.isEmpty() || id.isEmpty()) continue;
+                if (fields == null) fields = new JSONObject();
+                out.add(new Entry(collection, id, fields, delete));
             }
         } catch (Throwable ignored) {
             return new ArrayList<>();
@@ -166,6 +196,7 @@ public final class CloudflareOutbox {
                 item.put("c", entry.collection);
                 item.put("id", entry.id);
                 item.put("f", entry.fields);
+                if (entry.delete) item.put("del", true);
                 arr.put(item);
             }
             prefs(context).edit().putString(key(context), arr.toString()).apply();

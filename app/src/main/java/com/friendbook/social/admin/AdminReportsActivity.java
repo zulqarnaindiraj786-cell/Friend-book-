@@ -23,6 +23,7 @@ import com.google.firebase.firestore.Query;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /** Admin reports queue: act on reported posts / comments / messages / users. */
 public class AdminReportsActivity extends Activity {
@@ -94,22 +95,22 @@ public class AdminReportsActivity extends Activity {
                 String postId = Format.str(m, "postId");
                 String commentId = Format.str(m, "commentId");
                 if (!postId.isEmpty() && !postId.startsWith("reel_")) {
-                    Fb.db().collection("posts").document(postId).delete();
+                    D1Write.delete("posts", postId, null, null, () -> Fb.db().collection("posts").document(postId).delete());
                 } else if (postId.startsWith("reel_")) {
-                    Fb.db().collection("reels").document(postId.substring(5)).delete();
+                    D1Write.delete("reels", postId.substring(5), null, null, () -> Fb.db().collection("reels").document(postId.substring(5)).delete());
                 }
-                if (!commentId.isEmpty()) Fb.db().collection("comments").document(commentId).delete();
+                if (!commentId.isEmpty()) D1Write.delete("comments", commentId, null, null, () -> Fb.db().collection("comments").document(commentId).delete());
                 String uid = Format.str(m, "uid");
                 String type = Format.str(m, "type");
                 if (!uid.isEmpty() && "profile".equals(type)) {
-                    Fb.db().collection("users").document(uid).update("banned", true);
+                    D1Write.write("users", uid, Fb.map("banned", true), null, null, () -> Fb.db().collection("users").document(uid).update("banned", true));
                 }
                 d.getReference().delete();
                 Ui.toast(this, "Content deleted ✓");
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
-                Fb.db().collection("users").document(author).update("banned", true);
+                D1Write.write("users", author, Fb.map("banned", true), null, null, () -> Fb.db().collection("users").document(author).update("banned", true));
                 d.getReference().delete();
                 Ui.toast(this, "Author banned ✓");
             } else {

@@ -29,6 +29,7 @@ import com.google.firebase.firestore.SetOptions;
 import com.google.firebase.firestore.WriteBatch;
 
 import java.util.Date;
+import com.friendbook.social.core.D1Write;
 
 /**
  * Admin Payments tab — ONE unified list of every payment type:
@@ -221,6 +222,6 @@ public class AdminPaymentsFragment extends Fragment {
                 "text", text,
                 "isRead", false,
                 "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        D1Write.create("notifications", Fb.map("toUserId", uid, "fromUserId", Ui.TEAM_USER_ID, "fromUserName", "friendbook Team", "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN, "type", "payment", "text", text, "isRead", false), null, null, () -> Fb.db().collection("notifications").add(n));
     }
 }

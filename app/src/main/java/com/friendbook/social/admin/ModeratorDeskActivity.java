@@ -32,6 +32,7 @@ import com.google.firebase.firestore.SetOptions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import com.friendbook.social.core.D1Write;
 
 /**
  * Strictly-scoped Global Moderator Desk!
@@ -219,9 +220,10 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(delBtn, 10, 6, 10, 6);
         delBtn.setOnClickListener(v -> Ui.confirm(this, "Delete post by " + p.authorName + "?",
                 "This permanently deletes the violating post.", "Delete", () ->
-                        Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> Ui.toast(this, "Post deleted 🗑"))
-                                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()))));
+                        D1Write.delete("posts", p.id,
+                                () -> Ui.toast(this, "Post deleted 🗑"),
+                                reason -> Ui.toast(this, reason),
+                                () -> Fb.db().collection("posts").document(p.id).delete())));
         head.addView(delBtn);
         card.addView(head);
 

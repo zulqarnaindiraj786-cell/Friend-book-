@@ -30,7 +30,6 @@ import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,6 +37,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /** 1:1 chat: realtime messages, typing, presence, seen/delivered, images, deletes. */
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
@@ -564,10 +564,28 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             messageSnapshots.clear();historyMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;messageActor=Fb.uid();
         }
         historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
-        final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
-        final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
-        final boolean[] firstServer={true};
-        final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
+        // READ = Cloudflare first: this build writes every message to D1, so the conversation is read
+        // from there. The Firestore listener below is attached only when D1 has nothing for this room,
+        // which is exactly the pre-migration history.
+        watchMessagesOnD1();
+        com.friendbook.social.core.CloudflareDocs.read("messages", 40,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAtMs")
+                        .where("chatId", chatId),
+                first -> {
+                    if (isFinishing()) return;
+                    if (first != null && !first.documents.isEmpty()) return;
+                    attachLegacyMessageWatch();
+                });
+    }
+
+    /** The pre-migration listener: kept for rooms whose history was written before the migration. */
+    private void attachLegacyMessageWatch() {
+        final int chatGeneration = historyGeneration; final String chatActor = Fb.uid();
+        final Set<String> knownAtAttach = new HashSet<>(historyMessages.keySet());
+        knownAtAttach.addAll(messageSnapshots.keySet());
+        final boolean[] firstServer = {true};
+        final com.friendbook.social.core.RealtimeSoundGate soundGate =
+                new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
@@ -644,10 +662,127 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 });
     }
 
+    /**
+     * Watches the conversation on Cloudflare D1: the last 40 messages of this room, polled every few
+     * seconds while the screen is open. A message that somebody else sends lands in D1 (that is the
+     * write path of this build), so a short poll is what "live" means without a second connection
+     * open; the payload is merged into the same map the Firestore listener used, so the adapter, the
+     * scroll behaviour and the read receipts are untouched.
+     */
+    private void watchMessagesOnD1() {
+        final String actor = Fb.uid();
+        final String generation = String.valueOf(historyGeneration);
+        d1MsgPoll = new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || !java.util.Objects.equals(actor, Fb.uid())) return;
+                com.friendbook.social.core.CloudflareDocs.read("messages", 40,
+                        com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAtMs")
+                                .where("chatId", chatId),
+                        page -> {
+                            if (isFinishing() || !java.util.Objects.equals(actor, Fb.uid())
+                                    || !generation.equals(String.valueOf(historyGeneration))) return;
+                            if (page == null || page.documents.isEmpty()) return;
+                            java.util.List<Models.Message> fresh = new java.util.ArrayList<>();
+                            for (Map<String, Object> row : page.documents) {
+                                Models.Message m = Models.Message.fromMap(
+                                        String.valueOf(row.get("id")), row);
+                                Models.Message known = messageSnapshots.get(m.id);
+                                if (known == null || known.isSeen != m.isSeen
+                                        || known.isDeleted != m.isDeleted) {
+                                    fresh.add(m);
+                                }
+                                messageSnapshots.put(m.id, m);
+                            }
+                            if (fresh.isEmpty()) return;
+                            boolean incoming = false;
+                            String me = Fb.uid();
+                            for (Models.Message m : fresh) {
+                                if (me != null && !me.equals(m.senderId) && !m.isDeleted
+                                        && !"system".equals(m.type) && !"call".equals(m.type)) {
+                                    incoming = true;
+                                }
+                            }
+                            if (incoming) com.friendbook.social.core.SoundManager.playNewMessage(this);
+                            Map<String, Models.Message> combined = new HashMap<>(historyMessages);
+                            combined.putAll(messageSnapshots);
+                            java.util.List<Models.Message> list = new java.util.ArrayList<>(combined.values());
+                            Set<String> hidden = hiddenMsgs();
+                            list.removeIf(m -> hidden.contains(m.id) || maskedHistoryIds.contains(m.id));
+                            list.sort(java.util.Comparator
+                                    .comparingLong((Models.Message m) -> m.createdAt)
+                                    .thenComparing(m -> m.id));
+                            adapter.setData(list);
+                            if (!initialScrollDone || forceScrollBottom) {
+                                initialScrollDone = true;
+                                forceScrollBottom = false;
+                                rv.scrollToPosition(list.size() - 1);
+                            }
+                            markVisibleReceipts();
+                        });
+                D1_HANDLER.postDelayed(this, D1_POLL_MS);
+            }
+        };
+        D1_HANDLER.post(d1MsgPoll);
+    }
+
+    private static final android.os.Handler D1_HANDLER =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private static final long D1_POLL_MS = 4000L;
+    private Runnable d1MsgPoll;
+
     private void loadOlderMessages() {
         if(historyLoading || !historyMore || historyCursor==null) return;
         historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
         historyButton.setVisibility(View.GONE);historySpinner.setVisibility(View.VISIBLE);
+        // READ = Cloudflare first: the page before the oldest message on screen comes from D1, and the
+        // pre-migration query is used only when D1 has nothing older for this room.
+        final String oldestOnScreen = historyCursor == null ? null : historyCursor.getId();
+        com.friendbook.social.core.CloudflareDocs.read("messages", 40,
+                com.friendbook.social.core.CloudflareDocs.Query.orderDesc("createdAtMs")
+                        .where("chatId", chatId).cursor(oldestOnScreen),
+                page -> {
+                    if (page != null && !page.documents.isEmpty()) {
+                        if (generation != historyGeneration || !java.util.Objects.equals(actor, Fb.uid())
+                                || isFinishing()) return;
+                        historyLoading = false; historyFailed = false;
+                        historySpinner.setVisibility(View.GONE);
+                        historyMore = page.hasMore;
+                        java.util.List<Models.Message> older = new java.util.ArrayList<>();
+                        for (java.util.Map<String, Object> row : page.documents) {
+                            Models.Message m = Models.Message.fromMap(String.valueOf(row.get("id")), row);
+                            historyMessages.put(m.id, m);
+                            older.add(m);
+                        }
+                        if (!older.isEmpty()) historyMore = page.hasMore;
+                        LinearLayoutManager manager = (LinearLayoutManager) rv.getLayoutManager();
+                        int first = manager.findFirstVisibleItemPosition();
+                        View anchor = manager.findViewByPosition(first);
+                        int top = anchor == null ? 0 : anchor.getTop();
+                        String anchorId = adapter.idAt(first);
+                        Map<String, Models.Message> combined = new HashMap<>(historyMessages);
+                        combined.putAll(messageSnapshots);
+                        Set<String> hidden = hiddenMsgs();
+                        java.util.List<Models.Message> rows = new ArrayList<>(combined.values());
+                        rows.removeIf(m -> hidden.contains(m.id) || maskedHistoryIds.contains(m.id));
+                        rows.sort(java.util.Comparator
+                                .comparingLong((Models.Message m) -> m.createdAt).thenComparing(m -> m.id));
+                        adapter.setData(rows);
+                        int restored = -1;
+                        for (int i = 0; i < rows.size(); i++) {
+                            if (java.util.Objects.equals(anchorId, rows.get(i).id)) { restored = i; break; }
+                        }
+                        if (restored >= 0) manager.scrollToPositionWithOffset(restored, top);
+                        historyButton.setVisibility(historyMore ? View.VISIBLE : View.GONE);
+                        historyButton.setText("Load older messages");
+                        return;
+                    }
+                    loadOlderMessagesFromLegacy(generation, actor);
+                });
+    }
+
+    /** The pre-migration history page: reached only when D1 holds nothing older for this room. */
+    private void loadOlderMessagesFromLegacy(final int generation, final String actor) {
+        if (historyCursor == null) { historyLoading = false; historySpinner.setVisibility(View.GONE); return; }
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
@@ -679,18 +814,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     /** Dispatch receipts before rendering; only the foreground open conversation, no history scan. */
     private void markVisibleReceipts(){
         String me=Fb.uid();if(!chatVisible || me==null || !me.equals(messageActor) || messageSnapshots.isEmpty())return;
-        WriteBatch batch=Fb.db().batch();List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+        List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
         for(Models.Message m:messageSnapshots.values()){
             if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
             if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
             Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
-            batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
+            // WRITE = Cloudflare: the receipt is a field on the D1 message row.
+            com.friendbook.social.core.D1Write.write("messages", chatId + "_" + m.id, patch,
+                    null, null, null);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
-        batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
-        batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
+        receiptInFlight.removeAll(claimed);
         // WRITE = Cloudflare: the unread badge for this room is stored on the D1 room row, so a
         // conversation created by this build shows the correct badge on both sides.
         if (com.friendbook.social.core.CloudflareDocs.enabled()) {
@@ -712,6 +848,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStop() {
         super.onStop();
+        // The D1 message poll only runs while the conversation is on screen.
+        if (d1MsgPoll != null) D1_HANDLER.removeCallbacks(d1MsgPoll);
         historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
@@ -827,8 +965,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
-        com.google.firebase.firestore.DocumentReference msgRef =
-                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        // The id of a new message is generated here: D1 is a flat store, so `messages/<chatId>_<id>`
+        // is the document the room reads back, and no backend call is needed to know it.
+        final String msgId = com.friendbook.social.core.D1Write.newId();
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
                 "senderName", Fb.myName(),
@@ -844,21 +983,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         Models.Message optimistic = new Models.Message();
-        optimistic.id = msgRef.getId(); optimistic.senderId = me; optimistic.receiverId = peerId;
+        optimistic.id = msgId; optimistic.senderId = me; optimistic.receiverId = peerId;
         optimistic.type = "voice"; optimistic.voiceUrl = url; optimistic.voiceDurationSec = durSec;
         optimistic.createdAt = now; optimistic.text = "";
         adapter.appendOptimistic(optimistic);
         rv.scrollToPosition(adapter.getItemCount() - 1);
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
         forceScrollBottom = true;
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-        })
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+        // WRITE = Cloudflare: the voice note and its room row are written to D1, in that order, so a
+        // message can never appear in a chat that the server does not have.
+        writeRoomThenMessage(chatDoc, msg, msgId, () ->
+                com.friendbook.social.push.FCMPush.message(chatId, msgId),
+                () -> Ui.toast(this, "Couldn't send voice note"));
     }
 
     // ---------- chat theme ----------
@@ -877,8 +1014,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void resetUnread() {
         String me = Fb.uid();
         if (me == null || chatId == null) return;
-        // Use update() rather than set() so opening an empty chat never creates an incomplete room doc
-        Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
+        // WRITE = Cloudflare: opening a chat clears this reader's badge on the room row. The room row
+        // is created here if it does not exist yet, because a flat store has no implicit parent.
+        ensureRoomRow();
         // WRITE = Cloudflare (this build's own rooms live there).
         if (com.friendbook.social.core.CloudflareDocs.enabled()) {
             java.util.Map<String, Object> unread = new java.util.HashMap<>();
@@ -925,10 +1063,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
-        com.google.firebase.firestore.DocumentReference msgRef =
-                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        // The id of a new message is generated here: D1 is a flat store, so `messages/<chatId>_<id>`
+        // is the document the room reads back, and no backend call is needed to know it.
+        final String msgId = com.friendbook.social.core.D1Write.newId();
         Models.Message opt = new Models.Message();
-        opt.id = msgRef.getId();
+        opt.id = msgId;
         opt.senderId = me;
         opt.receiverId = peerId;
         opt.text = emoji;
@@ -952,15 +1091,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "✨ " + emoji + " sticker");
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit()
-                .addOnSuccessListener(x -> {
-                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-                })
-                .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
+        writeRoomThenMessage(chatDoc, msg, msgId, () ->
+                        com.friendbook.social.push.FCMPush.message(chatId, msgId),
+                () -> Ui.toast(this, "Queued offline — will sync automatically"));
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
@@ -986,10 +1120,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
         typingSent = false;
 
-        com.google.firebase.firestore.DocumentReference msgRef =
-                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        // The id of a new message is generated here: D1 is a flat store, so `messages/<chatId>_<id>`
+        // is the document the room reads back, and no backend call is needed to know it.
+        final String msgId = com.friendbook.social.core.D1Write.newId();
         Models.Message opt = new Models.Message();
-        opt.id = msgRef.getId();
+        opt.id = msgId;
         opt.senderId = me;
         opt.receiverId = peerId;
         opt.text = finalText != null ? finalText : "";
@@ -1028,17 +1163,44 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "image".equals(type) ? "📷 Photo" : finalText);
-        com.friendbook.social.core.CloudflareStore.put("chats", chatId, chatDoc);
-        com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_" + msgRef.getId(), msg);
-
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-        }).addOnFailureListener(e ->
-                Ui.toast(this, "Queued offline — will sync automatically"));
+        writeRoomThenMessage(chatDoc, msg, msgId, () ->
+                        com.friendbook.social.push.FCMPush.message(chatId, msgId),
+                () -> Ui.toast(this, "Queued offline — will sync automatically"));
+    }
+
+    /**
+     * Makes sure the room row exists in D1 before anything is attached to it: a flat document store
+     * has no implicit parent, so a chat opened from a notification must still create its room.
+     */
+    private void ensureRoomRow() {
+        String me = Fb.uid();
+        if (me == null || chatId == null) return;
+        Map<String, Object> row = new HashMap<>();
+        row.put("participants", isGroupChat ? java.util.Arrays.asList(me) : java.util.Arrays.asList(me, peerId));
+        row.put("isGroup", isGroupChat);
+        row.put("lastMessageAt", System.currentTimeMillis());
+        com.friendbook.social.core.D1Write.put("chats", chatId, row, null);
+    }
+
+    /**
+     * Sends one message: the room row first (so the conversation exists and shows the last line), then
+     * the message itself, both on Cloudflare D1. `onSent` runs when the message landed (or was parked
+     * for the next foreground), `onQueued` when it only reached the outbox.
+     */
+    private void writeRoomThenMessage(Map<String, Object> chatDoc, Map<String, Object> msg,
+                                      String messageId, Runnable onSent, Runnable onQueued) {
+        final String messageDocId = chatId + "_" + messageId;
+        final Map<String, Object> messageDoc = new java.util.HashMap<>(msg);
+        // The D1 message row needs to know its room: a flat store has no parent document.
+        messageDoc.put("chatId", chatId);
+        com.friendbook.social.core.D1Write.write("chats", chatId, chatDoc, () ->
+                com.friendbook.social.core.D1Write.write("messages", messageDocId, messageDoc,
+                        onSent, reason -> {
+                            if (onQueued != null) onQueued.run();
+                        }, null), reason -> {
+                    if (onQueued != null) onQueued.run();
+                }, null);
     }
 
     @Override
@@ -1127,9 +1289,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 for (Models.Message x : adapter.all()) if (!hidden.contains(x.id)) current.add(x);
                 adapter.setData(current);
             } else if (sel.contains("Report")) {
-                Fb.db().collection("reports").add(Fb.map(
-                        "messageId", m.id, "chatId", chatId, "reportedBy", Fb.uid(),
-                        "createdAt", FieldValue.serverTimestamp()));
+                D1Write.add("reports", Fb.map("messageId", m.id, "chatId", chatId, "reportedBy", Fb.uid()), null, null, () -> Fb.db().collection("reports").add(Fb.map( "messageId", m.id, "chatId", chatId, "reportedBy", Fb.uid(), "createdAt", FieldValue.serverTimestamp())));
                 Ui.toast(this, "Reported");
             }
         });
@@ -1142,12 +1302,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         for (final Models.Message m : messages) {
             if (m == null || m.id == null || !hydratedTeamMsgIds.add(m.id)) continue;
             final String sharedDocId = m.sharedTeamReactionDocId();
-            Fb.db().collection("chats").document("team_shared_reactions")
-                    .collection("messages").document(sharedDocId)
-                    .get()
-                    .addOnSuccessListener(doc -> {
-                        if (isFinishing() || doc == null || !doc.exists()) return;
-                        Models.Message shared = Models.Message.fromDoc(doc);
+            // READ = Cloudflare first; the pre-migration row is only read when D1 has none.
+            com.friendbook.social.core.CloudflareDocs.get("messages",
+                    "team_shared_reactions_" + sharedDocId, row -> {
+                        if (isFinishing() || row == null) {
+                            if (row == null) hydrateTeamSharedReactionsLegacy(m, sharedDocId);
+                            return;
+                        }
+                        Models.Message shared = Models.Message.fromMap("", row);
                         if (shared.reactions == null || shared.reactions.isEmpty()) return;
                         if (m.reactions == null) m.reactions = new HashMap<>();
                         if (m.reactorNames == null) m.reactorNames = new HashMap<>();
@@ -1160,6 +1322,25 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
     }
 
+    /** The pre-migration team reaction row: reached only when D1 has no row for this message. */
+    private void hydrateTeamSharedReactionsLegacy(final Models.Message m, final String sharedDocId) {
+        Fb.db().collection("chats").document("team_shared_reactions")
+                .collection("messages").document(sharedDocId)
+                .get()
+                .addOnSuccessListener(doc -> {
+                    if (isFinishing() || doc == null || !doc.exists()) return;
+                    Models.Message shared = Models.Message.fromDoc(doc);
+                    if (shared.reactions == null || shared.reactions.isEmpty()) return;
+                    if (m.reactions == null) m.reactions = new HashMap<>();
+                    if (m.reactorNames == null) m.reactorNames = new HashMap<>();
+                    if (m.reactorPhotos == null) m.reactorPhotos = new HashMap<>();
+                    m.reactions.putAll(shared.reactions);
+                    if (shared.reactorNames != null) m.reactorNames.putAll(shared.reactorNames);
+                    if (shared.reactorPhotos != null) m.reactorPhotos.putAll(shared.reactorPhotos);
+                    adapter.notifyDataSetChanged();
+                });
+    }
+
     private void reactPicker(Models.Message m) {
         String[] emoj = {"👍 Like", "❤️ Love", "😂 Haha", "😮 Wow", "😢 Sad", "🙏 Thanks", "😡 Angry", "🚫 Remove reaction"};
         Ui.choose(this, "React to this message", emoj, w -> {
@@ -1167,19 +1348,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if (me == null) return;
             String myName = Fb.myName();
             String myPhoto = Fb.myPhoto();
+            // The D1 patch uses plain map members; a null member removes just that key.
             java.util.Map<String, Object> upd = new HashMap<>();
             if (w == emoj.length - 1) {
-                upd.put("reactions." + me, FieldValue.delete());
-                upd.put("reactorNames." + me, FieldValue.delete());
-                upd.put("reactorPhotos." + me, FieldValue.delete());
+                upd.put("reactions", java.util.Collections.singletonMap(me, null));
+                upd.put("reactorNames", java.util.Collections.singletonMap(me, null));
+                upd.put("reactorPhotos", java.util.Collections.singletonMap(me, null));
                 if (m.reactions != null) m.reactions.remove(me);
                 if (m.reactorNames != null) m.reactorNames.remove(me);
                 if (m.reactorPhotos != null) m.reactorPhotos.remove(me);
             } else {
                 String e = emoj[w].split(" ")[0];
-                upd.put("reactions." + me, e);
-                if (myName != null && !myName.isEmpty()) upd.put("reactorNames." + me, myName);
-                if (myPhoto != null && !myPhoto.isEmpty()) upd.put("reactorPhotos." + me, myPhoto);
+                upd.put("reactions", java.util.Collections.singletonMap(me, e));
+                if (myName != null && !myName.isEmpty()) upd.put("reactorNames", java.util.Collections.singletonMap(me, myName));
+                if (myPhoto != null && !myPhoto.isEmpty()) upd.put("reactorPhotos", java.util.Collections.singletonMap(me, myPhoto));
                 if (m.reactions == null) m.reactions = new HashMap<>();
                 if (m.reactorNames == null) m.reactorNames = new HashMap<>();
                 if (m.reactorPhotos == null) m.reactorPhotos = new HashMap<>();
@@ -1188,30 +1370,15 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 if (myPhoto != null && !myPhoto.isEmpty()) m.reactorPhotos.put(me, myPhoto);
             }
             adapter.notifyDataSetChanged();
-            Fb.db().collection("chats").document(chatId)
-                    .collection("messages").document(m.id)
-                    .update(upd)
-                    .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
+            // WRITE = Cloudflare: a reaction is three map members on the message row (emoji, name,
+            // photo), merged key by key so two reactors never erase each other.
+            D1Write.write("messages", chatId + "_" + m.id, upd, null,
+                    err -> Ui.toast(this, "Reaction failed"), null);
             if (isTeamChat || Ui.TEAM_USER_ID.equals(m.senderId)) {
-                String sharedDocId = m.sharedTeamReactionDocId();
-                com.google.firebase.firestore.DocumentReference sharedRef =
-                        Fb.db().collection("chats").document("team_shared_reactions")
-                                .collection("messages").document(sharedDocId);
-                if (w == emoj.length - 1) {
-                    sharedRef.update(upd);
-                } else {
-                    String e = emoj[w].split(" ")[0];
-                    Map<String, Object> rx = java.util.Collections.singletonMap(me, e);
-                    Map<String, Object> mergeDoc = new HashMap<>();
-                    mergeDoc.put("reactions", rx);
-                    if (myName != null && !myName.isEmpty()) {
-                        mergeDoc.put("reactorNames", java.util.Collections.singletonMap(me, myName));
-                    }
-                    if (myPhoto != null && !myPhoto.isEmpty()) {
-                        mergeDoc.put("reactorPhotos", java.util.Collections.singletonMap(me, myPhoto));
-                    }
-                    sharedRef.set(mergeDoc, SetOptions.merge());
-                }
+                // The team broadcast reaction is one shared row per message, so every member of the
+                // team sees the same emoji count on it.
+                D1Write.write("messages", "team_shared_reactions_" + m.sharedTeamReactionDocId(),
+                        upd, null, null, null);
             }
         });
     }
@@ -1238,8 +1405,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void blockPeer() {
         Ui.confirm(this, "Block " + peerName + "?", "They won't be able to message or find you.",
                 "Block", () -> {
-                    Fb.db().collection("users").document(Fb.uid())
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(peerId)), SetOptions.merge());
+                    D1Write.write("users", Fb.uid(), Fb.map("blockedUsersAdd", peerId), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(peerId)), SetOptions.merge()));
                     Ui.toast(this, "Blocked");
                     finish();
                 });

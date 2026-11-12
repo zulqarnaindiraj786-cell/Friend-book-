@@ -403,8 +403,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # The queue is per account, so one user's pending writes can never replay as another's.
         self.assertIn('String uid = Fb.uid();', outbox)
         absent(self, 'addSnapshotListener', outbox, 'CloudflareOutbox')
-        # The worker's own size ceiling is respected client-side (32 KiB transport, 95 KiB Worker).
-        self.assertIn('MAX_MIRROR_BYTES', docs)
+        # The Worker's own ceiling is the client's ceiling now: the transport refuses over 64 KiB of
+        # UTF-8 and the Worker refuses over 95 000 characters, so a real post is never dropped.
+        self.assertIn('MAX_WRITE_BYTES', docs)
+        self.assertIn('60 * 1024', docs)
         # Both call sites that create content: a new Post and a new Reel.
         post = (JAVA / 'post/CreatePostActivity.java').read_text()
         reel = (JAVA / 'reels/ReelUploadManager.java').read_text()

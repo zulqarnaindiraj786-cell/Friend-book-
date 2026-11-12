@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 🚩 PagesActivity — Full friendbook Pages Directory:
@@ -154,12 +155,7 @@ public class PagesActivity extends Activity {
                     m.put("followers", Collections.singletonList(Fb.uid()));
                     m.put("tickLevel", "none");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("pages").add(m).addOnSuccessListener(ref -> {
-                        Ui.toast(this, "Page created 🚩");
-                        Intent i = new Intent(this, PageDetailActivity.class);
-                        i.putExtra("page_id", ref.getId());
-                        startActivity(i);
-                    });
+                    D1Write.add("pages", Fb.map("name", n, "category", cat.getText().toString().trim().isEmpty() ? "Page" : cat.getText().toString().trim(), "bio", bio.getText().toString().trim(), "photoUrl", Fb.myPhoto(), "ownerId", Fb.uid(), "followers", Collections.singletonList(Fb.uid()), "tickLevel", "none"), null, null, () -> Fb.db().collection("pages").add(m).addOnSuccessListener(ref -> { Ui.toast(this, "Page created 🚩"); Intent i = new Intent(this, PageDetailActivity.class); i.putExtra("page_id", ref.getId()); startActivity(i); }));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -268,8 +264,7 @@ public class PagesActivity extends Activity {
             h.btn.setOnClickListener(v -> {
                 String me = Fb.uid();
                 if (me == null) return;
-                Fb.db().collection("pages").document(p.id).update("followers",
-                        following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                D1Write.write("pages", p.id, (following ? Fb.map("followersRemove", me) : Fb.map("followersAdd", me)), null, null, () -> Fb.db().collection("pages").document(p.id).update("followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me)));
             });
             h.itemView.setOnClickListener(v -> {
                 Intent open = new Intent(PagesActivity.this, PageDetailActivity.class);

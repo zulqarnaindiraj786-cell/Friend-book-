@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 📢 friendbook Production AdMob Configuration (`com.friendbook.social`):
@@ -287,10 +288,7 @@ public class AdsConfig {
         m.put("appAdsTxtUrl", APP_ADS_TXT_URL);
         m.put("updatedBy", Fb.uid());
         m.put("updatedAt", FieldValue.serverTimestamp());
-        Fb.db().collection("config").document("ads")
-                .set(m, SetOptions.merge())
-                .addOnSuccessListener(v -> Ui.toast(ctx, "Production AdMob config saved ✓"))
-                .addOnFailureListener(e -> Ui.toast(ctx, "Save failed: " + e.getMessage()));
+        D1Write.write("config", "ads", Fb.map("appId", APP_ID, "feed_native_unit_v3", cleanFeed, "reels_native_unit_v3", cleanReels, "ads_enabled_v3", isEnabled, "websiteUrl", OFFICIAL_WEBSITE_URL, "appAdsTxtUrl", APP_ADS_TXT_URL, "updatedBy", Fb.uid()), null, null, () -> Fb.db().collection("config").document("ads") .set(m, SetOptions.merge()) .addOnSuccessListener(v -> Ui.toast(ctx, "Production AdMob config saved ✓")) .addOnFailureListener(e -> Ui.toast(ctx, "Save failed: " + e.getMessage())));
     }
 
     public static void reset(Context ctx) {
@@ -1445,7 +1443,7 @@ public class AdsConfig {
                             seed.put("likes", 0);
                             seed.put("comments", 0);
                             seed.put("shares", 0);
-                            Fb.db().collection("posts").document(docId).set(seed, SetOptions.merge());
+                            D1Write.write("posts", docId, Fb.map("id", docId, "authorId", "friendbook_sponsored", "authorName", adPost.authorName, "authorPhoto", "", "authorPhotoUrl", "", "content", adPost.content, "privacy", "Only me", "createdAt", System.currentTimeMillis(), "likes", 0, "comments", 0, "shares", 0), null, null, () -> Fb.db().collection("posts").document(docId).set(seed, SetOptions.merge()));
                         }
                         if (onHydrated != null) onHydrated.run();
                     })
@@ -1517,7 +1515,7 @@ public class AdsConfig {
         try {
             Map<String, Object> up = new HashMap<>();
             up.put("shares", FieldValue.increment(1));
-            Fb.db().collection("posts").document(adPost.id).set(up, SetOptions.merge());
+            D1Write.write("posts", adPost.id, Fb.map("sharesDelta", 1), null, null, () -> Fb.db().collection("posts").document(adPost.id).set(up, SetOptions.merge()));
         } catch (Throwable ignored) { }
         String h = headline != null && headline.length() > 0 ? headline.toString() : adPost.authorName;
         String b = body != null && body.length() > 0 ? ("\n" + body) : "";

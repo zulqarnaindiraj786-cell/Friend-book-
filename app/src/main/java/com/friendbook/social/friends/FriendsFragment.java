@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /** Bounded, cached friends pages. Requests includes a small inline suggestions page; no whole-list listeners. */
 public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
@@ -376,9 +377,9 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             String rid = r.requestId;
             removeRequestOptimistic(rid);
             final String actor=Fb.uid();
-            Fb.db().collection("friend_requests").document(rid).delete().addOnFailureListener(error->{
-                if(java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);Ui.toast(getActivity(),"Couldn't remove request. Try again.");startSection();}
-            });
+            D1Write.delete("friend_requests", rid, null,
+                    reason -> { if(java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);Ui.toast(getActivity(),"Couldn't remove request. Try again.");startSection();} },
+                    () -> Fb.db().collection("friend_requests").document(rid).delete());
             Ui.toast(getActivity(), "Request removed");
         } else if ("Unfriend".equals(r.secondaryLabel)) {
             unfriend(r.user);
@@ -410,11 +411,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void cancelRequest(UsersAdapter.Row row) {
         String me=Fb.uid();if(me==null || row.requestId==null)return;
         final String requestId=row.requestId,other=row.user.uid;
-        Fb.db().collection("friend_requests").document(requestId).delete().addOnSuccessListener(v->{
-            if(!me.equals(Fb.uid()) || getActivity()==null)return;
-            cancelledRequestIds.add(requestId);if(section==SEC_SENT && activePager!=null)activePager.forget(requestId);outgoing.remove(other);sentIds.remove(other);candidateOutgoing.remove(other);render();
-            Ui.toast(getActivity(),"Request cancelled");
-        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't cancel. Try again.");});
+        D1Write.delete("friend_requests", requestId,
+                () -> { if(!me.equals(Fb.uid()) || getActivity()==null)return; cancelledRequestIds.add(requestId);if(section==SEC_SENT && activePager!=null)activePager.forget(requestId);outgoing.remove(other);sentIds.remove(other);candidateOutgoing.remove(other);render(); Ui.toast(getActivity(),"Request cancelled"); },
+                reason -> { if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't cancel. Try again."); },
+                () -> Fb.db().collection("friend_requests").document(requestId).delete());
     }
 
     private void acceptRequest(UsersAdapter.Row r) {
@@ -435,8 +435,9 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 "createdAt", System.currentTimeMillis());
         final String friendId = me.compareTo(from) < 0 ? me + "_" + from : from + "_" + me;
         Runnable afterFriendship = () -> {
-            com.friendbook.social.core.CloudflareStore.put("users", me, Fb.map("friendsCount", FieldValue.increment(1)));
-            com.friendbook.social.core.CloudflareStore.put("users", from, Fb.map("friendsCount", FieldValue.increment(1)));
+            // WRITE = Cloudflare: a friend counter is a delta the database applies, on both sides.
+            D1Write.write("users", me, Fb.map("friendsCountDelta", 1), null, null, null);
+            D1Write.write("users", from, Fb.map("friendsCountDelta", 1), null, null, null);
         };
         com.friendbook.social.core.CloudflareDocs.writeDocument("friends", friendId, friendDoc,
             () -> {
@@ -447,6 +448,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             },
             reason -> { if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();} },
             () -> {
+                // Pre-migration write, reached only when Cloudflare is switched off for the build.
                 WriteBatch batch = Fb.db().batch();
                 com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
                 batch.set(friendDocRef, friendDoc);
@@ -457,9 +459,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
                 }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
             });
-        // The request itself is answered on both stores: D1 when enabled, the old source otherwise.
-        com.friendbook.social.core.CloudflareDocs.writeDocument("friend_requests", rid,
-                Fb.map("status", "accepted"), null, null,
+        // The request itself is answered in D1 too (the pre-migration update only runs with D1 off).
+        D1Write.write("friend_requests", rid, Fb.map("status", "accepted"), null, null,
                 () -> Fb.db().collection("friend_requests").document(rid).update("status", "accepted"));
     }
 
@@ -475,12 +476,14 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 for (String friendRowId : new String[]{abc, me + "_" + user.uid, user.uid + "_" + me}) {
                     com.friendbook.social.core.CloudflareDocs.deleteDocument("friends", friendRowId, null, null, null);
                 }
-                WriteBatch batch=Fb.db().batch();for(DocumentSnapshot doc:page)batch.delete(doc.getReference());
-                batch.update(Fb.db().collection("users").document(me),"friendsCount",FieldValue.increment(-page.size()));
-                batch.update(Fb.db().collection("users").document(user.uid),"friendsCount",FieldValue.increment(-page.size()));
-                batch.commit().addOnSuccessListener(v->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                // WRITE = Cloudflare: the counter is a delta the database applies, so two unfriends at
+                // the same moment cannot lose an increment.
+                final int removed = page.size();
+                java.util.Map<String,Object> delta = Fb.map("friendsCountDelta", -removed);
+                D1Write.write("users", me, delta, () -> {if(!me.equals(Fb.uid()) || getActivity()==null)return;
                     removedFriendIds.add(user.uid);friendIds.remove(user.uid);candidateFriends.remove(user.uid);render();Ui.toast(getActivity(),"Unfriended");
-                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't unfriend. Try again.");});
+                }, reason -> {if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't unfriend. Try again.");}, null);
+                D1Write.write("users", user.uid, delta, null, null, null);
             }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't check relationship. Try again.");});
         });
     }

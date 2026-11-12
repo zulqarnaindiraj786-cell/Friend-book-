@@ -167,12 +167,34 @@ public class Fb {
         return me != null && me.blocked != null && me.blocked.contains(otherUid);
     }
 
-    /** Patch a couple of fields on my user doc (merge). */
+    /**
+     * Patch a couple of fields on my user doc (merge).
+     *
+     * WRITE = Cloudflare: the profile row of this build lives in D1. The Firestore lambda is the
+     * pre-migration write and only runs when the Cloudflare path is switched off for a build.
+     */
     public static void patchMe(Map<String, Object> fields) {
         String uid = uid();
         if (uid == null) return;
-        CloudflareStore.put("users", uid, fields);
-        db().collection("users").document(uid).set(fields, SetOptions.merge());
+        D1Write.write("users", uid, fields, null, null,
+                () -> db().collection("users").document(uid).set(fields, SetOptions.merge()));
+    }
+
+    /**
+     * Adds or removes one member of a list on my own profile (`blockedUsers`, `restrictedUids`, ...).
+     *
+     * The D1 row stores the list, so the change is sent as `fieldAdd`/`fieldRemove` and the database
+     * applies it: two devices changing the same list at once cannot overwrite each other.
+     */
+    public static void patchMeList(String field, String item, boolean add) {
+        String uid = uid();
+        if (uid == null || field == null || item == null || item.isEmpty()) return;
+        Map<String, Object> d1 = new HashMap<>();
+        d1.put(field + (add ? "Add" : "Remove"), item);
+        D1Write.write("users", uid, d1, null, null,
+                () -> db().collection("users").document(uid).set(
+                        map(field, add ? FieldValue.arrayUnion(item) : FieldValue.arrayRemove(item)),
+                        SetOptions.merge()));
     }
 
     public static Map<String, Object> map(Object... kv) {

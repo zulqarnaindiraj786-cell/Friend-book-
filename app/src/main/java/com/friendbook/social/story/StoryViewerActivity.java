@@ -40,6 +40,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 📖 StoryViewerActivity — Full friendbook Story Viewer:
@@ -348,8 +349,7 @@ public class StoryViewerActivity extends Activity {
 
         String me = Fb.uid();
         if (me != null && !mine && !s.viewedBy.contains(me)) {
-            Fb.db().collection("stories").document(s.id)
-                    .update("viewedBy", FieldValue.arrayUnion(me));
+            D1Write.write("stories", s.id, Fb.map("viewedByAdd", me), null, null, () -> Fb.db().collection("stories").document(s.id) .update("viewedBy", FieldValue.arrayUnion(me)));
             // WRITE = Cloudflare: the "seen by" list of a story written by this build lives in D1.
             if (com.friendbook.social.core.CloudflareDocs.enabled()) {
                 com.friendbook.social.core.CloudflareDocs.get("stories", s.id, row -> {
@@ -404,8 +404,7 @@ public class StoryViewerActivity extends Activity {
                 if (myUid != null && s.authorId != null) {
                     Ui.confirm(this, "Block " + s.authorName + "?",
                             "You won't see their stories, posts, or messages anymore.", "Block", () -> {
-                                Fb.db().collection("users").document(myUid)
-                                        .set(Fb.map("blockedUsers", FieldValue.arrayUnion(s.authorId)), SetOptions.merge());
+                                D1Write.write("users", myUid, Fb.map("blockedUsersAdd", s.authorId), null, null, () -> Fb.db().collection("users").document(myUid) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(s.authorId)), SetOptions.merge()));
                                 if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(s.authorId)) {
                                     Fb.me.blocked.add(s.authorId);
                                 }
@@ -429,7 +428,7 @@ public class StoryViewerActivity extends Activity {
                     rep.put("reason", reasons[w]);
                     rep.put("reporterId", Fb.uid());
                     rep.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("reports").add(rep);
+                    D1Write.add("reports", Fb.map("targetId", s.id, "authorId", s.authorId, "type", "story", "reason", reasons[w], "reporterId", Fb.uid()), null, null, () -> Fb.db().collection("reports").add(rep));
                     if (w == 0 || w == 1 || w == 2) {
                         com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
                                 this, "stories", s.id, s.authorId,
@@ -451,16 +450,16 @@ public class StoryViewerActivity extends Activity {
     private void addCurrentToHighlights() {
         if (stories.isEmpty() || Fb.uid() == null) return;
         Models.Story s = stories.get(index);
-        Fb.db().collection("users").document(Fb.uid())
-                .update("highlightStoryIds", FieldValue.arrayUnion(s.id))
-                .addOnSuccessListener(x -> Ui.toast(this, "Pinned to Profile Highlights ✨"));
+        D1Write.write("users", Fb.uid(), Fb.map("highlightStoryIdsAdd", s.id), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .update("highlightStoryIds", FieldValue.arrayUnion(s.id)) .addOnSuccessListener(x -> Ui.toast(this, "Pinned to Profile Highlights ✨")));
     }
 
     private void sendQuickReaction(String emoji) {
         if (stories.isEmpty() || Fb.uid() == null) return;
         Models.Story s = stories.get(index);
-        Fb.db().collection("stories").document(s.id)
-                .update("reactions." + Fb.uid(), emoji);
+        // WRITE = Cloudflare: a story reaction is this reader's entry in the story's reactions map.
+        D1Write.write("stories", s.id,
+                Fb.map("reactions", java.util.Collections.singletonMap(Fb.uid(), emoji)),
+                null, null, null);
         Notify.send(s.authorId, "story_reaction", "reacted " + emoji + " to your story", "");
         Ui.toast(this, "Sent " + emoji + " to " + s.authorName);
     }
@@ -520,10 +519,7 @@ public class StoryViewerActivity extends Activity {
         if (stories.isEmpty()) return;
         Models.Story s = stories.get(index);
         Ui.confirm(this, "Delete this story?", "", "Delete", () -> {
-            Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(v->{
-                if(storyPages!=null)storyPages.forget(s.id);stories.remove(s);
-                Ui.toast(this,"Story deleted");if(stories.isEmpty()){finish();return;}index=Math.min(index,stories.size()-1);show();
-            });
+            D1Write.delete("stories", s.id, null, null, () -> Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(v->{ if(storyPages!=null)storyPages.forget(s.id);stories.remove(s); Ui.toast(this,"Story deleted");if(stories.isEmpty()){finish();return;}index=Math.min(index,stories.size()-1);show(); }));
         });
     }
 
@@ -562,17 +558,17 @@ public class StoryViewerActivity extends Activity {
                 "isDelivered", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
-        batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
+        // WRITE = Cloudflare: the room row and the reply message, both in D1.
+        final String msgId = D1Write.newId();
+        msg.put("chatId", chatId);
+        D1Write.write("chats", chatId, Fb.map(
                 "participants", Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,
-                "lastMessageTimeMs", now,
-                "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
-        batch.commit().addOnSuccessListener(x -> {
+                "lastMessageTimeMs", now), null, null, null);
+        D1Write.write("messages", chatId + "_" + msgId, msg, () -> {
             replyInput.setText("");
             Ui.hideKeyboard(this);
             Ui.toast(this, "Reply sent 💬");
-        });
+        }, null, null);
     }
 }

@@ -36,6 +36,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 👥 Messenger Group Chat Info & Admin Control Center:
@@ -147,7 +148,7 @@ public class GroupChatInfoActivity extends Activity {
         onlyAdminsSwitch = new Switch(this);
         onlyAdminsSwitch.setOnCheckedChangeListener((btn, checked) -> {
             if (updatingSwitch || room == null || !room.isGroupAdmin(Fb.uid())) return;
-            Fb.db().collection("chats").document(chatId).update("onlyAdminsCanSend", checked);
+            D1Write.write("chats", chatId, Fb.map("onlyAdminsCanSend", checked), null, null, () -> Fb.db().collection("chats").document(chatId).update("onlyAdminsCanSend", checked));
             postSystemMessage(checked
                     ? "🔒 " + Fb.myName() + " set group to Only Admins Can Send Messages"
                     : "🔓 " + Fb.myName() + " allowed all members to send messages");
@@ -350,14 +351,7 @@ public class GroupChatInfoActivity extends Activity {
                 chat.putExtra("name", memberName);
                 startActivity(chat);
             } else if (id == 3) {
-                Fb.db().collection("chats").document(chatId).update("adminIds",
-                        targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid))
-                        .addOnSuccessListener(x -> {
-                            postSystemMessage(targetIsAdmin
-                                    ? "➖ " + Fb.myName() + " dismissed " + memberName + " as admin"
-                                    : "🛡 " + Fb.myName() + " made " + memberName + " a Group Admin");
-                            Ui.toast(this, targetIsAdmin ? "Admin dismissed" : memberName + " is now a Group Admin 🛡");
-                        });
+                D1Write.write("chats", chatId, (targetIsAdmin ? Fb.map("adminIdsRemove", memberUid) : Fb.map("adminIdsAdd", memberUid)), null, null, () -> Fb.db().collection("chats").document(chatId).update("adminIds", targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid)) .addOnSuccessListener(x -> { postSystemMessage(targetIsAdmin ? "➖ " + Fb.myName() + " dismissed " + memberName + " as admin" : "🛡 " + Fb.myName() + " made " + memberName + " a Group Admin"); Ui.toast(this, targetIsAdmin ? "Admin dismissed" : memberName + " is now a Group Admin 🛡"); }));
             } else if (id == 4) {
                 Ui.confirm(this, "Remove " + memberName + "?",
                         "Remove " + memberName + " from this group chat?",
@@ -365,11 +359,7 @@ public class GroupChatInfoActivity extends Activity {
                             Map<String, Object> up = new HashMap<>();
                             up.put("participants", FieldValue.arrayRemove(memberUid));
                             up.put("adminIds", FieldValue.arrayRemove(memberUid));
-                            Fb.db().collection("chats").document(chatId).update(up)
-                                    .addOnSuccessListener(x -> {
-                                        postSystemMessage("🚫 " + Fb.myName() + " removed " + memberName);
-                                        Ui.toast(this, "Removed " + memberName);
-                                    });
+                            D1Write.write("chats", chatId, Fb.map("participantsRemove", memberUid, "adminIdsRemove", memberUid), null, null, () -> Fb.db().collection("chats").document(chatId).update(up) .addOnSuccessListener(x -> { postSystemMessage("🚫 " + Fb.myName() + " removed " + memberName); Ui.toast(this, "Removed " + memberName); }));
                         });
             }
             return true;
@@ -390,7 +380,7 @@ public class GroupChatInfoActivity extends Activity {
                 .setPositiveButton("Save", (d, w) -> {
                     String n = in.getText().toString().trim();
                     if (n.isEmpty()) return;
-                    Fb.db().collection("chats").document(chatId).update("groupName", n);
+                    D1Write.write("chats", chatId, Fb.map("groupName", n), null, null, () -> Fb.db().collection("chats").document(chatId).update("groupName", n));
                     postSystemMessage("✏️ " + Fb.myName() + " changed group name to \"" + n + "\"");
                 })
                 .setNegativeButton("Cancel", null)
@@ -453,11 +443,7 @@ public class GroupChatInfoActivity extends Activity {
                     patch.put("participants", FieldValue.arrayUnion(newUids.toArray()));
                     patch.put("participantNames", names);
                     patch.put("participantPhotos", photos);
-                    Fb.db().collection("chats").document(chatId).set(patch, SetOptions.merge())
-                            .addOnSuccessListener(x -> {
-                                postSystemMessage("➕ " + Fb.myName() + " added " + sb);
-                                Ui.toast(this, "Added " + newUids.size() + " member(s) ✓");
-                            });
+                    D1Write.write("chats", chatId, Fb.map("participantsAdd", newUids.toArray(), "participantNames", names, "participantPhotos", photos), null, null, () -> Fb.db().collection("chats").document(chatId).set(patch, SetOptions.merge()) .addOnSuccessListener(x -> { postSystemMessage("➕ " + Fb.myName() + " added " + sb); Ui.toast(this, "Added " + newUids.size() + " member(s) ✓"); }));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -482,11 +468,7 @@ public class GroupChatInfoActivity extends Activity {
                         }
                     }
                     postSystemMessage("🚪 " + Fb.myName() + " left the group");
-                    Fb.db().collection("chats").document(chatId).update(up)
-                            .addOnSuccessListener(x -> {
-                                Ui.toast(this, "You left the group");
-                                finish();
-                            });
+                    D1Write.write("chats", chatId, Fb.map("participantsRemove", me, "adminIdsRemove", me, "createdBy", p, "adminIdsAdd", p), null, null, () -> Fb.db().collection("chats").document(chatId).update(up) .addOnSuccessListener(x -> { Ui.toast(this, "You left the group"); finish(); }));
                 });
     }
 
@@ -499,7 +481,7 @@ public class GroupChatInfoActivity extends Activity {
             String path = "group_chats/" + chatId + "_" + System.currentTimeMillis() + ".jpg";
             Cloudinary.uploadOrFirebase(this, path, uri)
                     .addOnSuccessListener(url -> {
-                        Fb.db().collection("chats").document(chatId).update("groupPhoto", url.toString());
+                        D1Write.write("chats", chatId, Fb.map("groupPhoto", url.toString()), null, null, () -> Fb.db().collection("chats").document(chatId).update("groupPhoto", url.toString()));
                         postSystemMessage("📷 " + Fb.myName() + " updated the group photo");
                     })
                     .addOnFailureListener(e -> Ui.toast(this, "Photo upload failed"));
@@ -516,11 +498,11 @@ public class GroupChatInfoActivity extends Activity {
         m.put("isDelivered", true);
         m.put("isSeen", true);
         m.put("createdAtMs", now);
-        m.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("chats").document(chatId).collection("messages").add(m);
-        Fb.db().collection("chats").document(chatId).set(Fb.map(
-                "lastMessage", text,
-                "lastMessageTime", FieldValue.serverTimestamp(),
-                "lastMessageTimeMs", now), SetOptions.merge());
+        m.put("createdAt", System.currentTimeMillis());
+        // WRITE = Cloudflare: a system line is a normal message row of the room in D1.
+        final String msgId = D1Write.newId();
+        m.put("chatId", chatId);
+        D1Write.write("messages", chatId + "_" + msgId, m, null, null, null);
+        D1Write.write("chats", chatId, Fb.map("lastMessage", text, "lastMessageTimeMs", now), null, null, null);
     }
 }

@@ -134,7 +134,8 @@ public final class CreatorDashboardDialog {
                     : "Personal Profile · Professional Mode OFF");
             Map<String, Object> up = new HashMap<>();
             up.put("professionalMode", checked);
-            Fb.db().collection("users").document(me).set(up, SetOptions.merge());
+            com.friendbook.social.core.CloudflareDocs.writeDocument("users", me, up, null, null,
+                    () -> Fb.db().collection("users").document(me).set(up, SetOptions.merge()));
             if (onUpdated != null) onUpdated.run();
         });
         proRow.addView(proSw);

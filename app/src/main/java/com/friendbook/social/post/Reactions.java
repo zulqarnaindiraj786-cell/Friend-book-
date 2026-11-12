@@ -38,6 +38,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.friendbook.social.core.D1Write;
 
 /**
  * ⚡ Zero-Latency friendbook Pro Reactions: 👍 ❤️ 😂 😮 😢 😡
@@ -342,7 +343,49 @@ public class Reactions {
 
     public static void reconcileFromCollection(final Context c, final String postId, final int storedLikes) {
         if (postId == null || postId.isEmpty()) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts"))return;
+        // READ = Cloudflare first: the reactions of a post written by this build are the members of
+        // `reactionsMap` on its D1 row. The pre-migration sub-collection is only read when D1 has no
+        // members at all, which is exactly the history written before the migration.
+        if (com.friendbook.social.core.CloudflareDocs.enabled()) {
+            com.friendbook.social.core.CloudflareDocs.get("posts", postId, row -> {
+                Object map = row == null ? null : row.get("reactionsMap");
+                if (map instanceof java.util.Map && !((java.util.Map<?, ?>) map).isEmpty()) {
+                    reconcileFromD1Map(c, postId, (java.util.Map<?, ?>) map);
+                    return;
+                }
+                reconcileFromCollectionLegacy(c, postId, storedLikes);
+            });
+            return;
+        }
+        reconcileFromCollectionLegacy(c, postId, storedLikes);
+    }
+
+    /** Reaction state computed from the D1 row's `reactionsMap`: same outcome, one document read. */
+    private static void reconcileFromD1Map(final Context c, final String postId,
+                                           final java.util.Map<?, ?> map) {
+        int realCount = map.size();
+        String myType = null;
+        Map<String, Integer> freq = new LinkedHashMap<>();
+        for (String t : TYPES) freq.put(t, 0);
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            String uid = String.valueOf(e.getKey());
+            String raw = e.getValue() == null ? "" : String.valueOf(e.getValue());
+            String t = Models.normalizeReactionType(raw, "like");
+            freq.put(t, freq.getOrDefault(t, 0) + 1);
+            if (uid.equals(Fb.uid())) myType = t;
+        }
+        List<String> top = new ArrayList<>();
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(freq.entrySet());
+        sorted.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+        for (Map.Entry<String, Integer> e : sorted) if (e.getValue() > 0) top.add(e.getKey());
+        FastCache.setReactionTypes(postId, top);
+        FastCache.seedReactionFromPostMap(postId, myType == null ? "none" : myType, realCount);
+        FastCache.markReactionSynced(postId);
+    }
+
+    /** The pre-migration sub-collection: reached only when the D1 row holds no members. */
+    private static void reconcileFromCollectionLegacy(final Context c, final String postId,
+                                                      final int storedLikes) {
         final String me = Fb.uid();
         final Long tapBeforeFetch = FastCache.isLocalReactionInFlight(postId) ? System.currentTimeMillis() : null;
         Fb.db().collection("posts").document(postId).collection("reactions")
@@ -378,7 +421,7 @@ public class Reactions {
                     if (snap.size() < 250 && storedLikes != realCount) {
                         Map<String, Object> heal = new HashMap<>();
                         heal.put("likes", realCount);
-                        Fb.db().collection("posts").document(postId).set(heal, SetOptions.merge());
+                        D1Write.write("posts", postId, Fb.map("likes", realCount), null, null, () -> Fb.db().collection("posts").document(postId).set(heal, SetOptions.merge()));
                     }
                     FastCache.setReactionState(c, postId, myType, bestTotal, true);
                 });
@@ -658,49 +701,52 @@ public class Reactions {
 
         if (isTeamChat || Ui.TEAM_USER_ID.equals(msg.senderId)) {
             String sharedDocId = msg.sharedTeamReactionDocId();
-            Fb.db().collection("chats").document("team_shared_reactions")
-                    .collection("messages").document(sharedDocId)
-                    .get()
-                    .addOnSuccessListener(doc -> {
-                        if (doc == null || !doc.exists() || activity.isFinishing()) return;
-                        Models.Message shared = Models.Message.fromDoc(doc);
-                        boolean changed = false;
-                        if (shared.reactions != null) {
-                            if (msg.reactions == null) msg.reactions = new HashMap<>();
-                            if (msg.reactorNames == null) msg.reactorNames = new HashMap<>();
-                            if (msg.reactorPhotos == null) msg.reactorPhotos = new HashMap<>();
-                            for (Map.Entry<String, String> e : shared.reactions.entrySet()) {
-                                String uid = e.getKey();
-                                if (uid == null || uid.isEmpty()) continue;
-                                if (!e.getValue().equals(msg.reactions.get(uid))) {
-                                    msg.reactions.put(uid, e.getValue());
-                                    changed = true;
-                                }
-                                String nm = shared.reactorNames != null ? shared.reactorNames.get(uid) : null;
-                                String ph = shared.reactorPhotos != null ? shared.reactorPhotos.get(uid) : null;
-                                if (nm != null && !nm.isEmpty()) msg.reactorNames.put(uid, nm);
-                                if (ph != null && !ph.isEmpty()) msg.reactorPhotos.put(uid, ph);
-                                ReactorEntry r = byUid.get(uid);
-                                if (r == null) {
-                                    r = new ReactorEntry();
-                                    r.uid = uid;
-                                }
-                                r.type = normalizeMessageReactionType(e.getValue());
-                                if (nm != null && !nm.isEmpty()) r.name = nm;
-                                if (ph != null && !ph.isEmpty()) r.photo = ph;
-                                Models.User cached = FastCache.getUser(uid);
-                                if (cached != null) {
-                                    if (r.name == null || r.name.isEmpty()) r.name = cached.displayName;
-                                    if (r.photo == null || r.photo.isEmpty()) r.photo = cached.photoUrl;
-                                    r.tickLevel = cached.tickLevel;
-                                }
-                                byUid.put(uid, r);
-                            }
+            // READ = Cloudflare first: the shared team reaction row lives in D1; the pre-migration
+            // document is read only when D1 does not hold one for this message.
+            com.friendbook.social.core.CloudflareDocs.get("messages",
+                    "team_shared_reactions_" + sharedDocId, row -> {
+                        if (row == null) {
+                            readLegacyTeamSharedReaction(msg, sharedDocId);
+                            return;
                         }
-                        if (changed && onMergedUpdate != null) onMergedUpdate.run();
-                        renderNow.run();
+                        applySharedTeamReaction(msg, Models.Message.fromMap("", row), renderNow);
                     });
         }
+    }
+
+    /** The pre-migration team reaction row, read only when D1 has none. */
+    private static void readLegacyTeamSharedReaction(Models.Message msg, String sharedDocId) {
+        Fb.db().collection("chats").document("team_shared_reactions")
+                .collection("messages").document(sharedDocId)
+                .get()
+                .addOnSuccessListener(doc -> {
+                    if (doc == null || !doc.exists()) return;
+                    applySharedTeamReaction(msg, Models.Message.fromDoc(doc), null);
+                });
+    }
+
+    /**
+     * Merges one shared team reaction row into the message being rendered: the members D1 (or the
+     * pre-migration row) holds are applied to the local message and the view is re-rendered.
+     */
+    private static void applySharedTeamReaction(Models.Message msg, Models.Message shared,
+                                                Runnable renderNow) {
+        if (msg == null || shared == null) { if (renderNow != null) renderNow.run(); return; }
+        if (shared.reactions != null) {
+            if (msg.reactions == null) msg.reactions = new HashMap<>();
+            if (msg.reactorNames == null) msg.reactorNames = new HashMap<>();
+            if (msg.reactorPhotos == null) msg.reactorPhotos = new HashMap<>();
+            for (Map.Entry<String, String> e : shared.reactions.entrySet()) {
+                String uid = e.getKey();
+                if (uid == null || uid.isEmpty()) continue;
+                msg.reactions.put(uid, e.getValue());
+                String nm = shared.reactorNames != null ? shared.reactorNames.get(uid) : null;
+                String ph = shared.reactorPhotos != null ? shared.reactorPhotos.get(uid) : null;
+                if (nm != null && !nm.isEmpty()) msg.reactorNames.put(uid, nm);
+                if (ph != null && !ph.isEmpty()) msg.reactorPhotos.put(uid, ph);
+            }
+        }
+        if (renderNow != null) renderNow.run();
     }
 
     static void renderReactorView(

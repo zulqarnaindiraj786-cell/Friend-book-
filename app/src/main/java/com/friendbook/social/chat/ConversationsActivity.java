@@ -39,6 +39,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.friendbook.social.core.D1Write;
 
 /**
  * 💬 ConversationsActivity — Full friendbook Messenger Home:
@@ -486,8 +487,7 @@ public class ConversationsActivity extends Activity {
             } else if (w == 3) {
                 Map<String, Object> inner = new HashMap<>();
                 inner.put(Fb.uid(), 0);
-                Fb.db().collection("chats").document(r.room.id)
-                        .set(Fb.map("unreadCount", inner), SetOptions.merge());
+                D1Write.write("chats", r.room.id, Fb.map("unreadCount", inner), null, null, () -> Fb.db().collection("chats").document(r.room.id) .set(Fb.map("unreadCount", inner), SetOptions.merge()));
             } else if (w == 4) {
                 Ui.confirm(this, "Delete this conversation?", "It will be hidden from your chat list.", "Delete", () -> {
                     Set<String> hidden = getSharedPreferences("fb_prefs", MODE_PRIVATE)
@@ -501,8 +501,7 @@ public class ConversationsActivity extends Activity {
                 });
             } else if (w == 5) {
                 Ui.confirm(this, "Block this user?", "", "Block", () -> {
-                    Fb.db().collection("users").document(Fb.uid())
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(r.other)), SetOptions.merge());
+                    D1Write.write("users", Fb.uid(), Fb.map("blockedUsersAdd", r.other), null, null, () -> Fb.db().collection("users").document(Fb.uid()) .set(Fb.map("blockedUsers", FieldValue.arrayUnion(r.other)), SetOptions.merge()));
                     Ui.toast(this, "Blocked");
                 });
             }
