@@ -84,6 +84,8 @@ public class ConversationsActivity extends Activity {
     private com.google.firebase.firestore.DocumentSnapshot inboxCursor;
     private boolean inboxLoading, inboxMore=true;
     private String inboxActor;
+    /** Which account the Active Now strip was already filled for from D1. */
+    private String resetStripFor;
     private int inboxGeneration;
     private TextView inboxMoreButton;
     private android.widget.ProgressBar inboxSpinner;
@@ -255,24 +257,41 @@ public class ConversationsActivity extends Activity {
         adapter.notifyDataSetChanged();
         // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
+        // D1 FIRST for the Active Now strip: the people this build knows are D1 rows. The pre-migration
+        // listener below still runs so somebody who has not opened the app since the move is not lost.
+        if (!me.equals(resetStripFor)) {
+            resetStripFor = me;
+            com.friendbook.social.core.CloudflareDocs.read("users", 45,
+                    com.friendbook.social.core.CloudflareDocs.Query.orderDesc("lastSeen"),
+                    page -> {
+                        if (isFinishing() || page == null || page.documents.isEmpty()) return;
+                        if (!java.util.Objects.equals(me, Fb.uid())) return;
+                        for (java.util.Map<String, Object> row : page.documents) absorbStripUser(me, Models.User.fromMap(
+                                String.valueOf(row.get("id")), row));
+                        renderActiveNow();
+                        applyFilter();
+                    });
+        }
         // Live snapshot listener on users so Active Now strip updates green online dots in real time!
         usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
             if (isFinishing() || usnap == null || !java.util.Objects.equals(me,Fb.uid())) return;
-            for (DocumentSnapshot ud : usnap) {
-                Models.User u = Models.User.fromDoc(ud);
-                if (u.uid == null || u.uid.equals(me)) continue;
-                if (u.deactivated) { userCache.remove(u.uid); onlineUsers.remove(u.uid); continue; }
-                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                com.friendbook.social.core.FastCache.putUser(u);
-                userCache.put(u.uid, u);
-                ensurePresence(u.uid);
-            }
+            for (DocumentSnapshot ud : usnap) absorbStripUser(me, Models.User.fromDoc(ud));
             renderActiveNow();
             applyFilter();
         });
         if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
         inboxGeneration++; inboxLoading=false;
         loadInboxPage(true);
+    }
+
+    /** One person into the Active Now strip, from either source (the same guard for both). */
+    private void absorbStripUser(String me, Models.User u) {
+        if (u == null || u.uid == null || u.uid.equals(me)) return;
+        if (u.deactivated) { userCache.remove(u.uid); onlineUsers.remove(u.uid); return; }
+        if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) return;
+        com.friendbook.social.core.FastCache.putUser(u);
+        userCache.put(u.uid, u);
+        ensurePresence(u.uid);
     }
 
     private void loadInboxPage(boolean reset) {
