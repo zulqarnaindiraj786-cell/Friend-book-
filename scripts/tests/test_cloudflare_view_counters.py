@@ -348,6 +348,23 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertNotIn('firebase-storage', gradle)
         self.assertNotIn('firebase-analytics', gradle)
         self.assertIn("implementation 'com.google.firebase:firebase-auth'", gradle)
+
+    def test_no_app_code_reads_or_writes_the_legacy_document_store(self):
+        # Firebase is authentication. Not one file in app/src may still touch the legacy database -
+        # neither by import nor by fully-qualified name - or the cutover is a claim rather than a fact.
+        offenders = []
+        for path in sorted((JAVA).rglob('*.java')):
+            text = path.read_text()
+            for needle in ('com.google.firebase.firestore', 'FirebaseFirestore', 'com.google.firebase.Timestamp',
+                           'com.google.firebase.database', 'com.google.firebase.storage',
+                           'com.google.firebase.analytics', 'com.google.firebase.remoteconfig'):
+                if needle in text:
+                    offenders.append(f'{path.relative_to(JAVA)}: {needle}')
+        self.assertEqual([], offenders)
+        # And the replacement really is wired in: Fb.db() hands out the Cloudflare client.
+        fb = (JAVA / 'core/Fb.java').read_text()
+        self.assertIn('public static Database db() { return Database.getInstance(); }', fb)
+        self.assertIn('import com.example.frienbook.core.cloud.Database;', fb)
         client = (JAVA / 'core/CloudflareViews.java').read_text()
         self.assertIn('/v1/views', client)
         self.assertIn('BuildConfig.CLOUDFLARE_VIEWS_ENABLED', client)
