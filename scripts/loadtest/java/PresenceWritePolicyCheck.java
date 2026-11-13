@@ -9,18 +9,18 @@ public final class PresenceWritePolicyCheck {
     public static void main(String[] args) {
         PresenceWritePolicy p = new PresenceWritePolicy();
         long first = p.begin("a", true, 0);
-        check(first > 0 && p.begin("a", true, 2500) == 0);
+        check(first > 0 && p.begin("a", true, 2500) == 0); // 2.5s < 5s interval -> suppressed
         p.complete(first, true, 0);
-        check(p.begin("a", true, 9999) == 0);
-        long next = p.begin("a", true, 10000);
-        check(next > first); p.complete(next, false, 10000);
-        check(p.begin("a", true, 12500) > next);
-        long offline = p.begin("a", false, 12501);
-        p.complete(next, true, 12502); p.complete(offline, true, 12503);
-        check(p.begin("a", true, 12504) > offline);
-        long b = p.begin("b", true, 12505); check(b > 0);
-        p.complete(b, true, 12505);
-        check(p.begin("b", true, 12504) > 0);
+        check(p.begin("a", true, 4999) == 0); // 4.999s < 5s interval -> suppressed
+        long next = p.begin("a", true, 5000); // 5s >= 5s interval -> new ticket
+        check(next > first); p.complete(next, false, 5000);
+        check(p.begin("a", true, 7500) > next); // 2.5s after next -> new ticket
+        long offline = p.begin("a", false, 7501);
+        p.complete(next, true, 7502); p.complete(offline, true, 7503);
+        check(p.begin("a", true, 7504) > offline);
+        long b = p.begin("b", true, 7505); check(b > 0);
+        p.complete(b, true, 7505);
+        check(p.begin("b", true, 7504) > 0);
         // Write interval (5s) + buffer (2.5s) < TTL (10s)
         check(PresenceWritePolicy.ONLINE_WRITE_INTERVAL_MS + 2500 < PresencePolicy.ONLINE_TTL_MS);
         p = new PresenceWritePolicy();
