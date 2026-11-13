@@ -2,7 +2,7 @@ package com.friendbook.social.core;
 
 /** Process-local write coalescing, not a presence cache or per-user rate limit. */
 public final class PresenceWritePolicy {
-    public static final long ONLINE_WRITE_INTERVAL_MS = 100_000L;
+    public static final long ONLINE_WRITE_INTERVAL_MS = 5_000L; // 5s - must be < ONLINE_TTL_MS (10s)
     private String actor;
     private long generation, lastSuccess;
     private boolean pendingOnline, hasSuccess;
