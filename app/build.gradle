@@ -19,8 +19,8 @@ android {
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 117
-        versionName '2.8.85'
+        versionCode 118
+        versionName '2.8.86'
         ndk {
             debugSymbolLevel 'FULL'
         }
