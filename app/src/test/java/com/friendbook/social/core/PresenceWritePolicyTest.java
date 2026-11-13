@@ -4,15 +4,17 @@ import static org.junit.Assert.*;
 public class PresenceWritePolicyTest {
  @Test public void repeatedOnlineCoalescesAndSuccessfulWritesAreSpaced(){
   PresenceWritePolicy p=new PresenceWritePolicy();long first=p.begin("a",true,0);assertTrue(first>0);
-  // 5s write interval - coalesce within interval
-  assertEquals(0,p.begin("a",true,3000));p.complete(first,true,0);
-  // After 5s interval, new write allowed
-  assertEquals(0,p.begin("a",true,5999));assertTrue(p.begin("a",true,10000)>0);
+  // 5s write interval - coalesce within interval while pending
+  assertEquals(0,p.begin("a",true,3000));p.complete(first,true,3000);
+  // Within 5s of lastSuccess (3000), should coalesce
+  assertEquals(0,p.begin("a",true,5999));p.complete(first,true,5999);
+  // After 5s interval (>=8000), new write allowed
+  assertTrue(p.begin("a",true,10000)>0);
  }
  @Test public void failureCanRetryNextHeartbeat(){
   PresenceWritePolicy p=new PresenceWritePolicy();long t=p.begin("a",true,0);p.complete(t,false,0);
-  // Can retry after 5s write interval
-  assertTrue(p.begin("a",true,6000)>0);
+  // Can retry immediately after failure (no success recorded)
+  assertTrue(p.begin("a",true,100)>0);
  }
  @Test public void offlineAndForegroundAreImmediateAndIgnoreLateOnlineCallback(){
   PresenceWritePolicy p=new PresenceWritePolicy();long old=p.begin("a",true,0);
