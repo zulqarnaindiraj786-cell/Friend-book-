@@ -444,16 +444,16 @@ public class MainActivity extends Activity {
 
     /**
      * Overload for Reels tab: accepts a featured Reel to pre-load immediately
-     * (used when opening from Home Feed Featured Reels card). If fragment is new, passes all
-     * reel data as arguments for instant 0ms seed. If fragment already exists, calls
-     * focusFeaturedReel() to insert the reel at top and scroll to it. */
+     * (used when opening from Home Feed Featured Reels card). If fragment is new, creates it
+     * with ALL reel data as arguments and ADDS it to container immediately (not just show).
+     * If fragment already exists, calls focusFeaturedReel() to insert the reel at top and scroll. */
     public void select(int tab, com.friendbook.social.models.Models.Reel featuredReel) {
         if (tab == TAB_REELS && featuredReel != null
                 && featuredReel.id != null && !featuredReel.id.isEmpty()
                 && featuredReel.videoUrl != null && !featuredReel.videoUrl.isEmpty()) {
             Fragment existing = tabFragments[TAB_REELS];
             if (existing == null) {
-                // First time: create fragment with ALL reel data as arguments BEFORE adding to container
+                // First time: create fragment with ALL reel data as arguments AND add to container NOW
                 com.friendbook.social.reels.ReelsFragment f = new com.friendbook.social.reels.ReelsFragment();
                 Bundle args = new Bundle();
                 args.putString("initial_reel_id", featuredReel.id);
@@ -468,12 +468,36 @@ public class MainActivity extends Activity {
                 args.putInt("shares", featuredReel.shares);
                 f.setArguments(args);
                 tabFragments[TAB_REELS] = f;
+
+                // Do the fragment transaction HERE with ft.add() - not ft.show()!
+                // This ensures the fragment with bundle args is properly attached.
+                FragmentTransaction ft = getFragmentManager().beginTransaction();
+                if (active >= 0 && tabFragments[active] != null) {
+                    ft.hide(tabFragments[active]);
+                }
+                ft.add(container.getId(), f, "tab_" + TAB_REELS);
+                ft.commitAllowingStateLoss();
+                active = TAB_REELS;
+
+                // Update nav highlight
+                int activeSlot = 3;
+                for (int s = 0; s < 6; s++) {
+                    boolean on = s == activeSlot;
+                    slotIndicators[s].setVisibility(on ? View.VISIBLE : View.INVISIBLE);
+                    Icons.setTint(slotIcons[s], on ? Icons.BLUE : Icons.GRAY);
+                }
+                if (menuBtnCircle != null && menuBtnIcon != null) {
+                    menuBtnCircle.setBackground(Ui.circle(Ui.inputBg(this)));
+                    Icons.setTint(menuBtnIcon, Ui.txt(this));
+                }
+                clearReelsBadgeNow();
+                return; // Done - fragment added with bundle args
             } else if (existing instanceof com.friendbook.social.reels.ReelsFragment) {
                 // Fragment already exists: insert featured reel at top and scroll to it
                 ((com.friendbook.social.reels.ReelsFragment) existing).focusFeaturedReel(featuredReel);
             }
         }
-        select(tab);
+        select(tab); // Normal path for existing fragment or non-Reels tabs
     }
 
     /** Dismiss ONLY the outer friend-request badge; pending requests and their seen flags stay untouched. */
