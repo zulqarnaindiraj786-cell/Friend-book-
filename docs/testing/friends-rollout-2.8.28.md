@@ -1,0 +1,11 @@
+# v2.8.28 / 60 — friends pages and smooth loading
+
+- Requests, suggestions, All friends and Sent each have a separate20-record cursor page. Only the selected section fetches, with first-page account-scoped cache, explicit refresh/retry and near-end loading. No collection-wide live listener remains in FriendsFragment. Sent requests remain accessible in their own tab.
+- Suggestions check only new candidates in10-user groups (both legacy participant orders), with bounded20-result relationship/request probes. No full friend graph is downloaded to exclude existing relationships. Offline, failed or saturated checks do NOT enable Add friend; refresh retries. These extra probes have a read cost and require working Firestore query/index permissions; staged SDK testing remains required.
+- Account/section/lifecycle guards discard stale reads; repeated profile lookups are deduped and redraws coalesced to one UI frame. Sending feedback appears immediately; duplicate local taps are gated. Failed confirm/remove actions restore request visibility.
+- Cancellation targets the exact displayed request ID. Unfriend targets only the two participants; duplicated/saturated history fails closed rather than silently deleting a partial set. These actions run only after explicit user interaction, not as migration.
+- Background loading no longer rebuilds unchanged rows across CursorPager consumers and the shared legacy PagedLists wrapper. Comment prepends preserve the visible comment/pixel position. Existing automatic feed/video/story loading and on-demand video restrictions remain.
+
+No production migration, data reset, bulk deletion, billing change or traffic flood was executed. Old users/records are preserved. Normal explicit accept/cancel/delete/unfriend actions remain available.
+
+Validation: Python source/regression guards, all main/test Java syntax, backend mocked tests, synthetic5000-session page-boundary model and signed Gradle release/unit-test CI. Check the final CI result; simulations are NOT device,2G,real Firebase load/latency or5000-user capacity certification. Four graph/badge/call query paths from the previous audit remain; do not claim zero unbounded queries everywhere or exact Facebook speed. Some legacy pages use document-ID order rather than globally newest ordering; legacy maps/arrays remain.

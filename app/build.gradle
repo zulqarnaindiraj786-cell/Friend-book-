@@ -1,30 +1,65 @@
 plugins {
+    id 'org.jetbrains.kotlin.android'
     id 'com.android.application'
     id 'com.google.gms.google-services'
 }
 
 android {
-    namespace 'com.example.frienbook'
-    compileSdk 35
+    namespace 'com.friendbook.social'
+    compileSdk 36
 
     defaultConfig {
-        applicationId 'com.example.frienbook'
+        applicationId 'com.friendbook.social'
+        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
+        buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
+        // Real view counters live in Cloudflare Analytics Engine (one event per view, uniq(uid) = one
+        // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
+        // D1, no KV. Firebase is auth only.
+        buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
+        buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
-        targetSdk 35
-        versionCode 6
-        versionName '525.0.0.102'
+        targetSdk 36
+        versionCode 120
+        versionName '2.8.88'
+        ndk {
+            debugSymbolLevel 'FULL'
+        }
+        manifestPlaceholders = [
+            privacyPolicyUrl: 'https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view'
+        ]
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('friendbook-release.p12')
+            storeType 'PKCS12'
+            storePassword 'friendbook2026'
+            keyAlias 'friendbook'
+            keyPassword 'friendbook2026'
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            shrinkResources false
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            debuggable false
+            jniDebuggable false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
+            signingConfig signingConfigs.release
             minifyEnabled false
         }
     }
+
+    testOptions { unitTests.includeAndroidResources = true }
+    buildFeatures { buildConfig true }
+
+    kotlinOptions { jvmTarget = "17" }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -33,16 +68,34 @@ android {
 }
 
 dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-inline:5.2.0'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
     implementation platform('com.google.firebase:firebase-bom:33.5.1')
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-firestore'
     implementation 'com.google.firebase:firebase-database'
-    implementation 'com.google.firebase:firebase-storage'
     implementation 'com.google.firebase:firebase-config'
+    implementation 'com.google.firebase:firebase-messaging'
+    // 🔐 App Check with Play Integrity (production) — MONITOR mode first, then ENFORCE
+    implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+    implementation 'androidx.work:work-runtime:2.10.0'
+    implementation 'com.google.guava:guava:33.3.1-android'
 
-    // 📢 Google AdMob (banner in home feed)
-    implementation 'com.google.android.gms:play-services-ads:22.6.0'
+    // 🔐 Direct Google Sign-In (Android Credential Manager + Play Services Auth + Firebase OAuth)
+    implementation 'androidx.credentials:credentials:1.3.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+    implementation 'com.google.android.gms:play-services-auth:21.2.0'
+    implementation 'androidx.browser:browser:1.8.0'
 
+    // 📢 Google AdMob Production Ads SDK + UMP GDPR Consent SDK
+    implementation 'com.google.android.gms:play-services-ads:22.5.0'
+    implementation 'com.google.android.ump:user-messaging-platform:2.2.0'
+
+    implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
     implementation 'androidx.viewpager2:viewpager2:1.1.0'

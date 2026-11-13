@@ -1,11 +1,11 @@
-# FriendBook — Facebook-Lite 2026 style Android app (real Firebase)
+# FriendBook — friendbook 2026 style Android app (real Firebase)
 
-A complete Facebook-Lite clone built with **native Android (Java)** and **real Firebase**:
+A complete friendbook clone built with **native Android (Java)** and **real Firebase**:
 Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Database
 (presence + typing) and Cloud Storage. **Zero dummy data.**
 
 ### 🆕 Wave 2 (this build)
-- **📷 Profile Photos tab** — Facebook-style 3-column media grid on every profile (Posts / About / Friends / Photos)
+- **📷 Profile Photos tab** — friendbook-style 3-column media grid on every profile (Posts / About / Friends / Photos)
 - **👥 Tag friends in posts** — 👥 Tag friends picker in the composer; feed shows "— with X and N others"
 - **📖 Add to your story** — post ⋮ menu shares any post to your 24h story (photos reused, text → caption)
 - **✨ Chat stickers** — sticker button in Messenger composer, 32-sticker sheet, big transparent bubble render
@@ -14,10 +14,10 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **🔗 Copy profile link** — profile ⋮ menu copies `https://friendbook.app/user/{uid}`
 - **🔳 AMOLED black theme** — Settings → Preferences: pure-black dark mode for OLED screens
 
-### 🆕 What's new in v3 (Facebook Lite 2026 pack)
+### 🆕 What's new in v3 (friendbook 2026 pack)
 - **Polls in feed** — create polls (2–4 options), tap to vote, live % + counts, tap again to undo
 - **Multi-photo posts** — attach up to 10 photos, swipeable in-feed album (ViewPager2) with counter
-- **Colored text backgrounds** — 10 Facebook-style gradient backgrounds for text posts
+- **Colored text backgrounds** — 10 friendbook-style gradient backgrounds for text posts
 - **Check-in** — 📍 location line on posts
 - **Hide post / Snooze 30 days / per-post privacy change / copy link** in the post ⋮ menu
 - **📺 Watch tab** — all public videos in one feed
@@ -37,11 +37,12 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
   👑 top-gifter badge live. `lives`, `lives/*/chat`, `gifts` collections
 - **📈 Monetization** (Settings → Monetization) — In-Stream Ads eligibility (100 followers
   + 5 reels), Stars balance with Rs value, fan Subscriptions toggle + price, live subscriber count
-- **📢 Google AdMob banners** — real App ID `ca-app-pub-3387480177023669~5696528190`, live banner unit
-  `ca-app-pub-3387480177023669/2691090902` shown every 3 posts in Home (fresh load per bind);
+- **📢 Google AdMob Production Native Ads** — real App ID `ca-app-pub-3387480177023669~1513026594`,
+  Feed Native unit `ca-app-pub-3387480177023669/4957447582`, and Reels Native unit
+  `ca-app-pub-3387480177023669/6468085788` (loaded fresh per bind via `AdLoader.Builder`, Release APK/AAB only);
   admin-editable banner ID + on/off via Firestore `config/ads` (Settings → AdMob Settings, owner only),
   plus Firebase Remote Config `ads_enabled` kill switch
-- **🔐 Facebook-Lite recovery** — forgot password → Gmail me 6-digit OTP code → verify →
+- **🔐 friendbook recovery** — forgot password → Gmail me 6-digit OTP code → verify →
   secure password-set link (Firebase Auth) — `passwordOtps` (SHA-256 hashed, 10-min TTL) + `mail` queue
 - **🛡 Admin SUPER Dashboard** (quietly visible ONLY to `zulqarnaindiraj786@gmail.com`), **6 tabs**:
   (1) Users — search any user, give/remove ANY tick level, ban/promote; (2) Referrals;
@@ -64,7 +65,7 @@ Auth, Cloud Firestore (realtime `addSnapshotListener` everywhere), Realtime Data
 - **Post ⋯ extras** — Share to other apps, "Why am I seeing this?" explainer
 - **Ban enforcement** — banned accounts are signed out instantly and blocked at login
 
-- **Package:** `com.example.frienbook`
+- **Package:** `com.friendbook.social`
 - **App name:** friendbook
 - **Firebase project:** `friendbook-17551` (config in `app/google-services.json`)
 - **CI:** GitHub Actions builds the APK automatically (see `.github/workflows/build-apk.yml`)

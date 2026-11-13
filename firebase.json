@@ -1,0 +1,4 @@
+{
+  "functions": [{"source": "functions", "codebase": "friendbook-push", "ignore": ["node_modules", "*.log"]}],
+  "firestore": {"rules": "firebase/firestore.rules", "indexes": "firebase/firestore.indexes.json"}
+}

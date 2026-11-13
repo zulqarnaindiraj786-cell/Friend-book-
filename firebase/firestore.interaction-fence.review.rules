@@ -1,0 +1,320 @@
+// REVIEW ONLY: not referenced by firebase.json and NOT deployed.
+rules_version = '2';
+
+// FriendBook Firestore security rules (v2 — with Admin Panel + Groups + Polls)
+// Owner admin: zulqarnaindiraj786@gmail.com
+// Deploy: Firebase Console → Firestore Database → Rules → paste → Publish
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // owner email works instantly; promoted admins via users/{uid}.isAdmin
+    function isAdmin() {
+      return signedIn()
+        && (request.auth.token.email == 'zulqarnaindiraj786@gmail.com'
+            || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true));
+    }
+
+    // Global App Moderator: ONLY allowed to delete non-admin posts/reels & ban/unban non-admin users!
+    function isModerator() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isModerator', false) == true;
+    }
+
+    // FCM registrations are private, owner-only, never readable by other app users.
+    match /pushDevices/{uid}/devices/{deviceId} {
+      allow read, delete: if isMe(uid);
+      allow create, update: if isMe(uid)
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt', 'platform'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() < 4096;
+    }
+
+    // ---- users ----
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if isMe(uid);
+      allow update: if isMe(uid)
+          // normal users can never change their own admin/moderator/ban state
+          && !request.resource.data.diff(resource.data).affectedKeys()
+                .hasAny(['isAdmin', 'isModerator', 'banned'])
+        // friends/followers/blocked updates from other signed-in users
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['followers', 'following', 'friendsCount']))
+        // Global Moderator can ONLY toggle `banned` on non-admin, non-owner users!
+        || (isModerator()
+            && resource.data.get('isAdmin', false) != true
+            && resource.data.get('email', '') != 'zulqarnaindiraj786@gmail.com'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned']))
+        // Full Admins manage everything (ban, promote, moderators, ticks)
+        || isAdmin();
+      allow delete: if isMe(uid) || isAdmin();
+    }
+
+
+    // REVIEW-ONLY migration control; absent document keeps existing Firebase mode.
+    // Any non-firebase phase fails closed for interaction writes, not chat/calls.
+    function firebaseInteractionsOpen() {
+      return !exists(/databases/$(database)/documents/friendbookMigrationControl/interactions)
+        || get(/databases/$(database)/documents/friendbookMigrationControl/interactions).data.get('phase', 'unknown') == 'firebase';
+    }
+    function interactionFields() {
+      return ['likes', 'likeCount', 'likesCount', 'reactions', 'reactionsMap', 'reactionCounts', 'likedBy', 'comments', 'commentCount', 'commentsCount', 'commentsMap', 'commentsList', 'lastComment', 'lastCommentAt', 'commentsStorageVersion', 'pinnedCommentId'];
+    }
+    function noInteractionChanges() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(interactionFields());
+    }
+    function emptyInteractionValue(value) {
+      return value == null || value == 0 || value == '' || value == [] || value == {};
+    }
+    function emptyInteractionInitializers() {
+      return emptyInteractionValue(request.resource.data.get('likes', null))
+        && emptyInteractionValue(request.resource.data.get('likeCount', null))
+        && emptyInteractionValue(request.resource.data.get('likesCount', null))
+        && emptyInteractionValue(request.resource.data.get('reactions', null))
+        && emptyInteractionValue(request.resource.data.get('reactionsMap', null))
+        && emptyInteractionValue(request.resource.data.get('reactionCounts', null))
+        && emptyInteractionValue(request.resource.data.get('likedBy', null))
+        && emptyInteractionValue(request.resource.data.get('comments', null))
+        && emptyInteractionValue(request.resource.data.get('commentCount', null))
+        && emptyInteractionValue(request.resource.data.get('commentsCount', null))
+        && emptyInteractionValue(request.resource.data.get('commentsMap', null))
+        && emptyInteractionValue(request.resource.data.get('commentsList', null))
+        && emptyInteractionValue(request.resource.data.get('lastComment', null))
+        && emptyInteractionValue(request.resource.data.get('lastCommentAt', null))
+        && emptyInteractionValue(request.resource.data.get('commentsStorageVersion', null))
+        && emptyInteractionValue(request.resource.data.get('pinnedCommentId', null));
+    }
+    match /friendbookMigrationControl/{document} {
+      // Server-admin control only. Client admins cannot unfence old writers.
+      allow read, write: if false;
+    }
+
+    // ---- posts (incl. polls, multi-photo, backgrounds, group posts, moderator & safety moderation) ----
+    match /posts/{postId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (firebaseInteractionsOpen() || emptyInteractionInitializers());
+      allow update: if signedIn() && (firebaseInteractionsOpen() || noInteractionChanges());  // reactions/votes/saves/counters/safetyFlagged are collaborative
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true
+                                       || (resource.data.get('groupId', '') != ''
+                                           && exists(/databases/$(database)/documents/groups/$(resource.data.groupId)))))
+                    || isModerator()
+                    || isAdmin();
+
+      match /reactions/{rid} {
+        allow read: if signedIn();
+        allow write: if signedIn() && firebaseInteractionsOpen();
+      }
+      match /comments/{cid} {
+        allow read: if signedIn();
+        allow write: if signedIn() && firebaseInteractionsOpen();
+      }
+    }
+
+    // ---- comments ----
+    match /comments/{cid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && firebaseInteractionsOpen();
+      allow update: if signedIn() && firebaseInteractionsOpen(); // likes are collaborative
+      allow delete: if firebaseInteractionsOpen() && ((signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin());
+    }
+
+    // ---- stories (24h) ----
+    match /stories/{sid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // viewedBy marking
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isAdmin();
+    }
+
+    // ---- reels ----
+    match /reels/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (firebaseInteractionsOpen() || emptyInteractionInitializers());
+      allow update: if signedIn() && (firebaseInteractionsOpen() || noInteractionChanges()); // likes/comments counters
+      allow delete: if (signedIn() && (resource.data.authorId == request.auth.uid
+                                       || resource.data.get('safetyFlagged', false) == true))
+                    || isModerator()
+                    || isAdmin();
+
+      match /comments/{cid} {
+        allow read: if signedIn();
+        allow write: if signedIn() && firebaseInteractionsOpen();
+      }
+    }
+
+    // ---- groups (create = everyone, manage = members/admin) ----
+    match /groups/{gid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn(); // join/leave via arrayUnion/arrayRemove
+      allow delete: if (signedIn() && resource.data.adminId == request.auth.uid) || isAdmin();
+    }
+
+    // ---- friends & requests ----
+    match /friends/{fid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow delete: if signedIn() || isAdmin();
+    }
+    match /friend_requests/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if signedIn();
+    }
+
+    // ---- chats + messages (incl. voice notes & message reactions) ----
+    match /chats/{chatId} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+
+      match /messages/{mid} {
+        allow read: if signedIn();
+        allow write: if signedIn();
+      }
+    }
+
+    // Official broadcast specs/progress: only full admins, never moderators/ordinary users.
+    match /officialBroadcasts/{bid} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && request.resource.data.adminId == request.auth.uid
+        && request.resource.data.text is string && request.resource.data.text.size() <= 20000
+        && request.resource.data.mediaType in ['', 'image', 'video'];
+      allow update: if isAdmin() && resource.data.adminId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'processed']);
+      allow delete: if isAdmin();
+    }
+
+    // ---- notifications (admin broadcast writes many user docs) ----
+    match /notifications/{nid} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if signedIn();
+    }
+
+    // ---- referrals (5 invites → free blue tick) ----
+    // anyone signed-in can read referral records (progress + admin list), only users write them
+    match /referrals/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.refTo == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- blue-tick Rs 100 payments (legacy collection; new code uses `payments`) ----
+    match /blueTickPayments/{pid} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- unified payments: ticks / subscriptions — user uploads, admin approves ----
+    match /payments/{pid} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- Free VIP Fan Club subscriptions ----
+    match /subscriptions/{sid} {
+      allow create: if signedIn()
+        && request.resource.data.subscriberId == request.auth.uid;
+      allow read: if isAdmin()
+        || (signedIn() && (resource.data.subscriberId == request.auth.uid
+                          || resource.data.creatorId == request.auth.uid));
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.subscriberId == request.auth.uid);
+    }
+
+    // ---- 🔴 LIVE rooms + chat + gifts ----
+    match /lives/{lid} {
+      allow create: if signedIn() && request.resource.data.hostId == request.auth.uid;
+      allow read: if signedIn();
+      allow update: if isAdmin() || resource.data.hostId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['viewers', 'viewerCount', 'stars', 'totalStars', 'likesCount', 'viewerIds']);
+      allow delete: if isAdmin();
+      match /chat/{cid} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow delete: if isAdmin();
+      }
+    }
+    match /gifts/{gid} {
+      allow create: if signedIn() && request.resource.data.senderId == request.auth.uid;
+      allow read: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- Events: everyone reads, host creates, RSVP via arrayUnion ----
+    match /events/{eid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.hostId == request.auth.uid;
+      allow update: if isAdmin() || resource.data.hostId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['interested']);
+      allow delete: if isAdmin() || resource.data.hostId == request.auth.uid;
+    }
+
+    // ---- Pages: everyone reads, owner manages, follow via arrayUnion ----
+    match /pages/{pid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isAdmin() || resource.data.ownerId == request.auth.uid
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followers']);
+      allow delete: if isAdmin() || resource.data.ownerId == request.auth.uid;
+    }
+
+    // ---- sessions (own device list only) ----
+    match /users/{uid}/sessions/{sid} {
+      allow read, create: if signedIn() && uid == request.auth.uid;
+      allow delete: if (signedIn() && uid == request.auth.uid) || isAdmin();
+    }
+
+    // ---- app config (payment numbers, AdMob banner id etc): world-readable, admin-editable ----
+    match /config/{doc} {
+      allow read: if true;           // banner id must be readable before sign-in too
+      allow write: if isAdmin();
+    }
+
+    // ---- moderation inboxes: write by users, read/delete by admins only ----
+    match /reports/{doc} {
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow delete: if isAdmin();
+    }
+    match /feedback/{doc} {
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow delete: if isAdmin();
+    }
+    // ---- 👋 Pokes: classic FB fun — sender creates, recipient reads/clears ----
+    match /pokes/{pid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.from == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.to == request.auth.uid;
+    }
+    match /crashReports/{doc} {
+      // automatic device crash reports (written by the app's uncaught-exception handler)
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "esbuild functions/send-fcm-notification/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/gateway.mjs && esbuild functions/bulk-mentions/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/bulk.mjs && esbuild functions/counter-state/index.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/counter-api.mjs && esbuild functions/_shared/firebase-session.ts --bundle --platform=node --format=esm --alias:npm:jose@5.9.6=jose --outfile=.test-build/firebase-auth.mjs && node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.14",
+    "esbuild": "0.25.12",
+    "jose": "5.9.6"
+  }
+}

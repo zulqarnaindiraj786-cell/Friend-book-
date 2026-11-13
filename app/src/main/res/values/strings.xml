@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">friendbook</string>
+    <string name="play_store_url">https://play.google.com/store/apps/details?id=com.friendbook.social</string>
+    <string name="privacy_policy_url">https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view</string>
+    <string name="terms_of_service_url">https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view</string>
+    <string name="child_safety_url">https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view</string>
+    <string name="delete_account_url">https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view</string>
+</resources>

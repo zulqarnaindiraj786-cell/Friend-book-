@@ -7,9 +7,23 @@ service firebase.storage {
   match /b/{bucket}/o {
     function signedIn() { return request.auth != null; }
 
+    function fullAdmin() {
+      return signedIn() && (request.auth.token.email == 'zulqarnaindiraj786@gmail.com'
+        || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+    }
+
+    match /official_broadcasts/{uid}/{file=**} {
+      allow read: if signedIn();
+      allow create, update: if fullAdmin() && request.auth.uid == uid
+        && request.resource.size < 100 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*|video/.*');
+      allow delete: if fullAdmin() && request.auth.uid == uid;
+    }
+
     match /{folder}/{uid}/{file=**} {
       allow read: if true;                      // media is public by URL (like social apps)
-      allow write: if signedIn()
+      // Exclude official uploads: overlapping allow rules must not bypass fullAdmin().
+      allow write: if folder != 'official_broadcasts' && signedIn()
                    && request.resource.size < 100 * 1024 * 1024   // 100MB max (reels/videos)
                    && request.resource.contentType.matches('image/.*|video/.*');
     }
