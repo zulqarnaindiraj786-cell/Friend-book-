@@ -205,7 +205,7 @@ jobs:
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/9e217492-friend-book' || github.head_ref == 'arena/9e217492-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
