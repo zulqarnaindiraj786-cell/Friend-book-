@@ -1,0 +1,46 @@
+name: Verify counter reconciliation review (no cutover)
+on:
+  push:
+    branches: ['arena/15a53658-friend-book']
+    paths:
+      - '.github/workflows/check-counter-reconciliation.yml'
+      - 'scripts/admin/reconcile_interaction_counters.py'
+      - 'scripts/tests/test_counter_reconciliation.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-counter-reconciliation
+  cancel-in-progress: false
+jobs:
+  check:
+    if: github.ref == 'refs/heads/arena/15a53658-friend-book'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Android identity and both D1 switches OFF
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, tomllib
+          app = pathlib.Path('app/build.gradle').read_text()
+          assert re.findall(r"applicationId\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
+          assert re.findall(r"namespace\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
+          assert re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", app) == ['false']
+          assert tomllib.loads(pathlib.Path('wrangler.toml').read_text())['vars']['D1_INTERACTIONS_ENABLED'] == 'false'
+          cfg = json.loads(pathlib.Path('app/google-services.json').read_text())
+          assert cfg['project_info']['project_id'] == 'friendbook-17551'
+          assert any(c['client_info']['android_client_info']['package_name'] == 'com.friendbook.social' for c in cfg['client'])
+          print('Package + namespace: com.friendbook.social; Firebase project matches; both D1 gates OFF.')
+          PY
+      - name: Install read-only audit dependency
+        run: python3 -m pip install 'requests==2.32.5'
+      - name: Test original-counter preservation and fail-closed surplus handling
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Verify staged identities and append immutable counter review (no app/source changes)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/reconcile_interaction_counters.py
