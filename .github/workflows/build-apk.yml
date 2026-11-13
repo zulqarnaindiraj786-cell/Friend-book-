@@ -1,9 +1,18 @@
-name: Build FriendBook APK
+name: Build FriendBook Signed APK and AAB
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, 'arena/**' ]
+    # Worker-only changes must not rebuild/re-upload the existing Android release.
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
+
+concurrency:
+  group: friendbook-apk-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -12,21 +21,59 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node for gateway tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Guard message badge and read-state separation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
+      - name: Exercise 5000 virtual pagination sessions (model only, no production traffic)
+        run: python3 scripts/loadtest/paging_model.py
+
+      - name: Test direct FCM gateway with mocked providers
+        run: npm ci --prefix supabase && npm test --prefix supabase
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Ensure Android SDK 35
+      - name: Test actual Firestore SDK queries in isolated demo emulator (no production traffic)
+        working-directory: scripts/firebase-tests
+        run: |
+          set +e
+          (npm ci --ignore-scripts && npm test) > emulator-tests.log 2>&1
+          RESULT=$?
+          if [ "$RESULT" != "0" ]; then
+            tail -100 emulator-tests.log | while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done
+          else
+            tail -25 emulator-tests.log
+          fi
+          exit "$RESULT"
+
+      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
+        run: |
+          mkdir -p "$RUNNER_TEMP/presence-coordinators"
+          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
+
+      - name: Ensure Android SDK 36
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls "$ANDROID_HOME/platforms" || true
-          if [ -d "$ANDROID_HOME/platforms/android-35" ]; then
-            echo "android-35 platform already installed"
-          elif command -v sdkmanager >/dev/null 2>&1; then
-            yes | sdkmanager --licenses >/dev/null 2>&1 || true
-            sdkmanager "platforms;android-35" "build-tools;35.0.0" || \
+          SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
+          if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "android-36 platform already installed"
+          elif [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-36" "build-tools;36.0.0" || \
               echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
           else
             echo "::warning::sdkmanager not found; using preinstalled SDK"
@@ -35,57 +82,155 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.11.1'
 
-      - name: Verify Firebase config present
+      - name: Verify Firebase config & Production AdMob IDs
         run: |
           test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
+          grep -q "ca-app-pub-3387480177023669~1513026594" app/src/main/AndroidManifest.xml || (echo "::error::Missing real AdMob APPLICATION_ID in AndroidManifest.xml" && exit 1)
+          if grep -rq "3940256099942544" app/; then
+            echo "::error::Test AdMob ID detected in app/ — forbidden in production build!"
+            exit 1
+          fi
 
-      - name: Build debug APK
-        id: dbg
+      - name: Reject private credentials in Android sources
+        run: |
+          if grep -RIlE -- 'BEGIN (RSA )?PRIVATE KEY|os_v2_app_' app/src app/build.gradle; then
+            echo "::error::Server credential found in Android sources"
+            exit 1
+          fi
+          if find app/src -type f \( -iname '*service_account*.json' -o -iname '*firebase-adminsdk*.json' \) | grep -q .; then
+            echo "::error::Service account file must never be packaged"
+            exit 1
+          fi
+
+      - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
+        id: rel
         run: |
           set +e
-          gradle assembleDebug --console=plain > build-debug.log 2>&1
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
+            DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
+            JAR="$DIR/android-all-instrumented-$VER.jar"
+            if [ ! -s "$JAR" ]; then
+              mkdir -p "$DIR"
+              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
+                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            fi
+          done
+          gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "Retrying Gradle build after transient artifact fetch..."
+            sleep 5
+            gradle testReleaseUnitTest bundleRelease assembleRelease --rerun-tasks --console=plain > build-release.log 2>&1
+            RC=$?
+          fi
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Surface bounded unit-test failure details
+        if: steps.rel.outputs.exit != '0'
+        run: python3 scripts/ci/report_android_failure.py
+
       - name: Surface compiler errors as annotations
-        if: steps.dbg.outputs.exit != '0'
+        if: steps.rel.outputs.exit != '0'
         run: |
           echo "===== javac error blocks (with symbol details) ====="
-          grep -A8 -E "\.java:[0-9]+: error:" build-debug.log | head -120 | while IFS= read -r line; do
+          grep -A8 -E "\.java:[0-9]+: error:" build-release.log | head -120 | while IFS= read -r line; do
             echo "::error::${line:0:250}"
           done
           echo "===== failing source lines ====="
-          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-debug.log | sort -u | while IFS= read -r hit; do
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-release.log | sort -u | while IFS= read -r hit; do
             f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
             content=$(sed -n "${ln}p" "$f")
             echo "::error file=$f,line=$ln,title=source::${content:0:250}"
           done
           echo "===== aapt/resource errors ====="
-          grep -Ei "aapt|resource|merge|duplicate" build-debug.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
+          grep -Ei "aapt|resource|merge|duplicate" build-release.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
             echo "::error::$line"
           done
           echo "===== gradle tail (as warnings so we can read them) ====="
-          grep -vE "^$" build-debug.log | tail -60 | while IFS= read -r line; do
+          grep -vE "^$" build-release.log | tail -60 | while IFS= read -r line; do
             echo "::warning::${line:0:300}"
           done
 
-      - name: Fail if debug build failed
-        if: steps.dbg.outputs.exit != '0'
+      - name: Fail if release build failed
+        if: steps.rel.outputs.exit != '0'
         run: exit 1
 
-      - name: Build release APK
-        run: gradle assembleRelease --console=plain --stacktrace
+      - name: Require actual Android presence test results, not source-only checks
+        run: python3 scripts/ci/verify_presence_android_tests.py
 
-      - name: Upload debug APK
+      - name: Mark branch artifacts as migration candidates, not a production capacity pass
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
+        run: |
+          ls -lh app/build/outputs/bundle/release/
+          ls -lh app/build/outputs/apk/release/
+          cp app/build/outputs/bundle/release/app-release.aab friendbook-playstore.aab
+          cp app/build/outputs/apk/release/app-release.apk friendbook.apk
+          cp app/build/outputs/mapping/release/mapping.txt friendbook-mapping.txt
+          unzip -l friendbook-playstore.aab | grep "proguard.map"
+          test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
+          ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
+
+      - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
-          name: FriendBook-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: FriendBook-playstore-aab
+          path: friendbook-playstore.aab
+          retention-days: 1
 
-      - name: Upload release APK
+      - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: FriendBook-release-apk
-          path: app/build/outputs/apk/release/app-release*.apk
+          path: friendbook.apk
+          retention-days: 1
+
+      - name: Upload R8 Deobfuscation Mapping
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: FriendBook-release-mapping
+          path: friendbook-mapping.txt
+          retention-days: 1
+
+      # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
+      - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          publish() {
+            local OUTPUT CODE
+            if OUTPUT=$(gh "$@" 2>&1); then
+              printf '%s\n' "$OUTPUT"
+            else
+              CODE=$?
+              while IFS= read -r line; do echo "::error::${line:0:500}"; done <<< "$OUTPUT"
+              return "$CODE"
+            fi
+          }
+          VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
+          TAG="v${VER}"
+          TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
+          NOTES="Production Release build (\`versionCode ${VCODE}\`, \`com.friendbook.social\` ${TAG}) — Signed Release APK (\`friendbook.apk\`) + Signed Google Play Store AAB (\`friendbook-playstore.aab\`) with Pure Real Production AdMob Native Ads (\`ca-app-pub-3387480177023669~1513026594\`, Feed Native \`4957447582\`, Reels Native \`6468085788\`), Direct Google Sign-In, Live Studio, Reels & Groups."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber
+            publish release edit "$TAG" --latest --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
+          else
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$TARGET_SHA" \
+              --latest \
+              --title "$TITLE" \
+              --notes "$NOTES"
+          fi

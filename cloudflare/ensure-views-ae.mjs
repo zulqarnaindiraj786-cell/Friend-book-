@@ -1,0 +1,78 @@
+// Binds Cloudflare Analytics Engine to the Worker so every view becomes an AE event and the real
+// count comes from AE's uniq(uid) - which is what keeps "1 user = 1 view" true with ZERO D1 writes.
+//
+// Idempotent and offline: it only edits wrangler.toml. Whether the account can actually use
+// Analytics Engine is decided by `wrangler deploy` (the deploy step removes ONLY this binding and
+// retries if it is refused), and cloudflare/report-views-ae.mjs publishes the real API answer after
+// the deploy - including the exact wrangler error when a binding was refused.
+//
+// The key is `dataset`, NOT `dataset_name`: wrangler 4 reports `dataset_name` as an unexpected field,
+// drops it, and names the dataset after the binding. Every view event would then land in a dataset
+// called "AE" and every query for `friendbook_views` would answer "unknown field".
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const BINDING = 'ANALYTICS_ENGINE';
+const DATASET = 'friendbook_views';
+const WRANGLER = new URL('../wrangler.toml', import.meta.url);
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || '';
+// The R2 block is where the deploy fallback truncates wrangler.toml, so every binding this script
+// adds must sit BEFORE it or it would be dropped from the redeploy.
+const ANCHOR = '# Existing owner-provided bucket.';
+
+const warn = (message) => console.log(`::warning::${message}`);
+
+function insertBefore(text, block) {
+  const index = text.indexOf(ANCHOR);
+  return index === -1 ? `${text.trimEnd()}\n\n${block.trimEnd()}\n` : text.slice(0, index) + block + text.slice(index);
+}
+
+let text = readFileSync(WRANGLER, 'utf8');
+
+// 1. The Analytics Engine dataset binding.
+if (/^\[\[analytics_engine_datasets\]\]/m.test(text)) {
+  console.log('Analytics Engine binding already present in wrangler.toml.');
+} else {
+  const block = `# Every view is one Analytics Engine event; the count is AE's uniq(uid) per Reel/post, so
+# "1 user = 1 view" needs no D1 row at all. Never written to D1, never read from it.
+[[analytics_engine_datasets]]
+binding = "${BINDING}"
+dataset = "${DATASET}"
+
+`;
+  text = insertBefore(text, block);
+  console.log(`Bound Analytics Engine as ${BINDING} (dataset ${DATASET}).`);
+}
+
+// 2. The account id the Worker needs to query AE (public value, no secret).
+if (/^CF_ACCOUNT_ID\s*=/m.test(text)) {
+  if (ACCOUNT_ID) text = text.replace(/^CF_ACCOUNT_ID\s*=.*$/m, `CF_ACCOUNT_ID = "${ACCOUNT_ID}"`);
+  console.log('CF_ACCOUNT_ID already present in wrangler.toml.');
+} else if (ACCOUNT_ID) {
+  text = text.replace(/^(\[vars\]\n)/m, `$1CF_ACCOUNT_ID = "${ACCOUNT_ID}"\n`);
+  console.log('Added CF_ACCOUNT_ID to [vars].');
+} else {
+  warn('CLOUDFLARE_ACCOUNT_ID unavailable here; the Worker can still write AE events but cannot query them.');
+}
+
+// Repair a config written by an older run of this script (see the header note), and adopt the
+// binding name the owner created in the dashboard: a binding called anything else points at nothing.
+if (/^(\[\[analytics_engine_datasets\]\][\s\S]*?)binding = "AE"$/m.test(text)) {
+  text = text.replace(/^(\[\[analytics_engine_datasets\]\][\s\S]*?)binding = "AE"$/m, `$1binding = "${BINDING}"`);
+  console.log(`Renamed the Analytics Engine binding to ${BINDING}.`);
+}
+if (/^dataset_name\s*=/m.test(text)) {
+  text = text.replace(/^dataset_name\s*=\s*/m, 'dataset = ');
+  console.log('Renamed the Analytics Engine dataset key to `dataset` (wrangler 4 ignores `dataset_name`).');
+}
+if (!new RegExp(`^dataset = "${DATASET}"$`, 'm').test(text)) {
+  warn(`Analytics Engine dataset is not bound as '${DATASET}'; counts fall back to the snapshot + memory.`);
+}
+
+writeFileSync(WRANGLER, text);
+
+// The Worker reads AE with an encrypted secret (CF_AE_TOKEN), never with a plaintext var.
+if (!process.env.CLOUDFLARE_API_TOKEN) {
+  warn('CLOUDFLARE_API_TOKEN unavailable here; AE counts will be served from KV + memory instead (still zero D1 writes).');
+}
+console.log('View counters: Analytics Engine events + uniq(uid) counts, KV/R2 live snapshot, D1 never written.');
+process.exit(0);

@@ -1,0 +1,15 @@
+# Pagination rollout v2.8.26 / 58 — NOT an all-app completion certificate
+
+Implemented: feed15/stories20 retained; Reels5+5 and Watch10 retained; comments now latest50/older50; chat older15 triggered by upward scroll; profile posts15 one-shot/cursors and native Reels10 lazy on the Reels tab; profile friends20 on demand and a bounded two-user relationship existence query; followers/following20 reciprocal-array queries; notification list20 with explicit refresh/more; people search20 metadata per batch (10 per spelling variant) and recent-post search20 scanned records/page; canonical post-reaction list30/cursors and reaction dialog user hydration in30-row presentation batches.
+
+CursorPager shares an account-scoped bounded 24-entry first-page memory cache plus the SDK's disk cache. Requests dedup in flight, cancel logically on close/account change, preserve retry cursor on error and do not advance/end the remote cursor from offline-only snapshots. Single-document reads/listeners are already bounded to one record and cannot use Query.limit().
+
+## Important incomplete requirements / merge blockers
+- This is NOT "no unbounded queries anywhere". See list-query-audit.json: conservative lexical findings requiring manual business-logic review. It does not trace every variable/helper, so an empty result would not prove completeness either.
+- MainActivity's aggregate unread/call room listener and other legacy lists remain; blindly capping them would lose unread counts/calls or action targets. A verified replacement/deployment is still required. Prior live-migration access blockers remain; old comment/reaction/user-array parent payloads are not migrated/shrunk here.
+- Profile/notification/reaction cursor queries use default document-ID ordering to avoid silently requiring unavailable composite indexes. Sorting loaded records does NOT guarantee globally newest first. Profile videos currently show native Reels in10-page batches; video posts remain in paged posts, not a unified ten-record video tab.
+- Reciprocal-array followers/following assumes both sides of legacy relationships were written correctly; one-sided legacy records need reconciliation. Parent arrays/maps are not server-paginatable and still exist elsewhere.
+- Search posts are a paged recent-post scan with client filtering, not indexed full-text search; a page can yield fewer than20 matches. People spelling variants can overlap. Notifications are one-shot pages; explicit refresh gets newer events. Cache display is best effort, not zero-wait/exact Facebook speed.
+- Reaction totals are not rewritten from partial pages. Frozen embedded reaction maps remain a one-document compatibility read; row pagination does not shrink that document.
+
+Validation: Python source contracts/guards, Java parsing, backend mocks, synthetic pagination workload, then signed Gradle CI. Models are not real Firebase/device/2G tests or5000-user certification. Do not merge on an assumption of full acceptance; outstanding items above need completion first.

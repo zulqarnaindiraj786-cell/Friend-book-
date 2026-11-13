@@ -11,3 +11,25 @@ captures/
 .cxx/
 local.properties
 *.apk
+
+# Firebase admin credentials must only be deployed through the secret store.
+**/service_account*.json
+**/*firebase-adminsdk*.json
+**/service-account*.json
+node_modules/
+supabase/.test-build/
+
+# Python regression test cache
+__pycache__/
+
+# Local Cloudflare authorization/build artifacts (never commit secrets).
+.wrangler/
+.dev.vars
+.env
+.env.*
+
+# Generated allowlisted Cloudflare website bundle.
+.worker-assets/
+
+# Private migration exports, generated SQL, counts and verification reports.
+migration-artifacts/
