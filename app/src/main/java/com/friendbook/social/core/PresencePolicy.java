@@ -3,7 +3,7 @@ package com.friendbook.social.core;
 /** Shared pure policy for rows, active strip, chat headers and profiles. */
 public final class PresencePolicy {
     private PresencePolicy() {}
-    public static final long ONLINE_TTL_MS = 5 * 60_000L;
+    public static final long ONLINE_TTL_MS = 10_000L; // 10 seconds - instant offline on app kill
     public static boolean isFreshOnline(boolean active, long seen, long now) {
         long age = now - seen;
         return active && seen > 0 && age >= -30_000L && age < ONLINE_TTL_MS;

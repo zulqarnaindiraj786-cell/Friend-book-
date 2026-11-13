@@ -1,6 +1,6 @@
 // Authenticated Cloudflare Realtime Presence & Typing over WebSockets + D1.
-export const PRESENCE_TTL_MS = 300_000;
-export const WRITE_COALESCE_MS = 90_000;
+export const PRESENCE_TTL_MS = 10_000; // 10 seconds - instant offline on app kill
+export const WRITE_COALESCE_MS = 10_000; // Write every 10s when online
 export const TYPING_TTL_MS = 8_000;
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },

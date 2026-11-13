@@ -43,8 +43,8 @@ public class Presence {
     /** Callback for presence updates: (online, lastSeenMs). */
     public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
-    public static final long HEARTBEAT_INTERVAL_MS = 180_000L; // 3 min, matches Cloudflare WS heartbeat
-    public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 min
+    public static final long HEARTBEAT_INTERVAL_MS = 30_000L; // 30 seconds - fast offline on app kill
+    public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 10 seconds
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
 
