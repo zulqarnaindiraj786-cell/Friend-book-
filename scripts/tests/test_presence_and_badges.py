@@ -24,14 +24,26 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertIn('document(n.id).update("isRead", true)', source)
         self.assertIn('markAll.setOnClickListener(v -> markAllReadReal())', source)
         self.assertNotIn('markFriendRequestsSeen', (JAVA/'friends/FriendsFragment.java').read_text())
-    def test_rtdb_disconnect_is_armed_before_online_and_has_timestamp(self):
+    def test_cloudflare_websocket_presence_replaces_rtdb(self):
+        """Presence now uses Cloudflare WebSocket + Firestore heartbeat, RTDB only for activeCall."""
         source=(JAVA/'core/Presence.java').read_text()
-        self.assertIn('onDisconnect().updateChildren(status(false)', source)
-        self.assertIn('if (disconnectArmed && statusRef != null)', source)
-        self.assertIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
-        self.assertIn('"connections/" + installId()', source)
-        self.assertIn('PresencePolicy.resolve', source)
-        self.assertNotIn('mergedOnline = true', source)
+        # Cloudflare WebSocket presence
+        self.assertIn('CloudPresenceSocket', source)
+        self.assertIn('foreground(activeStatusVisible)', source)
+        self.assertIn('cloudSocket.background()', source)
+        # Firestore heartbeat (persisted, survives app kill)
+        self.assertIn('FIRESTORE_HEARTBEAT', source)
+        self.assertIn('writeFirestore(uid, true)', source)
+        # RTDB kept ONLY for serverTimeOffset (call signaling sync) and activeCall
+        self.assertIn('.info/serverTimeOffset', source)
+        self.assertIn('startCallSignal', source)
+        self.assertIn('setCallSignal', source)
+        # Old RTDB presence patterns REMOVED
+        self.assertNotIn('onDisconnect().updateChildren(status(false)', source)
+        self.assertNotIn('disconnectArmed', source)
+        self.assertNotIn('statusRef', source)
+        self.assertNotIn('connListener', source)
+        self.assertNotIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
     def test_active_strip_uses_live_presence_not_cached_flags(self):
         source=(JAVA/'chat/ConversationsActivity.java').read_text()
         strip=method(source,'private void renderActiveNow()')
