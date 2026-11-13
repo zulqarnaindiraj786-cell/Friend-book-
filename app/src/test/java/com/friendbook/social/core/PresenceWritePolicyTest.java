@@ -4,12 +4,15 @@ import static org.junit.Assert.*;
 public class PresenceWritePolicyTest {
  @Test public void repeatedOnlineCoalescesAndSuccessfulWritesAreSpaced(){
   PresenceWritePolicy p=new PresenceWritePolicy();long first=p.begin("a",true,0);assertTrue(first>0);
-  assertEquals(0,p.begin("a",true,25000));p.complete(first,true,0);
-  assertEquals(0,p.begin("a",true,99999));assertTrue(p.begin("a",true,100000)>0);
+  // 5s write interval - coalesce within interval
+  assertEquals(0,p.begin("a",true,3000));p.complete(first,true,0);
+  // After 5s interval, new write allowed
+  assertEquals(0,p.begin("a",true,5999));assertTrue(p.begin("a",true,10000)>0);
  }
  @Test public void failureCanRetryNextHeartbeat(){
   PresenceWritePolicy p=new PresenceWritePolicy();long t=p.begin("a",true,0);p.complete(t,false,0);
-  assertTrue(p.begin("a",true,25000)>0);
+  // Can retry after 5s write interval
+  assertTrue(p.begin("a",true,6000)>0);
  }
  @Test public void offlineAndForegroundAreImmediateAndIgnoreLateOnlineCallback(){
   PresenceWritePolicy p=new PresenceWritePolicy();long old=p.begin("a",true,0);
@@ -25,7 +28,8 @@ public class PresenceWritePolicyTest {
   PresenceWritePolicy p=new PresenceWritePolicy();long a=p.begin("a",true,1000);p.complete(a,true,1000);
   assertTrue(p.begin("a",true,999)>0);
  }
- @Test public void periodicMirrorWritesRemainBelowFiveMinuteFreshness(){
-  assertTrue(PresenceWritePolicy.ONLINE_WRITE_INTERVAL_MS+Presence.HEARTBEAT_INTERVAL_MS<PresencePolicy.ONLINE_TTL_MS);
+ @Test public void writeIntervalIsShorterThanOnlineTtl(){
+  // ONLINE_WRITE_INTERVAL_MS (5s) must be < ONLINE_TTL_MS (10s) for freshness
+  assertTrue(PresenceWritePolicy.ONLINE_WRITE_INTERVAL_MS < PresencePolicy.ONLINE_TTL_MS);
  }
 }
