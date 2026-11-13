@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
-import okhttp3.Callback;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -41,7 +40,8 @@ import okhttp3.Response;
  * - RTDB: Kept ONLY for activeCall (call signaling)
  */
 public class Presence {
-    public interface Callback { void onPresence(boolean online, long lastSeen); }
+    /** Callback for presence updates: (online, lastSeenMs). */
+    public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
     public static final long HEARTBEAT_INTERVAL_MS = 180_000L; // 3 min, matches Cloudflare WS heartbeat
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 min
@@ -239,15 +239,25 @@ public class Presence {
     /**
      * Watch presence for a user: combines Firestore (server-known) + Cloudflare HTTP (real-time).
      * Returns Handle to detach.
+     * @deprecated Use watchPresence(String, PresenceCallback) instead. Kept for backward compatibility.
      */
-    public static Handle watchPresence(String uid, Callback cb) {
+    @Deprecated
+    public static Handle watch(String uid, PresenceCallback cb) {
+        return watchPresence(uid, cb);
+    }
+
+    /**
+     * Watch presence for a user: combines Firestore (server-known) + Cloudflare HTTP (real-time).
+     * Returns Handle to detach.
+     */
+    public static Handle watchPresence(String uid, PresenceCallback cb) {
         Handle h = new Handle();
         final boolean[] fsSeen = {false};
         final boolean[] fsOnline = {false};
         final long[] fsLastSeen = {0L};
 
         Runnable emit = () -> {
-            if (!h.closed) cb.accept(fsOnline[0], fsLastSeen[0]);
+            if (!h.closed) cb.onPresence(fsOnline[0], fsLastSeen[0]);
         };
 
         // Firestore snapshot listener (authoritative for privacy flags)
@@ -371,7 +381,7 @@ public class Presence {
                                 .put(RequestBody.create(body.toString(), JSON))
                                 .header("Authorization", "Bearer " + token)
                                 .build();
-                        CF_CLIENT.newCall(request).enqueue(new Callback() {
+                        CF_CLIENT.newCall(request).enqueue(new okhttp3.Callback() {
                             @Override public void onFailure(Call call, java.io.IOException e) { }
                             @Override public void onResponse(Call call, Response response) {
                                 if (response != null) response.close();
