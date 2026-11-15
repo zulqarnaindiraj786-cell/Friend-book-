@@ -335,11 +335,17 @@ public class StoryViewerActivity extends Activity {
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
 
-            // Show the story's poster frame UNDER the video so the screen is never plain black
-            // while the video buffers. It is hidden the moment the first frame is actually ready.
-            boolean hasPoster = Ui.hasRealPhoto(s.mediaUrl);
+            // Show a real poster frame UNDER the video so the screen is never plain black while the
+            // video buffers. Never load the .mp4 into an ImageView: derive the image thumbnail
+            // (Cloudinary /video/upload/ -> /video/upload/w_480,f_webp) and only use it if it is an image.
+            String posterUrl = "";
+            try {
+                posterUrl = com.friendbook.social.reels.ReelVideoCache
+                        .deriveThumbUrl(s.mediaUrl, null);
+            } catch (Throwable ignored) { }
+            final boolean hasPoster = Ui.hasRealPhoto(posterUrl) && !posterUrl.equals(s.mediaUrl);
             if (hasPoster) {
-                Ui.img(this, img, s.mediaUrl);
+                Ui.img(this, img, posterUrl);
                 img.setVisibility(View.VISIBLE);
             } else {
                 img.setVisibility(View.GONE);
