@@ -60,13 +60,13 @@ jobs:
     - name: Get Version Info
       id: version
       run: |
-        VERSION_NAME=$(grep -oP 'versionName\s+\"\K[^"]+' app/build.gradle | head -1)
+        VERSION_NAME=$(grep -oP "versionName\s+['\"]\K[^'\"]+" app/build.gradle | head -1)
         VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1)
         TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-        echo "version_name=${VERSION_NAME:-2.8.89}" >> $GITHUB_OUTPUT
-        echo "version_code=${VERSION_CODE:-121}" >> $GITHUB_OUTPUT
+        echo "version_name=${VERSION_NAME:-2.8.90}" >> $GITHUB_OUTPUT
+        echo "version_code=${VERSION_CODE:-122}" >> $GITHUB_OUTPUT
         echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-        echo "tag=v${VERSION_NAME:-2.8.89}-${VERSION_CODE:-121}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+        echo "tag=v${VERSION_NAME:-2.8.90}-${VERSION_CODE:-122}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
     - name: Verify Build Outputs
       run: |
