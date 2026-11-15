@@ -672,65 +672,6 @@ public class AdsConfig {
         }
     }
 
-    /** Preloads both 3-Ad Feed and 3-Ad Reels queues using new Facebook-style AdQueueManager. */
-    public static synchronized void warmUpPools(final Context context) {
-        if (context == null || !nativeAdsEnabled()) return;
-        AdQueueManager.getInstance().initialize(context);
-    }
-    
-    /**
-     * Call when Feed ad gets impression - triggers immediate refill
-     */
-    public static void onFeedAdImpression(Context context) {
-        AdQueueManager.getInstance().onFeedAdImpression();
-    }
-    
-    /**
-     * Call when Reels ad gets impression - triggers immediate refill
-     */
-    public static void onReelsAdImpression(Context context) {
-        AdQueueManager.getInstance().onReelsAdImpression();
-    }
-    
-    /**
-     * Get Feed ad from queue (non-blocking)
-     */
-    public static NativeAd pollFeedAd(Context context) {
-        return AdQueueManager.getInstance().pollFeedAd();
-    }
-    
-    /**
-     * Get Reels ad from queue (non-blocking)
-     */
-    public static NativeAd pollReelsAd(Context context) {
-        return AdQueueManager.getInstance().pollReelsAd();
-    }
-    
-    /**
-     * Check if Feed queue has ad ready
-     */
-    public static boolean hasFeedAd(Context context) {
-        return AdQueueManager.getInstance().hasFeedAd();
-    }
-    
-    /**
-     * Check if Reels queue has ad ready
-     */
-    public static boolean hasReelsAd(Context context) {
-        return AdQueueManager.getInstance().hasReelsAd();
-    }
-    
-    /**
-     * Set callbacks for when ads are ready
-     */
-    public static void setFeedAdReadyCallback(AdQueueManager.AdReadyCallback callback) {
-        AdQueueManager.getInstance().setFeedAdReadyCallback(callback);
-    }
-    
-    public static void setReelsAdReadyCallback(AdQueueManager.AdReadyCallback callback) {
-        AdQueueManager.getInstance().setReelsAdReadyCallback(callback);
-    }
-
     // ------------------------------------------------------------------------
     // 💬 100% REAL Multi-User Likes, Reactions & Full-Post Comments on Ads
     //    Backed by real Firestore `posts/{adDocId}`, `Reactions.java`, and

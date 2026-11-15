@@ -491,6 +491,9 @@ public class MainActivity extends Activity {
                 // Fragment already exists: insert featured reel at top and scroll to it
                 ((com.friendbook.social.reels.ReelsFragment) existing).focusFeaturedReel(featuredReel);
             }
+            // The Reels tab is already on screen with the tapped reel pinned at the top —
+            // never fall through to select(tab), which re-shows the tab and wipes the reel.
+            return;
         }
         select(tab); // Normal path for existing fragment or non-Reels tabs
     }

@@ -332,22 +332,42 @@ public class StoryViewerActivity extends Activity {
             H.postDelayed(timer, 5500);
         } else if ("video".equals(s.mediaType)) {
             textCanvas.setVisibility(View.GONE);
-            img.setVisibility(View.GONE);
-            video.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            video.setVideoURI(Uri.parse(s.mediaUrl));
+
+            // Show the story's poster frame UNDER the video so the screen is never plain black
+            // while the video buffers. It is hidden the moment the first frame is actually ready.
+            boolean hasPoster = Ui.hasRealPhoto(s.mediaUrl);
+            if (hasPoster) {
+                Ui.img(this, img, s.mediaUrl);
+                img.setVisibility(View.VISIBLE);
+            } else {
+                img.setVisibility(View.GONE);
+            }
+            video.setVisibility(View.INVISIBLE);
+
+            // ⚠️ Order matters: ALL listeners must be registered BEFORE setVideoURI().
+            // Registering setOnPreparedListener() after setVideoURI() is a race — for a cached or
+            // data-URI source the player can finish preparing synchronously, the listener fires into
+            // the void, playback never starts and the story sits on a black frame until it expires.
             video.setOnPreparedListener(mp -> {
+                mp.setLooping(false);
+                video.setVisibility(View.VISIBLE);
+                img.setVisibility(View.GONE);
                 video.start();
-                // Start timer only after video is prepared and playing
+                // Start the progress timer only once the video is genuinely prepared and playing
                 animateSegment(15000);
             });
             video.setOnCompletionListener(mp -> step(1));
             video.setOnErrorListener((mp, what, extra) -> {
+                // Fall back to the poster instead of a black screen, then advance.
+                video.setVisibility(View.INVISIBLE);
+                if (hasPoster) img.setVisibility(View.VISIBLE);
                 Ui.toast(this, "Failed to load video");
                 step(1);
                 return true;
             });
+            video.setVideoURI(Uri.parse(s.mediaUrl));
         } else {
             video.stopPlayback();
             video.setVisibility(View.GONE);

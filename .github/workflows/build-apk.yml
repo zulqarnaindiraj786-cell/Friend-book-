@@ -1,11 +1,15 @@
-name: Build APK & Release
+name: Build FriendBook Signed APK and AAB
 
 on:
-  push:
-    branches: [ main, arena/** ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    branches: [ main, 'arena/**' ]
+    # Worker-only changes must not rebuild/re-upload the existing Android release.
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
+
+concurrency:
+  group: friendbook-apk-release
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -13,110 +17,252 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Set up Node for gateway tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-    - name: Ensure Android SDK 36
-      run: |
-        echo "ANDROID_HOME=$ANDROID_HOME"
-        ls "$ANDROID_HOME/platforms" || true
-        SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
-        if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
-          echo "android-36 platform already installed"
-        elif [ -n "$SDKM" ]; then
-          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
-          "$SDKM" "platforms;android-36" "build-tools;36.0.0" || echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
-        else
-          echo "::warning::sdkmanager not found; using preinstalled SDK"
-        fi
+      - name: Guard message badge and read-state separation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.11.1'
-        cache-disabled: true
+      - name: Exercise 5000 virtual pagination sessions (model only, no production traffic)
+        run: python3 scripts/loadtest/paging_model.py
 
-    - name: Generate Gradle Wrapper
-      run: |
-        gradle wrapper --gradle-version 8.11.1 --distribution-type all
-        chmod +x gradlew
-        ./gradlew --version
+      - name: Test direct FCM gateway with mocked providers
+        run: npm ci --prefix supabase && npm test --prefix supabase
 
-    - name: Build Debug APK
-      run: ./gradlew :app:assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build-debug.log
-    - name: Build Release AAB
-      run: ./gradlew :app:bundleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-    - name: Get Version Info
-      id: version
-      run: |
-        VERSION_NAME=$(grep -oP "versionName\s+['\"]\K[^'\"]+" app/build.gradle | head -1)
-        VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1)
-        TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-        echo "version_name=${VERSION_NAME:-2.8.90}" >> $GITHUB_OUTPUT
-        echo "version_code=${VERSION_CODE:-122}" >> $GITHUB_OUTPUT
-        echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-        echo "tag=v${VERSION_NAME:-2.8.90}-${VERSION_CODE:-122}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+      - name: Test actual Firestore SDK queries in isolated demo emulator (no production traffic)
+        working-directory: scripts/firebase-tests
+        run: |
+          set +e
+          (npm ci --ignore-scripts && npm test) > emulator-tests.log 2>&1
+          RESULT=$?
+          if [ "$RESULT" != "0" ]; then
+            tail -100 emulator-tests.log | while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done
+          else
+            tail -25 emulator-tests.log
+          fi
+          exit "$RESULT"
 
-    - name: Verify Build Outputs
-      run: |
-        echo "=== Checking Debug APK ==="
-        find app/build/outputs -name "*.apk" -type f 2>/dev/null | head -20
-        echo "=== Checking Release AAB ==="
-        find app/build/outputs -name "*.aab" -type f 2>/dev/null | head -20
-        # Find actual paths
-        DEBUG_APK=$(find app/build/outputs -name "app-debug.apk" -type f 2>/dev/null | head -1)
-        RELEASE_AAB=$(find app/build/outputs -name "app-release.aab" -type f 2>/dev/null | head -1)
-        echo "Debug APK: $DEBUG_APK"
-        echo "Release AAB: $RELEASE_AAB"
-        # Don't fail - the release step will fail if files don't exist
-        [ -n "$DEBUG_APK" ] && echo "✓ Debug APK found" || echo "✗ Debug APK not found"
-        [ -n "$RELEASE_AAB" ] && echo "✓ Release AAB found" || echo "✗ Release AAB not found"
+      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
+        run: |
+          mkdir -p "$RUNNER_TEMP/presence-coordinators"
+          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
+          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/arena/')
-      with:
-        tag_name: ${{ steps.version.outputs.tag }}
-        name: friendbook ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.timestamp }})
-        body: |
-          ## friendbook ${{ steps.version.outputs.version_name }} - Build ${{ steps.version.outputs.version_code }}
+      - name: Ensure Android SDK 36
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
+          if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "android-36 platform already installed"
+          elif [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-36" "build-tools;36.0.0" || \
+              echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
+          else
+            echo "::warning::sdkmanager not found; using preinstalled SDK"
+          fi
 
-          **Build Date:** ${{ steps.version.outputs.timestamp }}
-          **Branch:** ${{ github.ref_name }}
-          **Commit:** ${{ github.sha }}
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
 
-          ### Changes in this build:
-          - Story Viewer: Fixed black screen, timer starts after media loads
-          - Reel Tap: Full container clickable, no view interception
-          - Ad Queue: Refresh preserves unseen ads, only fills empty slots
-          - Meta Mediation: Audience Network SDK + Adapter (Placement ID: 4871960679794940_4871960806461594)
-          - Universal Play Store Link: ALL copy/share → Play Store link
+      - name: Verify Firebase config & Production AdMob IDs
+        run: |
+          test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
+          grep -q "ca-app-pub-3387480177023669~1513026594" app/src/main/AndroidManifest.xml || (echo "::error::Missing real AdMob APPLICATION_ID in AndroidManifest.xml" && exit 1)
+          if grep -rq "3940256099942544" app/; then
+            echo "::error::Test AdMob ID detected in app/ — forbidden in production build!"
+            exit 1
+          fi
 
-          ### Downloads:
-          - **Debug APK** (installable): `app-debug.apk`
-          - **Release AAB** (for Play Store): `app-release.aab`
+      # The install-in-place guarantee depends on TWO things that have silently regressed before:
+      # (1) the applicationId must stay com.friendbook.social — any other id installs as a SEPARATE app
+      #     instead of upgrading the user's existing one; (2) versionCode must strictly increase.
+      - name: Guard package id, version code and upgrade-in-place contract
+        run: |
+          APPID=$(grep -oP "applicationId\s+'\K[^']+" app/build.gradle | head -1)
+          if [ "$APPID" != "com.friendbook.social" ]; then
+            echo "::error::applicationId is '$APPID' — must be com.friendbook.social or the APK installs as a SEPARATE app instead of updating the existing one"
+            exit 1
+          fi
+          VCODE=$(grep -oP "versionCode\s+\K\d+" app/build.gradle | head -1)
+          VNAME=$(grep -oP "versionName\s+'\K[^']+" app/build.gradle | head -1)
+          echo "package=$APPID versionCode=$VCODE versionName=$VNAME"
+          # The last production release was 2.8.89 (121). Never ship a versionCode at or below it.
+          if [ "$VCODE" -le 121 ]; then
+            echo "::error::versionCode $VCODE must be > 121 (last published release), otherwise Android refuses the upgrade"
+            exit 1
+          fi
+          test -f app/friendbook-release.p12 || (echo "::error::app/friendbook-release.p12 missing — release APK would be unsigned and rejected as an update" && exit 1)
 
-        draft: false
-        prerelease: false
-        files: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/bundle/release/app-release.aab
-        make_latest: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reject private credentials in Android sources
+        run: |
+          if grep -RIlE -- 'BEGIN (RSA )?PRIVATE KEY|os_v2_app_' app/src app/build.gradle; then
+            echo "::error::Server credential found in Android sources"
+            exit 1
+          fi
+          if find app/src -type f \( -iname '*service_account*.json' -o -iname '*firebase-adminsdk*.json' \) | grep -q .; then
+            echo "::error::Service account file must never be packaged"
+            exit 1
+          fi
 
-    - name: Print Release URL
-      run: |
-        echo "Release created at: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
-        echo "Direct APK download: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/app-debug.apk"
+      - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
+        id: rel
+        run: |
+          set +e
+          for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
+            DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
+            JAR="$DIR/android-all-instrumented-$VER.jar"
+            if [ ! -s "$JAR" ]; then
+              mkdir -p "$DIR"
+              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
+                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            fi
+          done
+          gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "Retrying Gradle build after transient artifact fetch..."
+            sleep 5
+            gradle testReleaseUnitTest bundleRelease assembleRelease --rerun-tasks --console=plain > build-release.log 2>&1
+            RC=$?
+          fi
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Surface bounded unit-test failure details
+        if: steps.rel.outputs.exit != '0'
+        run: python3 scripts/ci/report_android_failure.py
+
+      - name: Surface compiler errors as annotations
+        if: steps.rel.outputs.exit != '0'
+        run: |
+          echo "===== javac error blocks (with symbol details) ====="
+          grep -A8 -E "\.java:[0-9]+: error:" build-release.log | head -120 | while IFS= read -r line; do
+            echo "::error::${line:0:250}"
+          done
+          echo "===== failing source lines ====="
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-release.log | sort -u | while IFS= read -r hit; do
+            f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
+            content=$(sed -n "${ln}p" "$f")
+            echo "::error file=$f,line=$ln,title=source::${content:0:250}"
+          done
+          echo "===== aapt/resource errors ====="
+          grep -Ei "aapt|resource|merge|duplicate" build-release.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "===== gradle tail (as warnings so we can read them) ====="
+          grep -vE "^$" build-release.log | tail -60 | while IFS= read -r line; do
+            echo "::warning::${line:0:300}"
+          done
+
+      - name: Fail if release build failed
+        if: steps.rel.outputs.exit != '0'
+        run: exit 1
+
+      - name: Require actual Android presence test results, not source-only checks
+        run: python3 scripts/ci/verify_presence_android_tests.py
+
+      - name: Mark branch artifacts as migration candidates, not a production capacity pass
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
+        run: |
+          ls -lh app/build/outputs/bundle/release/
+          ls -lh app/build/outputs/apk/release/
+          cp app/build/outputs/bundle/release/app-release.aab friendbook-playstore.aab
+          cp app/build/outputs/apk/release/app-release.apk friendbook.apk
+          cp app/build/outputs/mapping/release/mapping.txt friendbook-mapping.txt
+          unzip -l friendbook-playstore.aab | grep "proguard.map"
+          test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
+          ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
+
+      - name: Upload Google Play Store Signed AAB
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: FriendBook-playstore-aab
+          path: friendbook-playstore.aab
+          retention-days: 1
+
+      - name: Upload Signed Release APK
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: FriendBook-release-apk
+          path: friendbook.apk
+          retention-days: 1
+
+      - name: Upload R8 Deobfuscation Mapping
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: FriendBook-release-mapping
+          path: friendbook-mapping.txt
+          retention-days: 1
+
+      # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
+      - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
+        if: startsWith(github.ref, 'refs/heads/arena/') || github.ref == 'refs/heads/main' || startsWith(github.head_ref, 'arena/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          publish() {
+            local OUTPUT CODE
+            if OUTPUT=$(gh "$@" 2>&1); then
+              printf '%s\n' "$OUTPUT"
+            else
+              CODE=$?
+              while IFS= read -r line; do echo "::error::${line:0:500}"; done <<< "$OUTPUT"
+              return "$CODE"
+            fi
+          }
+          VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
+          TAG="v${VER}"
+          TITLE="friendbook ${TAG} (Signed Production Release APK + Play Store AAB)"
+          NOTES="Signed Production Release — ABD sirf yeh file install karein (upgrade in place, purani app ke upar).\`versionCode ${VCODE}\`, package \`com.friendbook.social\`, \`${TAG}\`.
+
+          **Fixed in this build**
+          - Group Chat: tapping a group in the chat list now opens the group (was silently doing nothing)
+          - Reel: tapping the Home Feed Reels card now opens that exact Reel (was bouncing back to Home)
+          - Story Viewer: video stories no longer go black — listeners registered before \`setVideoURI\`, poster frame shown while buffering
+          - Ad Queue: the handed-out ad is removed from the queue (no duplicate/stale ads after pull-to-refresh)
+          - AdsConfig: duplicate queue methods removed (this was a hard compile error)
+          - Universal Play Store link (\`com.friendbook.social\`) for ALL copy/share actions
+
+          **Files:** \`friendbook.apk\` (signed release — install this over the old app), \`friendbook-playstore.aab\` (Play Store upload), \`friendbook-mapping.txt\` (R8 deobfuscation map).
+
+          Do **not** uninstall the old app first — installing this APK over it keeps your data and updates in place."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            publish release upload "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --clobber
+            publish release edit "$TAG" --latest --target "$TARGET_SHA" --title "$TITLE" --notes "$NOTES"
+          else
+            publish release create "$TAG" friendbook-playstore.aab friendbook.apk friendbook-mapping.txt --target "$TARGET_SHA" \
+              --latest \
+              --title "$TITLE" \
+              --notes "$NOTES"
+          fi

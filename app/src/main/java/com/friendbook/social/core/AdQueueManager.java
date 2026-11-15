@@ -363,9 +363,16 @@ public final class AdQueueManager {
                             feedQueue.offer(nativeAd);
                             Log.d(TAG, "Feed queue: added ad, size=" + feedQueue.size());
                             
-                            // Notify waiting callback
-                            if (feedCallback != null) {
-                                mainHandler.post(() -> feedCallback.onAdReady(nativeAd, "feed"));
+                            // Notify waiting callback, but hand the ad OUT of the queue first —
+                            // otherwise the very same NativeAd is both delivered to the waiting slot
+                            // and left queued, so the next slot polls and renders a second view of it
+                            // (duplicate impressions and a stale ad after pull-to-refresh).
+                            AdReadyCallback cb = feedCallback;
+                            if (cb != null) {
+                                NativeAd handed = feedQueue.poll();
+                                if (handed == null) handed = nativeAd;
+                                final NativeAd toDeliver = handed;
+                                mainHandler.post(() -> cb.onAdReady(toDeliver, "feed"));
                             }
                         } else {
                             // Queue full - destroy ad to avoid memory leak
@@ -453,8 +460,14 @@ public final class AdQueueManager {
                             reelsQueue.offer(nativeAd);
                             Log.d(TAG, "Reels queue: added ad, size=" + reelsQueue.size());
                             
-                            if (reelsCallback != null) {
-                                mainHandler.post(() -> reelsCallback.onAdReady(nativeAd, "reels"));
+                            AdReadyCallback cb = reelsCallback;
+                            if (cb != null) {
+                                // Hand the ad out of the queue (same reason as Feed above):
+                                // one ad must never be delivered to a slot AND left queued.
+                                NativeAd handed = reelsQueue.poll();
+                                if (handed == null) handed = nativeAd;
+                                final NativeAd toDeliver = handed;
+                                mainHandler.post(() -> cb.onAdReady(toDeliver, "reels"));
                             }
                         } else {
                             try { nativeAd.destroy(); } catch (Throwable ignored) {}

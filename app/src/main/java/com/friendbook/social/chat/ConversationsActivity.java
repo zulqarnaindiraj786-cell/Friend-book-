@@ -723,8 +723,14 @@ public class ConversationsActivity extends Activity {
             // Click to open chat
             h.itemView.setOnClickListener(v -> {
                 Intent i = new Intent(ConversationsActivity.this, ChatActivity.class);
-                i.putExtra("chatId", r.room.id);
-                if (!r.room.isGroup) {
+                // ChatActivity reads "chat_id" (group) or "uid" (1:1). A group chat has no peer uid,
+                // so it MUST be opened by id and flagged is_group — otherwise ChatActivity finishes
+                // immediately (peerId == null) and tapping a group row does nothing at all.
+                if (r.room.isGroup) {
+                    i.putExtra("chat_id", r.room.id);
+                    i.putExtra("is_group", true);
+                    i.putExtra("name", resolvedName);
+                } else {
                     i.putExtra("uid", r.other);
                     i.putExtra("name", resolvedName);
                 }
