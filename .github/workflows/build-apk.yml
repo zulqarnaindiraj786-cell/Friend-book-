@@ -82,21 +82,6 @@ jobs:
         # Don't fail - the release step will fail if files don't exist
         [ -n "$DEBUG_APK" ] && echo "✓ Debug APK found" || echo "✗ Debug APK not found"
         [ -n "$RELEASE_AAB" ] && echo "✓ Release AAB found" || echo "✗ Release AAB not found"
-        # Copy to known location for release step (only if found)
-        mkdir -p artifacts
-        if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
-          cp "$DEBUG_APK" artifacts/app-debug.apk
-          echo "DEBUG_APK_PATH=artifacts/app-debug.apk" >> $GITHUB_OUTPUT
-        else
-          echo "DEBUG_APK_PATH=" >> $GITHUB_OUTPUT
-        fi
-        if [ -n "$RELEASE_AAB" ] && [ -f "$RELEASE_AAB" ]; then
-          cp "$RELEASE_AAB" artifacts/app-release.aab
-          echo "RELEASE_AAB_PATH=artifacts/app-release.aab" >> $GITHUB_OUTPUT
-        else
-          echo "RELEASE_AAB_PATH=" >> $GITHUB_OUTPUT
-        fi
-      id: verify
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -125,8 +110,8 @@ jobs:
         draft: false
         prerelease: false
         files: |
-          ${{ steps.verify.outputs.DEBUG_APK_PATH }}
-          ${{ steps.verify.outputs.RELEASE_AAB_PATH }}
+          app/build/outputs/apk/debug/app-debug.apk
+          app/build/outputs/bundle/release/app-release.aab
         make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
