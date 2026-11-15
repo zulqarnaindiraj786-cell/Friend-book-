@@ -33,11 +33,28 @@ android {
 
     signingConfigs {
         release {
-            storeFile file('friendbook-release.p12')
+            // The keystore is NOT committed (see .gitignore) so it can never leak if this repo is
+            // made public. Supply it either as a file or via Gradle properties / env vars:
+            //   app/friendbook-release.p12   OR   -PfbStoreFile=... -PfbStorePassword=...
+            //   FB_STORE_PASSWORD / FB_KEY_PASSWORD environment variables also work.
+            def storePath = project.findProperty('fbStoreFile')
+                    ?: System.getenv('FB_STORE_FILE')
+                    ?: 'friendbook-release.p12'
+            def storePw = project.findProperty('fbStorePassword')
+                    ?: System.getenv('FB_STORE_PASSWORD')
+                    ?: 'friendbook2026'
+            def keyPw = project.findProperty('fbKeyPassword')
+                    ?: System.getenv('FB_KEY_PASSWORD')
+                    ?: storePw
+            def alias = project.findProperty('fbKeyAlias')
+                    ?: System.getenv('FB_KEY_ALIAS')
+                    ?: 'friendbook'
+
+            storeFile file(storePath)
             storeType 'PKCS12'
-            storePassword 'friendbook2026'
-            keyAlias 'friendbook'
-            keyPassword 'friendbook2026'
+            storePassword storePw
+            keyAlias alias
+            keyPassword keyPw
             v1SigningEnabled true
             v2SigningEnabled true
         }

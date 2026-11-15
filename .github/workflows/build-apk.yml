@@ -93,6 +93,18 @@ jobs:
             exit 1
           fi
 
+      # The signing keystore is intentionally NOT in the repo (so making this repo public can
+      # never leak it). Restore it from the FB_KEYSTORE_B64 secret: base64 of the .p12 file.
+      # If the secret is absent the build continues and the guard below reports it clearly.
+      - name: Restore release keystore from secret
+        run: |
+          if [ -n "${{ secrets.FB_KEYSTORE_B64 }}" ]; then
+            printf '%s' "${{ secrets.FB_KEYSTORE_B64 }}" | base64 -d > app/friendbook-release.p12
+            test -s app/friendbook-release.p12 && echo "keystore restored from secret"
+          else
+            echo "::warning::FB_KEYSTORE_B64 secret not set — release APK will be unsigned"
+          fi
+
       # The install-in-place guarantee depends on TWO things that have silently regressed before:
       # (1) the applicationId must stay com.friendbook.social — any other id installs as a SEPARATE app
       #     instead of upgrading the user's existing one; (2) versionCode must strictly increase.

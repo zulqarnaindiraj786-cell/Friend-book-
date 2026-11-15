@@ -33,3 +33,9 @@ __pycache__/
 
 # Private migration exports, generated SQL, counts and verification reports.
 migration-artifacts/
+
+# Signing keystore — never commit (repo may be public). Keep app/friendbook-release.p12 locally.
+app/friendbook-release.p12
+app/*.p12
+app/*.jks
+app/*.keystore
