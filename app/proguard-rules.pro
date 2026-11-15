@@ -1,8 +1,21 @@
-# Firebase / Play services keep rules are bundled with the SDKs.
-# Glide
+# Google Play Console DEX Code Optimization & Split Debug Info (R8 Full Mode >75% Obfuscation)
+-optimizationpasses 5
+-overloadaggressively
+-repackageclasses 'o'
+-allowaccessmodification
+-renamesourcefileattribute SourceFile
+-keepattributes SourceFile,LineNumberTable,*Annotation*,Signature,InnerClasses,EnclosingMethod
+
+# Glide Generated API / Module entry points (AAR consumer rules handle internal classes)
 -keep public class * implements com.bumptech.glide.module.GlideModule
 -keep public class * extends com.bumptech.glide.module.AppGlideModule
--keep class com.bumptech.glide.** { *; }
+
+# Suppress benign optional library warnings while allowing R8 to obfuscate & shrink all unused library code
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+-dontwarn androidx.credentials.**
+-dontwarn com.google.android.libraries.identity.googleid.**
 -dontwarn com.bumptech.glide.**
-# Firestore model reflection (we map manually, but keep names safe)
--keep class com.example.frienbook.models.** { *; }
+-dontwarn com.google.android.ump.**
+-dontwarn okhttp3.**
+-dontwarn okio.**

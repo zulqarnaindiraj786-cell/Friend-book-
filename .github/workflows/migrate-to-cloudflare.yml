@@ -1,0 +1,375 @@
+name: Migrate Firebase to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_migration:
+        description: 'Run full migration (backup → deploy → migrate → verify → build)'
+        required: true
+        default: 'true'
+        type: boolean
+  push:
+    branches: [ 'arena/9e217492-friend-book' ]
+    paths:
+      - '.github/workflows/migrate-to-cloudflare.yml'
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+env:
+  FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+  FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+  CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+  CF_WORKERS_API_BASE: ${{ secrets.CF_WORKERS_API_BASE }}
+  FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+  MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+
+jobs:
+  migrate:
+    name: Full Migration Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      # ============ SETUP ============
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install Python dependencies
+        run: |
+          pip install firebase-admin requests
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      # ============ STEP 1: BACKUP FIREBASE ============
+      - name: Setup Firebase Service Account
+        if: env.FIREBASE_SERVICE_ACCOUNT != ''
+        run: |
+          echo "${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}" > service-account.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/service-account.json" >> $GITHUB_ENV
+      
+      - name: Run Firebase Backup
+        id: backup
+        continue-on-error: true
+        run: |
+          echo "Starting Firebase backup..."
+          if [ -f "service-account.json" ]; then
+            python3 scripts/backup_firebase.py
+            BACKUP_DIR=$(ls -td scripts/backups/*/ | head -1)
+            echo "BACKUP_DIR=$BACKUP_DIR" >> $GITHUB_OUTPUT
+            
+            # Show backup summary
+            cat "$BACKUP_DIR/BACKUP_SUMMARY.json" | jq .
+          else
+            echo "⚠ No Firebase service account found, skipping backup"
+            echo "BACKUP_DIR=" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload Backup Artifact
+        if: steps.backup.outputs.BACKUP_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-backup-${{ github.run_id }}
+          path: ${{ steps.backup.outputs.BACKUP_DIR }}
+          retention-days: 30
+      
+      # ============ STEP 2: DEPLOY CLOUDFLARE WORKERS (if secrets available) ============
+      - name: Check Cloudflare Secrets
+        id: cf_secrets
+        run: |
+          MISSING=""
+          [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && MISSING="$MISSING CLOUDFLARE_API_TOKEN"
+          [ -z "${{ secrets.CF_ACCOUNT_ID }}" ] && MISSING="$MISSING CF_ACCOUNT_ID"
+          [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ] && MISSING="$MISSING MIGRATION_ADMIN_TOKEN"
+          [ -z "${{ secrets.FIREBASE_API_KEY }}" ] && MISSING="$MISSING FIREBASE_API_KEY"
+          
+          if [ -n "$MISSING" ]; then
+            echo "⚠ Missing Cloudflare secrets:$MISSING"
+            echo "HAS_SECRETS=false" >> $GITHUB_OUTPUT
+            echo "MISSING_SECRETS=$MISSING" >> $GITHUB_OUTPUT
+          else
+            echo "✓ All Cloudflare secrets present"
+            echo "HAS_SECRETS=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Deploy D1 Migrations
+        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
+        continue-on-error: true
+        run: |
+          cd cloudflare
+          wrangler d1 migrations apply friendbook --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      - name: Deploy Data API Worker
+        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
+        continue-on-error: true
+        run: |
+          wrangler deploy data-api.js --name friendbook-data-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      - name: Deploy Migration API Worker
+        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
+        continue-on-error: true
+        run: |
+          wrangler deploy migration-api.js --name friendbook-migration-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      - name: Deploy Presence Worker
+        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
+        continue-on-error: true
+        run: |
+          wrangler deploy presence-realtime.js --name friendbook-presence
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      # Get worker URLs (use existing worker as fallback)
+      - name: Get Worker URLs
+        id: worker_urls
+        run: |
+          # Use known deployed worker URL
+          DATA_API="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"
+          MIGRATION_API="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"
+          echo "DATA_API=$DATA_API" >> $GITHUB_OUTPUT
+          echo "MIGRATION_API=$MIGRATION_API" >> $GITHUB_OUTPUT
+          echo "Using worker URL: $DATA_API"
+      
+      # ============ STEP 3: RUN MIGRATION ============
+      - name: Run Firestore to D1 Migration
+        continue-on-error: true
+        env:
+          CF_API_BASE: ${{ steps.worker_urls.outputs.MIGRATION_API }}
+          CF_API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+        run: |
+          echo "Starting migration to D1..."
+          if [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ]; then
+            echo "⚠ MIGRATION_ADMIN_TOKEN not set, skipping migration"
+            exit 0
+          fi
+          python3 scripts/migrate_firestore_to_d1.py
+      
+      # ============ STEP 4: VERIFY MIGRATION ============
+      - name: Verify Migration
+        id: verify
+        continue-on-error: true
+        env:
+          CF_API_BASE: ${{ steps.worker_urls.outputs.MIGRATION_API }}
+          CF_API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+        run: |
+          echo "Verifying migration..."
+          if [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ]; then
+            echo "⚠ MIGRATION_ADMIN_TOKEN not set, skipping verification"
+            echo "REPORT_FILE=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          python3 scripts/verify_migration.py
+          
+          # Extract report
+          REPORT_FILE=$(ls -t scripts/migration_report_*.json 2>/dev/null | head -1)
+          if [ -n "$REPORT_FILE" ]; then
+            echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+            cat "$REPORT_FILE" | jq .
+          else
+            echo "REPORT_FILE=" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload Migration Report
+        if: steps.verify.outputs.REPORT_FILE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-report-${{ github.run_id }}
+          path: ${{ steps.verify.outputs.REPORT_FILE }}
+          retention-days: 30
+      
+      # ============ STEP 5: ENABLE CLOUDFLARE DATA (if verified) & BUILD APK ============
+      - name: Enable Cloudflare Data in Build Config (if migration verified)
+        if: steps.verify.outputs.REPORT_FILE != ''
+        run: |
+          # Check if migration was successful
+          REPORT=$(cat ${{ steps.verify.outputs.REPORT_FILE }})
+          VERIFIED=$(echo $REPORT | jq -r '.verified')
+          FIRESTORE_TOTAL=$(echo $REPORT | jq -r '.totals.firestore')
+          D1_TOTAL=$(echo $REPORT | jq -r '.totals.d1')
+          
+          echo "Verification: $VERIFIED"
+          echo "Firestore Total: $FIRESTORE_TOTAL"
+          echo "D1 Total: $D1_TOTAL"
+          
+          if [ "$VERIFIED" = "true" ] && [ "$FIRESTORE_TOTAL" = "$D1_TOTAL" ] && [ "$FIRESTORE_TOTAL" -gt 0 ]; then
+            echo "✅ Migration verified! Enabling CLOUDFLARE_DATA_ENABLED..."
+            sed -i "s/buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'false'/buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'true'/" app/build.gradle
+            cat app/build.gradle | grep CLOUDFLARE_DATA_ENABLED
+          else
+            echo "❌ Migration verification FAILED!"
+            echo "Verification status: $VERIFIED"
+            echo "Firestore: $FIRESTORE_TOTAL, D1: $D1_TOTAL"
+            exit 1
+          fi
+      
+      - name: Bump Version
+        run: |
+          # Increment version code
+          CURRENT_CODE=$(grep versionCode app/build.gradle | head -1 | sed 's/.*versionCode //')
+          NEW_CODE=$((CURRENT_CODE + 1))
+          NEW_NAME="2.8.$((89 + NEW_CODE - 121))"
+          sed -i "s/versionCode $CURRENT_CODE/versionCode $NEW_CODE/" app/build.gradle
+          sed -i "s/versionName '2.8.89'/versionName '$NEW_NAME'/" app/build.gradle
+          echo "New version: $NEW_NAME ($NEW_CODE)"
+          echo "VERSION_NAME=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION_CODE=$NEW_CODE" >> $GITHUB_OUTPUT
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+    
+      - name: Ensure Android SDK 36
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
+          if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "android-36 platform already installed"
+          elif [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-36" "build-tools;36.0.0" || \
+              echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
+          else
+            echo "::warning::sdkmanager not found; using preinstalled SDK"
+          fi
+    
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+    
+      - name: Build Signed Release APK + AAB
+        id: rel
+        run: |
+          set +e
+          for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
+            DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
+            JAR="$DIR/android-all-instrumented-$VER.jar"
+            if [ ! -s "$JAR" ]; then
+              mkdir -p "$DIR"
+              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
+                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            fi
+          done
+          gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            echo "Retrying Gradle build after transient artifact fetch..."
+            sleep 5
+            gradle testReleaseUnitTest bundleRelease assembleRelease --rerun-tasks --console=plain > build-release.log 2>&1
+            RC=$?
+          fi
+          echo "exit=$RC" >> "$GITHUB_OUTPUT"
+          exit 0
+      
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: friendbook-apk-${{ steps.bump.outputs.VERSION_NAME }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
+      
+      - name: Surface bounded unit-test failure details
+        if: steps.rel.outputs.exit != '0'
+        run: python3 scripts/ci/report_android_failure.py
+    
+      - name: Surface compiler errors as annotations
+        if: steps.rel.outputs.exit != '0'
+        run: |
+          echo "===== javac error blocks (with symbol details) ====="
+          grep -A8 -E "\.java:[0-9]+: error:" build-release.log | head -120 | while IFS= read -r line; do
+            echo "::error::${line:0:250}"
+          done
+          echo "===== failing source lines ====="
+          grep -oE "^/[^ ]+\.java:[0-9]+: error:" build-release.log | sort -u | while IFS= read -r hit; do
+            f="${hit%%:*}"; ln="$(echo "$hit" | cut -d: -f2)"
+            content=$(sed -n "${ln}p" "$f")
+            echo "::error file=$f,line=$ln,title=source::${content:0:250}"
+          done
+          echo "===== aapt/resource errors ====="
+          grep -Ei "aapt|resource|merge|duplicate" build-release.log | grep -Ei "error|failed" | head -20 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          echo "===== gradle tail (as warnings so we can read them) ====="
+          grep -vE "^$" build-release.log | tail -60 | while IFS= read -r line; do
+            echo "::warning::${line:0:300}"
+          done
+    
+      - name: Upload AAB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: friendbook-aab-${{ steps.bump.outputs.VERSION_NAME }}
+          path: app/build/outputs/bundle/release/*.aab
+          retention-days: 30
+      
+      # ============ STEP 6: CREATE RELEASE ============
+      - name: Create GitHub Release
+        if: steps.rel.outputs.exit == '0'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.VERSION_NAME }}
+          name: "friendbook v${{ steps.bump.outputs.VERSION_NAME }} (Cloudflare Migration Ready)"
+          body: |
+            ## 🔄 Firebase → Cloudflare Migration Status
+            
+            ### Migration Report
+            ${{ steps.verify.outputs.REPORT_FILE != '' && format('\n            - **Firestore Users**: {0}\n            - **D1 Users**: {1}\n            - **Status**: ✅ 100% Match Verified\n            ', steps.verify.outputs.FIRESTORE_TOTAL, steps.verify.outputs.D1_TOTAL) || format('\n            - **Migration**: Not completed (missing Cloudflare secrets)\n            - **Missing Secrets**: {0}\n            - **CLOUDFLARE_DATA_ENABLED**: false (default)\n            ', steps.cf_secrets.outputs.MISSING_SECRETS) }}
+            
+            ### What's Ready
+            - ✅ CfClient.java - Cloudflare Workers API client
+            - ✅ Cloudflare Workers (data-api.js, migration-api.js, presence-realtime.js)
+            - ✅ D1 Schema (migration 0014_additive_core_schema.sql)
+            - ✅ Migration scripts (backup, migrate, verify)
+            - ✅ CLOUDFLARE_DATA_ENABLED build flag (currently false)
+            
+            ### What's Unchanged (Free Firebase Services)
+            - ✅ Firebase Auth (Email, Phone OTP, Google, Apple)
+            - ✅ FCM (Push Notifications)
+            - ✅ Crashlytics
+            - ✅ Analytics
+            - ✅ Remote Config
+            - ✅ App Check (Play Integrity - MONITOR mode)
+            
+            ### To Complete Migration
+            1. Add missing Cloudflare secrets to GitHub: ${{ steps.cf_secrets.outputs.MISSING_SECRETS || 'none' }}
+            2. Run this workflow again
+            3. Verify migration report shows 100% match
+            4. CLOUDFLARE_DATA_ENABLED will be set to true automatically
+          
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

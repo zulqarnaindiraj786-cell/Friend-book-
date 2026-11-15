@@ -1,0 +1,50 @@
+name: Test REVIEW-ONLY interaction write fence (emulator)
+on:
+  push:
+    branches: ['arena/15a53658-friend-book']
+    paths:
+      - '.github/workflows/check-interaction-fence.yml'
+      - 'scripts/admin/build_interaction_fence.py'
+      - 'firebase/firestore.interaction-fence.review.rules'
+      - 'firebase.interaction-fence-tests.json'
+      - 'scripts/firebase-tests/interaction-fence.test.mjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Check generated draft and production config isolation
+        run: |
+          python3 scripts/admin/build_interaction_fence.py --check
+          python3 - <<'PY'
+          import json
+          with open('firebase.json') as f:
+              assert json.load(f)['firestore']['rules']=='firebase/firestore.rules'
+          print('Production rules still point to the unchanged baseline; no deployment credentials used.')
+          PY
+      - name: Install demo emulator dependencies
+        run: npm ci --prefix scripts/firebase-tests --ignore-scripts
+      - name: Exercise OFF mode, old-writer fence, chat preservation and server-only control
+        working-directory: scripts/firebase-tests
+        run: |
+          set +e
+          npm run test:fence > fence-tests.log 2>&1
+          result=$?
+          tail -100 fence-tests.log
+          if [ "$result" != 0 ]; then
+            grep -A8 -E 'not ok|Error:|error:|Failed to' fence-tests.log | head -40 | while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done
+          fi
+          exit "$result"

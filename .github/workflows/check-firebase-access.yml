@@ -1,0 +1,40 @@
+name: Check Firebase read-only access and unchanged Android package
+on:
+  push:
+    branches: ['arena/15a53658-friend-book']
+    paths:
+      - '.github/workflows/check-firebase-access.yml'
+      - 'scripts/admin/check_firebase_access.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    if: github.ref == 'refs/heads/arena/15a53658-friend-book'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Android identity and both D1 switches OFF
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, tomllib
+          app = pathlib.Path('app/build.gradle').read_text()
+          assert re.findall(r"applicationId\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
+          assert re.findall(r"namespace\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
+          assert re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", app) == ['false']
+          assert tomllib.loads(pathlib.Path('wrangler.toml').read_text())['vars']['D1_INTERACTIONS_ENABLED'] == 'false'
+          cfg = json.loads(pathlib.Path('app/google-services.json').read_text())
+          assert cfg['project_info']['project_id'] == 'friendbook-17551'
+          assert any(c['client_info']['android_client_info']['package_name'] == 'com.friendbook.social' for c in cfg['client'])
+          print('Package + namespace: com.friendbook.social; Firebase project matches; both D1 gates OFF.')
+          PY
+      - name: Install read-only check dependencies
+        run: python3 -m pip install 'google-auth==2.40.3' 'requests==2.32.5'
+      - name: Check secret and Firebase read access (no writes or exports)
+        env:
+          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: python3 scripts/admin/check_firebase_access.py

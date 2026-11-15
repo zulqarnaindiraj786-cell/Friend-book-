@@ -1,48 +1,26 @@
-# Firebase setup checklist — FriendBook
+# Firebase Setup Checklist — friendbook (`com.friendbook.social`)
 
-The app talks to project **friendbook-17551** (`app/google-services.json` is real and
-already included). Follow these steps **once** in the
-[Firebase console](https://console.firebase.google.com/project/friendbook-17551).
+The app connects to Firebase project **`friendbook-17551`** (`app/google-services.json` is pre-configured). Complete these quick steps once in the [Firebase Console](https://console.firebase.google.com/project/friendbook-17551):
 
-## 1. Authentication
-- **Build → Authentication → Sign-in method → Email/Password → Enable** (both toggles off/on as needed; no email link required).
+## 1. Authentication (Email + Phone Number OTP)
+1. **Build → Authentication → Sign-in method → Email/Password → Enable → Save**.
+2. **Build → Authentication → Sign-in method → Phone → Enable → Save**.
+3. **Project Settings (⚙️) → Your apps → Android app (`com.friendbook.social`) → Add fingerprint** (for instant silent Phone OTP verification without browser captcha):
+   - **SHA-1:** `48:00:EF:58:AD:C6:0B:A3:3E:FC:1B:D8:E5:1B:60:A3:76:D7:B2:DF`
+   - **SHA-256:** `C9:B1:83:A4:11:85:35:47:E6:89:F0:E7:9F:C5:66:61:CB:73:A5:D2:5F:36:71:58:9C:6D:C5:87:F3:E2:DF:7D`
+   *(Optional: after adding fingerprints, re-download `google-services.json` into `app/google-services.json`).*
 
-## 2. Cloud Firestore
-- **Build → Firestore Database → Create database** → start in **production mode** → pick a region close to you.
-- **Rules tab:** paste [`firebase/firestore.rules`](firebase/firestore.rules) → **Publish**.
+## 2. Forgot Password Email OTP (`mail` + `otps` — Firebase Trigger Email Extension)
+- Install the official **Trigger Email from Firestore** extension (`firebase/firestore-send-email`):
+  - **Email documents collection:** `mail`
+  - **SMTP connection URI:** e.g. `smtps://YOUR_EMAIL%40gmail.com:YOUR_16_CHAR_APP_PASSWORD@smtp.gmail.com:465`
+- When any user enters **any email** on Forgot Password and taps **Send Code**, friendbook writes:
+  - `otps/{id}` → `{ email, otp, createdAt, expiresAt (+10 min) }`
+  - `mail/{id}` → `{ to: [email], message: { subject: "Friendbook OTP", html: "<h1>OTP: ${otp}</h1><p>Valid 10 min, check spam</p>" } }`
 
-## 3. Realtime Database (presence + typing)
-- **Build → Realtime Database → Create database** → location **United States**
-  (so it matches `https://friendbook-17551-default-rtdb.firebaseio.com`) → **Locked mode** is fine.
-- **Rules tab:** paste [`firebase/database.rules.json`](firebase/database.rules.json) → **Publish**.
-- If your RTDB URL is different (e.g. `.europe-west1.firebasedatabase.app`), copy it into
-  `Fb.RTDB_URL` in `app/src/main/java/com/example/frienbook/core/Fb.java`.
-- *Note:* if RTDB doesn't exist, the app still works — presence/typing gracefully fall
-  back to Firestore-only.
+## 3. Cloud Firestore Rules
+- **Build → Firestore Database → Rules** → paste [`firebase/firestore.rules`](firebase/firestore.rules) → **Publish** (includes `otps`, `mail`, `authVault`, and `users` rules).
 
-## 4. Cloud Storage
-- **Build → Storage → Get started** → production mode.
-- **Rules tab:** paste [`firebase/storage.rules`](firebase/storage.rules) → **Publish**.
-
-## 5. Android app registration (package name)
-Firebase already knows `com.example.friendbook` (the Flutter app).
-This native app uses **`com.example.frienbook`**. You have two options:
-
-**Option A — recommended:** In *Project settings → Your apps* add an Android app with
-package `com.example.frienbook`, download the new `google-services.json` and replace
-`app/google-services.json` with it.
-
-**Option B — keep the included config:** The included `google-services.json` already
-contains a client entry for `com.example.frienbook` and will build & run fine.
-If Firebase rejects requests for the new package (rare — only when API-key restrictions
-are enabled), do Option A, or in Google Cloud console add `com.example.frienbook` +
-your signing-certificate SHA-1 to the API key's Android app restrictions.
-
-## 6. (Optional) Security hardening
-The included Firestore rules are permissive-but-authenticated (any signed-in user can
-read/write most collections) so the app works **immediately** cross-platform with the
-Flutter app. Tighten them later (server-side friend checks, author-only post updates, …).
-
-## That's it
-Run the **Build FriendBook APK** GitHub Action → install the APK → create an account →
-everything (feed, stories, reels, chat, presence, notifications) is live and realtime.
+## 4. Realtime Database & Storage
+- **Realtime Database → Rules:** paste [`firebase/database.rules.json`](firebase/database.rules.json) → **Publish**.
+- **Storage → Rules:** paste [`firebase/storage.rules`](firebase/storage.rules) → **Publish**.
