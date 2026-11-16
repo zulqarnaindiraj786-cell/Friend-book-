@@ -224,6 +224,8 @@ def main():
     # Fail before touching Firestore. There is no dry-run mode: the script has no
     # "read everything, write nothing" path, so running without a token used to look
     # like a successful migration that wrote zero rows.
+    print(f"Target: {CF_API_BASE}")
+    print(f"Token: {'set (' + str(len(CF_API_TOKEN)) + ' chars)' if CF_API_TOKEN else 'MISSING'}")
     if not CF_API_TOKEN:
         print("ERROR: CF_API_TOKEN is not set.")
         print("The migration needs a Cloudflare migration token (wrangler secret put MIGRATION_ADMIN_TOKEN).")

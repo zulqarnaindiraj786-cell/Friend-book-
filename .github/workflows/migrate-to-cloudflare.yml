@@ -94,6 +94,7 @@ jobs:
           echo "WRANGLER=$WRANGLER" >> "$GITHUB_ENV"
           "$WRANGLER" --version
 
+      # Runs even when an earlier step failed, so the reason is always retrievable.
       - name: Upload CI logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -287,7 +288,12 @@ jobs:
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
-          python3 scripts/migrate_firestore_to_d1.py
+          set -o pipefail
+          mkdir -p .ci-logs
+          python3 -u scripts/migrate_firestore_to_d1.py 2>&1 | tee .ci-logs/migration.log
+          RC=${PIPESTATUS[0]}
+          echo "migration script exit=$RC"
+          exit $RC
 
       # ============ STEP 4: VERIFY MIGRATION ============
       - name: Verify Migration
