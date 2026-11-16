@@ -76,7 +76,7 @@ public class AppUpdatesTest {
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
         AlertDialog dialog = (AlertDialog) ShadowAlertDialog.getLatestAlertDialog();
-        assertFalse("the dialog itself must not be cancelable", dialog.isCancelable());
+        assertFalse("the dialog itself must not be cancelable", ((android.app.Dialog) dialog).isCancelable());
         boolean consumed = dialog.onKeyDown(KeyEvent.KEYCODE_BACK,
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
         assertTrue("BACK must be swallowed", consumed);
