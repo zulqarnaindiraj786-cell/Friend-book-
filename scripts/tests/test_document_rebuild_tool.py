@@ -1,8 +1,14 @@
 from argparse import Namespace
+from contextlib import redirect_stdout, redirect_stderr
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import io
 import json
+import os
 import sys
+import threading
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'admin'))
 import rebuild_documents as tool
@@ -106,10 +112,142 @@ class RebuildToolTests(unittest.TestCase):
             tool.rebuild_collection(call, 'admins')
         self.assertEqual(call.requests, [])
 
+    def test_base_url_accepts_the_worker_root_or_the_migration_api_prefix(self):
+        self.assertEqual(tool.normalise_base('https://w.example.workers.dev/'),
+                         'https://w.example.workers.dev')
+        self.assertEqual(tool.normalise_base('https://w.example.workers.dev/v1/admin/migrate'),
+                         'https://w.example.workers.dev')
+        self.assertEqual(tool.normalise_base('https://w.example.workers.dev/v1/admin/migrate/'),
+                         'https://w.example.workers.dev')
+        self.assertEqual(tool.normalise_base('https://w.example.workers.dev/other'),
+                         'https://w.example.workers.dev/other')
+
     def test_only_posts_is_the_declared_test_collection(self):
         self.assertEqual(tool.TEST_COLLECTION, 'posts')
         self.assertEqual(len(tool.COLLECTIONS), 10)
         self.assertEqual(tool.COLLECTIONS[0], 'posts')
+
+
+class _FakeWorker(BaseHTTPRequestHandler):
+    """Minimal stand-in for the deployed Worker, so the real HTTP path is exercised."""
+
+    token = 'x' * 48
+    calls = []
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, status, body):
+        payload = json.dumps(body).encode('utf8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _record(self, body=None):
+        type(self).calls.append({
+            'path': self.path,
+            'method': self.command,
+            'authorization': self.headers.get('Authorization'),
+            'body': body,
+        })
+
+    def do_GET(self):
+        self._record()
+        if self.path == '/v1/admin/migrate/documents/plan':
+            return self._send(200, {
+                'ok': True, 'testCollection': 'posts',
+                'gate': {'collection': 'posts', 'passed': False, 'sourceRows': 2, 'documentRows': 0},
+                'collections': [{'collection': 'posts', 'sourceRows': 2, 'documentRows': 0, 'pending': 2}],
+                'totals': {'sourceRows': 2, 'documentRows': 0, 'pending': 2},
+            })
+        if self.path.startswith('/v1/admin/migrate/documents/verify'):
+            return self._send(200, {'mismatchCount': 0, 'checked': 1})
+        return self._send(404, {'error': 'Not found'})
+
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length') or 0)
+        body = json.loads(self.rfile.read(length) or b'{}')
+        self._record(body)
+        if self.path != '/v1/admin/migrate/documents/rebuild':
+            return self._send(404, {'error': 'Not found'})
+        if body.get('collection') != 'posts':
+            return self._send(409, {'error': 'gate', 'gate': {'passed': False}})
+        return self._send(200, {
+            'collection': 'posts', 'dryRun': not body.get('apply'), 'scanned': 2,
+            'converted': 2, 'written': 0, 'skippedExisting': 0, 'oversized': 0,
+            'invalid': 0, 'nextCursor': None,
+        })
+
+
+class HttpSmokeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), _FakeWorker)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f'http://127.0.0.1:{cls.server.server_port}'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def run_cli(self, argv, base=None):
+        out = io.StringIO()
+        err = io.StringIO()
+        environment = {'CF_WORKERS_API_BASE': base or self.base,
+                       'MIGRATION_ADMIN_TOKEN': _FakeWorker.token}
+        _FakeWorker.calls = []
+        with patch.dict(os.environ, environment, clear=False):
+            with redirect_stdout(out), redirect_stderr(err):
+                code = tool.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_plan_reaches_the_migration_route_with_the_bearer_token(self):
+        code, out, _ = self.run_cli(['plan'])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['totals']['pending'], 2)
+        call = _FakeWorker.calls[0]
+        self.assertEqual(call['path'], '/v1/admin/migrate/documents/plan')
+        self.assertEqual(call['authorization'], f'Bearer {_FakeWorker.token}')
+
+    def test_posts_dry_run_sends_apply_false_and_writes_nothing(self):
+        code, out, _ = self.run_cli(['run', 'posts'])
+        self.assertEqual(code, 0)
+        rebuild = [call for call in _FakeWorker.calls if call['method'] == 'POST']
+        self.assertEqual(len(rebuild), 1)
+        self.assertEqual(rebuild[0]['body']['collection'], 'posts')
+        self.assertIs(rebuild[0]['body']['apply'], False)
+        # One compact JSON line per page, then the indented final summary.
+        lines = out.strip().splitlines()
+        start = max(index for index, line in enumerate(lines) if line == '{')
+        summary = json.loads('\n'.join(lines[start:]))
+        self.assertEqual(summary['results'][0]['written'], 0)
+        self.assertTrue(summary['results'][0]['dryRun'])
+
+    def test_gate_block_exits_with_code_2(self):
+        code, _, err = self.run_cli(['run', 'users', '--apply'])
+        self.assertEqual(code, 2)
+        self.assertIn('gate', err)
+
+    def test_base_may_already_include_the_migration_prefix(self):
+        code, _, _ = self.run_cli(['plan'], base=self.base + '/v1/admin/migrate')
+        self.assertEqual(code, 0)
+        self.assertEqual(_FakeWorker.calls[0]['path'], '/v1/admin/migrate/documents/plan')
+
+    def test_short_token_is_refused_before_any_request(self):
+        out = io.StringIO()
+        err = io.StringIO()
+        _FakeWorker.calls = []
+        with patch.dict(os.environ, {'CF_WORKERS_API_BASE': self.base,
+                                     'MIGRATION_ADMIN_TOKEN': 'short'}, clear=False):
+            with redirect_stdout(out), redirect_stderr(err):
+                code = tool.main(['plan'])
+        self.assertEqual(code, 1)
+        self.assertIn('32 characters', err.getvalue())
+        self.assertEqual(_FakeWorker.calls, [])
 
 
 if __name__ == '__main__':

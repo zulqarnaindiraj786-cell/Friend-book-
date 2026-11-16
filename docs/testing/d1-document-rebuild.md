@@ -20,8 +20,9 @@ change to the Android app, and `CLOUDFLARE_DATA_ENABLED` stays as it is.
 - **Existing documents are kept.** Writes use `INSERT … ON CONFLICT(path) DO NOTHING`,
   so preserved Firestore staging documents are never replaced unless
   `{"overwrite": true}` is sent explicitly.
-- **Admin secret only.** `MIGRATION_ADMIN_TOKEN` (Worker secret). Unset → 503,
-  wrong/missing token → 401. A Firebase user token is never accepted here.
+- **Admin secret only.** `MIGRATION_ADMIN_TOKEN` (Worker secret, ≥ 32 characters).
+  Unset → 503, missing header → 401, wrong token → 403. A Firebase user token is never
+  accepted here.
 - **Nothing is deleted, ever.** Source tables are only read. Firebase is untouched.
 
 ## Endpoints
@@ -41,6 +42,65 @@ was already dispatched before Firebase token verification.
 `limit` defaults to 30 rows per request so a Workers **Free** account stays inside the
 50-queries-per-invocation D1 limit. Paid accounts can pass up to 100. The response
 returns a keyset `nextCursor`; the runner script loops until it is `null`.
+
+## Two safe steps to start with (no writes)
+
+Run these two first, look at the numbers, and only then decide about `--apply`.
+
+```bash
+export CF_WORKERS_API_BASE="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"
+export MIGRATION_ADMIN_TOKEN="<existing migration token, >= 32 chars>"
+
+# 1) READ-ONLY: counts per collection, pending work, and the posts gate
+python3 scripts/admin/rebuild_documents.py plan
+
+# 2) READ-ONLY: reads and maps every posts row, writes nothing
+python3 scripts/admin/rebuild_documents.py run posts
+```
+
+`CF_WORKERS_API_BASE` may be the Worker root or the `.../v1/admin/migrate` form used by
+`plan_missing_documents.py`; both work.
+
+What to check before the first apply:
+
+- `plan` → `totals.sourceRows` is the total rows across the ten tables (2775 was the
+  expected figure), `totals.pending` equals it while nothing is converted, and
+  `gate.passed` is `false` until posts is applied and verified.
+- `run posts` (dry run) → `dryRun: true`, `written: 0`, and `converted == scanned` unless a
+  row is listed in `errors` (`document-too-large` or an invalid id).
+- Every page prints `nextCursor`; the script follows it until `null`. A dry run cannot
+  change a single row, so it is safe to repeat as often as needed.
+
+Only after both look right: `run posts --apply`, then `verify posts --sample 40`, then check
+the app feed, then `run all --apply`. The gate enforces that order server-side.
+
+## Running it before the merge (preview version, read-only)
+
+The routes only exist once this code is deployed, so `plan` against the current production
+URL answers `404 {"error":"Not found"}` until then. To check the numbers **before** merging,
+upload a preview version instead of deploying over production:
+
+```bash
+npx wrangler versions upload          # prints a preview URL for this branch/version
+export CF_WORKERS_API_BASE="<that preview URL>"
+python3 scripts/admin/rebuild_documents.py plan
+python3 scripts/admin/rebuild_documents.py run posts
+```
+
+A preview version keeps the same bindings (the real D1) and the same Worker secrets, but it
+does not replace the production deployment — so `plan` and `run posts` are genuinely
+read-only there. `wrangler versions deploy` is what actually swaps production, and this
+document never asks you to run it before the plan looks right.
+
+Reading the first response:
+
+| Response | Meaning |
+|---|---|
+| `200` with `collections`/`totals` | routes are live, numbers are real |
+| `404 {"error":"Not found"}` | this code is not deployed at that URL yet |
+| `503 {"error":"Migration API is not configured"}` | `MIGRATION_ADMIN_TOKEN` missing or < 32 chars |
+| `401` | no `Authorization` header sent |
+| `403 {"error":"Invalid admin token"}` | token does not match the Worker secret |
 
 ## Field mapping
 

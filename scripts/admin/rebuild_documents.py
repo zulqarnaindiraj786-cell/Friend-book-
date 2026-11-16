@@ -32,6 +32,19 @@ COLLECTIONS = [
 TEST_COLLECTION = 'posts'
 
 
+def normalise_base(value):
+    """Accept a Worker root URL or the migration-API URL used by the other scripts.
+
+    CF_API_BASE in this repo sometimes already ends with /v1/admin/migrate (see
+    plan_missing_documents.py). Both forms must work, without duplicating the prefix.
+    """
+    base = (value or '').strip().rstrip('/')
+    suffix = '/v1/admin/migrate'
+    if base.endswith(suffix):
+        base = base[:-len(suffix)]
+    return base
+
+
 class RebuildError(Exception):
     pass
 
@@ -120,8 +133,9 @@ def run(args, call, log=print):
                                               overwrite=args.overwrite, limit=args.limit,
                                               max_pages=args.max_pages, log=log))
         except GateBlocked as error:
-            log(json.dumps({'collection': collection, 'blocked': 'posts gate not passed',
-                            'gate': json.loads(str(error))}, sort_keys=True))
+            # A blocked gate is an error, not progress: print it on stderr too.
+            print(json.dumps({'collection': collection, 'blocked': 'posts gate not passed',
+                              'gate': json.loads(str(error))}, sort_keys=True), file=sys.stderr)
             return 2
     log(json.dumps({'mode': 'APPLY' if args.apply else 'DRY_RUN', 'results': results},
                    indent=2, sort_keys=True))
@@ -145,9 +159,10 @@ def main(argv=None):
     run_parser.add_argument('--max-pages', type=int, default=500)
     args = parser.parse_args(argv)
 
-    base = (os.environ.get('CF_WORKERS_API_BASE') or os.environ.get('CF_API_BASE') or '').rstrip('/')
+    base = normalise_base(os.environ.get('CF_WORKERS_API_BASE') or os.environ.get('CF_API_BASE'))
     token = os.environ.get('MIGRATION_ADMIN_TOKEN') or ''
-    if not base.startswith('https://'):
+    local = base.startswith('http://127.0.0.1') or base.startswith('http://localhost')
+    if not base.startswith('https://') and not local:
         print('CF_WORKERS_API_BASE must be an https Worker URL', file=sys.stderr)
         return 1
     if len(token) < 32:
