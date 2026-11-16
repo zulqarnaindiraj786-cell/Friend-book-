@@ -2,5 +2,5 @@
   "step": "apply",
   "confirm": "APPLY",
   "limit": 0,
-  "note": "Apply run 2: same guarded merge, plus a third source - an author with no Firebase name but a real name on their D1 row."
+  "note": "Apply run 3: resolve each post document's author through the posts row (owner_uid is missing on app-written documents)."
 }

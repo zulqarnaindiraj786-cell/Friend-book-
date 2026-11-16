@@ -373,8 +373,11 @@ def apply(limit=0):
     byUid = {user['uid']: user for user in firebase}
     postDocs = all_rows("SELECT path, doc_id, owner_uid, document_json "
                         "FROM friendbook_cf_documents WHERE collection = 'posts'")
+    # A document written by the app does not always carry owner_uid; the posts row always
+    # knows its author, so resolve through it and fall back to the stored owner only then.
+    postAuthors = {row['id']: row['author_id'] for row in rows('SELECT id, author_id FROM posts')}
     for record in postDocs:
-        authorId = record.get('owner_uid')
+        authorId = postAuthors.get(record.get('doc_id')) or record.get('owner_uid')
         user = byUid.get(authorId)
         if not user or not (user['name'] or user['photo']):
             continue
@@ -402,7 +405,7 @@ def apply(limit=0):
                if not placeholder(row['display_name'])}
     stats['d1NamesAvailable'] = len(d1Names)
     for record in postDocs:
-        authorId = record.get('owner_uid')
+        authorId = postAuthors.get(record.get('doc_id')) or record.get('owner_uid')
         # Firebase wins: never let the D1 copy replace a name the live profile just gave us.
         if byUid.get(authorId, {}).get('name'):
             continue
