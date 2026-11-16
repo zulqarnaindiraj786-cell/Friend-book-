@@ -279,9 +279,11 @@ public class AdsConfig {
             // would spend reads on every client forever to catch a handful of edits.
             com.friendbook.social.core.CloudflareStore.get("config", "ads", doc -> {
                         if (doc != null) {
-                            String fId = snap.getString("feed_native_unit_v3");
-                            String rId = snap.getString("reels_native_unit_v3");
-                            Boolean en = snap.getBoolean("ads_enabled_v3");
+                            // doc is the stored field map, not a document handle.
+                            String fId = Format.str(doc, "feed_native_unit_v3");
+                            String rId = Format.str(doc, "reels_native_unit_v3");
+                            Object rawEn = doc.get("ads_enabled_v3");
+                            Boolean en = rawEn instanceof Boolean ? (Boolean) rawEn : null;
                             feedNativeUnitId = isRealProductionUnit(fId) ? fId.trim() : FEED_NATIVE_ID;
                             reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
                             if (en != null) masterSwitchEnabled = en;
