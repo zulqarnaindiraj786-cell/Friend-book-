@@ -122,9 +122,9 @@ def main() -> int:
 
         # Two annotations per collection: the field list, then one whole document. Everything
         # else goes to stdout, because annotations beyond the tenth are discarded.
-        print(f"{collection} fields: {', '.join(keys)[:620]}")
+        # field list omitted: the sample below shows them
         sample = json.dumps(doc, default=str)[:620]
-        print(f"{collection} sample: {sample}")
+        print(f"::notice::{collection} sample: {sample}")
 
     return 0
 
