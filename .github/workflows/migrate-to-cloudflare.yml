@@ -18,6 +18,13 @@ on:
         required: false
         default: ''
         type: string
+  schedule:
+    # The Spark read quota comes back at midnight Pacific, which is 08:00 UTC. Firestore
+    # refuses to say how much of it is gone and the refusal is indistinguishable from a
+    # credential problem, so the only reliable trigger is "after the reset": 09:00 UTC,
+    # an hour of headroom, every day. Once the copy succeeds this can be deleted - re-running
+    # it is idempotent, but a daily run against a finished migration is just noise.
+    - cron: '0 9 * * *'
   push:
     # Only this workflow's own edits retrigger it; a normal code push must never start
     # a data migration by accident.
