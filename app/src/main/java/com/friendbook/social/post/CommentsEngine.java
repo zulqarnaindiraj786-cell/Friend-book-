@@ -137,8 +137,21 @@ public class CommentsEngine {
         // One read. A comment thread does not need push: the only writer that matters is the
         // reader themself, and their comment is added locally the moment it is sent.
         handle.add(handle.query.limit(50).get().addOnSuccessListener(page -> {
-            if(!handle.active()) return;
+            if(!handle.active() || page == null) return;
             handle.older.putAll(handle.latest);
+            handle.latest.clear();
+            for(com.friendbook.social.core.Doc doc:page.getDocuments()) {
+                Models.Comment c=Models.Comment.fromMap(doc.getId(),doc.getData());
+                handle.latest.put(c.id,c);
+                handle.deleted.remove(c.id);
+            }
+            // D1 returns stored documents, so the first page is always server truth.
+            if(!handle.cursorReady) {
+                handle.cursorReady=true; handle.more=page.size()==50;
+                if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
+            }
+            handle.emit();
+        }));
         return handle;
     }
 

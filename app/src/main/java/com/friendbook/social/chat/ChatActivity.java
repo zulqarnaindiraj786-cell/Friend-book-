@@ -1126,11 +1126,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "messages", chatId + "_" + msgRef.getId(), msg);
         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        // Every send path re-reads once when it lands, so own messages show immediately.
-        batch.commit().addOnCompleteListener(t -> { if (chatPushAction != null) chatPushAction.run(); });
-                .addOnSuccessListener(x -> {
-                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-                })
+        batch.commit().addOnSuccessListener(x -> {
+            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+            // The peer's push cannot confirm our own message; re-read locally so it appears.
+            if (chatPushAction != null) chatPushAction.run();
+        })
                 .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
     }
 

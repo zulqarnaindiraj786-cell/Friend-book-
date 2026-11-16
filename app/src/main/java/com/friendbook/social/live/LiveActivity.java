@@ -3581,6 +3581,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkMediaAId = "pkmedia_" + targetPkId + "_a";
         pkMediaBId = "pkmedia_" + targetPkId + "_b";
         fetchPkSignals();
+    }
 
     private void onPkBattleDocSnapshot(@NonNull com.friendbook.social.core.Doc snap) {
         Map<String, Object> m = snap.getData();
