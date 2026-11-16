@@ -92,6 +92,9 @@ def probe_firestore(fs_client):
         return True
     except Exception as exc:
         print(f"Firestore read probe FAILED: {type(exc).__name__}: {str(exc)[:400]}")
+        # The exception type and first lines of the message are the only reliable signal;
+        # a truncated traceback tail has repeatedly hidden the real cause in this pipeline.
+        print(f"::error::Firestore read probe failed: {type(exc).__name__}: {str(exc)[:300]}")
         return False
 
 def init_firebase():
