@@ -1,6 +1,6 @@
 {
-  "step": "plan",
-  "confirm": "",
+  "step": "apply",
+  "confirm": "APPLY",
   "limit": 0,
-  "note": "Read-only plan, run 2: Firestore answered 429, so Auth (same profiles, separate quota) is the source."
+  "note": "Merge names/photos by uid into users table, users documents, posts rows and post documents. No inserts, no deletes, placeholders only."
 }
