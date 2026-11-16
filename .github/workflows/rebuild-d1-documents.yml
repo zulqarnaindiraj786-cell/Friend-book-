@@ -1,0 +1,107 @@
+name: Rebuild D1 relational rows into document store (gated)
+
+# Owner-triggered only. Nothing runs on push.
+# Drives the rebuild routes that live inside the existing migration API
+# (/v1/admin/migrate/documents/*), so it uses the same MIGRATION_ADMIN_TOKEN secret
+# (at least 32 characters) as the other migration jobs. The Worker endpoint itself is a
+# dry run unless mode=apply.
+
+on:
+  workflow_dispatch:
+    inputs:
+      collection:
+        description: 'Collection to rebuild (posts first; other collections need the posts gate)'
+        required: true
+        default: posts
+        type: choice
+        options:
+          - plan
+          - posts
+          - users
+          - comments
+          - reels
+          - stories
+          - chats
+          - messages
+          - groups
+          - friend_requests
+          - notifications
+          - all
+      mode:
+        description: 'dry-run reads rows and maps them without writing; apply writes documents'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      overwrite:
+        description: 'Replace documents that already exist (default: keep them)'
+        required: true
+        default: false
+        type: boolean
+      confirm:
+        description: 'Type APPLY to allow mode=apply (ignored for dry-run)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: friendbook-document-rebuild
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CF_WORKERS_API_BASE: ${{ secrets.CF_WORKERS_API_BASE || 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev' }}
+      MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check configuration and confirmation
+        run: |
+          if [ -z "$MIGRATION_ADMIN_TOKEN" ]; then
+            echo "::error::MIGRATION_ADMIN_TOKEN secret is not set"
+            exit 1
+          fi
+          if [ "${{ inputs.mode }}" = "apply" ] && [ "${{ inputs.confirm }}" != "APPLY" ]; then
+            echo "::error::mode=apply requires confirm=APPLY"
+            exit 1
+          fi
+
+      - name: Offline safety tests
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_document_rebuild_tool.py'
+          npm ci --no-audit --no-fund
+          node --test cloudflare/test/document-rebuild.test.js
+
+      - name: Show plan
+        run: python3 scripts/admin/rebuild_documents.py plan
+
+      - name: Dry run (no writes)
+        if: inputs.mode == 'dry-run' && inputs.collection != 'plan'
+        run: python3 scripts/admin/rebuild_documents.py run "${{ inputs.collection }}"
+
+      - name: Apply
+        if: inputs.mode == 'apply'
+        run: |
+          ARGS=""
+          if [ "${{ inputs.overwrite }}" = "true" ]; then ARGS="--overwrite"; fi
+          python3 scripts/admin/rebuild_documents.py run "${{ inputs.collection }}" --apply $ARGS
+
+      - name: Verify posts after a posts rebuild
+        if: inputs.mode == 'apply' && (inputs.collection == 'posts' || inputs.collection == 'all')
+        run: python3 scripts/admin/rebuild_documents.py verify posts --sample 40
+
+      - name: Final plan (counts and gate)
+        if: always()
+        run: python3 scripts/admin/rebuild_documents.py plan || true
