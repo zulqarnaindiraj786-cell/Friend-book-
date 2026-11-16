@@ -1,6 +1,6 @@
 {
-  "step": "verify",
-  "confirm": "",
+  "step": "apply",
+  "confirm": "APPLY",
   "limit": 0,
-  "note": "Read-only: the newest 12 posts as the feed renders them, plus what is still unresolved."
+  "note": "Apply run 4: the post document's own authorId is the last resort when the row and owner_uid are empty."
 }

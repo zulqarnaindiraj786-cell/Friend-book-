@@ -302,6 +302,19 @@ def plan():
 
 # --------------------------------------------------------------------------- apply
 
+def author_of(record, document, postAuthors):
+    """Who wrote this post document: the posts row, else the stored owner, else the document.
+
+    A posts row migrated from Firestore can carry an empty author_id, and a document written
+    by the app can carry no owner_uid - so neither field alone is enough.
+    """
+    for candidate in (postAuthors.get(record.get('doc_id')), record.get('owner_uid'),
+                      document.get('authorId'), document.get('authorUid')):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
 def updateDocument(path, document, now):
     """Write back one document we edited in memory. Only ever an UPDATE of that path."""
     d1('UPDATE friendbook_cf_documents SET document_json = ?, updated_at = ? WHERE path = ?',
@@ -377,13 +390,13 @@ def apply(limit=0):
     # knows its author, so resolve through it and fall back to the stored owner only then.
     postAuthors = {row['id']: row['author_id'] for row in rows('SELECT id, author_id FROM posts')}
     for record in postDocs:
-        authorId = postAuthors.get(record.get('doc_id')) or record.get('owner_uid')
-        user = byUid.get(authorId)
-        if not user or not (user['name'] or user['photo']):
-            continue
         try:
             document = json.loads(record['document_json'] or '{}')
         except ValueError:
+            continue
+        authorId = author_of(record, document, postAuthors)
+        user = byUid.get(authorId)
+        if not user or not (user['name'] or user['photo']):
             continue
         changed = False
         if user['name'] and placeholder(document.get('authorName')):
@@ -405,16 +418,16 @@ def apply(limit=0):
                if not placeholder(row['display_name'])}
     stats['d1NamesAvailable'] = len(d1Names)
     for record in postDocs:
-        authorId = postAuthors.get(record.get('doc_id')) or record.get('owner_uid')
+        try:
+            document = json.loads(record['document_json'] or '{}')
+        except ValueError:
+            continue
+        authorId = author_of(record, document, postAuthors)
         # Firebase wins: never let the D1 copy replace a name the live profile just gave us.
         if byUid.get(authorId, {}).get('name'):
             continue
         name = d1Names.get(authorId)
         if not name:
-            continue
-        try:
-            document = json.loads(record['document_json'] or '{}')
-        except ValueError:
             continue
         if placeholder(document.get('authorName')):
             document['authorName'] = name
@@ -443,7 +456,9 @@ def verify():
     feed = rows("SELECT p.id, json_extract(d.document_json, '$.authorName') AS authorName, "
                 "json_extract(d.document_json, '$.authorPhoto') AS authorPhoto, "
                 "substr(COALESCE(json_extract(d.document_json, '$.content'), ''), 1, 60) AS content, "
-                "json_extract(d.document_json, '$.createdAt') AS createdAt "
+                "json_extract(d.document_json, '$.createdAt') AS createdAt, "
+                "json_extract(d.document_json, '$.authorId') AS docAuthorId, "
+                "p.author_id AS rowAuthorId, d.owner_uid AS ownerUid "
                 "FROM friendbook_cf_documents d LEFT JOIN posts p ON d.path = 'posts/' || p.id "
                 "WHERE d.collection = 'posts' "
                 "ORDER BY COALESCE(json_extract(d.document_json, '$.createdAt'), 0) DESC LIMIT 12")
@@ -466,6 +481,8 @@ def verify():
                                      'd1Name': row['usersTableName']}
                                     for row in outstanding[:MAX_SAMPLE]]},
          'feedNewestFirst': [{'id': row['id'], 'authorName': row['authorName'],
+                              'authorRef': (row['rowAuthorId'] or row['docAuthorId']
+                                            or row['ownerUid'] or '')[:6] or None,
                               'hasPhoto': bool(row['authorPhoto']),
                               'photoHost': (row['authorPhoto'] or '').split('/')[2]
                               if row['authorPhoto'] and '://' in row['authorPhoto'] else None,
