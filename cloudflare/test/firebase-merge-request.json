@@ -1,6 +1,6 @@
 {
-  "step": "orphans",
-  "confirm": "",
+  "step": "apply",
+  "confirm": "APPLY",
   "limit": 0,
-  "note": "Read-only: look inside the 30 documents the feed still cannot attribute."
+  "note": "Apply run 5: a document that stored only uid (legacy shape) is attributed to that uid as the last resort."
 }

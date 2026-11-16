@@ -309,7 +309,8 @@ def author_of(record, document, postAuthors):
     by the app can carry no owner_uid - so neither field alone is enough.
     """
     for candidate in (postAuthors.get(record.get('doc_id')), record.get('owner_uid'),
-                      document.get('authorId'), document.get('authorUid')):
+                      document.get('authorId'), document.get('authorUid'),
+                      document.get('uid')):
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
