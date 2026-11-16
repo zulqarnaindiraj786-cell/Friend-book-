@@ -26,7 +26,7 @@ import urllib.request
 API = "https://api.cloudflare.com/client/v4"
 D1_DATABASE_ID = os.environ.get("D1_DATABASE_ID", "e1c605ca-a50b-46c6-9deb-56dd1f70d163")
 
-COLLECTIONS = ["posts", "notifications", "messages"]
+COLLECTIONS = ["posts", "messages"]
 
 # The fields each screen cannot render without. If a document lacks these, the row appears
 # blank or is skipped by the app entirely - which is indistinguishable from "not migrated".
