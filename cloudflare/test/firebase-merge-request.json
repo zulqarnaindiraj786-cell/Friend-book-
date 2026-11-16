@@ -2,5 +2,5 @@
   "step": "verify",
   "confirm": "",
   "limit": 0,
-  "note": "Read-only final check: the newest documents with the exact author name and photo URL the feed binds."
+  "note": "Read-only final proof: newest documents with the exact author name and avatar URL the feed binds."
 }
