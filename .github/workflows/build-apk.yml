@@ -259,6 +259,10 @@ jobs:
           NOTES="Signed Production Release — ABD sirf yeh file install karein (upgrade in place, purani app ke upar).\`versionCode ${VCODE}\`, package \`com.friendbook.social\`, \`${TAG}\`.
 
           **Fixed in this build**
+          - Every screen now reads D1: all 48 Firestore listeners are gone (chats, calls, live, profile, admin, broadcast, post detail, media, monetization)
+          - Counts are counted in D1 instead of downloading a list, and cached for a minute
+          - No polling loops: a screen reads once when it opens, when you return to it, or when a push says something changed
+          - Typing indicator removed (it cost one request per open chat every three seconds)
           - Group Chat: tapping a group in the chat list now opens the group (was silently doing nothing)
           - Reel: tapping the Home Feed Reels card now opens that exact Reel (was bouncing back to Home)
           - Story Viewer: video stories no longer go black — listeners registered before \`setVideoURI\`, poster frame shown while buffering
