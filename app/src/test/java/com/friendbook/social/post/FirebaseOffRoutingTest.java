@@ -63,6 +63,7 @@ public class FirebaseOffRoutingTest {
    // One read, not a subscription: the thread is fetched with get() and nothing stays attached.
    when(query.get()).thenReturn(Tasks.forResult(page));
    when(page.getDocuments()).thenReturn(Collections.singletonList(doc));when(page.size()).thenReturn(1);
+   when(page.getMetadata()).thenReturn(metadata);when(metadata.isFromCache()).thenReturn(false);when(metadata.hasPendingWrites()).thenReturn(false);
    when(page.iterator()).thenAnswer(inv->Collections.singletonList(doc).iterator());
    when(doc.getId()).thenReturn("existing");when(doc.getReference()).thenReturn(child);when(child.getParent()).thenReturn(comments);when(comments.getParent()).thenReturn(parent);
    Map<String,Object> data=new HashMap<>();data.put("authorId","off-user");data.put("content","existing Firebase comment");data.put("createdAt",1000L);when(doc.getData()).thenReturn(data);
