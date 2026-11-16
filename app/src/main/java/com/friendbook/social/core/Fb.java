@@ -136,6 +136,36 @@ public class Fb {
     }
 
     /** Start (or restart) the live listener that keeps {@link #me} fresh. */
+    /**
+     * Pulls {@code users/{me}} from D1.
+     *
+     * <p>Needed because the Firestore me-listener can no longer produce a fresh document: with
+     * Firestore's network off it only ever replays the on-device cache, so a profile edit made
+     * on another device would never arrive and a fresh install would never populate at all.
+     * D1 is the source of truth for this document now, so this is what fills it in.
+     */
+    public static void hydrateMeFromD1() {
+        final String uid = uid();
+        if (uid == null) return;
+        CloudflareStore.get("users", uid, doc -> {
+            if (doc == null || !uid.equals(uidOf())) return;
+            Models.User fresh = Models.User.fromMap(uid, doc);
+            if (fresh == null || fresh.uid == null) return;
+            me = fresh;
+            FastCache.saveMe(com.friendbook.social.App.instance, fresh);
+            notifyMeObservers(null);
+        });
+    }
+
+    /** The signed-in uid, read defensively so this class works before auth settles. */
+    private static String uidOf() {
+        try {
+            return uid();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     public static void startMeListener() {
         String uid = uid();
         if (uid == null) return;
@@ -144,6 +174,7 @@ public class Fb {
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
         }
         if (meReg != null) meReg.remove();
+        if (com.friendbook.social.BuildConfig.CLOUDFLARE_DATA_ENABLED) hydrateMeFromD1();
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
                     if (doc == null) return;

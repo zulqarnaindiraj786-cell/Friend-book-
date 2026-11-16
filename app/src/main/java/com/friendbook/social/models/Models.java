@@ -79,10 +79,22 @@ public class Models {
         public List<String> following = new ArrayList<>();
         public List<String> blocked = new ArrayList<>();
 
-        public static User fromDoc(DocumentSnapshot d) {
+        /**
+         * Maps a plain document map, as returned by the D1 document store.
+         *
+         * <p>Exists so a document that never came from Firestore can still become a User. The
+         * body is shared with {@link #fromDoc} rather than copied: two field mappings drift, and
+         * a drifted one is a profile that silently loses a field when it is read from D1.
+         */
+        public static User fromMap(String id, Map<String, Object> data) {
             User u = new User();
-            Map<String, Object> m = d.getData();
-            u.uid = d.getId();
+            u.uid = id;
+            applyFields(u, data == null ? new java.util.HashMap<>() : data);
+            return u;
+        }
+
+        /** The single field mapping for a user document, shared by both entry points. */
+        private static void applyFields(User u, Map<String, Object> m) {
             u.displayName = Format.strOr(m, "displayName", "User");
             u.email = Format.str(m, "email");
             u.photoUrl = Format.str(m, "photoUrl");
@@ -161,6 +173,12 @@ public class Models {
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
             u.blocked = Format.listOf(m, "blockedUsers");
+        }
+
+        public static User fromDoc(DocumentSnapshot d) {
+            User u = new User();
+            u.uid = d.getId();
+            applyFields(u, d.getData() == null ? new java.util.HashMap<>() : d.getData());
             return u;
         }
     }

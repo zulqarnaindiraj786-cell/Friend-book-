@@ -75,6 +75,38 @@ public final class CloudflareStore {
         return out;
     }
 
+    /**
+     * Reads a single document. Reports {@code null} when the document does not exist.
+     *
+     * <p>There was no single-document read here at all: every caller went through
+     * {@link #list} and filtered client-side, which read a whole page to get one document.
+     */
+    public static void get(String collection, String docId, Consumer<Map<String, Object>> callback) {
+        if (!enabled() || collection == null || docId == null || docId.isEmpty() || callback == null) {
+            if (callback != null) MAIN.post(() -> callback.accept(null));
+            return;
+        }
+        FirebaseUser user = currentUser();
+        if (user == null) { MAIN.post(() -> callback.accept(null)); return; }
+        user.getIdToken(false).addOnSuccessListener(res -> {
+            String token = res != null ? res.getToken() : null;
+            if (token == null || token.isEmpty()) { MAIN.post(() -> callback.accept(null)); return; }
+            IO.execute(() -> {
+                Map<String, Object> found = null;
+                try {
+                    URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
+                    JSONObject data = D1HttpTransport.send(url, "GET", token, null);
+                    JSONObject document = data != null ? data.optJSONObject("document") : null;
+                    if (document != null) found = D1Client.map(document);
+                } catch (Throwable absent) {
+                    // A missing document is not an error: the caller decides what to render.
+                }
+                final Map<String, Object> result = found;
+                MAIN.post(() -> callback.accept(result));
+            });
+        }).addOnFailureListener(err -> MAIN.post(() -> callback.accept(null)));
+    }
+
     public static void put(String collection, String docId, Map<String, Object> fields) {
         put(collection, docId, fields, null);
     }
