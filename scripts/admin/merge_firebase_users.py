@@ -521,7 +521,10 @@ def orphans(limit=5):
         authorId = author_of(record, document, postAuthors)
         if authorId and not placeholder(document.get('authorName')):
             continue
-        found.append({'path': record['path'], 'ownerUid': record['owner_uid'],
+        row = (rows('SELECT id, author_id, author_name, content, likes, privacy, created_at, '
+                    'archived, trashed_at FROM posts WHERE id = ?', [record['doc_id']]) or [None])[0]
+        found.append({'row': row, 'documentKeys': sorted(document.keys()),
+                      'path': record['path'], 'ownerUid': record['owner_uid'],
                       'rowAuthorId': postAuthors.get(record['doc_id']),
                       'resolvedAuthorId': authorId,
                       'authorFields': {key: document.get(key) for key in

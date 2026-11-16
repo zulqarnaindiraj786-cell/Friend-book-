@@ -1,6 +1,6 @@
 {
-  "step": "apply",
-  "confirm": "APPLY",
-  "limit": 0,
-  "note": "Apply run 5: a document that stored only uid (legacy shape) is attributed to that uid as the last resort."
+  "step": "orphans",
+  "confirm": "",
+  "limit": 4,
+  "note": "Read-only: what the 25 unattributable documents actually are - their row and every stored key."
 }
