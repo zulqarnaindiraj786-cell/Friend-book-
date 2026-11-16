@@ -132,6 +132,28 @@ plane Worker + D1 hai.
 
 ---
 
+## 8. Data plane - kya D1 par hai
+
+v2.9.0 (versionCode 126) ke baad:
+
+| Cheez | Kahan |
+|---|---|
+| Feed (page 1 + pages), Reels card | D1, `DocQuery` -> `/v1/docs` |
+| Profile (`users/{me}`) | D1 (`hydrateMeFromD1`) |
+| Naye post / chat / story / reel / friend / live writes | D1 (mirror) + Firestore queue |
+| Document writes (91 sites) | D1 mirror (see `DataRouter`) |
+| Auth, FCM, Crashlytics, App Check | Firebase |
+| Firestore network | **OFF** (`Fb.disableFirestoreNetwork()`) |
+
+Firestore ka network off hone ka matlab: jo reads abhi bhi `Fb.db()` se jaate hain
+(chat list, friends, notifications, settings, groups, live) woh **on-device cache
+se** aate hain. Pehli baar app kholne par, ya naye device par, woh khaali dikhenge
+jab tak unhe D1 par shift nahi kiya jata. Feed aur profile D1 se aate hain, is liye
+migration ke baad feed khud bhar jayega.
+
+Batch writes abhi mirror nahi hote (`batch.set/update`), sirf direct document
+writes. Yeh haath se karne hain.
+
 ## Rollback
 
 Koi bhi step reversible hai:
