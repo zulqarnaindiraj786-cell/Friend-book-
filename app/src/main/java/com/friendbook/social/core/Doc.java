@@ -47,6 +47,7 @@ public final class Doc {
         return out;
     }
 
+    /** The row's id. For a message row the caller may have already trimmed the chat prefix. */
     public String getId() { return id; }
 
     public boolean exists() { return data != null; }
