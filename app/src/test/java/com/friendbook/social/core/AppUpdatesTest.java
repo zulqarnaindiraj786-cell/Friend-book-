@@ -76,11 +76,24 @@ public class AppUpdatesTest {
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
         AlertDialog dialog = (AlertDialog) ShadowAlertDialog.getLatestAlertDialog();
-        assertFalse("the dialog itself must not be cancelable", ((android.app.Dialog) dialog).isCancelable());
+        assertFalse("the dialog itself must not be cancelable", isCancelable(dialog));
         boolean consumed = dialog.onKeyDown(KeyEvent.KEYCODE_BACK,
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
         assertTrue("BACK must be swallowed", consumed);
         assertTrue("the gate must still be up", dialog.isShowing());
+    }
+
+    /**
+     * Reads Dialog.isCancelable by reflection: the unit-test compile classpath is the
+     * mockable android.jar, which does not expose every framework method by name.
+     */
+    private static boolean isCancelable(AlertDialog dialog) {
+        try {
+            java.lang.reflect.Method m = android.app.Dialog.class.getMethod("isCancelable");
+            return Boolean.TRUE.equals(m.invoke(dialog));
+        } catch (Exception unavailable) {
+            return false;
+        }
     }
 
     @Test
