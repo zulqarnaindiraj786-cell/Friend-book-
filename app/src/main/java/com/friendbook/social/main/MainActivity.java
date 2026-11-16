@@ -24,6 +24,7 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
+import com.friendbook.social.core.QuotaGuard;
 import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.SearchActivity;
@@ -552,6 +553,26 @@ public class MainActivity extends Activity {
                 com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
+    /** True while this Activity has told the user the backend is unavailable. */
+    private boolean backendNoticeShown;
+
+    /**
+     * Tell the user once, not sixty times, that the app is in a degraded state.
+     *
+     * <p>Without this, a spent quota silently empties every list in the app and users read that
+     * as data loss. The message is deliberately reassuring and only appears when the failure is
+     * a refusal (quota/unavailable), never for a genuinely empty result.
+     */
+    private void noteBackendDegraded() {
+        if (backendNoticeShown || isFinishing()) return;
+        backendNoticeShown = true;
+        Ui.toast(this, com.friendbook.social.core.QuotaGuard.userMessage(this));
+        // Re-arm once the backend answers again, so a later outage still shows a message.
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (!com.friendbook.social.core.QuotaGuard.degraded()) backendNoticeShown = false;
+        }, 5 * 60_000L);
+    }
+
     private void startBadgeListeners() {
         String me = Fb.uid();
         if (me == null) return;
@@ -559,6 +580,10 @@ public class MainActivity extends Activity {
         notifReg = Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null && err != null) {
+                        if (QuotaGuard.noteFailure(err)) noteBackendDegraded();
+                        return;
+                    }
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
@@ -595,6 +620,14 @@ public class MainActivity extends Activity {
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
                 .addSnapshotListener((snap, err) -> {
+                    // A failed read is NOT an empty inbox. Zeroing the badges here made the app
+                    // look like the user had no chats at all, which is the difference between
+                    // "quiet day" and "the app is broken, uninstall it".
+                    if (snap == null && err != null) {
+                        if (QuotaGuard.noteFailure(err)) noteBackendDegraded();
+                        return;
+                    }
+                    if (err == null) QuotaGuard.noteSuccess();
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {

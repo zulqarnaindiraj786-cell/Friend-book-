@@ -181,6 +181,18 @@ public final class FastCache {
     public static int cachedFeedCount() { return FEED.size(); }
 
     /**
+     * The feed as last seen successfully, from RAM or the on-disk snapshot.
+     *
+     * <p>Exists so a screen can keep showing real content when the server refuses a read
+     * (quota spent, backend unreachable) instead of rendering an empty list that reads as
+     * "all my posts are gone".
+     */
+    public static java.util.List<Models.Post> cachedFeed() {
+        java.util.List<Models.Post> copy = new java.util.ArrayList<>(FEED);
+        return copy;
+    }
+
+    /**
      * Reflects a server-side comment-counter change in the cached feed immediately.
      *
      * The parent document's `comments` field is incremented atomically in Firestore when a comment

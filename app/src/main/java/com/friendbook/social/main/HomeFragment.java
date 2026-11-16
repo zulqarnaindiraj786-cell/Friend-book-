@@ -729,9 +729,50 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
             loadingPosts=false;pageError=true;updatePagingUi();
-            if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); }
-            else if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
+            boolean refused = com.friendbook.social.core.QuotaGuard.noteFailure(error);
+            if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); return; }
+            // The server refused us (quota spent / unreachable). Showing an empty feed here is
+            // what makes users think their data is gone, so fall back to whatever was cached
+            // on disk before saying anything.
+            if(refused) {
+                if(renderCachedFeed()) {
+                    if(getActivity()!=null) Ui.toast(getActivity(),
+                            com.friendbook.social.core.QuotaGuard.userMessage(getActivity()));
+                    return;
+                }
+                if(getActivity()!=null) Ui.toast(getActivity(),
+                        com.friendbook.social.core.QuotaGuard.userMessage(getActivity()));
+                return;
+            }
+            if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
         });
+    }
+
+    /**
+     * Render the last feed that was successfully cached on disk.
+     *
+     * <p>Returns true when something was shown. Used only on a backend refusal, never as a
+     * substitute for a fresh read: stale-but-present beats blank, and the alternative is a user
+     * concluding the app lost their posts.
+     */
+    private boolean renderCachedFeed() {
+        try {
+            List<Models.Post> cached = com.friendbook.social.core.FastCache.cachedFeed();
+            if (cached == null || cached.isEmpty()) return false;
+            String filter = getActivity() == null ? "all" : Prefs.feedFilter(getActivity());
+            List<Models.Post> filtered = new ArrayList<>();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (Models.Post p : cached) {
+                if (p == null || p.id == null || !seen.add(p.id)) continue;
+                if (!visible(p)) continue;
+                if (matchesFilter(p, filter)) filtered.add(p);
+            }
+            if (filtered.isEmpty()) return false;
+            if (adapter != null) adapter.setPosts(filtered);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean ordered, boolean persistCache) {
