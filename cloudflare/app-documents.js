@@ -1,4 +1,5 @@
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
+import { buildQuery, parseQueryParams, encodeCursor } from './doc-query.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -145,26 +146,51 @@ export async function appDocuments(request, env, identity) {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
     const collection = url.searchParams.get('collection') || '';
     if (!ALLOWED_COLLECTIONS.has(collection)) return json({ error: 'Unsupported collection' }, 400);
-    const rawLimit = Number(url.searchParams.get('limit') || '20');
-    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
-    const now = Date.now();
-    const lCache = getDbMap(listCache, env.DB);
-    const cacheKey = `${collection}:${limit}`;
-    const cached = lCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return json({ collection, documents: cached.documents, cached: true });
-    }
+
+    let query;
     try {
-      const rows = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
-      ).bind(collection, limit).all();
+      query = parseQueryParams(url);
+    } catch (error) {
+      return json({ error: error.status === 400 ? error.message : 'Invalid query' }, 400);
+    }
+
+    // An unfiltered, cursor-less list is cacheable; anything with a filter or cursor is not,
+    // because the answer depends on the caller's parameters.
+    const cacheable = query.wheres.length === 0 && !query.after && !query.orderBy;
+    const lCache = getDbMap(listCache, env.DB);
+    const cacheKey = `${collection}:${query.limit}`;
+    if (cacheable) {
+      const cached = lCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return json({ collection, documents: cached.documents, cached: true });
+      }
+    }
+
+    let built;
+    try {
+      built = buildQuery(query);
+    } catch (error) {
+      return json({ error: error.status === 400 ? error.message : 'Invalid query' }, 400);
+    }
+
+    try {
+      const rows = await env.DB.prepare(built.sql).bind(...built.params).all();
+      const results = rows?.results || [];
+      const hasMore = results.length > built.limit;
+      const pageRows = hasMore ? results.slice(0, built.limit) : results;
       const documents = [];
-      for (const row of rows?.results || []) {
+      for (const row of pageRows) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
         if (doc) documents.push(doc);
       }
-      lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
-      return json({ collection, documents });
+      let nextCursor = null;
+      if (hasMore && pageRows.length > 0) {
+        const last = pageRows[pageRows.length - 1];
+        const lastDoc = toPlainDocument(last.document_json, last.doc_id) || {};
+        nextCursor = encodeCursor(lastDoc[built.sortField], last.doc_id);
+      }
+      if (cacheable) lCache.set(cacheKey, { documents, expiresAt: Date.now() + LIST_CACHE_TTL_MS });
+      return json({ collection, documents, hasMore, nextCursor });
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
     }
@@ -193,6 +219,30 @@ export async function appDocuments(request, env, identity) {
       return json({ id: docId, document: toPlainDocument(row.document_json, docId) });
     } catch {
       return json({ error: 'Document read unavailable' }, 503);
+    }
+  }
+
+  if (request.method === 'DELETE') {
+    // Deletion is owner-only. A document created by another user must never be
+    // removable through this endpoint, otherwise any authenticated caller could
+    // wipe another member's post by guessing its id.
+    try {
+      const row = await env.DB.prepare(
+        'SELECT owner_uid FROM friendbook_cf_documents WHERE path = ?'
+      ).bind(docPath).first();
+      if (!row) {
+        // Idempotent delete: absent is the desired end state, so this is a success.
+        return json({ id: docId, deleted: false, alreadyAbsent: true });
+      }
+      if (row.owner_uid && row.owner_uid !== uid) {
+        return json({ error: 'Forbidden' }, 403);
+      }
+      await env.DB.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(docPath).run();
+      getDbMap(docCache, env.DB).delete(docPath);
+      getDbMap(listCache, env.DB).clear();
+      return json({ id: docId, deleted: true });
+    } catch {
+      return json({ error: 'Document delete unavailable' }, 503);
     }
   }
 
@@ -226,11 +276,10 @@ export async function appDocuments(request, env, identity) {
       getDbMap(docCache, env.DB).delete(docPath);
       getDbMap(listCache, env.DB).clear();
 
-      if (collection === 'posts' || collection === 'reels') {
-        await env.DB.prepare(
-          "INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state = 'verified'"
-        ).bind(docPath).run();
-      }
+      // Deliberately does NOT touch friendbook_cf_interaction_resources. Writing a
+      // document here says nothing about whether its history was migrated, and
+      // self-marking a resource 'verified' is exactly how engagement data was lost
+      // before. Verification is owned by the migration pipeline, not the write path.
       if (collection === 'users' && docId === uid) {
         const displayName = typeof merged.displayName === 'string' ? merged.displayName.slice(0, 200) : '';
         const avatarUrl = typeof merged.photoUrl === 'string' ? merged.photoUrl.slice(0, 2048) : null;

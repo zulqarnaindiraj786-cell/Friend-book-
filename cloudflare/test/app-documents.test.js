@@ -132,3 +132,64 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
   assert.equal(allowed, true);
   assert.equal(ctx.owner, 'uid_new');
 });
+
+test('/v1/docs filters, paginates and deletes through the real worker', async () => {
+  const { db } = createSqliteD1();
+  const w = createWorker(async () => 'uid_owner');
+  const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test' };
+  const put = (coll, id, body, token = 'uid_owner') => w.fetch(new Request(`https://example.com/v1/docs/${coll}/${id}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }), env);
+
+  for (let i = 0; i < 12; i++) {
+    assert.equal((await put('posts', `p${String(i).padStart(2, '0')}`, {
+      authorId: i % 2 === 0 ? 'uid_owner' : 'uid_other',
+      createdAt: 1000 + i,
+      content: `post ${i}`,
+    })).status, 200);
+  }
+
+  // WHERE narrows the collection to one author's posts.
+  const filtered = await (await w.fetch(new Request(
+    'https://example.com/v1/docs?collection=posts&where=authorId:eq:uid_owner&orderBy=createdAt:asc&limit=50',
+    { headers: { Authorization: 'Bearer uid_owner' } }), env)).json();
+  assert.ok(filtered.documents.every(d => d.authorId === 'uid_owner'));
+  assert.equal(filtered.documents.length, 6);
+
+  // Pagination walks the whole filtered set without gaps or repeats.
+  const seen = [];
+  let after = null;
+  for (let page = 0; page < 10; page++) {
+    const qs = 'https://example.com/v1/docs?collection=posts&orderBy=createdAt:asc&limit=5'
+      + (after ? `&after=${encodeURIComponent(after)}` : '');
+    const body = await (await w.fetch(new Request(qs, { headers: { Authorization: 'Bearer uid_owner' } }), env)).json();
+    seen.push(...body.documents.map(d => d.id));
+    if (!body.hasMore) { assert.equal(body.nextCursor, null); break; }
+    after = body.nextCursor;
+  }
+  assert.equal(seen.length, 12);
+  assert.equal(new Set(seen).size, 12, 'no duplicates across pages');
+
+  // Owner deletes; the document is gone and the delete is idempotent.
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs/posts/p00', {
+    method: 'DELETE', headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 200);
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs/posts/p00', {
+    headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 404);
+  const repeat = await (await w.fetch(new Request('https://example.com/v1/docs/posts/p00', {
+    method: 'DELETE', headers: { Authorization: 'Bearer uid_owner' } }), env)).json();
+  assert.equal(repeat.deleted, false);
+
+  // Someone else's post cannot be deleted.
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs/posts/p01', {
+    method: 'DELETE', headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 403);
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs/posts/p01', {
+    headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 200);
+
+  // Bad query parameters are rejected, not silently ignored.
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs?collection=posts&where=bad',
+    { headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 400);
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs?collection=nope',
+    { headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 400);
+});
