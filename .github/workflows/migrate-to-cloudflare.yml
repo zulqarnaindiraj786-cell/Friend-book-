@@ -317,10 +317,11 @@ jobs:
           MIGRATION_MAX_DOCS: ${{ inputs.max_docs || env.MIGRATION_MAX_DOCS_DEFAULT }}
           MIGRATION_ONLY: ${{ inputs.only_collections || env.MIGRATION_ONLY_DEFAULT }}
           MIGRATION_READ_RETRIES: '4'
-          # Firestore's Spark quota returns at midnight Pacific = 08:00 UTC, not 00:00.
-          # 480 minutes covers a run started at any point in the day; the job timeout is
-          # 120 minutes, so this is effectively "wait for the reset, then canary".
-          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '480' }}
+          # The daily run starts an hour after the reset, so waiting inside a run buys
+          # nothing: a spent quota means the run is a day early, and sleeping for hours only
+          # burns a runner. Fail fast and let tomorrow's cron try, with the numbers in the
+          # log saying exactly that.
+          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '10' }}
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
