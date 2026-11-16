@@ -13,7 +13,11 @@ test('public APK metadata matches Android version; no database, auth or website 
  assert.equal(androidRelease.packageName,'com.friendbook.social');
  // The app must never point people at a GitHub APK: Play is the only update path.
  assert.match(androidRelease.apkUrl,/^https:\/\/play\.google\.com\/store\/apps\/details\?id=com\.friendbook\.social$/);
- assert.equal(androidRelease.minVersionCode, androidRelease.versionCode);
+ // minVersionCode is the oldest build allowed to talk to this backend, so it only ever
+ // moves up when an old build stops working. Tying it to the current version would block
+ // every user the moment a new build ships, which is the opposite of a forced update.
+ assert.ok(androidRelease.minVersionCode <= androidRelease.versionCode,
+   'minVersionCode must never exceed the published version');
 });
 test('release metadata cannot be changed by callers',async()=>{
  assert.equal((await worker.fetch(new Request('https://test.invalid/v1/android-release',{method:'POST',body:'{}'}),{})).status,405);
