@@ -71,10 +71,12 @@ export async function interactions(request, env, identity, match, authorize = au
       const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
       if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
       if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
-      if (!ready) {
-        await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
-          .bind(resource).run();
-      }
+      // A resource is ONLY served from D1 after its source rows were imported and the import was
+      // verified (the migration writes state='verified'). This endpoint must never promote a
+      // resource by itself: doing so would silently serve an empty counters row for a post whose
+      // real likes/comments still live in Firestore, i.e. every existing like and comment would
+      // appear to vanish. An unknown resource is refused so the client keeps reading Firestore.
+      if (!ready) return json({ error: 'Resource migration not verified' }, 503);
       vSet.add(resource);
     } else if (!await authorize(identity, collection, id, undefined, context)) {
       return json({ error: 'Forbidden' }, 403);

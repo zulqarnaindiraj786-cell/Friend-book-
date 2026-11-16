@@ -159,7 +159,7 @@ public class Reactions {
 
     /** Returns ONLY the reaction given by `currentUserId` (`Fb.uid()`), or `null` if `currentUserId` has not reacted. */
     public static String resolveCurrentUserReaction(Models.Post post) {
-        if(post!=null && com.friendbook.social.core.D1Client.enabled("posts"))return D1Reactions.mine("posts",post.id);
+        if(post!=null && com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id))return D1Reactions.mine("posts",post.id);
         String me = Fb.uid();
         if (me == null || me.isEmpty() || post == null || post.id == null) return null;
         if (!FastCache.isLocalReactionInFlight(post.id)
@@ -174,7 +174,7 @@ public class Reactions {
     /** 1-tap Like toggle: removes `currentUserId`'s reaction if present, otherwise immediately adds "like". */
     public static void tapLike(Context c, Models.Post post) {
         if (post == null || post.id == null) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.apply(c,"posts",post.id,"like",false,()->D1Reactions.hydrate(post));return;}
+        if(com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id)){D1Reactions.apply(c,"posts",post.id,"like",false,()->D1Reactions.hydrate(post));return;}
         hydrateFromPostInstant(post);
         String prev = resolveCurrentUserReaction(post);
         apply(c, post, prev != null ? null : "like");
@@ -187,7 +187,7 @@ public class Reactions {
         String me = Fb.uid();
         if (me == null || me.isEmpty() || post == null || post.id == null) return;
 
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.apply(c,"posts",post.id,type,false,()->D1Reactions.hydrate(post));return;}
+        if(com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id)){D1Reactions.apply(c,"posts",post.id,type,false,()->D1Reactions.hydrate(post));return;}
         hydrateFromPostInstant(post);
         String prev = resolveCurrentUserReaction(post);
         int curTotal = FastCache.getReactionTotal(post.id, post.likes);
@@ -305,7 +305,7 @@ public class Reactions {
      */
     public static void hydrateFromPostInstant(final Models.Post post) {
         if (post == null || post.id == null) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.hydrate(post);return;}
+        if(com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id)){D1Reactions.hydrate(post);return;}
         FastCache.ensureUserScope();
         if (FastCache.isLocalReactionInFlight(post.id)) return;
         String currentUserId = Fb.uid();
@@ -342,7 +342,7 @@ public class Reactions {
 
     public static void reconcileFromCollection(final Context c, final String postId, final int storedLikes) {
         if (postId == null || postId.isEmpty()) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts"))return;
+        if(com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id))return;
         final String me = Fb.uid();
         final Long tapBeforeFetch = FastCache.isLocalReactionInFlight(postId) ? System.currentTimeMillis() : null;
         Fb.db().collection("posts").document(postId).collection("reactions")
@@ -390,7 +390,7 @@ public class Reactions {
     public static void showWhoReacted(final Activity activity, final String postId) {
         if (activity == null || activity.isFinishing() || postId == null || postId.isEmpty()) return;
 
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.show(activity,"posts",postId,null);return;}
+        if(com.friendbook.social.core.D1Client.routed("posts",postId)){D1Reactions.show(activity,"posts",postId,null);return;}
         LinearLayout root = Ui.col(activity);
         root.setBackgroundColor(Ui.card(activity));
         Ui.pad(root, 14, 12, 14, 8);
@@ -479,7 +479,7 @@ public class Reactions {
      */
     public static void showReelReactors(final Activity activity, final Models.Reel reel) {
         if (activity == null || activity.isFinishing() || reel == null) return;
-        if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")){D1Reactions.show(activity,reel.isFromPost?"posts":"reels",reel.id,null);return;}
+        if(com.friendbook.social.core.D1Client.routed(reel.isFromPost?"posts":"reels",reel.id)){D1Reactions.show(activity,reel.isFromPost?"posts":"reels",reel.id,null);return;}
         final List<ReactorEntry> all = new ArrayList<>();
         final Map<String, Integer> counts = new LinkedHashMap<>();
         for (String t : TYPES) counts.put(t, 0);

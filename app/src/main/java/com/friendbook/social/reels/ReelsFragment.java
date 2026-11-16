@@ -124,7 +124,7 @@ public class ReelsFragment extends Fragment {
     static String resolveMyReelReaction(Models.Reel reel) {
         String me = Fb.uid();
         if (me == null || me.isEmpty() || reel == null) return null;
-        if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels"))return com.friendbook.social.post.D1Reactions.mine(reel.isFromPost?"posts":"reels",reel.id);
+        if(com.friendbook.social.core.D1Client.routed(reel.isFromPost?"posts":"reels",reel.id))return com.friendbook.social.post.D1Reactions.mine(reel.isFromPost?"posts":"reels",reel.id);
         String myRx = reel.reactions != null ? reel.reactions.get(me) : null;
         if (myRx != null && !myRx.isEmpty()) {
             return Models.normalizeReactionType(myRx, "love");
@@ -2375,7 +2375,7 @@ public class ReelsFragment extends Fragment {
             /** Reconciles subcollection reactions (`posts/{id}/reactions`) for legacy Video Posts with empty `reactionsMap`. */
             private void hydrateLegacyPostReelReactionsIfNeeded(final Models.Reel target) {
                 if (target == null || !target.isFromPost || target.id == null || target.id.isEmpty()) return;
-                if(com.friendbook.social.core.D1Client.enabled(target.isFromPost?"posts":"reels"))return;
+                if(com.friendbook.social.core.D1Client.routed(target.isFromPost?"posts":"reels",target.id))return;
                 if (target.reactions != null && !target.reactions.isEmpty()) return;
                 if (target.likes <= 0 || isReelReactionInFlight(target.id)) return;
                 final String targetId = target.id;
@@ -2414,7 +2414,7 @@ public class ReelsFragment extends Fragment {
             private void renderCounts() {
                 if (reel == null) return;
                 Context c = itemView.getContext();
-                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")){final Models.Reel current=reel;com.friendbook.social.post.D1Reactions.reel(c,current,()->{if(reel==current)renderCounts();});}
+                if(com.friendbook.social.core.D1Client.routed(reel.isFromPost?"posts":"reels",reel.id)){final Models.Reel current=reel;com.friendbook.social.post.D1Reactions.reel(c,current,()->{if(reel==current)renderCounts();});}
                 String me = Fb.uid();
                 String myRx = resolveMyReelReaction(reel);
 
@@ -2475,7 +2475,7 @@ public class ReelsFragment extends Fragment {
                 String me = Fb.uid();
                 if (me == null || me.isEmpty() || reel == null) return;
                 if (reel.id != null && reel.id.startsWith("local_uploading_")) return;
-                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")){
+                if(com.friendbook.social.core.D1Client.routed(reel.isFromPost?"posts":"reels",reel.id)){
                     final Models.Reel target=reel;String collection=target.isFromPost?"posts":"reels";
                     com.friendbook.social.post.D1Reactions.apply(itemView.getContext(),collection,target.id,requestedType,onlyAdd,()->{
                         if(reel==target)com.friendbook.social.post.D1Reactions.reel(itemView.getContext(),target,this::renderCounts);

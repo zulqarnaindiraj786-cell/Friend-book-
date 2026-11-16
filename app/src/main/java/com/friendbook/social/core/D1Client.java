@@ -14,7 +14,38 @@ import java.util.concurrent.*;
 /** Serialized authenticated transport. Never retries writes against Firebase. */
 public final class D1Client {
     private D1Client(){}
-    public static boolean enabled(String collection){return BuildConfig.D1_INTERACTIONS_ENABLED && ("posts".equals(collection)||"reels".equals(collection));}
+
+    /**
+     * Per-resource D1 routing.
+     *
+     * Marking a collection as "D1" is not enough: a post whose likes/comments were NOT imported
+     * would answer from an empty D1 row and its real interactions would appear to vanish. So the
+     * worker is the source of truth — it only serves a resource once that resource's import has
+     * been verified, and answers 503 "not verified" for everything else. A 503 marks the resource
+     * as firestore-backed for this process, so the app keeps using Firestore for it.
+     */
+    private static final Set<String> D1_UNAVAILABLE = Collections.synchronizedSet(new HashSet<>());
+
+    /** True when this collection is eligible for D1 at all (build flag + supported collection). */
+    public static boolean enabled(String collection){
+        return BuildConfig.D1_INTERACTIONS_ENABLED && ("posts".equals(collection)||"reels".equals(collection));
+    }
+
+    /** True when this specific document should be served by D1 (eligible and not rejected yet). */
+    public static boolean routed(String collection,String id){
+        return enabled(collection) && (id == null || !D1_UNAVAILABLE.contains(key(collection,id)));
+    }
+
+    /** Worker said this resource was never migrated: keep it on Firestore for this process. */
+    public static void markUnavailable(String collection,String id){
+        if(collection==null||id==null)return;
+        D1_UNAVAILABLE.add(key(collection,id));
+    }
+
+    public static boolean isUnavailable(String collection,String id){
+        return id!=null&&D1_UNAVAILABLE.contains(key(collection,id));
+    }
+
     private static final ThreadPoolExecutor IO=new ThreadPoolExecutor(4,8,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(256));
     private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final Map<String,List<Runnable>> OBSERVERS=new HashMap<>();
@@ -37,7 +68,14 @@ public final class D1Client {
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
                 JSONObject data=D1HttpTransport.send(url,method,token,body);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
-            }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));}
+            }catch(Exception error){
+                // "Resource migration not verified" (503) means this document's interactions were
+                // never imported into D1. Route it back to Firestore for the rest of this process
+                // instead of showing the user an empty counter, and let callers fall back cleanly.
+                String message = error.getMessage() == null ? "" : error.getMessage();
+                if (message.contains("not verified") || message.contains("503")) markUnavailable(collection, id);
+                MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));
+            }
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
     }

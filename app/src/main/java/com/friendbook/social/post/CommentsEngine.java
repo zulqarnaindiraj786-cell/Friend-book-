@@ -28,6 +28,7 @@ public class CommentsEngine {
     }
     private static final List<Handle> D1_HANDLES=new ArrayList<>();
     private static boolean d1(String collection){return com.friendbook.social.core.D1Client.enabled(collection);}
+    private static boolean d1(String collection,String docId){return com.friendbook.social.core.D1Client.routed(collection,docId);}
     private static Models.Comment fromD1(org.json.JSONObject row,String key) {
         try{Models.Comment c=Models.Comment.fromMap(row.optString("id"),com.friendbook.social.core.D1Client.map(row));c.postId=key;c.canonicalStored=true;return c;}
         catch(org.json.JSONException e){throw new IllegalArgumentException("Invalid D1 comment",e);}
@@ -120,7 +121,7 @@ public class CommentsEngine {
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
         Handle handle=new Handle(); handle.listener=listener;
         if(docId==null || docId.isEmpty()) return handle;
-        if(d1(collection)){
+        if(d1(collection,docId)){
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
             D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);return handle;
         }
@@ -214,7 +215,7 @@ public class CommentsEngine {
             if (cb != null) cb.onComplete(false, "Not signed in");
             return null;
         }
-        final String newId = d1(collection)?java.util.UUID.randomUUID().toString():Fb.db().collection("comments").document().getId();
+        final String newId = d1(collection,docId)?java.util.UUID.randomUUID().toString():Fb.db().collection("comments").document().getId();
         final long now = System.currentTimeMillis();
 
         Models.Comment local = new Models.Comment();
@@ -229,7 +230,7 @@ public class CommentsEngine {
         local.parentId = parentId == null ? "" : parentId;
         local.createdAt = now;
 
-        if(d1(collection)){
+        if(d1(collection,docId)){
             org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
             if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
@@ -268,7 +269,7 @@ public class CommentsEngine {
                                              String userId, String nextType) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()
                 || userId == null || userId.isEmpty()) return;
-        if(d1(collection)){if(java.util.Objects.equals(userId,Fb.uid()))d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","react","id",c.id,"type",nextType));return;}
+        if(d1(collection,docId)){if(java.util.Objects.equals(userId,Fb.uid()))d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","react","id",c.id,"type",nextType));return;}
         Object rxVal = nextType == null ? FieldValue.delete() : nextType;
         Object likedByVal = nextType == null ? FieldValue.arrayRemove(userId) : FieldValue.arrayUnion(userId);
 
@@ -284,7 +285,7 @@ public class CommentsEngine {
     /** Edits canonical text/mentions and moderation mirror without growing parent maps. */
     public static void editComment(String collection, String docId, Models.Comment c, String newText) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()) return;
-        if(d1(collection)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","edit","id",c.id,"text",newText,"mentions",new org.json.JSONArray(c.mentions)));return;}
+        if(d1(collection,docId)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","edit","id",c.id,"text",newText,"mentions",new org.json.JSONArray(c.mentions)));return;}
         Map<String, Object> up = new HashMap<>();
         up.put("mentions", c.mentions);
         up.put("content", newText);
@@ -326,7 +327,7 @@ public class CommentsEngine {
     /** Pins/unpins a comment on a post (Post Author feature!). */
     public static void pinComment(String collection, String docId, String commentId, boolean pin) {
         if (docId == null || docId.isEmpty()) return;
-        if(d1(collection)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","pin","id",commentId,"pin",pin));return;}
+        if(d1(collection,docId)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","pin","id",commentId,"pin",pin));return;}
         Map<String, Object> dot = new HashMap<>();
         dot.put("pinnedCommentId", pin ? commentId : "");
         Fb.db().collection(collection).document(docId).update(dot);
@@ -335,7 +336,7 @@ public class CommentsEngine {
     /** Deletes a comment across parent doc `commentsMap`, subcollection, and root `comments`. */
     public static void deleteComment(String collection, String docId, Models.Comment c) {
         if (c == null || c.id == null) return;
-        if(d1(collection)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","remove","id",c.id));return;}
+        if(d1(collection,docId)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","remove","id",c.id));return;}
         if (docId != null && !docId.isEmpty()) {
             Map<String, Object> dot = new HashMap<>();
             dot.put("commentsMap." + c.id, FieldValue.delete());

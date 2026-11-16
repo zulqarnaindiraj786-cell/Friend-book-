@@ -68,7 +68,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private boolean showEmptyWhenNone = true;
     /** Collection holding the parent counter ("posts" or "reels"), and its document id. */
     private void showReactors(Models.Comment c){
-        if(com.friendbook.social.core.D1Client.enabled(counterCollection))D1Reactions.show(activity,counterCollection,counterId!=null?counterId:c.postId,c.id);
+        if(com.friendbook.social.core.D1Client.routed(counterCollection,counterId!=null?counterId:c.postId))D1Reactions.show(activity,counterCollection,counterId!=null?counterId:c.postId,c.id);
         else Reactions.showCommentReactors(activity,c);
     }
     public String counterCollection = "posts";

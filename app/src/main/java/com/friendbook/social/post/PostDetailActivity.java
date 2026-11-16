@@ -179,7 +179,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             updateCommentPager();
         });
         cHeader.addView(older);
-        if(com.friendbook.social.core.D1Client.enabled("posts")){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
+        if(com.friendbook.social.core.D1Client.routed("posts",postId)){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
 
         TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
         seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
@@ -404,7 +404,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         busy = true;
         final List<Map<String,Object>> mentions = com.friendbook.social.core.Mentions.capture(input);
 
-        if(com.friendbook.social.core.D1Client.enabled("posts") && pendingPhotoUri==null && !retryD1Media.isEmpty()){String media=retryD1Media;retryD1Media="";writeCommentDoc(me,text,media,mentions);}
+        if(com.friendbook.social.core.D1Client.routed("posts",postId) && pendingPhotoUri==null && !retryD1Media.isEmpty()){String media=retryD1Media;retryD1Media="";writeCommentDoc(me,text,media,mentions);}
         else if (pendingPhotoUri != null) {
             Uri toUpload = pendingPhotoUri;
             Ui.toast(this, "Uploading comment photo…");
@@ -462,7 +462,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             mainRv.scrollToPosition(Math.max(0, commentsAdapter.getItemCount() - 1));
         } else {
             busy = false;
-            if(com.friendbook.social.core.D1Client.enabled("posts")){com.friendbook.social.core.Mentions.restore(input,text,mentions);retryD1Media=mediaUrl;}
+            if(com.friendbook.social.core.D1Client.routed("posts",postId)){com.friendbook.social.core.Mentions.restore(input,text,mentions);retryD1Media=mediaUrl;}
         }
     }
 

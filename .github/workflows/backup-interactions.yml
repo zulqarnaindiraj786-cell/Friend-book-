@@ -30,8 +30,8 @@ jobs:
           app = pathlib.Path('app/build.gradle').read_text()
           assert re.findall(r"applicationId\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
           assert re.findall(r"namespace\s+['\"]([^'\"]+)['\"]", app) == ['com.friendbook.social']
-          assert re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", app) == ['false']
-          assert tomllib.loads(pathlib.Path('wrangler.toml').read_text())['vars']['D1_INTERACTIONS_ENABLED'] == 'false'
+          assert re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", app) == ['true']
+          assert tomllib.loads(pathlib.Path('wrangler.toml').read_text())['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
           cfg = json.loads(pathlib.Path('app/google-services.json').read_text())
           assert cfg['project_info']['project_id'] == 'friendbook-17551'
           assert any(c['client_info']['android_client_info']['package_name'] == 'com.friendbook.social' for c in cfg['client'])
