@@ -227,6 +227,34 @@ jobs:
           test "$vcode" = 401
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
           echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify the deployed build serves the new routes
+        run: |
+          # Proves the code actually on the worker, not just that a deploy exited 0.
+          # Every check is read-only; none of them writes user data.
+          B=https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
+          fail=0
+          check() { # label method path expected [curl-args...]
+            label="$1"; method="$2"; path="$3"; want="$4"; shift 4
+            code=$(curl --silent --show-error --max-time 30 -X "$method" "$@" -o /tmp/r.json -w '%{http_code}' "$B$path" || echo 000)
+            body=$(head -c 200 /tmp/r.json 2>/dev/null || true)
+            if [ "$code" = "$want" ]; then
+              echo "  OK   $label -> $code"
+            else
+              echo "::error::$label expected HTTP $want but got $code. Body: $body"
+              fail=1
+            fi
+          }
+          echo 'Routing checks (post-deploy):'
+          # data-api is off by default, so its paths must still answer 404.
+          check 'data-api dark' GET '/v1/posts/feed' 404
+          # The migration API is routed: unauthenticated is 401, never 404.
+          check 'migrate no token' GET '/v1/admin/migrate/verify' 401
+          check 'migrate bad token' GET '/v1/admin/migrate/verify' 403 -H 'Authorization: Bearer definitely-not-the-token'
+          # The document store routes exist and demand a Firebase identity.
+          check 'docs query route' GET '/v1/docs?collection=posts&limit=5' 401
+          check 'docs delete route' DELETE '/v1/docs/posts/nonexistent-id' 401
+          exit $fail
+
       - name: Verify public Android-only release metadata
         run: |
           node --input-type=module <<'JS'
