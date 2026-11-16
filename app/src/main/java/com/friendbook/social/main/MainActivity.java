@@ -573,6 +573,15 @@ public class MainActivity extends Activity {
         }, 5 * 60_000L);
     }
 
+    /**
+     * Upper bound on chats considered for the unread/call badge.
+     *
+     * <p>Deliberately generous: it only exists so the per-change cost of the chats listener
+     * cannot grow without limit. 100 is far above what any current user has, so it changes
+     * nothing today while capping the pathological case.
+     */
+    private static final int CHAT_BADGE_LIMIT = 100;
+
     private void startBadgeListeners() {
         String me = Fb.uid();
         if (me == null) return;
@@ -617,8 +626,14 @@ public class MainActivity extends Activity {
                 });
 
         if (chatReg != null) chatReg.remove();
+        // Bounded on purpose. This listener re-delivers its ENTIRE result set on any change to
+        // any chat, and every document in that set is billed as a read. Unbounded, one message
+        // in one chat re-reads every chat the user is in - which is why ~200 active users were
+        // enough to exhaust a 50,000 reads/day plan. A cap does not make it free, but it stops
+        // the cost from growing with account age.
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
+                .limit(CHAT_BADGE_LIMIT)
                 .addSnapshotListener((snap, err) -> {
                     // A failed read is NOT an empty inbox. Zeroing the badges here made the app
                     // look like the user had no chats at all, which is the difference between
