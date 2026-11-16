@@ -718,12 +718,12 @@ public class MainActivity extends Activity {
                         Ui.setBadge(reelsBadge, 0);
                         return;
                     }
-                    long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
+                    long reelsClearedAt = Prefs.reelsBadgeClearedAt(this, me);
                     int unseen = 0;
                     {
                         for (com.friendbook.social.core.Doc d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
-                            if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
+                            if (reelsClearedAt <= 0L || ts <= 0L || ts > reelsClearedAt) {
                                 unseen++;
                             }
                         }
