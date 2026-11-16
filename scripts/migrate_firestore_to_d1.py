@@ -37,6 +37,48 @@ COLLECTIONS = [
 BATCH_SIZE = 500
 MAX_WORKERS = 4
 
+# Firestore reads from a busy production project can exceed the client's default deadline
+# (observed as google.api_core.timeout / DEADLINE_EXCEEDED). A single blip must not abort a
+# migration that has already copied thousands of documents.
+READ_RETRIES = int(os.environ.get("MIGRATION_READ_RETRIES", "4"))
+RETRY_BACKOFF_S = 5
+# Canary knob: copy at most this many documents per collection, 0 = no limit.
+MAX_DOCS_PER_COLLECTION = int(os.environ.get("MIGRATION_MAX_DOCS", "0"))
+# Restrict the run to specific collections (comma separated), empty = all.
+ONLY_COLLECTIONS = [c.strip() for c in os.environ.get("MIGRATION_ONLY", "").split(",") if c.strip()]
+
+
+def with_retry(description, fn):
+    """Run fn, retrying transient Firestore failures with backoff.
+
+    Returns the value, or raises the last error so the caller can count it. Every retry is
+    printed: a migration that silently retried for ten minutes looks identical to a hang.
+    """
+    last = None
+    for attempt in range(1, READ_RETRIES + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last = exc
+            if attempt == READ_RETRIES:
+                break
+            wait = RETRY_BACKOFF_S * attempt
+            print(f"    retry {attempt}/{READ_RETRIES - 1} for {description} "
+                  f"in {wait}s after {type(exc).__name__}: {str(exc)[:160]}")
+            time.sleep(wait)
+    raise last
+
+
+def read_documents(coll_ref, description, limit=None):
+    """Stream a collection with retries, capped by MAX_DOCS_PER_COLLECTION."""
+    def _read():
+        ref = coll_ref
+        cap = limit if limit else (MAX_DOCS_PER_COLLECTION or None)
+        if cap:
+            ref = ref.limit(cap)
+        return list(ref.stream())
+    return with_retry(description, _read)
+
 def init_firebase():
     """Initialise the Admin SDK from a key file, key JSON, or ADC.
 
@@ -84,10 +126,11 @@ def migrate_collection(fs_client, collection_name, limit=None):
     print(f"{'='*60}")
     
     coll_ref = fs_client.collection(collection_name)
-    if limit:
-        docs = coll_ref.limit(limit).stream()
-    else:
-        docs = coll_ref.stream()
+    print(f"  reading {collection_name}..."
+          + (f" (cap {limit})" if limit else
+             (f" (cap {MAX_DOCS_PER_COLLECTION})" if MAX_DOCS_PER_COLLECTION else "")))
+    docs = read_documents(coll_ref, collection_name, limit)
+    print(f"  read {len(docs)} documents from {collection_name}")
     
     batch = []
     total = 0
@@ -222,10 +265,10 @@ def verify_counts(fs_client):
     
     for coll in COLLECTIONS:
         try:
-            count = len(list(fs_client.collection(coll).limit(10000).stream()))
+            count = len(read_documents(fs_client.collection(coll), f"count {coll}", 10000))
             print(f"  Firestore {coll}: ~{count}+ docs")
         except Exception as e:
-            print(f"  Firestore {coll}: ERROR - {e}")
+            print(f"  Firestore {coll}: ERROR - {type(e).__name__}: {e}")
 
 def main():
     print(f"""
@@ -283,7 +326,13 @@ def main():
     total_docs = 0
     total_errors = 0
     
-    for coll in COLLECTIONS:
+    targets = [c for c in COLLECTIONS if not ONLY_COLLECTIONS or c in ONLY_COLLECTIONS]
+    if ONLY_COLLECTIONS:
+        print(f"Restricted to collections: {', '.join(targets)}")
+    if MAX_DOCS_PER_COLLECTION:
+        print(f"Canary mode: at most {MAX_DOCS_PER_COLLECTION} documents per collection")
+
+    for coll in targets:
         try:
             count, errors = migrate_collection(fs_client, coll)
         except Exception as exc:
