@@ -1,7 +1,7 @@
 name: Deploy existing Cloudflare Worker (D1 OFF)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -24,6 +24,7 @@ concurrency:
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
+      || github.ref == 'refs/heads/arena/f6bf61bd-friend-book'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -96,6 +97,29 @@ jobs:
             echo 'CF_AE_TOKEN secret stored; the Worker can read Analytics Engine counts.'
           else
             echo '::warning::Could not store CF_AE_TOKEN; AE counts will be served from KV + memory instead (still zero D1 writes).'
+          fi
+
+      - name: Publish the migration token the worker requires
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+        run: |
+          # The worker fails closed (503) unless MIGRATION_ADMIN_TOKEN is at least 32 chars.
+          # Setting the secret in GitHub is not enough: wrangler has to push it to the worker.
+          if [ -z "$MIGRATION_ADMIN_TOKEN" ]; then
+            echo '::warning::MIGRATION_ADMIN_TOKEN is not set in repository secrets; /v1/admin/migrate will answer 503 until it is. Nothing else is affected.'
+            exit 0
+          fi
+          if [ "${#MIGRATION_ADMIN_TOKEN}" -lt 32 ]; then
+            echo '::error::MIGRATION_ADMIN_TOKEN is shorter than 32 characters; the worker would reject it. Use: openssl rand -hex 32'
+            exit 1
+          fi
+          if printf '%s' "$MIGRATION_ADMIN_TOKEN" | npx wrangler secret put MIGRATION_ADMIN_TOKEN; then
+            echo 'MIGRATION_ADMIN_TOKEN stored on the worker; the migration API is now reachable with that bearer token.'
+          else
+            echo '::error::Could not store MIGRATION_ADMIN_TOKEN.'
+            exit 1
           fi
 
       - name: Deploy existing Worker and bind existing database (no migration)
