@@ -463,6 +463,14 @@ public class AdsConfig {
 
     private static final Map<Integer, Integer> SESSION_SLOT_TO_UNIQUE_ID = new HashMap<>();
 
+    /**
+     * Slot whose ad is currently owned by the post-detail screen. It is set when the detail view
+     * opens (openFeedAdPostDetail) and read by disposeShownSlotAd, so the detail screen's ad is not
+     * destroyed out from under it when the feed recycles the slot behind it.
+     * Was referenced but never declared — a compile error that blocked every release build.
+     */
+    private static volatile int preservedDetailSlotKey = -1;
+
     private static final String[][] EXTRA_BRANDS = new String[][]{
             {"Toyota Land Cruiser 300 ZX V6", "Toyota Indus Flagship", "3.5L V6 Twin-Turbo 409HP with E-KDSS suspension, JBL 14-speaker system & fingerprint start.", "Book ZX V6", "PKR 9.5 Crore • Zero Meter", "FLAGSHIP 4X4 🚙", "Land Cruiser 300 ZX Twin-Turbo", "409HP V6 Twin-Turbo • 10-Speed Auto • VIP Pearl White"},
             {"Burj Binghatti Jacob & Co. Sky Mansion", "Binghatti Developers Dubai", "Ultra-high-rise sky mansions in Business Bay Dubai with private infinity pool & concierge.", "Invest in Dubai", "AED 22M • Tax-Free ROI", "DUBAI SKY MANSION 🏙️", "Burj Binghatti Penthouse", "Private Sky Pool • Panoramic Burj Khalifa View"},

@@ -12,6 +12,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 
 import com.friendbook.social.core.Admin;
+import com.friendbook.social.core.AdQueueManager;
 import com.friendbook.social.core.AdsConfig;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.Fb;

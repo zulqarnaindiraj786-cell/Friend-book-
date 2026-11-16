@@ -124,10 +124,11 @@ public final class AdQueueManager {
         if (context == null) return;
         appContext = context.getApplicationContext();
         
-        // Ensure MobileAds is initialized
-        if (!MobileAds.getInitializationStatus().isInitialized()) {
+        // Ensure MobileAds is initialized. `InitializationStatus` has no isInitialized() method —
+        // ConsentManager owns that state and guarantees the callback/fallback always fires.
+        if (!ConsentManager.isAdsSdkReady()) {
             Log.w(TAG, "MobileAds not initialized yet, waiting...");
-            MobileAds.initialize(appContext, initializationStatus -> {
+            ConsentManager.runWhenInitialized(appContext, () -> {
                 Log.d(TAG, "MobileAds initialized, starting queue preload");
                 startPreloading();
             });
