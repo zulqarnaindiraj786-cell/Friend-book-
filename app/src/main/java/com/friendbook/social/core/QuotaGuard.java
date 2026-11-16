@@ -85,7 +85,7 @@ public final class QuotaGuard {
         if (!isRefusalCode(code)) return false;
         if (!degraded) {
             degradedAt = System.currentTimeMillis();
-            Log.w(TAG, "Backend degraded: " + code);
+            logw("Backend degraded: " + code);
         }
         degraded = true;
         lastReason = code;
@@ -94,7 +94,7 @@ public final class QuotaGuard {
 
     /** A successful read means whatever was wrong has cleared. */
     public static void noteSuccess() {
-        if (degraded) Log.i(TAG, "Backend recovered after " + (System.currentTimeMillis() - degradedAt) + "ms");
+        if (degraded) logi("Backend recovered after " + (System.currentTimeMillis() - degradedAt) + "ms");
         degraded = false;
         lastSuccessAt = System.currentTimeMillis();
     }
@@ -136,6 +136,24 @@ public final class QuotaGuard {
                     + (message != null ? ": " + message.substring(0, Math.min(120, message.length())) : "");
         }
         return error.getClass().getSimpleName();
+    }
+
+
+    /**
+     * android.util.Log throws on a plain JVM unless it is mocked. These two wrappers keep the
+     * classification logic testable without Robolectric, which matters because this class is
+     * the guard that decides whether a blank screen is an outage.
+     */
+    private static void logw(String message) {
+        try {
+            Log.w(TAG, message);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void logi(String message) {
+        try {
+            Log.i(TAG, message);
+        } catch (Throwable ignored) { }
     }
 
     /** Test hook. Never call from app code. */
