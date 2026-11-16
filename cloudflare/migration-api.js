@@ -30,17 +30,28 @@ function cors(status = 200, body = null) {
  *
  * Best effort by design: a mirror failure is reported but never rolls back the primary
  * write, and never turns an otherwise successful batch into a failed one.
+ *
+ * This refuses to overwrite a newer row. By the time anyone runs a migration, the app has
+ * already been writing to D1 for a while — so the copy source is *older* than what is in the
+ * table. An unconditional upsert would take a document a user edited ten minutes ago and
+ * replace it with the version Firestore had last week. Rows are therefore only replaced when
+ * the copy is genuinely newer, counted by the document's own updatedAt where it has one.
  */
 async function mirrorDocuments(env, collection, documents) {
   let mirrored = 0;
   const failures = [];
   try {
+    // The WHERE clause is what makes this a merge rather than an overwrite: an incoming
+    // document only wins if it is at least as new as the row already there. Rows with no
+    // comparable timestamp are left alone, because "unknown" is not evidence of being newer.
     const stmt = env.DB.prepare(
       `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
          document_json = excluded.document_json,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at
+       WHERE CAST(json_extract(friendbook_cf_documents.document_json, '$.updatedAt') AS INTEGER)
+             <= CAST(json_extract(excluded.document_json, '$.updatedAt') AS INTEGER)`
     );
     const statements = [];
     for (const doc of documents || []) {
@@ -53,11 +64,20 @@ async function mirrorDocuments(env, collection, documents) {
       statements.push(stmt.bind(`${collection}/${id}`, collection, id, owner,
         JSON.stringify(plain), Date.now()));
     }
+    // Count what the database actually changed, not what was submitted. With the merge guard
+    // above, a slice of twenty stale documents legitimately changes nothing, and reporting
+    // "mirrored 20" for that would read as success.
+    // wrangler reports changes as result.meta.changes; node:sqlite (used by the tests) reports
+    // them as result.changes. Both are read so the count is honest in either environment.
+    const changesOf = (result) => Number(result?.meta?.changes ?? result?.changes ?? 0);
     for (let i = 0; i < statements.length; i += 50) {
       const slice = statements.slice(i, i + 50);
-      if (typeof env.DB.batch === 'function') await env.DB.batch(slice);
-      else for (const statement of slice) await statement.run();
-      mirrored += slice.length;
+      if (typeof env.DB.batch === 'function') {
+        const results = await env.DB.batch(slice);
+        for (const result of results || []) mirrored += changesOf(result);
+      } else {
+        for (const statement of slice) mirrored += changesOf(await statement.run());
+      }
     }
   } catch (error) {
     failures.push(String(error && error.message ? error.message : error).slice(0, 120));

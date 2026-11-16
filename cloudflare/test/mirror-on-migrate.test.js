@@ -133,3 +133,69 @@ test('a mirror failure is reported without failing the batch', async () => {
   assert.equal(body.mirrorErrors, 1, 'the mirror problem must be visible, not silent');
   assert.equal(body.mirrored, 0);
 });
+
+// By the time a migration runs, D1 is not an empty target — the app has been writing to it for
+// weeks. The copy source is therefore older than the table, so an unconditional upsert would
+// replace live user edits with week-old Firestore versions. This asserts the merge guard.
+test('a migration never overwrites a newer document with an older copy', async () => {
+  const { db } = createSqliteD1();
+  const worker = createWorker(async () => 'uid_guard');
+  env.current = env(db);
+
+  const live = {
+    __id: 'post_live',
+    authorId: 'uid_guard',
+    content: 'edited in the app five minutes ago',
+    createdAt: 1700000000000,
+    updatedAt: 1800000000000,
+  };
+  await migrate(worker, 'posts', [live]);
+
+  // The same document, as Firestore still has it: an older updatedAt.
+  const stale = {
+    __id: 'post_live',
+    authorId: 'uid_guard',
+    content: 'the version Firestore kept from last week',
+    createdAt: 1700000000000,
+    updatedAt: 1700000100000,
+  };
+  await migrate(worker, 'posts', [stale]);
+
+  const read = await worker.fetch(
+    new Request('https://test.invalid/v1/docs/posts/post_live', {
+      headers: { Authorization: 'Bearer anything' },
+    }),
+    env.current
+  );
+  assert.equal(read.status, 200);
+  const body = await read.json();
+  assert.equal(
+    body.document.content,
+    'edited in the app five minutes ago',
+    'the older copy must not win'
+  );
+});
+
+// The guard must not be so strict that it blocks a genuine update: a newer copy still lands.
+test('a newer copy still updates the document', async () => {
+  const { db } = createSqliteD1();
+  const worker = createWorker(async () => 'uid_newer');
+  env.current = env(db);
+
+  await migrate(worker, 'posts', [{
+    __id: 'post_moves_on', authorId: 'uid_newer', content: 'first', createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  }]);
+  await migrate(worker, 'posts', [{
+    __id: 'post_moves_on', authorId: 'uid_newer', content: 'second', createdAt: 1700000000000,
+    updatedAt: 1900000000000,
+  }]);
+
+  const read = await worker.fetch(
+    new Request('https://test.invalid/v1/docs/posts/post_moves_on', {
+      headers: { Authorization: 'Bearer anything' },
+    }),
+    env.current
+  );
+  assert.equal((await read.json()).document.content, 'second');
+});
