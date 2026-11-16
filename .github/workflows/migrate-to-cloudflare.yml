@@ -290,9 +290,14 @@ jobs:
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
           mkdir -p .ci-logs
-          echo '::notice::migration step started' 
+          echo '::notice::migration step started'
+          # GitHub runs this shell with -e, so a non-zero python exit would abort the step
+          # before the diagnostics below ever ran. That is exactly why the previous
+          # failures produced no output.
+          set +e
           python3 -u scripts/migrate_firestore_to_d1.py > .ci-logs/migration.log 2>&1
           RC=$?
+          set -e
           echo "migration script exit=$RC"
           echo "--- last 20 lines ---"
           tail -n 20 .ci-logs/migration.log || true
