@@ -69,15 +69,52 @@ def with_retry(description, fn):
     raise last
 
 
-def read_documents(coll_ref, description, limit=None):
-    """Stream a collection with retries, capped by MAX_DOCS_PER_COLLECTION."""
-    def _read():
-        ref = coll_ref
-        cap = limit if limit else (MAX_DOCS_PER_COLLECTION or None)
+# A single stream over a busy production collection can outlive the client deadline
+# (DEADLINE_EXCEEDED), and a run that tried to read the whole collection in one call died
+# with exactly that. Pages are small, ordered, and resumable: each page is its own read, so
+# a slow collection costs more pages rather than one timeout.
+PAGE_SIZE = int(os.environ.get("MIGRATION_PAGE_SIZE", "300"))
+
+
+def read_pages(coll_ref, description, limit=None):
+    """Yield a collection in ordered pages, retrying each page on its own.
+
+    Ordering by document name is what makes a page boundary stable: without it the next
+    page could repeat or skip documents while the collection is being written to.
+    """
+    cap = limit if limit else (MAX_DOCS_PER_COLLECTION or None)
+    read = 0
+    last = None
+    page_number = 0
+    while True:
+        size = PAGE_SIZE
         if cap:
-            ref = ref.limit(cap)
-        return list(ref.stream())
-    return with_retry(description, _read)
+            remaining = cap - read
+            if remaining <= 0:
+                return
+            size = min(size, remaining)
+
+        def _page(last_seen=last, size=size):
+            query = coll_ref.order_by("__name__").limit(size)
+            if last_seen is not None:
+                query = query.start_after(last_seen)
+            return list(query.stream())
+
+        page = with_retry(f"{description} page {page_number + 1}", _page)
+        if not page:
+            return
+        page_number += 1
+        for doc in page:
+            yield doc
+        read += len(page)
+        last = page[-1]
+        if len(page) < size:
+            return
+
+
+def read_documents(coll_ref, description, limit=None):
+    """Every document of a collection, read in pages."""
+    return list(read_pages(coll_ref, description, limit))
 
 
 # The Spark plan's daily read quota resets at midnight Pacific, which is 08:00 UTC -
@@ -298,26 +335,12 @@ def migrate_subcollections(fs_client):
     print(f"Migrating subcollections...")
     print(f"{'='*60}")
 
-    def page_through(collection, description):
-        """Every document of a parent collection, paged, with no per-run cap."""
-        last = None
-        while True:
-            query = fs_client.collection(collection).order_by("__name__").limit(300)
-            if last is not None:
-                query = query.start_after(last)
-            batch_docs = with_retry(description, lambda: list(query.stream()))
-            if not batch_docs:
-                return
-            for doc in batch_docs:
-                yield doc
-            last = batch_docs[-1]
-
     # Comments on posts -> comments
     posts_seen = 0
-    for post in page_through("posts", "posts for comment copy"):
+    for post in read_pages(fs_client.collection("posts"), "posts for comment copy"):
         posts_seen += 1
         comments = with_retry(f"comments of post {post.id}",
-                              lambda: list(post.reference.collection("comments").stream()))
+                              lambda: list(post.reference.collection("comments").limit(2000).stream()))
         if not comments:
             continue
         batch = []
@@ -335,10 +358,10 @@ def migrate_subcollections(fs_client):
 
     # Messages in chats -> messages, keyed <chatId>_<messageId>
     chats_seen = 0
-    for chat in page_through("chats", "chats for message copy"):
+    for chat in read_pages(fs_client.collection("chats"), "chats for message copy"):
         chats_seen += 1
         messages = with_retry(f"messages of chat {chat.id}",
-                              lambda: list(chat.reference.collection("messages").stream()))
+                              lambda: list(chat.reference.collection("messages").limit(2000).stream()))
         if not messages:
             continue
         batch = []
@@ -364,12 +387,15 @@ def verify_counts(fs_client):
     print(f"Verifying counts...")
     print(f"{'='*60}")
     
+    # A preview counts without downloading. Reading ten thousand documents here just to
+    # print a number spent a fifth of the day's quota on a line of log output.
     for coll in COLLECTIONS:
         try:
-            count = len(read_documents(fs_client.collection(coll), f"count {coll}", 10000))
-            print(f"  Firestore {coll}: ~{count}+ docs")
+            aggregations = [a for a in fs_client.collection(coll).count(alias="n").get()]
+            total = aggregations[0][0].value if aggregations else 0
+            print(f"  Firestore {coll}: {total} docs")
         except Exception as e:
-            print(f"  Firestore {coll}: ERROR - {type(e).__name__}: {e}")
+            print(f"  Firestore {coll}: count unavailable - {type(e).__name__}: {str(e)[:120]}")
 
 def main():
     print(f"""
