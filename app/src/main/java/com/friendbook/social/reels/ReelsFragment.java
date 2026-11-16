@@ -2578,14 +2578,19 @@ public class ReelsFragment extends Fragment {
                     Map<String, Object> dot = new HashMap<>();
                     dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);
                     dot.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                    dot.put("likes", reel.reactions.size());
+                    // Counters are collaborative: write the DELTA, never the absolute size.
+                    // `reel.reactions` only holds what THIS device has loaded, so writing
+                    // reel.reactions.size() overwrote every other user's likes with a smaller
+                    // local number — that is why like counts appeared to stop counting (and
+                    // sometimes went down). FieldValue.increment is atomic on the server.
+                    if (delta != 0) dot.put("likes", FieldValue.increment(delta));
                     reelRef.update(dot).addOnSuccessListener(v -> notifyReaction.run()).addOnFailureListener(err -> {
                         Map<String, Object> fallback = new HashMap<>();
                         Map<String, Object> rxMap = new HashMap<>();
                         rxMap.put(me, nextType == null ? FieldValue.delete() : nextType);
                         fallback.put("reactions", rxMap);
                         fallback.put("likedBy", nextType == null ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                        fallback.put("likes", reel.reactions.size());
+                        if (delta != 0) fallback.put("likes", FieldValue.increment(delta));
                         reelRef.set(fallback, SetOptions.merge()).addOnSuccessListener(v -> notifyReaction.run());
                     });
                 }

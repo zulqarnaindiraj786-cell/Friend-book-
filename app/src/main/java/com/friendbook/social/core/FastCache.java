@@ -180,6 +180,25 @@ public final class FastCache {
     public static int cachedUserCount() { return USERS.size(); }
     public static int cachedFeedCount() { return FEED.size(); }
 
+    /**
+     * Reflects a server-side comment-counter change in the cached feed immediately.
+     *
+     * The parent document's `comments` field is incremented atomically in Firestore when a comment
+     * is added or deleted, but every screen already holds a snapshot taken before that write — so
+     * the count stayed stale until a full reload, which looked like "comments are not counting".
+     * This updates the held copy (never the server) so the UI is correct the moment the write lands.
+     */
+    public static void bumpCachedCommentCount(String collection, String docId, int delta) {
+        if (docId == null || docId.isEmpty() || delta == 0) return;
+        if ("posts".equals(collection)) {
+            for (Models.Post p : FEED) {
+                if (p != null && docId.equals(p.id)) {
+                    p.comments = Math.max(0, p.comments + delta);
+                }
+            }
+        }
+    }
+
     // ===================== ME & USERS =====================
 
     public static Models.User getMe() { return CACHED_ME; }

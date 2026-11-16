@@ -252,6 +252,10 @@ public class CommentsEngine {
         patch.put("commentsStorageVersion",2);
         batch.update(parentRef,patch);
         batch.commit().addOnSuccessListener(v -> {
+            // The parent doc's `comments` counter was incremented on the server, but the Post/Reel
+            // object the UI already holds is a stale snapshot — so the feed kept showing the old
+            // count until a full reload. Bump the in-memory copy so the UI is correct immediately.
+            bumpLocalCommentCount(collection, docId, 1);
             if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
             if(cb!=null) cb.onComplete(true,null);
         }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
@@ -291,6 +295,20 @@ public class CommentsEngine {
 
     /** Existing canonical records keep offline queued edits/reactions. Legacy promotion is transactional
      * to avoid overwriting a newer canonical edit with a frozen legacy copy. */
+    /**
+     * Keeps the in-memory Post/Reel's `comments` counter in step with the server increment, so the
+     * feed shows the new total immediately instead of waiting for a full reload. The Firestore
+     * counter itself is already incremented atomically in the batch — this never writes a count.
+     */
+    private static void bumpLocalCommentCount(String collection, String docId, int delta) {
+        if (docId == null || docId.isEmpty() || delta == 0) return;
+        try {
+            com.friendbook.social.core.FastCache.bumpCachedCommentCount(collection, docId, delta);
+        } catch (Throwable ignored) {
+            // Counters refresh on the next page load anyway; never fail a send over a UI counter.
+        }
+    }
+
     private static void mutateComment(String collection,String docId,Models.Comment c,Map<String,Object> patch) {
         DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
         DocumentReference mirror=Fb.db().collection("comments").document(c.id);
@@ -323,7 +341,8 @@ public class CommentsEngine {
             dot.put("commentsMap." + c.id, FieldValue.delete());
             dot.put("comments", FieldValue.increment(-1));
             dot.put("lastComment", FieldValue.delete());
-            Fb.db().collection(collection).document(docId).update(dot);
+            Fb.db().collection(collection).document(docId).update(dot)
+                    .addOnSuccessListener(v -> bumpLocalCommentCount(collection, docId, -1));
             Fb.db().collection(collection).document(docId).collection("comments").document(c.id).delete();
         }
         Fb.db().collection("comments").document(c.id).delete();
