@@ -1,7 +1,7 @@
 {
-  "step": "flow",
+  "step": "verify",
   "collection": "posts",
   "apply": false,
   "confirm": "",
-  "note": "Read-only flow 2: plan + posts dry run, result posted to PR #31. Writes nothing."
+  "note": "Read-only: field-by-field check of 40 existing posts rows against their documents."
 }
