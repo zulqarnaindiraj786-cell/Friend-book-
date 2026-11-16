@@ -1,6 +1,6 @@
 {
-  "step": "none",
+  "step": "verify",
   "confirm": "",
   "limit": 0,
-  "note": "Merge complete: 571 of 596 post documents carry a real author name. Set step=verify to re-read."
+  "note": "Read-only final check: the newest documents with the exact author name and photo URL the feed binds."
 }
