@@ -88,7 +88,12 @@ public final class AdQueueManager {
     // ============ PUBLIC INTERFACE ============
     
     public interface AdReadyCallback {
-        void onAdReady(NativeAd ad, String adType); // adType: "feed" or "reels"
+        /**
+         * @param ad the ad that just left the queue and is now owned by the caller, or null when the
+         *           pool has no ad to hand over. The ad is polled OUT of the queue before this runs,
+         *           so it can never be delivered twice.
+         */
+        void onAdReady(NativeAd ad);
     }
     
     public interface AdConsumer {
@@ -170,6 +175,24 @@ public final class AdQueueManager {
         return null;
     }
     
+    /**
+     * Ask AdMob for one more Feed ad right now (used by the admin "Run Real Ad Fill Check").
+     * It is a real load into the pool, never a test ad, and it respects the capacity bound.
+     */
+    public synchronized void requestFeedAd() {
+        if (feedQueue.size() >= QUEUE_CAPACITY) return;
+        preloadFeedQueue();
+    }
+
+    /**
+     * Ask AdMob for one more Reels ad right now (used by the admin "Run Real Ad Fill Check").
+     * Real load only, bounded by pool capacity.
+     */
+    public synchronized void requestReelsAd() {
+        if (reelsQueue.size() >= QUEUE_CAPACITY) return;
+        preloadReelsQueue();
+    }
+
     /**
      * Check if Feed queue has ad ready
      */
@@ -372,7 +395,7 @@ public final class AdQueueManager {
                                 NativeAd handed = feedQueue.poll();
                                 if (handed == null) handed = nativeAd;
                                 final NativeAd toDeliver = handed;
-                                mainHandler.post(() -> cb.onAdReady(toDeliver, "feed"));
+                                mainHandler.post(() -> cb.onAdReady(toDeliver));
                             }
                         } else {
                             // Queue full - destroy ad to avoid memory leak
@@ -467,7 +490,7 @@ public final class AdQueueManager {
                                 NativeAd handed = reelsQueue.poll();
                                 if (handed == null) handed = nativeAd;
                                 final NativeAd toDeliver = handed;
-                                mainHandler.post(() -> cb.onAdReady(toDeliver, "reels"));
+                                mainHandler.post(() -> cb.onAdReady(toDeliver));
                             }
                         } else {
                             try { nativeAd.destroy(); } catch (Throwable ignored) {}

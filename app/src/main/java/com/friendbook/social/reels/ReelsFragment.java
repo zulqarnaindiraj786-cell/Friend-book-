@@ -747,7 +747,7 @@ public class ReelsFragment extends Fragment {
     @Override public void onResume(){
         super.onResume();
         // Queue manager initialized in Application, no manual preload needed
-        AdsConfig.setReelsAdReadyCallback(() -> {
+        AdsConfig.setReelsAdReadyCallback(readyAd -> {
             if (adapter != null && pager != null) {
                 adapter.onPoolAdAvailable();
             }
