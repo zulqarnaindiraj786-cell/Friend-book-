@@ -79,8 +79,10 @@ jobs:
           D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
         run: python3 scripts/repair_documents.py --apply --confirm REPAIR
 
-      - name: Dump what the document store actually contains
-        continue-on-error: true
+      # One question, bounded: is the content in D1 real users' data, or test data? Three
+      # small LIMIT queries answer it. The previous version of this step scanned whole
+      # collections repeatedly; that is what spent the read budget.
+      - name: Whose data is in D1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: >-
@@ -88,10 +90,30 @@ jobs:
                 secrets.CF_ACCOUNT_ID ||
                 '92f3d04598822de2e49e14561218d090' }}
           D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
-        # The check-run only keeps ten annotations, so the full dump goes to a file that is
-        # readable from the job output rather than being cut off mid-collection.
         run: |
-          python3 scripts/inspect_documents.py 2>&1 | tee inspect-documents.log
-          echo '--- full dump ---'
-          cat inspect-documents.log
+          python3 - <<'PYEOF'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          from d1_direct import execute
 
+          # The accounts that wrote the most posts in D1 - bounded, 10 rows.
+          rows = execute("""
+              SELECT owner_uid, COUNT(*) AS posts
+              FROM friendbook_cf_documents
+              WHERE collection = 'posts' AND owner_uid <> ''
+              GROUP BY owner_uid ORDER BY posts DESC LIMIT 10
+          """)
+          for r in rows:
+              print(f"::notice::poster {r['owner_uid'][:12]}... wrote {r['posts']} posts")
+
+          # What a real user's profile looks like - one document.
+          one = execute("""
+              SELECT document_json FROM friendbook_cf_documents
+              WHERE collection = 'users' AND owner_uid <> ''
+              ORDER BY updated_at DESC LIMIT 1
+          """)
+          if one:
+              doc = json.loads(one[0]['document_json'])
+              sample = {k: doc[k] for k in list(doc)[:10]}
+              print(f"::notice::sample user: {json.dumps(sample, default=str)[:500]}")
+          PYEOF
