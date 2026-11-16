@@ -146,13 +146,17 @@ public class FeedPreferencesActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        meReg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
+        // Shares the session-wide users/{me} listener.
+        Fb.observeMe(meObserver);
+    }
+
+    private final Fb.MeObserver meObserver = d -> {
                     favorites.clear();
                     if (d != null && d.exists())
                         favorites.addAll(com.friendbook.social.core.Format.listOf(d.getData(), "favoriteUids"));
+                    else if (Fb.me != null && Fb.me.favoriteUids != null) favorites.addAll(Fb.me.favoriteUids);
                     render();
-                });
+    };
         reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
                 Fb.db().collection("friends").whereArrayContains("participants",me),20,"feed-preference-friends",(snap,err)-> {
                     friends.clear();
@@ -202,6 +206,7 @@ public class FeedPreferencesActivity extends Activity {
 
     @Override
     protected void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
         if (reg != null) reg.remove();
         if (meReg != null) meReg.remove();

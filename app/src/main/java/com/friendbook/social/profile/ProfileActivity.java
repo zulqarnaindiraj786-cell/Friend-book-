@@ -116,6 +116,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private ReelsGridAdapter reelsAdapter;
 
     private final List<Models.Post> allLoadedPosts = new ArrayList<>();
+    private final Fb.MeObserver meObserver = d -> {
+        if (isFinishing()) return;
+        Models.User u = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+        if (u == null) return;
+        user = u;
+        FastCache.putUser(u);
+        FastCache.saveMe(this, u);
+        bindUser();
+        if (activeTab == 3 && friendPager == null) startFriendPages();
+    };
+
     private ListenerRegistration userReg, friendsReg, ownerFriendsReg, outReg, inReg, postsReg, reelsReg;
     private Presence.Handle presenceH;
     private final List<String> friendIds = new ArrayList<>();
@@ -819,18 +830,28 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
-        userReg = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) {
-                        nameT.setText("User not found");
-                        return;
-                    }
-                    user = Models.User.fromDoc(d);
-                    FastCache.putUser(user);
-                    if (mine) FastCache.saveMe(this, user);
-                    bindUser();
-                    if(activeTab==3 && friendPager==null)startFriendPages();
-                });
+        if (mine) {
+            // Own profile: ride the session-wide users/{me} listener Fb already maintains.
+            // Opening a second listener on the same document billed the same reads twice.
+            Fb.observeMe(meObserver);
+            if (user == null) user = Fb.me;
+            if (user != null) { bindUser(); if (activeTab == 3 && friendPager == null) startFriendPages(); }
+        } else {
+            userReg = Fb.db().collection("users").document(uid)
+                    .addSnapshotListener((d, err) -> {
+                        if (d == null || !d.exists()) {
+                            // A refused read is not a missing user. Saying "not found" here made a
+                            // spent quota look like deleted accounts.
+                            if (com.friendbook.social.core.QuotaGuard.noteFailure(err)) return;
+                            nameT.setText("User not found");
+                            return;
+                        }
+                        user = Models.User.fromDoc(d);
+                        FastCache.putUser(user);
+                        bindUser();
+                        if(activeTab==3 && friendPager==null)startFriendPages();
+                    });
+        }
         watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
@@ -973,6 +994,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if(postPager!=null){postPager.close();postPager=null;}
         if(videoPager!=null){videoPager.close();videoPager=null;}
         FastCache.removeReactionObserver(reactionObserver);
+        Fb.removeMeObserver(meObserver);
         if (userReg != null) userReg.remove();
         if (friendsReg != null) friendsReg.remove();
         if (ownerFriendsReg != null) ownerFriendsReg.remove();

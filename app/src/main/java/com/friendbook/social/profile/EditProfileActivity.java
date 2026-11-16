@@ -187,10 +187,18 @@ public class EditProfileActivity extends Activity {
     protected void onStart() {
         super.onStart();
         if (Fb.uid() == null) { finish(); return; }
-        userReg = Fb.db().collection("users").document(Fb.uid())
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    Models.User u = Models.User.fromDoc(d);
+        // Shares the session-wide users/{me} listener.
+        Fb.observeMe(meObserver);
+        if (Fb.me != null) applyUser(Fb.me);
+    }
+
+    private final Fb.MeObserver meObserver = d -> {
+                    Models.User u = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+                    if (u != null) applyUser(u);
+    };
+
+    /** Paints the editable fields from a profile; split out so the cache can paint instantly. */
+    private void applyUser(Models.User u) {
                     avatarUrl = u.photoUrl;
                     coverUrl = u.coverUrl;
                     Ui.avatar(this, avatar, avatarUrl);
@@ -220,7 +228,6 @@ public class EditProfileActivity extends Activity {
                             : "🎂 " + birthday + "  (tap to change)");
                     emailPrivacy = (u.emailPrivacy == null || u.emailPrivacy.isEmpty()) ? "Only me" : u.emailPrivacy;
                     if (emailPrivacyBtn != null) emailPrivacyBtn.setText(emailPrivacyLabel(emailPrivacy));
-                });
     }
 
     private String emailPrivacyLabel(String p) {
@@ -232,6 +239,7 @@ public class EditProfileActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        Fb.removeMeObserver(meObserver);
         if (userReg != null) userReg.remove();
     }
 

@@ -52,10 +52,14 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        reg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    Models.User me2 = Models.User.fromDoc(d);
+        // Shares the session-wide users/{me} listener rather than opening a fifth one on the
+        // same document.
+        Fb.observeMe(meObserver);
+    }
+
+    private final Fb.MeObserver meObserver = d -> {
+                    Models.User me2 = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+                    if (me2 == null) return;
                     List<UsersAdapter.Row> rows = new ArrayList<>();
                     if (me2.blocked.isEmpty()) {
                         adapter.setData(rows);
@@ -80,11 +84,11 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
                             }
                         });
                     }
-                });
-    }
+    };
 
     @Override
     protected void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
         if (reg != null) reg.remove();
     }

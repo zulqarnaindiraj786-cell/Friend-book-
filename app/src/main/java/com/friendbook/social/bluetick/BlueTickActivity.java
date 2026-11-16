@@ -170,9 +170,12 @@ public class BlueTickActivity extends Activity {
         super.onStart();
         String uid = Fb.uid();
         if (uid == null) { finish(); return; }
-        meReg = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
+        // Shares the session-wide users/{me} listener instead of opening another on the same doc.
+        Fb.observeMe(meObserver);
+    }
+
+    private final Fb.MeObserver meObserver = d -> {
+                    if (d == null || !d.exists()) { if (Fb.me != null) renderTick(Fb.me.tickLevel); return; }
                     String level = Format.strOr(d.getData(), "tickLevel",
                             Format.boolOf(d.getData(), "isVerified") ? "blue" : "none");
                     Icons.setTickBadge(heroBadge, level, true);
@@ -182,7 +185,7 @@ public class BlueTickActivity extends Activity {
                     for (int i = 0; i < 3; i++) {
                         ctaBox[i].setVisibility(rank >= Icons.tickRank(LEVELS[i]) ? View.GONE : View.VISIBLE);
                     }
-                });
+    };
         refsReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",uid),total->{
                     int count=(int)Math.min(Integer.MAX_VALUE,total);
                     for (int i = 0; i < 3; i++) {
@@ -210,9 +213,25 @@ public class BlueTickActivity extends Activity {
 
     @Override
     protected void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
         if (refsReg != null) refsReg.remove();
         if (meReg != null) meReg.remove();
         if (reqReg != null) reqReg.remove();
     }
+
+
+    /** Renders the badge hero from a tick level; used by the shared observer. */
+    private void renderTick(String level) {
+        if (level == null) return;
+        Icons.setTickBadge(heroBadge, level, true);
+        heroStatus.setText(Icons.tickRank(level) > 0
+                ? "You have the " + Admin.tickLabel(level) : "No badge yet");
+        int rank = Icons.tickRank(level);
+        for (int i = 0; i < 3; i++) {
+            ctaBox[i].setVisibility(rank >= Icons.tickRank(LEVELS[i]) ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    @Override
 }

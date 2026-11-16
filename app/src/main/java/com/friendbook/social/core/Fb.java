@@ -124,6 +124,7 @@ public class Fb {
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
                     syncProfileToCloudflare(u);
+                    notifyMeObservers(doc);
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
@@ -142,6 +143,58 @@ public class Fb {
                     }
                 });
         meLastRefresh = System.currentTimeMillis();
+    }
+
+    /** Live listeners on users/{me}, shared by every screen that needs them. */
+    private static final java.util.List<MeObserver> meObservers = new java.util.ArrayList<>();
+
+    /** Called with the current user document whenever {@code users/{me}} changes. */
+    public interface MeObserver {
+        void onMe(DocumentSnapshot doc);
+    }
+
+    /**
+     * Subscribe to the already-running {@code users/{me}} listener instead of starting another.
+     *
+     * <p>Six screens (menu, profile, edit profile, settings, blocked users, feed preferences,
+     * monetization, blue tick) each opened their own listener on this same document. Firestore
+     * charges per document delivered per listener, so the same unchanged document was billed
+     * once per open screen, and every screen had to be trusted to detach correctly. {@link
+     * #startMeListener()} already keeps this document live for the whole session; screens now
+     * piggyback on it.
+     *
+     * <p>The observer is invoked immediately with the cached value when one exists, so a screen
+     * never has to wait for a snapshot to render.
+     */
+    public static void observeMe(MeObserver observer) {
+        if (observer == null) return;
+        synchronized (meObservers) {
+            if (!meObservers.contains(observer)) meObservers.add(observer);
+        }
+        Models.User cached = me;
+        if (cached != null) {
+            try { observer.onMe(null); } catch (Throwable ignored) { }
+        }
+        if (meReg == null) startMeListener();
+    }
+
+    public static void removeMeObserver(MeObserver observer) {
+        if (observer == null) return;
+        synchronized (meObservers) { meObservers.remove(observer); }
+    }
+
+    /** Delivers a fresh users/{me} document to every subscribed screen. */
+    private static void notifyMeObservers(DocumentSnapshot doc) {
+        java.util.List<MeObserver> copy;
+        synchronized (meObservers) { copy = new java.util.ArrayList<>(meObservers); }
+        for (MeObserver o : copy) {
+            try { o.onMe(doc); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** Number of screens currently sharing the me listener. Test/diagnostic only. */
+    static int meObserverCount() {
+        synchronized (meObservers) { return meObservers.size(); }
     }
 
     public static void ensureMeFresh() {

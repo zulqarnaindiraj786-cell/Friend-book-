@@ -127,20 +127,36 @@ public class MonetizationActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        meReg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    followersCount = Format.intOf(d.getData(), "followersCountCache");
-                    Object fol = d.get("followers");
-                    if (fol instanceof java.util.List) followersCount = ((java.util.List<?>) fol).size();
-                    long stars = Format.intOf(d.getData(), "stars");
-                    starsT.setText("Your Stars: " + Format.count(stars) + " ⭐");
-                    boolean subsOn = Boolean.TRUE.equals(d.getBoolean("subscriptionsEnabled"));
-                    subsSwitch.setOnCheckedChangeListener(null);
-                    subsSwitch.setChecked(subsOn);
-                    subsSwitch.setOnCheckedChangeListener(this::toggleSubs);
-                    checkEligibility(followersCount, -1);
-                });
+        // Shares the session-wide users/{me} listener.
+        Fb.observeMe(meObserver);
+    }
+
+    private final Fb.MeObserver meObserver = d -> {
+        // The shared listener delivers the document; render from it, or from the cached profile
+        // if no snapshot is available yet so the screen is never blank.
+        java.util.Map<String, Object> map = d != null && d.exists()
+                ? d.getData()
+                : (Fb.me != null ? userToMap(Fb.me) : null);
+        if (map == null) return;
+        followersCount = Format.intOf(map, "followersCountCache");
+        Object fol = map.get("followers");
+        if (fol instanceof java.util.List) followersCount = ((java.util.List<?>) fol).size();
+        long stars = Format.intOf(map, "stars");
+        starsT.setText("Your Stars: " + Format.count(stars) + " \u2B50");
+        boolean subsOn = Boolean.TRUE.equals(map.get("subscriptionsEnabled"));
+        subsSwitch.setOnCheckedChangeListener(null);
+        subsSwitch.setChecked(subsOn);
+        subsSwitch.setOnCheckedChangeListener(this::toggleSubs);
+        checkEligibility(followersCount, -1);
+    };
+
+    /** Minimal map view of a cached profile, for rendering before the first snapshot. */
+    private static java.util.Map<String, Object> userToMap(Models.User u) {
+        java.util.Map<String, Object> m = new java.util.HashMap<>();
+        m.put("stars", u.stars);
+        if (u.followers != null) m.put("followers", u.followers);
+        return m;
+    }
         Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
                 .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
         if (subsCountReg != null) subsCountReg.remove();
@@ -171,8 +187,9 @@ public class MonetizationActivity extends Activity {
 
     @Override
     protected void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
-        if (meReg != null) meReg.remove();
+        if (meReg != null) { meReg.remove(); meReg = null; }
         if (subsCountReg != null) { subsCountReg.remove(); subsCountReg = null; }
     }
 }

@@ -476,27 +476,43 @@ public class MenuFragment extends Fragment {
         super.onStart();
         String me = Fb.uid();
         if (me == null) return;
-        meReg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists() || getActivity() == null) return;
-                    Models.User u = Models.User.fromDoc(d);
-                    name.setText(u.displayName);
-                    Icons.setTickBadge(tickIv, u.tickLevel, false);
-                    String sub = (u.professionalMode ? "📊 Creator · " : "")
-                            + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
-                    bio.setText(sub);
-                    Ui.avatar(getActivity(), avatar, u.photoUrl);
-                    if (Fb.auth().getCurrentUser() != null) {
-                        Prefs.saveAccount(getActivity(), u.uid,
-                                Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
-                    }
-                });
+        // Shares the session-wide users/{me} listener instead of opening another one on the
+        // same document. The header is refreshed by Fb's callback below.
+        Fb.observeMe(meObserver);
+        renderHeader(Fb.me);
     }
+
+    /**
+     * Renders the menu header from a user model.
+     *
+     * <p>Split out so the screen can paint immediately from the cached profile while the shared
+     * listener is still fetching, rather than showing an empty header.
+     */
+    private void renderHeader(Models.User u) {
+        if (u == null || getActivity() == null || name == null) return;
+        name.setText(u.displayName);
+        Icons.setTickBadge(tickIv, u.tickLevel, false);
+        String sub = (u.professionalMode ? "📊 Creator · " : "")
+                + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
+        bio.setText(sub);
+        Ui.avatar(getActivity(), avatar, u.photoUrl);
+        if (Fb.auth().getCurrentUser() != null) {
+            Prefs.saveAccount(getActivity(), u.uid,
+                    Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
+        }
+    }
+
+    private final Fb.MeObserver meObserver = doc -> {
+        if (getActivity() == null) return;
+        Models.User u = doc != null && doc.exists() ? Models.User.fromDoc(doc) : Fb.me;
+        renderHeader(u);
+    };
 
     @Override
     public void onStop() {
         super.onStop();
-        if (meReg != null) meReg.remove();
+        Fb.removeMeObserver(meObserver);
+        if (meReg != null) { meReg.remove(); meReg = null; }
     }
 
     private void claimDailyBonus(final Activity a) {

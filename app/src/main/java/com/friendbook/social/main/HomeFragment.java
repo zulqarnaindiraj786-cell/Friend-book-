@@ -72,6 +72,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean pageError,pymkLoading,pymkLoaded;
     private boolean featuredReelsLoaded, featuredReelsLoading;
     private String pymkActor;
+    /** When pymk was last fetched from the server; drives the cache window below. */
+    private long pymkFetchedAt;
     private final List<Models.User> pymkCandidates=new ArrayList<>();
     private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
@@ -393,8 +395,31 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 .show();
     }
 
+    /** When the status-notes row was last fetched. */
+    private long notesFetchedAt;
+    /** Same window as the featured Reels card; both are decorative and slow-moving. */
+    private static final long NOTES_CACHE_MS = 10 * 60_000L;
+
+    /**
+     * Loads the status-notes strip.
+     *
+     * <p>This ran on every onStart - so every return to Home from any tab - and read 30 user
+     * documents each time. At roughly 250 reads per user per day that made the notes strip one
+     * of the largest single consumers in the app, for a row that changes a few times a day.
+     */
     private void loadNotesUsers() {
-        Fb.db().collection("users").limit(30).get().addOnSuccessListener(snap -> {
+        long nowMs = android.os.SystemClock.elapsedRealtime();
+        if (notesFetchedAt > 0 && nowMs - notesFetchedAt < NOTES_CACHE_MS) {
+            renderNotesRow();
+            return;
+        }
+        if (com.friendbook.social.core.QuotaGuard.shouldSuppressNetworkWork()) {
+            renderNotesRow();
+            return;
+        }
+        // 15 is plenty for a horizontal strip; the extra 15 were never rendered.
+        Fb.db().collection("users").limit(15).get().addOnSuccessListener(snap -> {
+            notesFetchedAt = android.os.SystemClock.elapsedRealtime();
             noteUsers.clear();
             long now = System.currentTimeMillis();
             if (snap != null) {
@@ -503,11 +528,27 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     // ---------- 🔴 active lives strip ----------
+    /** When the live strip was last started; a restart inside this window is skipped. */
+    private long lastLivesStart;
+    private static final long LIVES_CACHE_MS = 3 * 60_000L;
+
     private void startLivesListener() {
+        long now0 = android.os.SystemClock.elapsedRealtime();
+        // Returning to Home from another tab used to tear down and re-create this listener,
+        // which re-bills every live document. The strip changes slowly, so reopening it within
+        // three minutes keeps whatever is already on screen.
+        if (livesReg != null && now0 - lastLivesStart < LIVES_CACHE_MS) return;
+        if (livesReg != null) { livesReg.remove(); livesReg = null; }
+        lastLivesStart = now0;
         livesReg = Fb.db().collection("lives")
                 .whereEqualTo("status", "live")
                 .limit(25)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null && err != null) {
+                        // Keep the previous strip rather than blanking it on a refused read.
+                        com.friendbook.social.core.QuotaGuard.noteFailure(err);
+                        return;
+                    }
                     List<Map<String, Object>> lives = new ArrayList<>();
                     long now = System.currentTimeMillis();
                     if (snap != null) {
@@ -585,13 +626,30 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 });
     }
 
+    /**
+     * How long a people-you-may-know result stays usable.
+     *
+     * <p>This used to run on every onStart, i.e. every time the user came back to Home from any
+     * other tab. With 10 documents per fetch and tab switching being the most common gesture in
+     * the app, that alone was a meaningful slice of the daily read budget for a list that barely
+     * changes. Ten minutes is long enough to be free and short enough to stay relevant.
+     */
+    private static final long PYMK_CACHE_MS = 10 * 60_000L;
+
     private void loadPymk() {
         String me=Fb.uid();if(me==null || adapter==null)return;
-        if(!java.util.Objects.equals(pymkActor,me)){pymkActor=me;pymkLoaded=false;pymkLoading=false;pymkCandidates.clear();}
-        if(pymkLoaded){renderPymk();return;}if(pymkLoading)return;pymkLoading=true;
+        if(!java.util.Objects.equals(pymkActor,me)){pymkActor=me;pymkLoaded=false;pymkLoading=false;pymkCandidates.clear();pymkFetchedAt=0L;}
+        // Cached result still fresh: render it and spend nothing.
+        if(pymkLoaded && pymkFetchedAt>0 && android.os.SystemClock.elapsedRealtime()-pymkFetchedAt<PYMK_CACHE_MS){renderPymk();return;}
+        if(pymkLoaded && !pymkCandidates.isEmpty())renderPymk();
+        if(pymkLoading)return;
+        // While the backend is refusing reads, do not queue more of them: an optional suggestion
+        // list must not compete with the main feed for a spent quota.
+        if(com.friendbook.social.core.QuotaGuard.shouldSuppressNetworkWork()){renderPymk();return;}
+        pymkLoading=true;
         Fb.db().collection("users").limit(10).get().addOnSuccessListener(snap->{
             if(!java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
-            pymkLoading=false;pymkLoaded=true;pymkCandidates.clear();
+            pymkLoading=false;pymkLoaded=true;pymkFetchedAt=android.os.SystemClock.elapsedRealtime();pymkCandidates.clear();
             for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);FastCache.putUser(u);pymkCandidates.add(u);}
             renderPymk();
         }).addOnFailureListener(error->{if(java.util.Objects.equals(me,Fb.uid()))pymkLoading=false;});
@@ -604,12 +662,22 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     /** Loads featured Reels once on Home open so the one-time Reels Showcase Card after Post #1 shows a real Reel preview. */
+    /** When the featured Reels card was last fetched from the server. */
+    private long featuredReelsFetchedAt;
+    private static final long FEATURED_REELS_CACHE_MS = 10 * 60_000L;
+
     private void loadFeaturedReelsForHome() {
         if (adapter == null) return;
         if (featuredReelsLoaded && !featuredReels.isEmpty()) {
             adapter.setFeaturedReels(featuredReels);
-            return;
+            // A cached card is enough for ten minutes. This used to re-query 12 Reels on every
+            // return to Home - a rotating decoration costing real reads each time.
+            if (featuredReelsFetchedAt > 0
+                    && android.os.SystemClock.elapsedRealtime() - featuredReelsFetchedAt < FEATURED_REELS_CACHE_MS) {
+                return;
+            }
         }
+        if (com.friendbook.social.core.QuotaGuard.shouldSuppressNetworkWork()) return;
         if (featuredReelsLoading) return;
         featuredReelsLoading = true;
         // 1. Seed immediately from any cached video posts in FastCache so Frame #1 has a Reel ready
@@ -634,6 +702,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
         });
         // 3. One-shot Firestore reels query (cache first, then network)
+        featuredReelsFetchedAt = android.os.SystemClock.elapsedRealtime();
         Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
                 .get(Source.CACHE)
                 .addOnSuccessListener(cacheSnap -> {
