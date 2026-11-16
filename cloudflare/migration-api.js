@@ -131,6 +131,10 @@ export async function migrationApi(request, env) {
     if (path === '/v1/admin/migrate/verify' && request.method === 'GET') {
       return await verifyCounts(env);
     }
+
+    if (path === '/v1/admin/migrate/audit' && request.method === 'GET') {
+      return await auditFreshness(env);
+    }
     
     return cors(404, { error: 'Not found' });
     
@@ -1014,6 +1018,65 @@ async function migrateMessages(env, body) {
   
   const mirror = await mirrorDocuments(env, 'messages', documents);
   return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
+}
+
+/**
+ * How fresh is what D1 holds?
+ *
+ * <p>Counts alone cannot answer "is this a copy or the live data". A copied row and a row the
+ * app wrote a minute ago look identical in a COUNT. What separates them is the timestamp:
+ * every write through the document API stamps updated_at, so a table whose newest row is
+ * from today is being written to right now, and a table whose rows all predate the copy is a
+ * one-time snapshot nobody has touched since.
+ *
+ * <p>It also reports which documents still carry the shape only the copy produces, so a
+ * table that is half copied is visible as such rather than as a healthy count.
+ */
+async function auditFreshness(env) {
+  const now = Date.now();
+  const summary = {};
+  for (const table of ['users', 'posts', 'chats', 'groups', 'notifications', 'comments', 'messages']) {
+    try {
+      const row = await env.DB.prepare(
+        `SELECT COUNT(*) AS total,
+                MIN(updated_at) AS oldest,
+                MAX(updated_at) AS newest
+         FROM ${table}`
+      ).first();
+      const total = row?.total || 0;
+      const newest = row?.newest || 0;
+      const oldest = row?.oldest || 0;
+      summary[table] = {
+        total,
+        oldest: oldest ? new Date(oldest).toISOString() : null,
+        newest: newest ? new Date(newest).toISOString() : null,
+        newestAgeMinutes: newest ? Math.round((now - newest) / 60000) : null,
+        writtenToday: newest ? new Date(newest).toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10) : false,
+      };
+    } catch (error) {
+      summary[table] = { error: String(error && error.message ? error.message : error).slice(0, 120) };
+    }
+  }
+
+  // The flat document table is what the app actually reads for most screens.
+  try {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS total, MIN(updated_at) AS oldest, MAX(updated_at) AS newest
+       FROM friendbook_cf_documents`
+    ).first();
+    const newest = row?.newest || 0;
+    summary.documents = {
+      total: row?.total || 0,
+      oldest: row?.oldest ? new Date(row.oldest).toISOString() : null,
+      newest: newest ? new Date(newest).toISOString() : null,
+      newestAgeMinutes: newest ? Math.round((now - newest) / 60000) : null,
+    };
+  } catch (error) {
+    summary.documents = { error: String(error && error.message ? error.message : error).slice(0, 120) };
+  }
+
+  summary.serverTime = new Date(now).toISOString();
+  return cors(200, summary);
 }
 
 async function verifyCounts(env) {
