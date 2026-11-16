@@ -117,7 +117,11 @@ dependencies {
     // 📢 Meta Audience Network SDK + AdMob Adapter for Mediation
     // Meta Placement ID: 4871960679794940_4871960806461594
     implementation 'com.facebook.android:audience-network-sdk:6.14.0'
-    implementation 'com.google.android.gms:play-services-ads-mediation-facebook:22.5.0'
+    // Meta Audience Network (AdMob mediation) — the real artifact is com.google.ads.mediation:facebook.
+    // The old coordinate com.google.android.gms:play-services-ads-mediation-facebook does NOT exist
+    // on any repository, which failed ':app:checkReleaseAarMetadata' and blocked every release build.
+    // 6.14.0.0 is the adapter release verified against audience-network-sdk 6.14.0 (the version below).
+    implementation 'com.google.ads.mediation:facebook:6.14.0.0'
 
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
