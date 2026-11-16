@@ -147,6 +147,33 @@ def is_quota_refusal(exc):
     return "resourceexhausted" in text or "resource exhausted" in text or "quota exceeded" in text
 
 
+def rest_probe():
+    """Read one document over the REST API instead of gRPC.
+
+    The gRPC client's 429 carries no metric, no quota id and no retry hint, which is not what
+    Firestore's own quota error looks like. Before concluding that the data is unreachable,
+    it is worth knowing whether the refusal is specific to the gRPC channel: one document over
+    HTTPS costs one read and answers that.
+    """
+    try:
+        import google.auth
+        import google.auth.transport.requests
+        scopes = ["https://www.googleapis.com/auth/datastore"]
+        creds, _ = google.auth.default(scopes=scopes)
+        creds.refresh(google.auth.transport.requests.Request())
+        url = (f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}"
+               f"/databases/(default)/documents/users?pageSize=1")
+        response = requests.get(url, headers={"Authorization": f"Bearer {creds.token}"},
+                                timeout=30)
+        print(f"REST probe: HTTP {response.status_code} {response.text[:200]}")
+        print(f"::notice::REST probe HTTP {response.status_code}")
+        return response.status_code == 200
+    except Exception as exc:
+        print(f"REST probe failed to run: {type(exc).__name__}: {str(exc)[:200]}")
+        print(f"::notice::REST probe error {type(exc).__name__}")
+        return False
+
+
 def report_identity(fs_client):
     """Print which project the reads are actually billed to.
 
@@ -503,6 +530,9 @@ def main():
     print("✓ Firebase initialized")
     report_identity(fs_client)
     if not probe_firestore(fs_client):
+        # gRPC refused. One HTTPS read says whether the project is blocked or the channel is.
+        print("gRPC refused; checking the REST channel...")
+        rest_probe()
         print("ERROR: Firestore is not readable from this runner; nothing was copied.")
         return 6
     print()
