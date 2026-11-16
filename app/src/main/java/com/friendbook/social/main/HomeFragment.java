@@ -731,6 +731,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     if (id.isEmpty()) continue;
                     loadedPostIds.add(id);
                     if (Boolean.TRUE.equals(m.get("safetyFlagged"))) continue;
+                    if (isEmptyGhost(m)) continue;
                     fresh.add(Models.Post.fromMap(id, m));
                 }
             }
@@ -742,6 +743,32 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             pageError = true;
             updatePagingUi();
         });
+    }
+
+    /**
+     * A post document with no author and nothing to show cannot be rendered as a post: the feed
+     * can only draw an anonymous "User" card with no content, no photo and no link. Some of these
+     * are leftovers of earlier imports (a raw Firestore export carries fields/name/createTime
+     * instead of a post body). They are skipped here, not removed - the rows and documents stay
+     * exactly as they are, and a post that has an author or any content is always kept.
+     */
+    private static boolean isEmptyGhost(java.util.Map<String, Object> m) {
+        if (m == null) return true;
+        String author = feedStr(m.get("authorId"));
+        if (!author.isEmpty()) return false;
+        if (!feedStr(m.get("content")).isEmpty()) return false;
+        if (!feedStr(m.get("mediaUrl")).isEmpty() || !feedStr(m.get("imageUrl")).isEmpty()) return false;
+        if (!feedStr(m.get("videoUrl")).isEmpty()) return false;
+        Object mediaUrls = m.get("mediaUrls");
+        if (mediaUrls instanceof java.util.List && !((java.util.List<?>) mediaUrls).isEmpty()) return false;
+        Object pollOptions = m.get("pollOptions");
+        if (pollOptions instanceof java.util.List && !((java.util.List<?>) pollOptions).isEmpty()) return false;
+        Object bgColor = m.get("bgColor");
+        return !(bgColor instanceof Number) || ((Number) bgColor).longValue() == 0L;
+    }
+
+    private static String feedStr(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     /**

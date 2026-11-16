@@ -1,6 +1,6 @@
 {
-  "step": "orphans",
+  "step": "none",
   "confirm": "",
-  "limit": 4,
-  "note": "Read-only: what the 25 unattributable documents actually are - their row and every stored key."
+  "limit": 0,
+  "note": "Merge complete: 571 of 596 post documents carry a real author name. Set step=verify to re-read."
 }
