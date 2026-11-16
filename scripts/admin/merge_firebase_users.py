@@ -439,6 +439,14 @@ def verify():
                   "json_extract(d.document_json, '$.authorPhoto') AS docAuthorPhoto "
                   "FROM posts p JOIN friendbook_cf_documents d "
                   "ON d.path = 'posts/' || p.id ORDER BY p.id LIMIT ?", [MAX_SAMPLE])
+    # Exactly what the feed renders, newest first: the document fields the app binds.
+    feed = rows("SELECT p.id, json_extract(d.document_json, '$.authorName') AS authorName, "
+                "json_extract(d.document_json, '$.authorPhoto') AS authorPhoto, "
+                "substr(COALESCE(json_extract(d.document_json, '$.content'), ''), 1, 60) AS content, "
+                "json_extract(d.document_json, '$.createdAt') AS createdAt "
+                "FROM friendbook_cf_documents d LEFT JOIN posts p ON d.path = 'posts/' || p.id "
+                "WHERE d.collection = 'posts' "
+                "ORDER BY COALESCE(json_extract(d.document_json, '$.createdAt'), 0) DESC LIMIT 12")
     stats = placeholderStats()
     realTable = counters()['postsTable'] - stats['postsTableWithoutAuthorName']
     realDocs = counters()['postDocs'] - stats['postDocumentsWithoutAuthorName']
@@ -457,6 +465,12 @@ def verify():
                          'sample': [{'id': row['id'], 'authorId': (row['author_id'] or '')[:6] + '…',
                                      'd1Name': row['usersTableName']}
                                     for row in outstanding[:MAX_SAMPLE]]},
+         'feedNewestFirst': [{'id': row['id'], 'authorName': row['authorName'],
+                              'hasPhoto': bool(row['authorPhoto']),
+                              'photoHost': (row['authorPhoto'] or '').split('/')[2]
+                              if row['authorPhoto'] and '://' in row['authorPhoto'] else None,
+                              'content': row['content'], 'createdAt': row['createdAt']}
+                             for row in feed],
          'users': {'withoutName': stats['usersTableWithoutName'],
                    'withoutPhoto': stats['usersTableWithoutPhoto'],
                    'documentsWithoutName': stats['userDocumentsWithoutName']},

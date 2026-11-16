@@ -1,6 +1,6 @@
 {
-  "step": "apply",
-  "confirm": "APPLY",
+  "step": "verify",
+  "confirm": "",
   "limit": 0,
-  "note": "Apply run 3: resolve each post document's author through the posts row (owner_uid is missing on app-written documents)."
+  "note": "Read-only: the newest 12 posts as the feed renders them, plus what is still unresolved."
 }
