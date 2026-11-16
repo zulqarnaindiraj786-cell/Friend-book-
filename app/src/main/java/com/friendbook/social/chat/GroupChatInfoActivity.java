@@ -351,8 +351,7 @@ public class GroupChatInfoActivity extends Activity {
                 chat.putExtra("name", memberName);
                 startActivity(chat);
             } else if (id == 3) {
-                com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "adminIds",
-                        targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "adminIds", targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid));
                 Fb.db().collection("chats").document(chatId).update("adminIds",
                         targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid))
                         .addOnSuccessListener(x -> {
@@ -527,7 +526,9 @@ public class GroupChatInfoActivity extends Activity {
         m.put("createdAt", FieldValue.serverTimestamp());
         Fb.db().collection("chats").document(chatId).collection("messages").add(m);
         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
-                "lastMessage");
+                "lastMessage", text,
+                "lastMessageTime", FieldValue.serverTimestamp(),
+                "lastMessageTimeMs", now));
         Fb.db().collection("chats").document(chatId).set(Fb.map(
                 "lastMessage", text,
                 "lastMessageTime", FieldValue.serverTimestamp(),

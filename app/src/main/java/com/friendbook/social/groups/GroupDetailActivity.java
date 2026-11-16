@@ -1075,14 +1075,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             if (act == 1) {
                 startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", targetUid));
             } else if (act == 2) {
-                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "adminIds",
-                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "adminIds", targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Fb.db().collection("groups").document(id).update("adminIds",
                         targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Ui.toast(this, targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
             } else if (act == 3) {
-                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "moderatorIds",
-                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "moderatorIds", targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Fb.db().collection("groups").document(id).update("moderatorIds",
                         targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Ui.toast(this, targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");

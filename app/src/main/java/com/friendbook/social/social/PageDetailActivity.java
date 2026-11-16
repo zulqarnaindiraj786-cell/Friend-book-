@@ -255,8 +255,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
     private void toggleFollow() {
         String me = Fb.uid();
         if (me == null) return;
-        com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, "followers",
-                following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+        com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, "followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
         Fb.db().collection("pages").document(pageId).update("followers",
                 following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
     }

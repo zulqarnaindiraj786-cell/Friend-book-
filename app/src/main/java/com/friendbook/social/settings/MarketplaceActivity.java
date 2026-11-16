@@ -379,8 +379,7 @@ public class MarketplaceActivity extends Activity {
             boolean saved = Fb.uid() != null && p.savedBy.contains(Fb.uid());
             ab.setNeutralButton(saved ? "Saved ✓" : "🔖 Save item", (dlg, w) -> {
                 if (Fb.uid() == null) return;
-                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "savedBy",
-                        saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "savedBy", saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                 Fb.db().collection("posts").document(p.id).update("savedBy",
                         saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                 Ui.toast(this, saved ? "Removed from Saved" : "Saved ✓");
@@ -409,10 +408,7 @@ public class MarketplaceActivity extends Activity {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, msg);
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
-                "participants");
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,

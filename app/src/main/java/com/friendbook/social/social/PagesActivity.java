@@ -268,8 +268,7 @@ public class PagesActivity extends Activity {
             h.btn.setOnClickListener(v -> {
                 String me = Fb.uid();
                 if (me == null) return;
-                com.friendbook.social.core.DataRouter.mirrorPut("pages", p.id, "followers",
-                        following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                com.friendbook.social.core.DataRouter.mirrorPut("pages", p.id, "followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
                 Fb.db().collection("pages").document(p.id).update("followers",
                         following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
             });

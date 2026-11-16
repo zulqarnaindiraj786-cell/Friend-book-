@@ -533,7 +533,7 @@ public class SettingsActivity extends Activity {
     private void patchUser(String key, Object val) {
         String uid = Fb.uid();
         if (uid == null) return;
-        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, Fb.map(key);
+        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, Fb.map(key, val));
         Fb.db().collection("users").document(uid).set(Fb.map(key, val), SetOptions.merge());
     }
 

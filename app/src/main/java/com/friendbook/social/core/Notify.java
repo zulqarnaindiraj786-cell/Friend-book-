@@ -23,10 +23,8 @@ public class Notify {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
         WriteBatch batch = Fb.db().batch();
-        com.friendbook.social.core.DataRouter.mirrorPut("users", toUid, Fb.map("followers");
         batch.set(Fb.db().collection("users").document(toUid),
                 Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
-        com.friendbook.social.core.DataRouter.mirrorPut("users", me, Fb.map("following");
         batch.set(Fb.db().collection("users").document(me),
                 Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
         batch.commit().addOnSuccessListener(v -> {

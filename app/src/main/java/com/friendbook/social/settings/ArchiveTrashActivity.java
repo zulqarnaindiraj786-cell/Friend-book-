@@ -238,8 +238,7 @@ public class ArchiveTrashActivity extends Activity {
     private void toggleHighlight(Models.Story s, boolean currentlyHighlighted) {
         String me = Fb.uid();
         if (me == null) return;
-        com.friendbook.social.core.DataRouter.mirrorPut("users", me, "highlightStoryIds",
-                currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id));
+        com.friendbook.social.core.DataRouter.mirrorPut("users", me, "highlightStoryIds", currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id));
         Fb.db().collection("users").document(me).update("highlightStoryIds",
                 currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id))
                 .addOnSuccessListener(x -> Ui.toast(this, currentlyHighlighted

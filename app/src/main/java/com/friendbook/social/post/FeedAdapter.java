@@ -1584,8 +1584,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("notifications for this post")) {
                 if (Fb.uid() != null) {
-                    com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "subscribedBy",
-                            subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                    com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "subscribedBy", subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                     Fb.db().collection("posts").document(p.id).update("subscribedBy",
                             subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                     Ui.toast(activity, subscribed ? "Post notifications OFF" : "Post notifications ON 🔔");
