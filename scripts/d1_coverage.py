@@ -76,6 +76,8 @@ def main() -> int:
     rows_out = []
     totals = {"documents": 0, "table": 0, "only_in_docs": 0, "only_in_table": 0, "in_both": 0}
 
+    # Failures here are printed as ::error:: so they survive into the check-run annotations;
+    # this repository's log download comes back empty, so a bare traceback is invisible.
     for collection, table, pk in SHAPES:
         try:
             doc_rows = d1_query(
@@ -83,7 +85,7 @@ def main() -> int:
                 f"SELECT doc_id AS id FROM friendbook_cf_documents WHERE collection = '{collection}'",
             )
         except Exception as error:  # noqa: BLE001
-            print(f"::warning::{collection}: document store unreadable - {error}")
+            print(f"::error::{collection}: document store unreadable - {type(error).__name__}: {error}")
             continue
 
         doc_ids = {str(r["id"]) for r in doc_rows if r.get("id") is not None}
@@ -117,6 +119,10 @@ def main() -> int:
             # A sample, so the shape of the gap is visible without dumping thousands of ids.
             "only_in_table_sample": sorted(only_table)[:5],
         })
+
+    if not rows_out:
+        print("::error::no collection could be read; the comparison did not run")
+        return 1
 
     for row in rows_out:
         print(
