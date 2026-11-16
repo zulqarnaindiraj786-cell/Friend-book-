@@ -4,19 +4,21 @@ name: Audit D1 Freshness
 #
 # The counts we had were compatible with both answers. 4,651 rows in D1 against ~4,377 in
 # Firestore says D1 is not short of documents, but it says nothing about whether anything has
-# been written to it since a copy finished. The timestamps say that, and they cost one
-# authenticated GET and zero Firestore reads — so this stays safe to run while the Firestore
-# read path is blocked.
+# been written to it since a copy finished. The timestamps say that, and reading them costs
+# zero Firestore reads — so this stays safe to run while the Firestore read path is blocked.
 #
-# Read-only by construction: it calls /v1/admin/migrate/audit, which runs SELECTs and returns
-# JSON. It never touches Firestore and never writes to D1.
+# It talks to the Cloudflare D1 REST API directly rather than to the worker. The worker's
+# migration routes are gated behind MIGRATION_ADMIN_TOKEN, which is not stored as a repository
+# secret, and going through the API means this diagnostic keeps working regardless of what the
+# worker is doing.
+#
+# Read-only by construction: every statement below is a SELECT.
 
 on:
   push:
     paths:
       - '.github/workflows/audit-d1-freshness.yml'
-      - 'cloudflare/migration-api.js'
-      - 'scripts/report_d1_audit.py'
+      - 'scripts/audit_d1_freshness.py'
   workflow_dispatch:
 
 permissions:
@@ -30,28 +32,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Query the audit endpoint
+      - name: Query D1 for row counts and write timestamps
         env:
-          API_BASE: >-
-            ${{ secrets.CF_WORKERS_API_BASE != '' &&
-                secrets.CF_WORKERS_API_BASE ||
-                'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev' }}
-          API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
-        run: |
-          if [ -z "$API_TOKEN" ]; then
-            echo "::error::MIGRATION_ADMIN_TOKEN is not set"
-            exit 1
-          fi
-          URL="${API_BASE%/}/v1/admin/migrate/audit"
-          echo "GET $URL"
-          STATUS=$(curl -sS -m 60 -o /tmp/audit.json -w '%{http_code}' \
-            -H "Authorization: Bearer $API_TOKEN" "$URL" || echo 000)
-          echo "HTTP $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::audit endpoint returned HTTP $STATUS"
-            head -c 400 /tmp/audit.json 2>/dev/null || true
-            exit 1
-          fi
-          cat /tmp/audit.json
-          echo
-          python3 scripts/report_d1_audit.py /tmp/audit.json
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+        run: python3 scripts/audit_d1_freshness.py
