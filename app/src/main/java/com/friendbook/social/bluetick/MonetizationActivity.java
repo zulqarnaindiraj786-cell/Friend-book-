@@ -11,6 +11,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.models.Models;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
