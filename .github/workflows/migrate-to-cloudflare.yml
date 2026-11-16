@@ -51,7 +51,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # wrangler@4.157.0 refuses to start on Node 20 (it needs a newer runtime); the
+          # deploy workflow has used 22 all along, which is why deploys work and this
+          # pipeline died at the wrangler install step every time.
+          node-version: '22'
       
       - name: Install Python dependencies
         run: |

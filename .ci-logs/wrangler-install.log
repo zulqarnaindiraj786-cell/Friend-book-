@@ -1,0 +1,13 @@
+=== node/npm ===
+v22.22.3
+10.9.8
+=== npm install ===
+
+added 38 packages, and removed 2 packages in 6s
+install exit=0
+total 8
+drwxr-xr-x  2 user user 4096 Nov 16 03:35 .
+drwxr-xr-x 33 user user 4096 Nov 16 03:35 ..
+lrwxrwxrwx  1 user user   30 Nov 16 03:35 cf-wrangler -> ../wrangler/bin/cf-wrangler.js
+lrwxrwxrwx  1 user user   22 Nov 16 03:35 esbuild -> ../esbuild/bin/esbuild
+4.157.0
