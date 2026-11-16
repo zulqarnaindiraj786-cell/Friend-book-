@@ -113,6 +113,6 @@ public final class DataRouter {
     /** Mirrors a delete into D1. */
     public static void mirrorDelete(String collection, String docId) {
         if (!d1First(collection) || docId == null || docId.isEmpty()) return;
-        CloudflareStore.delete(collection, docId);
+        CloudflareStore.delete(collection, docId, null);
     }
 }
