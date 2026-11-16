@@ -185,6 +185,7 @@ public class Presence {
             m.put("showActiveStatus", allowed);
             m.put("lastSeenMs", now());
             m.put("lastSeen", FieldValue.serverTimestamp());
+            com.friendbook.social.core.DataRouter.mirrorPut("users", uid, m);
             Fb.db().collection("users").document(uid).set(m, SetOptions.merge())
                     .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()))
                     .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));

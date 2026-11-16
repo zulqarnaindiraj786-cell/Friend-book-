@@ -255,6 +255,8 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
     private void toggleFollow() {
         String me = Fb.uid();
         if (me == null) return;
+        com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, "followers",
+                following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
         Fb.db().collection("pages").document(pageId).update("followers",
                 following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
     }
@@ -287,6 +289,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     upd.put("category", cIn.getText().toString().trim());
                     upd.put("website", wIn.getText().toString().trim());
                     upd.put("about", aIn.getText().toString().trim());
+                    com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, upd);
                     Fb.db().collection("pages").document(pageId).update(upd)
                             .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓"));
                 })

@@ -496,6 +496,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                         up.put("members", FieldValue.arrayRemove(me));
                         up.put("adminIds", FieldValue.arrayRemove(me));
                         up.put("moderatorIds", FieldValue.arrayRemove(me));
+                        com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                         Fb.db().collection("groups").document(id).update(up);
                         Ui.toast(this, "You left " + group.name);
                     });
@@ -511,6 +512,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             Map<String, Object> up = new HashMap<>();
             up.put("members", FieldValue.arrayUnion(me));
             up.put("invitedUids", FieldValue.arrayRemove(me));
+            com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
             Fb.db().collection("groups").document(id).update(up);
             Ui.toast(this, "Joined " + group.name + " 🎉");
         }
@@ -698,6 +700,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView appr = Ui.btn(this, "✓ Approve");
             Ui.pad(appr, 12, 6, 12, 6);
             appr.setOnClickListener(v -> {
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "groupApprovalStatus", "approved");
                 Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved");
                 Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
                 card.setVisibility(View.GONE);
@@ -752,6 +755,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 Map<String, Object> up = new HashMap<>();
                 up.put("pendingMemberIds", FieldValue.arrayRemove(reqUid));
                 up.put("members", FieldValue.arrayUnion(reqUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                 Fb.db().collection("groups").document(id).update(up);
                 Notify.sendGroupInvite(reqUid, id, group.name);
                 row.setVisibility(View.GONE);
@@ -816,6 +820,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView pinB = Ui.btnOutline(this, pinned ? "Unpin" : "📌 Pin to Featured", Ui.BLUE);
             Ui.pad(pinB, 10, 5, 10, 5);
             pinB.setOnClickListener(v -> {
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "pinnedPostId", pinned ? "" : p.id);
                 Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id);
                 dlg.dismiss();
                 Ui.toast(this, pinned ? "Unpinned" : "Pinned to Featured 📌");
@@ -932,6 +937,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                     up.put("postPermission", postPerm[0]);
                     up.put("requirePostApproval", swPostAppr.isChecked());
                     up.put("requireJoinApproval", swJoinAppr.isChecked());
+                    com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                     Fb.db().collection("groups").document(id).set(up, SetOptions.merge())
                             .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓"));
                 })
@@ -1069,10 +1075,14 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             if (act == 1) {
                 startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", targetUid));
             } else if (act == 2) {
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "adminIds",
+                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Fb.db().collection("groups").document(id).update("adminIds",
                         targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Ui.toast(this, targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
             } else if (act == 3) {
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "moderatorIds",
+                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Fb.db().collection("groups").document(id).update("moderatorIds",
                         targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
                 Ui.toast(this, targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");
@@ -1081,6 +1091,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("members", FieldValue.arrayRemove(targetUid));
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                 Fb.db().collection("groups").document(id).update(up);
                 Ui.toast(this, "Removed " + targetName);
             } else if (act == 5) {
@@ -1089,6 +1100,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
                 up.put("bannedMemberIds", FieldValue.arrayUnion(targetUid));
+                com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                 Fb.db().collection("groups").document(id).update(up);
                 Ui.toast(this, "Banned " + targetName + " from group 🚫");
             }

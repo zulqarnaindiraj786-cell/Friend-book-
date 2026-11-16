@@ -1320,6 +1320,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         sub.put("createdAt", FieldValue.serverTimestamp());
         sub.put("expiry", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L)));
+        com.friendbook.social.core.DataRouter.mirrorPut("subscriptions", uid + "_" + me, sub);
         Fb.db().collection("subscriptions").document(uid + "_" + me).set(sub)
                 .addOnSuccessListener(x -> {
                     subscribedActive = true;
@@ -1395,11 +1396,16 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     if (incomingRequestId == null) return;
                     if (w == 0) {
                         WriteBatch batch = Fb.db().batch();
+                        com.friendbook.social.core.DataRouter.mirrorPut("friend_requests", incomingRequestId, "status", "accepted");
                         batch.update(Fb.db().collection("friend_requests").document(incomingRequestId), "status", "accepted");
+                        com.friendbook.social.core.DataRouter.mirrorPut("friends", , Fb.map(
+                                "participants");
                         batch.set(Fb.db().collection("friends").document(), Fb.map(
                                 "participants", java.util.Arrays.asList(Fb.uid(), uid),
                                 "createdAt", FieldValue.serverTimestamp()));
+                        com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), "friendsCount", FieldValue.increment(1));
                         batch.update(Fb.db().collection("users").document(Fb.uid()), "friendsCount", FieldValue.increment(1));
+                        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "friendsCount", FieldValue.increment(1));
                         batch.update(Fb.db().collection("users").document(uid), "friendsCount", FieldValue.increment(1));
                         batch.commit().addOnSuccessListener(x -> {
                             Notify.send(uid, "friend_accept", "accepted your friend request");
@@ -1451,7 +1457,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             if (parts.contains(uid)) {
                                 d.getReference().delete();
+                                com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount", FieldValue.increment(-1));
                                 Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
+                                com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "friendsCount", FieldValue.increment(-1));
                                 Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1));
                             }
                         }

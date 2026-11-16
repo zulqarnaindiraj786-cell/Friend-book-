@@ -549,6 +549,7 @@ public class MenuFragment extends Fragment {
                     upd.put("stars", FieldValue.increment(bonus));
                     upd.put("dailyStreak", newStreak);
                     upd.put("lastBonusAt", now);
+                    com.friendbook.social.core.DataRouter.mirrorPut("users", me, upd);
                     Fb.db().collection("users").document(me).update(upd)
                             .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
                                     "+" + bonusF + " ⭐ added to your balance!\n\n"

@@ -590,7 +590,10 @@ public class StoryViewerActivity extends Activity {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, msg);
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
+                "participants");
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,

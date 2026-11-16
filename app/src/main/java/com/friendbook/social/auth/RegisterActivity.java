@@ -222,6 +222,7 @@ public class RegisterActivity extends Activity {
                     u.put("following", new ArrayList<String>());
                     u.put("blockedUsers", new ArrayList<String>());
                     u.put("createdAt", FieldValue.serverTimestamp());
+                    com.friendbook.social.core.DataRouter.mirrorPut("users", uid, u);
                     Fb.db().collection("users").document(uid).set(u)
                             .addOnSuccessListener(x -> {
                                 GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",

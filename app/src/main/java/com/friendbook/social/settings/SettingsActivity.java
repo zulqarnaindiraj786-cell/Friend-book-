@@ -533,6 +533,7 @@ public class SettingsActivity extends Activity {
     private void patchUser(String key, Object val) {
         String uid = Fb.uid();
         if (uid == null) return;
+        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, Fb.map(key);
         Fb.db().collection("users").document(uid).set(Fb.map(key, val), SetOptions.merge());
     }
 
@@ -633,6 +634,7 @@ public class SettingsActivity extends Activity {
                     upd.put("nameLower", n.toLowerCase(Locale.ROOT));
                     upd.put("pronouns", pronIn.getText().toString().trim());
                     upd.put("phone", phoneIn.getText().toString().trim());
+                    com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), upd);
                     Fb.db().collection("users").document(Fb.uid()).set(upd, SetOptions.merge())
                             .addOnSuccessListener(x -> {
                                 Ui.toast(this, "Personal info updated ✓");

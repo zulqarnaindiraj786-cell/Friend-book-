@@ -368,6 +368,7 @@ public class MarketplaceActivity extends Activity {
         AlertDialog.Builder ab = new AlertDialog.Builder(this).setView(sv);
         if (p.authorId.equals(Fb.uid())) {
             ab.setPositiveButton(p.marketSold ? "Mark Available" : "✓ Mark as Sold", (dlg, w) -> {
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "marketSold", !p.marketSold);
                 Fb.db().collection("posts").document(p.id).update("marketSold", !p.marketSold);
                 Ui.toast(this, !p.marketSold ? "Marked as SOLD" : "Marked available again");
             });
@@ -378,6 +379,8 @@ public class MarketplaceActivity extends Activity {
             boolean saved = Fb.uid() != null && p.savedBy.contains(Fb.uid());
             ab.setNeutralButton(saved ? "Saved ✓" : "🔖 Save item", (dlg, w) -> {
                 if (Fb.uid() == null) return;
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "savedBy",
+                        saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                 Fb.db().collection("posts").document(p.id).update("savedBy",
                         saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                 Ui.toast(this, saved ? "Removed from Saved" : "Saved ✓");
@@ -406,7 +409,10 @@ public class MarketplaceActivity extends Activity {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, msg);
         batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
+                "participants");
         batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,

@@ -385,6 +385,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         if (!friendIds.contains(from)) friendIds.add(from);
 
         WriteBatch batch = Fb.db().batch();
+        com.friendbook.social.core.DataRouter.mirrorPut("friend_requests", rid, "status", "accepted");
         batch.update(Fb.db().collection("friend_requests").document(rid),
                 "status", "accepted");
         com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
@@ -393,7 +394,9 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 "createdAt", FieldValue.serverTimestamp());
         com.friendbook.social.core.CloudflareStore.put("friends", friendDocRef.getId(), friendDoc);
         batch.set(friendDocRef, friendDoc);
+        com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
+        com.friendbook.social.core.DataRouter.mirrorPut("users", from, "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
         batch.commit().addOnSuccessListener(x -> {
             if(!me.equals(Fb.uid()) || getActivity()==null)return;
@@ -410,7 +413,9 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 if(page.getMetadata().isFromCache() || page.size()==20){Ui.toast(getActivity(),"Couldn't verify all relationship records. Nothing changed; retry online.");return;}
                 if(page.isEmpty()){removedFriendIds.add(user.uid);friendIds.remove(user.uid);render();return;}
                 WriteBatch batch=Fb.db().batch();for(DocumentSnapshot doc:page)batch.delete(doc.getReference());
+                com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount",FieldValue.increment(-page.size()));
                 batch.update(Fb.db().collection("users").document(me),"friendsCount",FieldValue.increment(-page.size()));
+                com.friendbook.social.core.DataRouter.mirrorPut("users", user.uid, "friendsCount",FieldValue.increment(-page.size()));
                 batch.update(Fb.db().collection("users").document(user.uid),"friendsCount",FieldValue.increment(-page.size()));
                 batch.commit().addOnSuccessListener(v->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
                     removedFriendIds.add(user.uid);friendIds.remove(user.uid);candidateFriends.remove(user.uid);render();Ui.toast(getActivity(),"Unfriended");

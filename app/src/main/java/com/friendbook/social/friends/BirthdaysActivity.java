@@ -225,6 +225,7 @@ public class BirthdaysActivity extends Activity {
                                 "comments", 0,
                                 "shares", 0,
                                 "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                        com.friendbook.social.core.DataRouter.mirrorPut("posts", , post);
                         Fb.db().collection("posts").document().set(post);
                         com.friendbook.social.core.Notify.send(r.user.uid, "birthday",
                                 "wished you a Happy Birthday 🎂🎉", "");

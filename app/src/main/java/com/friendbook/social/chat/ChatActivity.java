@@ -756,12 +756,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
             if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
             Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
+            com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, patch);
             batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
         
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, com.google.firebase.firestore.FieldPath.of("unreadCount");
         batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
     }
@@ -927,6 +929,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         forceScrollBottom = true;
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
@@ -952,6 +955,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String me = Fb.uid();
         if (me == null || chatId == null) return;
         // Use update() rather than set() so opening an empty chat never creates an incomplete room doc
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "unreadCount." + me, 0);
         Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
     }
 
@@ -1022,6 +1026,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "✨ " + emoji + " sticker");
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit()
@@ -1106,6 +1111,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {

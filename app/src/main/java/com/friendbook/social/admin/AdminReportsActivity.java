@@ -102,6 +102,7 @@ public class AdminReportsActivity extends Activity {
                 String uid = Format.str(m, "uid");
                 String type = Format.str(m, "type");
                 if (!uid.isEmpty() && "profile".equals(type)) {
+                    com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "banned", true);
                     Fb.db().collection("users").document(uid).update("banned", true);
                 }
                 d.getReference().delete();
@@ -109,6 +110,7 @@ public class AdminReportsActivity extends Activity {
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
+                com.friendbook.social.core.DataRouter.mirrorPut("users", author, "banned", true);
                 Fb.db().collection("users").document(author).update("banned", true);
                 d.getReference().delete();
                 Ui.toast(this, "Author banned ✓");

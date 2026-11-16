@@ -238,6 +238,7 @@ public class NotificationsFragment extends Fragment {
 
     private void open(Models.Notif n) {
         if (!n.isRead) {
+            com.friendbook.social.core.DataRouter.mirrorPut("notifications", n.id, "isRead", true);
             Fb.db().collection("notifications").document(n.id).update("isRead", true);
         }
         android.app.Activity a = getActivity();

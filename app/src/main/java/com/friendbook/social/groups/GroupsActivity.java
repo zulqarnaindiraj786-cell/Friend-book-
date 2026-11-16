@@ -410,6 +410,7 @@ public class GroupsActivity extends Activity {
                     Map<String, Object> up = new HashMap<>();
                     up.put("members", FieldValue.arrayUnion(me));
                     up.put("invitedUids", FieldValue.arrayRemove(me));
+                    com.friendbook.social.core.DataRouter.mirrorPut("groups", g.id, up);
                     Fb.db().collection("groups").document(g.id).update(up);
                     Ui.toast(GroupsActivity.this, "Joined " + g.name + " 🎉");
                 }

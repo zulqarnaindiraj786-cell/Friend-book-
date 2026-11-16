@@ -318,6 +318,7 @@ public class EditProfileActivity extends Activity {
         m.put("contactPrivacy", ep);
         m.put("contactInfoPrivacy", ep);
 
+        com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), m);
         Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     Ui.toast(this, "Profile & Intro updated ✓");

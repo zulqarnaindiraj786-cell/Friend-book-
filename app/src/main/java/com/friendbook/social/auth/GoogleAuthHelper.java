@@ -415,6 +415,7 @@ public final class GoogleAuthHelper {
                                                String displayName, String googlePhoto,
                                                String referralInput, View btnView, TextView labelTv) {
         Map<String, Object> u = buildDefaultGoogleUserMap(uid, email, displayName, googlePhoto);
+        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, u);
         Fb.db().collection("users").document(uid).set(u, SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     sAuthInFlight = false;
@@ -524,6 +525,7 @@ public final class GoogleAuthHelper {
             existingPhoto = googlePhoto;
         }
         if (!patch.isEmpty()) {
+            com.friendbook.social.core.DataRouter.mirrorPut("users", uid, patch);
             Fb.db().collection("users").document(uid).set(patch, SetOptions.merge());
         }
         if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
@@ -555,6 +557,7 @@ public final class GoogleAuthHelper {
             r.put("status", "completed");
             r.put("date", FieldValue.serverTimestamp());
             r.put("createdAt", FieldValue.serverTimestamp());
+            com.friendbook.social.core.DataRouter.mirrorPut("referrals", refBy + "_" + newUid, r);
             Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r);
 
             Map<String, Object> n = new HashMap<>();

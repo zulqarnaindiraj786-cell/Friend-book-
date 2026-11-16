@@ -378,6 +378,7 @@ public class Reactions {
                     if (snap.size() < 250 && storedLikes != realCount) {
                         Map<String, Object> heal = new HashMap<>();
                         heal.put("likes", realCount);
+                        com.friendbook.social.core.DataRouter.mirrorPut("posts", postId, heal);
                         Fb.db().collection("posts").document(postId).set(heal, SetOptions.merge());
                     }
                     FastCache.setReactionState(c, postId, myType, bestTotal, true);

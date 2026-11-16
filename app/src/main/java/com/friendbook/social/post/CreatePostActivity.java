@@ -870,6 +870,7 @@ public class CreatePostActivity extends Activity {
             if (com.friendbook.social.core.CloudflareStore.enabled()) {
                 com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
             } else {
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", editId, m);
                 Fb.db().collection("posts").document(editId).update(m);
             }
             Ui.toast(this, "Post updated ✓");

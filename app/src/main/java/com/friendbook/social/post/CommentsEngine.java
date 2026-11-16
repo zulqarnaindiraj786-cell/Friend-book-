@@ -247,6 +247,7 @@ public class CommentsEngine {
         com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
         batch.set(parentRef.collection("comments").document(newId),commentMap);
         local.canonicalStored=true;
+        com.friendbook.social.core.DataRouter.mirrorPut("comments", newId, commentMap);
         batch.set(Fb.db().collection("comments").document(newId),commentMap);
         Map<String,Object> patch=new HashMap<>();
         patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));

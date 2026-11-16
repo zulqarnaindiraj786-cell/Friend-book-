@@ -1437,6 +1437,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (p.pollVotes == null) p.pollVotes = new HashMap<>();
             p.pollVotes.put(me, (long) idx);
         }
+        com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, upd);
         Fb.db().collection("posts").document(p.id).update(upd)
                 .addOnFailureListener(e -> Ui.toast(activity, "Vote failed: " + e.getMessage()));
         notifyDataSetChanged();
@@ -1583,18 +1584,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("notifications for this post")) {
                 if (Fb.uid() != null) {
+                    com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "subscribedBy",
+                            subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                     Fb.db().collection("posts").document(p.id).update("subscribedBy",
                             subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
                     Ui.toast(activity, subscribed ? "Post notifications OFF" : "Post notifications ON 🔔");
                 }
             }
             else if (t.contains("Move to Archive")) {
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "archived", true);
                 Fb.db().collection("posts").document(p.id).update("archived", true);
                 posts.remove(p);
                 notifyDataSetChanged();
                 Ui.toast(activity, "Moved to Archive 📦 (Settings → Archive & Trash)");
             }
             else if (t.contains("Move to Recycle Bin")) {
+                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "trashedAt", System.currentTimeMillis());
                 Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis());
                 posts.remove(p);
                 notifyDataSetChanged();
@@ -1607,6 +1612,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 java.util.Map<String, Object> upd = new HashMap<>();
                 upd.put("pinnedPostId", unpin
                         ? com.google.firebase.firestore.FieldValue.delete() : p.id);
+                com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), upd);
                 Fb.db().collection("users").document(Fb.uid()).update(upd)
                         .addOnSuccessListener(x -> Ui.toast(activity,
                                 unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
@@ -1686,6 +1692,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
         String[] vals = {"Public", "Friends", "Only me"};
         Ui.choose(activity, "Who can see this post?", opts, w -> {
+            com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "privacy", vals[w]);
             Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
             p.privacy = vals[w];
             notifyDataSetChanged();
@@ -1815,6 +1822,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
                             "createdAt", FieldValue.serverTimestamp());
                     Fb.db().collection("posts").add(m);
+                    com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "shares", FieldValue.increment(1));
                     Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
                     Notify.send(p.authorId, "share", "shared your post", p.id);
                     Ui.toast(c, "Shared to your feed ✓");

@@ -186,6 +186,7 @@ public class AdminPaymentsFragment extends Fragment {
 
         if (type != null && type.startsWith("tick_")) {
             String level = type.substring(5);
+            com.friendbook.social.core.DataRouter.mirrorPut("users", uid, Fb.map("tickLevel");
             batch.set(Fb.db().collection("users").document(uid),
                     Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
         } else if ("subscription".equals(type)) {

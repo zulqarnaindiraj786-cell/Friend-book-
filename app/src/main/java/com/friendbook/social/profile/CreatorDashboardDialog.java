@@ -134,6 +134,7 @@ public final class CreatorDashboardDialog {
                     : "Personal Profile · Professional Mode OFF");
             Map<String, Object> up = new HashMap<>();
             up.put("professionalMode", checked);
+            com.friendbook.social.core.DataRouter.mirrorPut("users", me, up);
             Fb.db().collection("users").document(me).set(up, SetOptions.merge());
             if (onUpdated != null) onUpdated.run();
         });
