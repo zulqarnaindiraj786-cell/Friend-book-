@@ -279,18 +279,16 @@ jobs:
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
-          set -o pipefail
           mkdir -p .ci-logs
-          python3 -u scripts/migrate_firestore_to_d1.py 2>&1 | tee .ci-logs/migration.log
-          RC=${PIPESTATUS[0]}
+          echo '::notice::migration step started' 
+          python3 -u scripts/migrate_firestore_to_d1.py > .ci-logs/migration.log 2>&1
+          RC=$?
           echo "migration script exit=$RC"
+          echo "--- last 20 lines ---"
+          tail -n 20 .ci-logs/migration.log || true
           if [ "$RC" != '0' ]; then
-            # Artifacts are not retrievable from every environment; annotations are.
-            # Surface the last lines as workflow commands so the cause is visible in the
-            # checks UI without downloading anything.
-            tail -n 15 .ci-logs/migration.log | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::$line"
-            done
+            msg=$(tail -n 8 .ci-logs/migration.log | tr '\n' ' | ' | cut -c1-400)
+            echo "::error::Migration failed (exit $RC): $msg"
           fi
           exit $RC
 
