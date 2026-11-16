@@ -62,16 +62,43 @@ jobs:
         # not reliably on PATH on these runners, and npx re-resolves on every call. A
         # local install is one pinned download at a known path, so later steps invoke
         # exactly the version wrangler.toml targets.
+        #
+        # Everything is teed to a file and uploaded as an artifact. The runner log for
+        # this job is not retrievable from every environment, and guessing at a failure
+        # with no output is how the previous three attempts were wasted.
         run: |
-          npm install --no-save --no-audit --no-fund wrangler@4.157.0
+          set -o pipefail
+          mkdir -p .ci-logs
+          {
+            echo "=== node/npm ==="
+            node --version || true
+            npm --version || true
+            echo "=== existing package.json ==="
+            cat package.json || true
+            echo "=== npm install wrangler@4.157.0 ==="
+            npm install --no-save --no-audit --no-fund wrangler@4.157.0 2>&1
+            echo "install exit=$?"
+            echo "=== node_modules/.bin ==="
+            ls -la node_modules/.bin/ 2>&1 | head -30 || true
+            echo "=== version ==="
+            ./node_modules/.bin/wrangler --version 2>&1 || true
+          } 2>&1 | tee .ci-logs/wrangler-install.log
           WRANGLER="$(pwd)/node_modules/.bin/wrangler"
           if [ ! -x "$WRANGLER" ]; then
-            echo "::error::wrangler did not install at $WRANGLER"
-            ls -la node_modules/.bin/ | head -20 || true
+            echo "::error::wrangler did not install at $WRANGLER - see the wrangler-install-log artifact"
             exit 1
           fi
           echo "WRANGLER=$WRANGLER" >> "$GITHUB_ENV"
           "$WRANGLER" --version
+
+      - name: Upload CI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ github.run_id }}-${{ github.job }}
+          path: .ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
       
       # ============ STEP 1: BACKUP FIREBASE ============
       - name: Setup Firebase Service Account
