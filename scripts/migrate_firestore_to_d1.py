@@ -156,10 +156,18 @@ def rest_probe():
     HTTPS costs one read and answers that.
     """
     try:
-        import google.auth
         import google.auth.transport.requests
+        from google.oauth2 import service_account
         scopes = ["https://www.googleapis.com/auth/datastore"]
-        creds, _ = google.auth.default(scopes=scopes)
+        source = SERVICE_ACCOUNT
+        if source and source.lstrip().startswith("{"):
+            # CI holds the key as JSON in the variable, not as a file path, so ADC finds
+            # nothing. Build the credential from the same material the Admin SDK uses.
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(source), scopes=scopes)
+        else:
+            import google.auth
+            creds, _ = google.auth.default(scopes=scopes)
         creds.refresh(google.auth.transport.requests.Request())
         url = (f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}"
                f"/databases/(default)/documents/users?pageSize=1")
