@@ -55,13 +55,21 @@ jobs:
         if: ${{ inputs.mode == 'copy' }}
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
-          MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
-          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
         run: python3 scripts/copy_all_to_d1.py --copy
 
       - name: Verify every document arrived
         if: ${{ inputs.mode == 'copy' }}
         env:
-          MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
-          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
         run: python3 scripts/verify_all_copied.py verify
