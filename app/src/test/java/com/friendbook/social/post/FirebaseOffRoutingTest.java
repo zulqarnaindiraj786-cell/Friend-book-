@@ -49,7 +49,7 @@ public class FirebaseOffRoutingTest {
    verify(batch).set(eq(copy),anyMap());verify(batch).update(eq(parent),ArgumentMatchers.<Map<String,Object>>argThat(map->map.containsKey("lastComment")&&map.containsKey("comments")));verify(batch).commit();noD1(d1);
   }
  }
- @Test public void offCommentWatchUsesFirebaseListenerAndRemovesItOnClose(){
+ @Test public void offCommentWatchReadsFirebaseOnceAndStopsOnClose(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");FirebaseFirestore db=mock(FirebaseFirestore.class);fb.when(Fb::db).thenReturn(db);
@@ -58,16 +58,16 @@ public class FirebaseOffRoutingTest {
    when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);when(parent.collection("comments")).thenReturn(comments);
    when(parent.get()).thenReturn(Tasks.forResult(parentData));when(parentData.exists()).thenReturn(false);
    when(comments.orderBy("createdAt",Query.Direction.DESCENDING)).thenReturn(query);when(query.limit(50)).thenReturn(query);
-   ListenerRegistration registration=mock(ListenerRegistration.class);
-   ArgumentCaptor<com.google.firebase.firestore.EventListener<QuerySnapshot>> callback=ArgumentCaptor.forClass(com.google.firebase.firestore.EventListener.class);
-   when(query.addSnapshotListener(callback.capture())).thenReturn(registration);
-   when(page.getDocuments()).thenReturn(Collections.singletonList(doc));when(page.getDocumentChanges()).thenReturn(Collections.emptyList());when(page.getMetadata()).thenReturn(metadata);when(page.size()).thenReturn(1);
+   // One read, not a subscription: the thread is fetched with get() and nothing stays attached.
+   when(query.get()).thenReturn(Tasks.forResult(page));
+   when(page.getDocuments()).thenReturn(Collections.singletonList(doc));when(page.size()).thenReturn(1);
    when(page.iterator()).thenAnswer(inv->Collections.singletonList(doc).iterator());
    when(doc.getId()).thenReturn("existing");when(doc.getReference()).thenReturn(child);when(child.getParent()).thenReturn(comments);when(comments.getParent()).thenReturn(parent);
    Map<String,Object> data=new HashMap<>();data.put("authorId","off-user");data.put("content","existing Firebase comment");data.put("createdAt",1000L);when(doc.getData()).thenReturn(data);
    List<Models.Comment> shown=new ArrayList<>();CommentsEngine.Handle handle=CommentsEngine.watch("posts","p1","p1",(all,pin)->{shown.clear();shown.addAll(all);});
-   callback.getValue().onEvent(page,null);Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(1,shown.size());assertEquals("existing Firebase comment",shown.get(0).content);
-   handle.remove();verify(registration).remove();noD1(d1);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(1,shown.size());assertEquals("existing Firebase comment",shown.get(0).content);
+   handle.remove();verify(query,never()).addSnapshotListener(any());
+   noD1(d1);
   }
  }
  @Test public void offPostReactionWritesFirebaseNotWorker(){
