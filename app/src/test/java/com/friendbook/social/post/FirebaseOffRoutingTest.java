@@ -52,6 +52,8 @@ public class FirebaseOffRoutingTest {
  @Test public void offCommentWatchReadsFirebaseOnceAndStopsOnClose(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
+   // The comments router asks "is this collection routed to D1", not just "is D1 on".
+   d1.when(()->D1Client.routed(anyString(),anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");FirebaseFirestore db=mock(FirebaseFirestore.class);fb.when(Fb::db).thenReturn(db);
    CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class);DocumentReference parent=mock(DocumentReference.class),child=mock(DocumentReference.class);
    Query query=mock(Query.class);DocumentSnapshot parentData=mock(DocumentSnapshot.class),doc=mock(DocumentSnapshot.class);QuerySnapshot page=mock(QuerySnapshot.class);SnapshotMetadata metadata=mock(SnapshotMetadata.class);
