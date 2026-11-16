@@ -1,4 +1,4 @@
 {
   "step": "run",
-  "note": "Live end-to-end: throwaway signup, D1 profile, post, like, comment, chat message."
+  "note": "Live E2E run 2: the web API key comes from app/google-services.json (public client id, secret not set)."
 }

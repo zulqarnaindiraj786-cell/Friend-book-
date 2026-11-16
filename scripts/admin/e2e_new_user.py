@@ -18,6 +18,7 @@ Every step prints its HTTP status and the field that proves it. The test account
 """
 import json
 import os
+import pathlib
 import sys
 import time
 import urllib.error
@@ -25,7 +26,27 @@ import urllib.parse
 import urllib.request
 
 WORKER = os.environ.get('WORKER_URL', 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev').rstrip('/')
-API_KEY = os.environ.get('FIREBASE_API_KEY', '').strip()
+
+
+def api_key():
+    """The Firebase web API key: the Android client identifier, not a credential.
+
+    It ships inside every APK and lives in app/google-services.json, so reading it from the
+    checkout adds no secret; the repository secret of the same name is simply not set. Without
+    it the identity toolkit cannot sign a test account in.
+    """
+    value = os.environ.get('FIREBASE_API_KEY', '').strip()
+    if value:
+        return value
+    path = pathlib.Path(__file__).resolve().parents[2] / 'app' / 'google-services.json'
+    try:
+        data = json.loads(path.read_text())
+        return str(data['client'][0]['api_key'][0]['current_key']).strip()
+    except Exception:
+        return ''
+
+
+API_KEY = api_key()
 STAMP = int(time.time())
 TAG = f'e2e{STAMP}'
 PASSWORD = f'E2e-{STAMP}-Passw0rd!'
