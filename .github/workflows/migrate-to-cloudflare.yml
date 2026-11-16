@@ -284,6 +284,14 @@ jobs:
           python3 -u scripts/migrate_firestore_to_d1.py 2>&1 | tee .ci-logs/migration.log
           RC=${PIPESTATUS[0]}
           echo "migration script exit=$RC"
+          if [ "$RC" != '0' ]; then
+            # Artifacts are not retrievable from every environment; annotations are.
+            # Surface the last lines as workflow commands so the cause is visible in the
+            # checks UI without downloading anything.
+            tail -n 15 .ci-logs/migration.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
+          fi
           exit $RC
 
       # ============ STEP 4: VERIFY MIGRATION ============
