@@ -58,7 +58,11 @@ jobs:
           pip install firebase-admin requests
       
       - name: Install Wrangler
-        run: npm install -g wrangler
+        # Pinned, and checked, because a globally-floating wrangler can drift from the
+        # version wrangler.toml was written for and change its CLI surface mid-pipeline.
+        run: |
+          npm install -g wrangler@4.157.0
+          wrangler --version
       
       # ============ STEP 1: BACKUP FIREBASE ============
       - name: Setup Firebase Service Account
@@ -107,14 +111,38 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          # The account id is public (it is in wrangler.toml and every worker URL), so a
+          # missing secret must not block schema application.
+          FALLBACK_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
         run: |
+          set -o pipefail
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo '::error::CLOUDFLARE_API_TOKEN is not available to this workflow.'
             exit 1
           fi
+          export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-$FALLBACK_ACCOUNT_ID}"
+
+          # Prove the credential can reach this account before guessing at a failure.
+          code=$(curl --silent --show-error --max-time 30 -o /tmp/d1.json -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" || echo 000)
+          echo "D1 list API -> HTTP $code"
+          case "$code" in
+            200) python3 -c "import json;d=json.load(open('/tmp/d1.json'));print('databases:',[x.get('name') for x in d.get('result',[])])" ;;
+            403|401) echo '::error::CLOUDFLARE_API_TOKEN cannot list D1 databases for this account. It needs the D1:Edit permission on account 92f3d04598822de2e49e14561218d090.'; head -c 300 /tmp/d1.json; exit 1 ;;
+            000) echo '::error::Could not reach the Cloudflare API from the runner.'; exit 1 ;;
+            *) echo "::warning::Unexpected status $code from the D1 list API; continuing to the migrations command."; head -c 300 /tmp/d1.json ;;
+          esac
+
           # --remote matters: without it wrangler only touches a local .sqlite file and
           # the production database stays empty while the run looks successful.
-          npx --yes wrangler@4.157.0 d1 migrations apply friendbook-db --remote
+          wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee /tmp/d1-apply.log
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" != '0' ]; then
+            echo "::error::wrangler d1 migrations apply failed with exit $RC. Last lines:"
+            tail -n 25 /tmp/d1-apply.log
+          fi
+          exit $RC
 
       - name: Make sure the worker has a migration token
         id: token
