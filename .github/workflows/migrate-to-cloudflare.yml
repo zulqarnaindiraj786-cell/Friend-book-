@@ -14,6 +14,10 @@ on:
     branches: [ main, 'arena/f6bf61bd-friend-book' ]
     paths:
       - '.github/workflows/migrate-to-cloudflare.yml'
+      # The script this pipeline runs. Without it, a fix to the migration itself does not
+      # trigger the pipeline that exercises it, which is how the last fix sat unrun.
+      - 'scripts/migrate_firestore_to_d1.py'
+      - 'scripts/verify_migration.py'
 
 permissions:
   contents: write
