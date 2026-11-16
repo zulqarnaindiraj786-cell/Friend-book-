@@ -254,7 +254,10 @@ jobs:
           }
           echo 'Routing checks (post-deploy):'
           # data-api is off by default, so its paths must still answer 404.
-          check 'data-api dark'        GET    '/v1/posts/feed'                 404
+          # The data API is now ON (DATA_API_ENABLED=true), so a data route must not 404.
+          # 401 with no Authorization header is exactly right: the route exists and the
+          # token gate in front of it is working.
+          check 'data-api live'        GET    '/v1/posts/feed'                 '401 403'
           # The migration API must be routed: 503 (no token), 401 (no header) or 403
           # (wrong token) all prove the handler is live. 404 would mean it never shipped.
           check 'migrate routed'       GET    '/v1/admin/migrate/verify'       '401 403 503'

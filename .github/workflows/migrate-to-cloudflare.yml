@@ -35,6 +35,12 @@ permissions:
   id-token: write
 
 env:
+  # A push-triggered run has no workflow_dispatch inputs, so these defaults are what a
+  # push-run canary uses. They are deliberately the first, cheap step of the ladder:
+  # 100 documents from two collections only. Widen them by editing this block, never by
+  # dispatching from the UI - that is how a "canary" turned into a full dump before.
+  MIGRATION_MAX_DOCS_DEFAULT: '100'
+  MIGRATION_ONLY_DEFAULT: 'users,posts'
   FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
   FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
   CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -297,8 +303,8 @@ jobs:
           # exit-4 failure.
           CF_API_TOKEN: ${{ env.TOKEN }}
           # Defaults keep a normal push run at "everything"; workflow_dispatch can narrow it.
-          MIGRATION_MAX_DOCS: ${{ inputs.max_docs || '0' }}
-          MIGRATION_ONLY: ${{ inputs.only_collections || '' }}
+          MIGRATION_MAX_DOCS: ${{ inputs.max_docs || env.MIGRATION_MAX_DOCS_DEFAULT }}
+          MIGRATION_ONLY: ${{ inputs.only_collections || env.MIGRATION_ONLY_DEFAULT }}
           MIGRATION_READ_RETRIES: '4'
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
