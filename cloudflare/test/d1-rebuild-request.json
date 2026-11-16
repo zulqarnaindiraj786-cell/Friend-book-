@@ -3,5 +3,5 @@
   "collection": "posts",
   "apply": false,
   "confirm": "",
-  "note": "Read-only: plan + posts dry run. No document is written by this request."
+  "note": "Read-only flow 2: plan + posts dry run, result posted to PR #31. Writes nothing."
 }
