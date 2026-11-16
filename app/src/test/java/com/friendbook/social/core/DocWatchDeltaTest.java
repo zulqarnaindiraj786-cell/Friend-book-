@@ -56,7 +56,7 @@ public class DocWatchDeltaTest {
         t.poll(page(doc("a", "hello"), doc("b", "world")));
         DocDelta.Result r = t.poll(page(doc("a", "hello"), doc("b", "world")));
         assertFalse("an idle feed must not fire the listener", r.changed());
-        assertEquals(2, r.documents.size(), "the window is still available for rendering");
+        assertEquals("the window is still available for rendering", 2, r.documents.size());
     }
 
     @Test public void reorderingAloneIsNotAChange() {
