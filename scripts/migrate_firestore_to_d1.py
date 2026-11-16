@@ -232,7 +232,33 @@ def main():
         print("Refusing to start: a run without it would report success while writing nothing.")
         return 2
     
-    fs_client = init_firebase()
+    # Probe the worker before touching Firestore. If the migration endpoint rejects us,
+    # reading the entire database first would be wasted work and the failure would look
+    # like a data problem rather than an auth problem.
+    try:
+        url = f"{CF_API_BASE}/verify"
+        response = requests.get(url, headers={"Authorization": f"Bearer {CF_API_TOKEN}"}, timeout=30)
+        print(f"Worker /verify -> HTTP {response.status_code}")
+        if response.status_code in (401, 403):
+            print(f"ERROR: the worker rejected the migration token. Body: {response.text[:200]}")
+            return 4
+        if response.status_code == 503:
+            print("ERROR: the worker has no MIGRATION_ADMIN_TOKEN configured.")
+            return 4
+        if response.status_code == 200:
+            print(f"Worker counts: {response.text[:300]}")
+    except Exception as exc:
+        print(f"ERROR: could not reach the migration endpoint: {exc}")
+        return 4
+
+    print("Initialising Firebase...")
+    try:
+        fs_client = init_firebase()
+    except Exception as exc:
+        print(f"ERROR: Firebase initialisation failed: {type(exc).__name__}: {exc}")
+        print(f"GOOGLE_APPLICATION_CREDENTIALS={os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'unset')}")
+        print(f"service account file exists: {os.path.exists(SERVICE_ACCOUNT)}")
+        return 5
     print("✓ Firebase initialized\n")
     
     # Verify first
@@ -243,7 +269,14 @@ def main():
     total_errors = 0
     
     for coll in COLLECTIONS:
-        count, errors = migrate_collection(fs_client, coll)
+        try:
+            count, errors = migrate_collection(fs_client, coll)
+        except Exception as exc:
+            # One unreadable collection must not abort the whole run, but it must not be
+            # silent either: it counts as an error and is named.
+            print(f"  ERROR reading {coll}: {type(exc).__name__}: {exc}")
+            total_errors += 1
+            continue
         total_docs += count
         total_errors += errors
     
