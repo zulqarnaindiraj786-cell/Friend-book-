@@ -19,6 +19,7 @@ on:
     paths:
       - '.github/workflows/audit-d1-freshness.yml'
       - 'scripts/audit_d1_freshness.py'
+      - 'scripts/d1_coverage.py'
   workflow_dispatch:
 
 permissions:
@@ -31,6 +32,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compare documents against the normalised tables
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+        run: python3 scripts/d1_coverage.py
 
       - name: Query D1 for row counts and write timestamps
         env:
