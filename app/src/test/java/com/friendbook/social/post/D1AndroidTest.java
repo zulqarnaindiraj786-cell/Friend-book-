@@ -12,10 +12,25 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class D1AndroidTest {
- @Test public void releaseGateIsOffAndDisabledTransportDoesNotInitializeFirebase(){
-  assertFalse(BuildConfig.D1_INTERACTIONS_ENABLED);assertFalse(D1Client.enabled("posts"));assertFalse(D1Client.enabled("reels"));assertFalse(D1Client.enabled("unknown"));
+ @Test public void releaseGateIsOnForPostsAndReelsOnly(){
+  // 2.8.92 routes post/reel interactions to D1 (billing-free). Anything else stays on Firebase.
+  assertTrue(BuildConfig.D1_INTERACTIONS_ENABLED);
+  assertTrue(D1Client.enabled("posts"));assertTrue(D1Client.enabled("reels"));
+  assertFalse(D1Client.enabled("unknown"));
+  // Unsupported collections are rejected locally, without touching Firebase.
   com.google.android.gms.tasks.Task<JSONObject> task=D1Client.request("unknown","p1","comments","POST",D1Client.object("id","one"),null);
   assertTrue(task.isComplete());assertFalse(task.isSuccessful());assertNotNull(task.getException());
+ }
+ @Test public void aResourceTheWorkerNeverMigratedFallsBackToFirestore(){
+  // The worker answers 503 "not verified" for a document whose interactions were not imported.
+  // That must route the document back to Firestore, otherwise its real likes/comments would show
+  // as zero. A document is only served by D1 once it is known-good.
+  assertTrue(D1Client.routed("posts","fresh-post"));
+  D1Client.markUnavailable("posts","legacy-post");
+  assertFalse(D1Client.routed("posts","legacy-post"));
+  assertTrue(D1Client.isUnavailable("posts","legacy-post"));
+  // Rejection is per document: a different post is unaffected.
+  assertTrue(D1Client.routed("posts","another-post"));
  }
  @Test public void dtoPreservesReplyMentionMediaAndActorReaction()throws Exception{
   JSONObject row=D1Client.object("id","c1","authorId","u1","content","hello @friend","createdAt",1234L,"parentId","parent1",
