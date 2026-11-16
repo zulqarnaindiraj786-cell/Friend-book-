@@ -47,11 +47,20 @@ Iske baghair `/v1/admin/migrate/*` 503 deta hai — jaan bujh kar. Koi default t
 
 ## 3. Data copy (Firestore → D1)
 
-> **Current blocker (verified 2026-11-16 04:12 UTC):** Firestore answers
-> `ResourceExhausted: 429 Quota exceeded` on a single-document read. The Spark
-> plan's 50,000 reads/day are spent, so the copy cannot run until the quota
-> resets at 00:00 UTC. Nothing has been lost: the worker `/verify` endpoint
-> reports every D1 table at 0 and Firestore is untouched.
+> **Pehle ye parho - write path ab do jagah likhta hai.** Migration script
+> normalised tables (`users`, `posts`, `chats`, ...) mein rows likhti hai, lekin
+> app har document `/v1/docs` se padhta hai, jo `friendbook_cf_documents` se
+> aata hai. Yeh do shapes pehle kabhi jude nahi the - migration "1,234 migrated,
+> 0 errors" bol sakti thi aur app bilkul khaali rehta tha. Ab `migration-api.js`
+> har document dono jagah likhta hai (`mirrored` field response mein aata hai).
+> `mirrorErrors` 0 hona chahiye; agar nahi, to `/v1/docs` wali copies fail ho
+> rahi hain aur app ko data nahi dikhega.
+>
+> **Blocker (verified 2026-11-16 04:12 UTC):** Firestore ne
+> `ResourceExhausted: 429 Quota exceeded` diya ek single-document read par bhi.
+> Spark plan ke 50,000 reads/day khatam the, is liye copy 00:00 UTC reset ke
+> baghair nahi chal sakti. Kuch bhi zaya nahi hua: worker ka `/verify` har D1
+> table 0 batata hai aur Firestore ko chhua hi nahi gaya.
 
 Run the pipeline: Actions -> **Migrate Firebase to Cloudflare**.
 
@@ -67,8 +76,15 @@ It first proves itself against the live worker, then copies, then verifies:
    quota or credential problem is reported as such instead of as "0 documents"
 5. `Verify Migration` - compares counts; this step no longer swallows failures
 
-For a first, cheap copy instead of a full dump, dispatch the workflow with
-`max_docs=100` and `only_collections=users,posts`.
+**Canary pehle, phir batches.** Ek dum se poora dump mat maaro:
+
+| Run | `max_docs` | `only_collections` | Kya check karna hai |
+|---|---|---|---|
+| 1 (canary) | `100` | `users,posts` | `errors=0`, `mirrorErrors=0`, share kiya hua post app mein dikhta hai |
+| 2 | `500` | *(khaali = baaki sab)* | `mirrored` = `inserted` |
+| 3 | `0` | *(khaali = poora)* | `/verify` ke counts Firestore se match karein |
+
+Canary green hone tak batch 2 mat chalao. Har run ke baad `/verify`.
 
 
 Laptop + Firebase service-account key chahiye. GitHub Actions se bhi ho sakta hai:
@@ -88,24 +104,31 @@ curl -H "Authorization: Bearer $MIGRATION_ADMIN_TOKEN" \
 ```
 Firestore counts se milao. **Counts match na hon to aage mat barhna.**
 
-## 5. Read path on karna
+## 5. Read path - pehle se ON hai
 
-`wrangler.toml` mein `[vars]` ke andar:
+`wrangler.toml` ke `[vars]` mein `DATA_API_ENABLED = "true"` ab committed hai
+(v2.9.0 ke saath). Yeh `/v1/posts`, `/v1/chats`, `/v1/users/...` routes kholta hai.
+Off karna ho to value hata kar redeploy - purana behaviour turant wapas.
 
-```toml
-DATA_API_ENABLED = "true"
-```
+## 6. App - pehle se ON hai
 
-Phir deploy dobara. Ye ek switch hai — off karne se turant purana behaviour wapas.
+`app/build.gradle` mein `CLOUDFLARE_DATA_ENABLED = true` ab committed hai (v2.9.0,
+versionCode 126). Auth + FCM + Crashlytics Firebase pe hi rehte hain; baaki data
+plane Worker + D1 hai.
 
-## 6. App
+## 7. Force update - Play Store ke baghair kuch nahi
 
-`app/build.gradle`:
-```gradle
-buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'true'
-```
-`CfClient` pehle se `/v1/posts`, `/v1/chats`, `/v1/users/...` call karta hai — routes ab
-maujood hain. Auth + FCM Firebase pe hi rehte hain.
+`ForceUpdate.java` launcher par synchronous gate chalata hai:
+
+- `MIN_SUPPORTED_VERSION_CODE = 126` (v2.9.0). Isse purana build aage nahi barhta.
+- Dialog `cancelable(false)` hai, BACK khata hai, aur sirf ek button hai:
+  **"Play Store Se Update Karo"** -> Play listing.
+- Koi skip nahi, koi "baad me" nahi, koi GitHub/APK link nahi.
+- Upar se Play In-App Updates **Immediate** mode chalta hai (Play se install hui
+  builds ke liye). Woh actual replace karta hai; gate usko rokta nahi.
+- `/v1/android-release` ka `minVersionCode` remote floor hai. Policy server na mile
+  to gate apni baked-in floor hi use karta hai - network down ka matlab "up to date"
+  kabhi nahi.
 
 ---
 
