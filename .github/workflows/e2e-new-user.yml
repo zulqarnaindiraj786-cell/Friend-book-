@@ -1,0 +1,172 @@
+name: E2E - new user signup, profile, post, like, comment, chat
+
+# Proves the new-user flow against the live stack: a throwaway Firebase Auth account, its
+# profile into D1, then a post, a like, a comment, a chat and a message - every call the APK
+# makes, over HTTP with that account's own ID token. Nothing is written to Firestore.
+#
+# Triggered by a committed request file (cloudflare/test/e2e-request.json).
+
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['cloudflare/test/e2e-request.json']
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'none | run'
+        required: true
+        default: none
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: friendbook-e2e-new-user
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || '92f3d04598822de2e49e14561218d090' }}
+      D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+      REQUEST_FILE: cloudflare/test/e2e-request.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Read the request
+        id: request
+        env:
+          DISPATCH_STEP: ${{ inputs.step }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib
+          step = (os.environ.get('DISPATCH_STEP') or '').strip()
+          data = {}
+          path = pathlib.Path(os.environ['REQUEST_FILE'])
+          if path.exists():
+              data = json.loads(path.read_text())
+          if not step:
+              step = str(data.get('step') or 'none')
+          print(f"step={step}")
+          print(f"note={str(data.get('note') or '')[:160]}")
+          PY
+
+      - name: Nothing requested
+        if: steps.request.outputs.step != 'run'
+        run: echo "step is not 'run' - nothing attempted."
+
+      - name: Signup, profile, post, like, comment, chat (live)
+        id: e2e
+        if: steps.request.outputs.step == 'run'
+        continue-on-error: true
+        run: |
+          set +e
+          python3 scripts/admin/e2e_new_user.py > e2e-output.json 2> e2e-error.log
+          echo "$?" > e2e-exit.txt
+          cat e2e-output.json 2>/dev/null
+          cat e2e-error.log >&2 2>/dev/null
+          exit 0
+
+      - name: Confirm the new account is a row in D1 users
+        id: row
+        if: steps.request.outputs.step == 'run'
+        continue-on-error: true
+        run: |
+          set +e
+          python3 - <<'PY' | tee row-check.txt
+          import json, os, pathlib, urllib.request
+          token = os.environ.get('CLOUDFLARE_API_TOKEN', '')
+          account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '')
+          database = os.environ.get('D1_DATABASE_ID', '')
+          uid = ''
+          try:
+              uid = json.loads(pathlib.Path('e2e-output.json').read_text().splitlines()[0]).get('uid', '')
+          except Exception:
+              pass
+          if not (token and account and database and uid):
+              print(json.dumps({'rowCheck': 'skipped', 'reason': 'no uid or no token'}))
+              raise SystemExit(0)
+          body = json.dumps({'sql': 'SELECT uid, display_name, email, photo_url FROM users WHERE uid = ? LIMIT 1',
+                             'params': [uid]}).encode()
+          request = urllib.request.Request(
+              f'https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{database}/query',
+              data=body, method='POST')
+          request.add_header('Authorization', f'Bearer {token}')
+          request.add_header('Content-Type', 'application/json')
+          try:
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  payload = json.loads(response.read().decode())
+              rows = (payload.get('result') or [{}])[0].get('results') or []
+              print(json.dumps({'rowCheck': 'found' if rows else 'missing', 'uid': uid,
+                                'row': rows[0] if rows else None}, ensure_ascii=False))
+          except Exception as error:
+              print(json.dumps({'rowCheck': 'error', 'error': str(error)[:160]}))
+          PY
+
+      - name: Worker health (read-only HTTP check)
+        if: always() && steps.request.outputs.step == 'run'
+        run: |
+          URL="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/health"
+          CODE=$(curl -sS -o health-body.json -w '%{http_code}' --max-time 30 "$URL" || echo 000)
+          echo "$CODE" > health-code.txt
+          head -c 600 health-body.json > health-body.txt 2>/dev/null || true
+          echo "GET $URL -> $CODE"
+
+      - name: Publish the result
+        if: always() && steps.request.outputs.step == 'run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo '### E2E: new user (signup -> profile -> post -> like -> comment -> chat)'
+            echo ''
+            echo '```json'
+            head -c 30000 e2e-output.json 2>/dev/null || echo 'no output'
+            echo '```'
+            if [ -s row-check.txt ]; then
+              echo ''
+              echo '**D1 users row for the new account**'
+              echo '```'
+              head -c 2000 row-check.txt
+              echo '```'
+            fi
+            if [ -s e2e-error.log ]; then
+              echo ''
+              echo '**stderr**'
+              echo '```'
+              head -c 3000 e2e-error.log
+              echo '```'
+            fi
+            echo ''
+            echo "exit=$(cat e2e-exit.txt 2>/dev/null || echo missing)"
+            echo ''
+            echo "**GET /v1/health -> $(cat health-code.txt 2>/dev/null || echo missing)**"
+            if [ -s health-body.txt ]; then
+              echo '```json'
+              head -c 600 health-body.txt
+              echo '```'
+            fi
+            echo "commit=${{ github.sha }}"
+          } > e2e-comment.md
+          cat e2e-comment.md >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment 31 --repo "$GITHUB_REPOSITORY" --body-file e2e-comment.md \
+            || gh issue comment 31 --repo "$GITHUB_REPOSITORY" --body-file e2e-comment.md \
+            || echo "::warning::could not post the result comment"
+
+      - name: Fail if the run failed
+        if: always() && steps.request.outputs.step == 'run'
+        run: |
+          CODE=$(cat e2e-exit.txt 2>/dev/null || echo 1)
+          echo "recorded exit=$CODE"
+          test "$CODE" = "0"

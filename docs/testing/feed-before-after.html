@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feed before / after the Firebase profile merge</title>
+<style>
+ body{margin:0;background:#eef0f3;font-family:-apple-system,Roboto,"Segoe UI",sans-serif;color:#0f1419}
+ header{background:#fff;padding:14px 18px;border-bottom:1px solid #dadde1;position:sticky;top:0}
+ h1{font-size:16px;margin:0 0 4px} .sub{font-size:12px;color:#65676b;line-height:1.5}
+ .wrap{display:flex;gap:18px;padding:18px;align-items:flex-start;flex-wrap:wrap}
+ .phone{width:360px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.12)}
+ .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#65676b;margin:0 0 6px 2px}
+ .card{border-top:1px solid #e4e6eb;padding:12px 14px}
+ .card:first-child{border-top:0}
+ .head{display:flex;gap:10px;align-items:center}
+ .av{width:40px;height:40px;border-radius:50%;object-fit:cover;display:block}
+ .av.grey{background:#c8ccd1}
+ .name{font-weight:600;font-size:15px} .meta{font-size:12px;color:#65676b}
+ .body{margin:10px 0 8px;font-size:14px;line-height:1.45}
+ .muted{color:#8a8d91;font-style:italic}
+ .counts{font-size:12px;color:#65676b;min-height:16px}
+ .row{display:flex;justify-content:space-between;margin-top:10px;font-size:13px;color:#3a3f45}
+ .row div{flex:1;text-align:center;padding:6px 0;background:#f0f2f5;border-radius:8px;margin-right:6px}
+ .row div:last-child{margin-right:0}
+ .facts{background:#fff;border-radius:12px;padding:16px 18px;max-width:420px;font-size:13px;line-height:1.7}
+ .facts b{display:block;margin-bottom:6px;font-size:14px}
+ .ok{color:#1a7f37;font-weight:600}
+</style></head><body>
+<header>
+  <h1>Feed: before and after the Firebase profile merge</h1>
+  <div class="sub">Left: what the home screen drew while D1 had no names (anonymous "User", grey avatar).
+  Right: the same live documents after the merge — the exact <code>document_json</code> fields the app binds
+  (<code>authorName</code>, <code>authorPhoto</code>), read from D1 at 16 Nov 2026 16:55 UTC.
+  This page is rendered from that data for review; it is not a screenshot of the app.</div>
+</header>
+<div class="wrap">
+  <div>
+    <div class="tag">Before</div>
+    <div class="phone">
+    <div class="card">
+      <div class="head"><div class="av grey"></div>
+        <div class="who"><div class="name">User</div>
+        <div class="meta">16 Nov, 08:02 UTC · no photo</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts">👍 1 likes</div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div></div>
+  </div>
+  <div>
+    <div class="tag">After — newest posts the feed draws</div>
+    <div class="phone">
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJlw6R0Rl-52DfrDDvALavHyvTKJOsuexN2HlpeWJVTl32NXA=s96-c" alt="">
+        <div class="who"><div class="name">❤️💪</div>
+        <div class="meta">16 Nov, 09:23 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocKJAyWdwEjTRQ9MQf65wezYORVAXyHCFoBPSRJLjFkbIjjPhu_I=s96-c" alt="">
+        <div class="who"><div class="name">Zulqarnain diraj Zulqarnain diraj</div>
+        <div class="meta">16 Nov, 08:55 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocL_KHpJQDIjNmzowK-09AqYxbry7hhQ88QjQhg5FhW7Qjeh0w=s96-c" alt="">
+        <div class="who"><div class="name">Ratatat Ali</div>
+        <div class="meta">16 Nov, 08:53 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts">👍 1 likes</div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><div class="av grey"></div>
+        <div class="who"><div class="name">Asad Abbas</div>
+        <div class="meta">16 Nov, 08:51 UTC · no photo</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><div class="av grey"></div>
+        <div class="who"><div class="name">Asad Abbas</div>
+        <div class="meta">16 Nov, 08:51 UTC · no photo</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJGsiltX45xOMeNM0ZSzamVAE2eFUYqNY2VU4gAYCUYqKUJ0Q=s96-c" alt="">
+        <div class="who"><div class="name">Akmal mehar</div>
+        <div class="meta">16 Nov, 08:50 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocLF_2QGriixoM5LfI1WE2H6MLcR1NxmBi3BEBuEqYqnIw6Gdlg=s96-c" alt="">
+        <div class="who"><div class="name">Rizwan Khuhro</div>
+        <div class="meta">16 Nov, 08:48 UTC</div></div>
+      </div>
+      <div class="body">**ایسا نہیں کہ تیرے بعد اہل کرم نہیں ملے🥹*
+*لوگ تو بہت ملے پر لوگوں سے ہم نہیں ملے❤️‍🩹*
+
+*🕊️⃝🌸𓆩⍣͢Rizwan🩷⃝🧸⁩*</div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJZLrkQeS8hwyMIqnoP5xgBe8F2ukQ_4EKJfjxv5EOmR5CKqQ=s96-c" alt="">
+        <div class="who"><div class="name">⦕๏ຼົ⦖____။︽။⸽༒⸽။︽။____⦕๏ຼົ⦖
+(⁕⁕⁕𝐓Ħ͜͡ə 𝐌ɵ͜͡sʈ Ꮗɑ͜͡ηʈɞɗ⁕⁕⁕
+𝐂ɽɪ͜͡ɪɱɪ͜͡ɪηɑɭ(____⦕๏ຼົ⦖ 𝟚𝟘𝟚𝟚)
+(︼)⦕๏ຼົ⦖____။︽။⸽༒⸽။____⦕๏ຼົ⦖
+❰❰𝐑𝐄𝐇𝐀𝐍 𝐉𝐔𝐓𝐓❱❱ 😈 😘 🙂</div>
+        <div class="meta">16 Nov, 08:35 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJZLrkQeS8hwyMIqnoP5xgBe8F2ukQ_4EKJfjxv5EOmR5CKqQ=s96-c" alt="">
+        <div class="who"><div class="name">⦕๏ຼົ⦖____။︽။⸽༒⸽။︽။____⦕๏ຼົ⦖
+(⁕⁕⁕𝐓Ħ͜͡ə 𝐌ɵ͜͡sʈ Ꮗɑ͜͡ηʈɞɗ⁕⁕⁕
+𝐂ɽɪ͜͡ɪɱɪ͜͡ɪηɑɭ(____⦕๏ຼົ⦖ 𝟚𝟘𝟚𝟚)
+(︼)⦕๏ຼົ⦖____။︽။⸽༒⸽။____⦕๏ຼົ⦖
+❰❰𝐑𝐄𝐇𝐀𝐍 𝐉𝐔𝐓𝐓❱❱ 😈 😘 🙂</div>
+        <div class="meta">16 Nov, 08:35 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJc2UwZDBKwyN6ssoxXZBRRdoppk3hOW0MDaiDZ9UXQCx7KdQ=s96-c" alt="">
+        <div class="who"><div class="name">Rizwan Ahmad</div>
+        <div class="meta">16 Nov, 08:22 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJc2UwZDBKwyN6ssoxXZBRRdoppk3hOW0MDaiDZ9UXQCx7KdQ=s96-c" alt="">
+        <div class="who"><div class="name">Rizwan Ahmad</div>
+        <div class="meta">16 Nov, 08:22 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div>
+    <div class="card">
+      <div class="head"><img class="av" src="https://lh3.googleusercontent.com/a/ACg8ocJc2UwZDBKwyN6ssoxXZBRRdoppk3hOW0MDaiDZ9UXQCx7KdQ=s96-c" alt="">
+        <div class="who"><div class="name">Rizwan Ahmad</div>
+        <div class="meta">16 Nov, 08:22 UTC</div></div>
+      </div>
+      <div class="body"><span class="muted">(no text)</span></div>
+      <div class="counts"></div>
+      <div class="row"><div>👍 Like</div><div>💬 Comment</div><div>↗ Share</div></div>
+    </div></div>
+  </div>
+  <div class="facts">
+    <b>What changed</b>
+    Firebase accounts read: <b>412</b> (320 with a name, 319 with a photo).<br>
+    Post documents with a real author name: <span class="ok">571 of 596</span> (was 411).<br>
+    Posts with a real author name in the rows: <span class="ok">565 of 595</span> (was 563).<br>
+    Avatars restored on posts: <b>100</b>; user documents filled: <b>4</b> names, <b>3</b> photos.<br>
+    Firebase users not in D1: <b>177</b> — reported, never created.<br>
+    Documents with no author at all: <b>25</b> — empty leftovers, now skipped by the feed<br>
+    (nothing deleted; they stay in D1).
+    <b style="margin-top:14px">Rules kept</b>
+    No INSERT, no DELETE, no overwrite of a real name or photo: every write was guarded by the
+    placeholder condition. Firebase data untouched.
+  </div>
+</div>
+</body></html>

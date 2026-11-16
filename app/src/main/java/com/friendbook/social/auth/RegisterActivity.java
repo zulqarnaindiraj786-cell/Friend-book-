@@ -222,24 +222,34 @@ public class RegisterActivity extends Activity {
                     u.put("following", new ArrayList<String>());
                     u.put("blockedUsers", new ArrayList<String>());
                     u.put("createdAt", FieldValue.serverTimestamp());
-                    com.friendbook.social.core.DataRouter.mirrorPut("users", uid, u);
-                    Fb.db().collection("users").document(uid).set(u)
-                            .addOnSuccessListener(x -> {
-                                GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",
-                                        refCode != null ? refCode.getText().toString() : null);
-                                Prefs.saveAccount(this, uid, e, n, "");
-                                Prefs.setUnlockedSession(this, true);
-                                SessionsActivity.record();
-                                Fb.startMeListener();
-                                Presence.init();
-                                startActivity(new Intent(this, MainActivity.class));
-                                finishAffinity();
-                            })
-                            .addOnFailureListener(err -> {
-                                btn.setText("Sign Up");
-                                btn.setEnabled(true);
-                                Ui.toast(this, err.getMessage());
-                            });
+                    // D1 first. The profile has to exist the moment the account does: when the
+                    // Firestore write was the one that had to succeed, a spent quota left an
+                    // account that could sign in but whose posts fell back to 'User'.
+                    Runnable signedUp = () -> {
+                        GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",
+                                refCode != null ? refCode.getText().toString() : null);
+                        Prefs.saveAccount(this, uid, e, n, "");
+                        Prefs.setUnlockedSession(this, true);
+                        SessionsActivity.record();
+                        Fb.startMeListener();
+                        Presence.init();
+                        startActivity(new Intent(this, MainActivity.class));
+                        finishAffinity();
+                    };
+                    Runnable signUpFailed = () -> {
+                        btn.setText("Sign Up");
+                        btn.setEnabled(true);
+                        Ui.toast(this, "Could not save your profile. Please try again.");
+                    };
+                    com.friendbook.social.core.DataRouter.write("users", uid, u, false,
+                            signedUp, signUpFailed,
+                            () -> Fb.db().collection("users").document(uid).set(u)
+                                    .addOnSuccessListener(x -> signedUp.run())
+                                    .addOnFailureListener(err -> {
+                                        btn.setText("Sign Up");
+                                        btn.setEnabled(true);
+                                        Ui.toast(this, err.getMessage());
+                                    }));
                 })
                 .addOnFailureListener(err -> {
                     btn.setText("Sign Up");

@@ -393,6 +393,24 @@ export async function appDocuments(request, env, identity) {
           'INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) '
           + 'ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url'
         ).bind(uid, displayName, avatarUrl).run();
+        // The relational row is what the data API and every join reads, so a profile write
+        // keeps it in step: a signup can no longer exist in Auth and in the documents but not
+        // in `users`, which is how a new account ended up posting as 'User'. Existing real
+        // values win - this only fills a placeholder or an empty column.
+        const email = typeof merged.email === 'string' && merged.email.trim() ? merged.email.trim().slice(0, 320) : null;
+        try {
+          await env.DB.prepare(
+            'INSERT INTO users(uid, display_name, email, photo_url) VALUES (?, ?, ?, ?) '
+            + 'ON CONFLICT(uid) DO UPDATE SET '
+            + "display_name = CASE WHEN TRIM(COALESCE(users.display_name, '')) IN ('', 'User') "
+            + 'THEN excluded.display_name ELSE users.display_name END, '
+            + "email = COALESCE(NULLIF(TRIM(users.email), ''), excluded.email), "
+            + "photo_url = COALESCE(NULLIF(TRIM(users.photo_url), ''), excluded.photo_url)"
+          ).bind(uid, displayName || 'User', email, avatarUrl || null).run();
+        } catch {
+          // The document is the app's source of truth; a schema that has no relational row
+          // (an older deployment, a test database) must not fail the profile write.
+        }
       }
       return json({ id: docId, path: docPath, document: merged });
     } catch {
