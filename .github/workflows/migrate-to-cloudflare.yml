@@ -9,7 +9,9 @@ on:
         default: 'true'
         type: boolean
   push:
-    branches: [ 'arena/9e217492-friend-book' ]
+    # Only this workflow's own edits retrigger it; a normal code push must never start
+    # a data migration by accident.
+    branches: [ main, 'arena/f6bf61bd-friend-book' ]
     paths:
       - '.github/workflows/migrate-to-cloudflare.yml'
 
@@ -90,101 +92,88 @@ jobs:
           path: ${{ steps.backup.outputs.BACKUP_DIR }}
           retention-days: 30
       
-      # ============ STEP 2: DEPLOY CLOUDFLARE WORKERS (if secrets available) ============
-      - name: Check Cloudflare Secrets
-        id: cf_secrets
+      # ============ STEP 2: SCHEMA + MIGRATION TOKEN ============
+      #
+      # The previous version of this section deployed three modules
+      # (data-api.js, migration-api.js, presence-realtime.js) as separate workers.
+      # None of them has an `export default { fetch }`, so wrangler could not deploy
+      # any of them; and `d1 migrations apply friendbook` named a database that does
+      # not exist (the binding is friendbook-db). Every one of those steps also had
+      # continue-on-error, so the workflow stayed green while doing nothing.
+      #
+      # The modules are already routed inside the main worker by deploy-cloudflare.yml,
+      # so all that is needed here is the schema and the migration token.
+      - name: Apply D1 schema to the remote database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          MISSING=""
-          [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && MISSING="$MISSING CLOUDFLARE_API_TOKEN"
-          [ -z "${{ secrets.CF_ACCOUNT_ID }}" ] && MISSING="$MISSING CF_ACCOUNT_ID"
-          [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ] && MISSING="$MISSING MIGRATION_ADMIN_TOKEN"
-          [ -z "${{ secrets.FIREBASE_API_KEY }}" ] && MISSING="$MISSING FIREBASE_API_KEY"
-          
-          if [ -n "$MISSING" ]; then
-            echo "⚠ Missing Cloudflare secrets:$MISSING"
-            echo "HAS_SECRETS=false" >> $GITHUB_OUTPUT
-            echo "MISSING_SECRETS=$MISSING" >> $GITHUB_OUTPUT
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo '::error::CLOUDFLARE_API_TOKEN is not available to this workflow.'
+            exit 1
+          fi
+          # --remote matters: without it wrangler only touches a local .sqlite file and
+          # the production database stays empty while the run looks successful.
+          npx --yes wrangler@4.157.0 d1 migrations apply friendbook-db --remote
+
+      - name: Make sure the worker has a migration token
+        id: token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          SECRET_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+        run: |
+          # The worker refuses to serve /v1/admin/migrate without a token of at least 32
+          # characters (fails closed). If the owner has not stored one, generate a fresh
+          # token for this run so the migration can proceed without them having to create
+          # and paste a secret. A stored secret always wins.
+          if [ -n "$SECRET_TOKEN" ]; then
+            T="$SECRET_TOKEN"
+            echo 'Using MIGRATION_ADMIN_TOKEN from repository secrets.'
           else
-            echo "✓ All Cloudflare secrets present"
-            echo "HAS_SECRETS=true" >> $GITHUB_OUTPUT
+            T=$(openssl rand -hex 32)
+            echo 'MIGRATION_ADMIN_TOKEN is not in repository secrets; generated an ephemeral one for this run.'
+            echo 'To keep it stable, add a repository secret named MIGRATION_ADMIN_TOKEN (openssl rand -hex 32).'
           fi
-      
-      - name: Deploy D1 Migrations
-        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
-        continue-on-error: true
-        run: |
-          cd cloudflare
-          wrangler d1 migrations apply friendbook --remote
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      
-      - name: Deploy Data API Worker
-        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
-        continue-on-error: true
-        run: |
-          wrangler deploy data-api.js --name friendbook-data-api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      
-      - name: Deploy Migration API Worker
-        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
-        continue-on-error: true
-        run: |
-          wrangler deploy migration-api.js --name friendbook-migration-api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      
-      - name: Deploy Presence Worker
-        if: steps.cf_secrets.outputs.HAS_SECRETS == 'true'
-        continue-on-error: true
-        run: |
-          wrangler deploy presence-realtime.js --name friendbook-presence
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      
-      # Get worker URLs (use existing worker as fallback)
-      - name: Get Worker URLs
-        id: worker_urls
-        run: |
-          # Use known deployed worker URL
-          DATA_API="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"
-          MIGRATION_API="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"
-          echo "DATA_API=$DATA_API" >> $GITHUB_OUTPUT
-          echo "MIGRATION_API=$MIGRATION_API" >> $GITHUB_OUTPUT
-          echo "Using worker URL: $DATA_API"
-      
+          if [ "${#T}" -lt 32 ]; then
+            echo '::error::MIGRATION_ADMIN_TOKEN must be at least 32 characters.'
+            exit 1
+          fi
+          # Push it onto the worker, then hand it to later steps without ever printing it.
+          printf '%s' "$T" | npx --yes wrangler@4.157.0 secret put MIGRATION_ADMIN_TOKEN --name rough-firefly-dd7b
+          echo "::add-mask::$T"
+          echo "TOKEN=$T" >> "$GITHUB_ENV"
+          echo 'Migration token installed on the worker.'
+
       # ============ STEP 3: RUN MIGRATION ============
-      - name: Run Firestore to D1 Migration
-        continue-on-error: true
-        env:
-          CF_API_BASE: ${{ steps.worker_urls.outputs.MIGRATION_API }}
-          CF_API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+      - name: Confirm the worker routes are live before touching data
         run: |
-          echo "Starting migration to D1..."
-          if [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ]; then
-            echo "⚠ MIGRATION_ADMIN_TOKEN not set, skipping migration"
-            exit 0
-          fi
+          B=https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
+          code=$(curl --silent --show-error --max-time 30 -o /tmp/v.json -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" "$B/v1/admin/migrate/verify" || echo 000)
+          echo "migrate/verify -> $code"
+          case "$code" in
+            200) echo 'Migration API is live and the token is accepted.' ;;
+            401|403) echo '::error::The worker rejected the migration token.'; exit 1 ;;
+            503) echo '::error::The worker has no migration token configured; the previous step did not take effect.'; exit 1 ;;
+            *) echo "::error::/v1/admin/migrate is not routed (HTTP $code). Deploy the worker first: Actions -> Deploy existing Cloudflare Worker."; exit 1 ;;
+          esac
+
+      - name: Run Firestore to D1 Migration
+        env:
+          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+        run: |
+          # No "skip if no token" branch: the script fails closed on its own and exits
+          # non-zero, and this step must not report success for a run that copied nothing.
           python3 scripts/migrate_firestore_to_d1.py
-      
+
       # ============ STEP 4: VERIFY MIGRATION ============
       - name: Verify Migration
         id: verify
-        continue-on-error: true
         env:
-          CF_API_BASE: ${{ steps.worker_urls.outputs.MIGRATION_API }}
-          CF_API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+          CF_API_TOKEN: ${{ env.TOKEN }}
         run: |
-          echo "Verifying migration..."
-          if [ -z "${{ secrets.MIGRATION_ADMIN_TOKEN }}" ]; then
-            echo "⚠ MIGRATION_ADMIN_TOKEN not set, skipping verification"
-            echo "REPORT_FILE=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
           python3 scripts/verify_migration.py
           
           # Extract report
