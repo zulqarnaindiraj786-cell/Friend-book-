@@ -503,6 +503,36 @@ def verify():
     return 0
 
 
+def orphans(limit=5):
+    """Read-only: the documents the feed still cannot attribute, in full.
+
+    Printed so a gap is explained rather than assumed: if the stored document carries no author
+    reference at all, no merge can invent one.
+    """
+    postAuthors = {row['id']: row['author_id'] for row in rows('SELECT id, author_id FROM posts')}
+    found = []
+    for record in all_rows("SELECT path, doc_id, owner_uid, document_json "
+                           "FROM friendbook_cf_documents WHERE collection = 'posts'"):
+        try:
+            document = json.loads(record['document_json'] or '{}')
+        except ValueError:
+            continue
+        authorId = author_of(record, document, postAuthors)
+        if authorId and not placeholder(document.get('authorName')):
+            continue
+        found.append({'path': record['path'], 'ownerUid': record['owner_uid'],
+                      'rowAuthorId': postAuthors.get(record['doc_id']),
+                      'resolvedAuthorId': authorId,
+                      'authorFields': {key: document.get(key) for key in
+                                       ('authorId', 'authorUid', 'authorName', 'authorPhoto',
+                                        'author', 'uid', 'content', 'privacy', 'likes',
+                                        'createdAt', 'sponsored')}})
+        if len(found) >= limit:
+            break
+    say({'mode': 'ORPHANS', 'count': len(found), 'documents': found})
+    return 0
+
+
 def main(argv):
     command = (argv[1] if len(argv) > 1 else 'plan').strip()
     if command == 'plan':
@@ -515,6 +545,12 @@ def main(argv):
         return apply(limit)
     if command == 'verify':
         return verify()
+    if command == 'orphans':
+        limit = 5
+        for flag in argv[2:]:
+            if flag.startswith('--limit='):
+                limit = int(flag.split('=', 1)[1])
+        return orphans(limit)
     print('usage: merge_firebase_users.py [plan|apply [--limit=N]|verify]', file=sys.stderr)
     return 2
 

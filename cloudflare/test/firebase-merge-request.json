@@ -1,6 +1,6 @@
 {
-  "step": "apply",
-  "confirm": "APPLY",
+  "step": "orphans",
+  "confirm": "",
   "limit": 0,
-  "note": "Apply run 4: the post document's own authorId is the last resort when the row and owner_uid are empty."
+  "note": "Read-only: look inside the 30 documents the feed still cannot attribute."
 }
