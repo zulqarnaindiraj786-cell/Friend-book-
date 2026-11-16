@@ -1667,7 +1667,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         // when it is not. The interval is deliberately modest: a broadcast is one document plus
         // a bounded chat tail, and D1 reads are cheap compared with the Firestore quota this
         // replaces. Polling only runs between onStart and onStop.
-        pollLiveRoom();
+        fetchLiveRoom();
+        fetchLiveChat();
         chatPollRunnable = () -> {
             if (isFinishing() || isDestroyed() || liveId == null) return;
             fetchLiveRoom();

@@ -16,6 +16,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.social.chat.ChatActivity;
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;

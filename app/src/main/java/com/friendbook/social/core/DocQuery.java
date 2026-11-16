@@ -66,6 +66,16 @@ public final class DocQuery {
         return sb.toString();
     }
 
+    /**
+     * A copy of this query with a different page size.
+     *
+     * <p>{@link Builder#limit} only exists on the builder, so a pager that owns a finished
+     * query had no way to change the page size and passed the builder around instead.
+     */
+    public DocQuery limit(int size) {
+        return new DocQuery(collection, wheres, orderBy, size, after);
+    }
+
     /** A copy of this query positioned after {@code cursor}, for the next page. */
     public DocQuery nextPage(String cursor) {
         return new DocQuery(collection, wheres, orderBy, limit, cursor);
