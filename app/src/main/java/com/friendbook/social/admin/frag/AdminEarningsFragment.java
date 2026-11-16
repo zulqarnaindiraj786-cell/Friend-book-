@@ -147,7 +147,7 @@ public class AdminEarningsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("payments").whereEqualTo("status",approved).limit(1000).build(),snap->{
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("payments").whereEqualTo("status","approved").limit(1000).build(),snap->{
                     tickBlue = tickGold = tickDiamond = subs = 0;
                     monthly.clear();
                     seedMonths();

@@ -678,7 +678,7 @@ public class MainActivity extends Activity {
                 });
 
         if (reqReg != null) reqReg.remove();
-        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status",pending).limit(50).build(),snap->{
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending").limit(50).build(),snap->{
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {

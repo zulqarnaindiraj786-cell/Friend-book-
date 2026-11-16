@@ -66,7 +66,7 @@ public class AdminLiveFragment extends Fragment {
                         list.addView(e);
                         return;
                     }
-                    for (DocumentSnapshot d : docs) list.addView(row(a, d));
+                    for (com.friendbook.social.core.Doc d : docs) list.addView(row(a, d));
                 });
     }
 
@@ -76,7 +76,7 @@ public class AdminLiveFragment extends Fragment {
         if (reg != null) reg.remove();
     }
 
-    private View row(android.app.Activity a, DocumentSnapshot d) {
+    private View row(android.app.Activity a, com.friendbook.social.core.Doc d) {
         Map<String, Object> m = d.getData();
         boolean live = "live".equals(Format.str(m, "status"));
 

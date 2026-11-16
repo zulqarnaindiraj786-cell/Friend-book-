@@ -867,11 +867,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 }
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
-            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("toUid",uid).whereEqualTo("status",pending).limit(1).build(),snap->{
+            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("toUid",uid).whereEqualTo("status","pending").limit(1).build(),snap->{
                         hasOut = snap != null && !snap.isEmpty();
                         computeFriendState();
                     });
-            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",uid).whereEqualTo("toUid",me).whereEqualTo("status",pending).limit(1).build(),snap->{
+            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",uid).whereEqualTo("toUid",me).whereEqualTo("status","pending").limit(1).build(),snap->{
                         hasIn = snap != null && !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();

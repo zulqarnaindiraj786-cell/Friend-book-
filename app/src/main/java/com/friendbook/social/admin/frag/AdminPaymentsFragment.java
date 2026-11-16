@@ -144,8 +144,12 @@ public class AdminPaymentsFragment extends Fragment {
                     "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
             reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
-                    () -> d.getReference().update("status", "rejected",
-                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())));
+                    () -> {
+                        Fb.db().collection("payments").document(d.getId()).update("status", "rejected",
+                                "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp());
+                        com.friendbook.social.core.DataRouter.mirrorPut("payments", d.getId(),
+                                "status", "rejected", "rejectedBy", Fb.uid());
+                    }));
             LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             b2.leftMargin = Ui.dp(a, 8);
