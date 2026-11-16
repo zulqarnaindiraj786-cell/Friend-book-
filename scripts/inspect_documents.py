@@ -70,7 +70,7 @@ def main() -> int:
             rows = d1_query(
                 account_id, token,
                 f"SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents "
-                f"WHERE collection = '{collection}' ORDER BY updated_at DESC LIMIT 3",
+                f"WHERE collection = '{collection}' ORDER BY updated_at ASC LIMIT 3",
             )
         except Exception as error:  # noqa: BLE001
             print(f"::error::{collection}: read failed - {type(error).__name__}: {error}")

@@ -35,6 +35,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # One read against Firestore: has the 429 gate opened? Twelve attempts were refused
+      # with a bare RESOURCE_EXHAUSTED and no quota detail, and retrying inside it kept it
+      # shut, so this asks once and does not retry.
+      - name: Check whether the Firestore gate has opened
+        continue-on-error: true
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          try:
+              import firebase_admin
+              from firebase_admin import credentials, firestore
+          except ImportError as e:
+              print(f"::warning::firebase_admin unavailable: {e}")
+              sys.exit(0)
+          raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+          if not raw:
+              print("::warning::FIREBASE_ADMIN_SERVICE_ACCOUNT is not set")
+              sys.exit(0)
+          try:
+              info = json.loads(raw)
+              firebase_admin.initialize_app(credentials.Certificate(info))
+          except json.JSONDecodeError:
+              firebase_admin.initialize_app(credentials.Certificate(raw))
+          client = firestore.client()
+          for coll in ("posts", "users", "notifications"):
+              try:
+                  n = client.collection(coll).limit(1).get()
+                  print(f"::notice::FIRESTORE OPEN: {coll} readable ({len(n)} doc sampled)")
+              except Exception as e:
+                  print(f"::error::FIRESTORE CLOSED: {coll} -> {type(e).__name__}: {str(e)[:120]}")
+          PYEOF
+
       - name: Dump what the document store actually contains
         continue-on-error: true
         env:
