@@ -219,36 +219,53 @@ jobs:
           # Push it onto the worker. Output is captured rather than streamed, because
           # `wrangler secret put` can exit 0 while the upload failed, and a silent
           # failure here shows up much later as a confusing 503 from the worker.
+          #
+          # A newline is sent with the value: wrangler reads the secret from stdin and
+          # without a terminating newline it can store an empty or truncated value while
+          # still exiting 0.
           mkdir -p .ci-logs
-          set +e
-          printf '%s' "$T" | "$WRANGLER" secret put MIGRATION_ADMIN_TOKEN \
-            --name rough-firefly-dd7b > .ci-logs/secret-put.log 2>&1
-          RC=$?
-          set -e
-          # Never print the token: everything logged here has been masked already, and the
-          # log is uploaded as an artifact.
-          sed -e "s/$T/***REDACTED***/g" .ci-logs/secret-put.log | tail -n 30
-          if [ "$RC" != '0' ]; then
-            echo "::error::wrangler secret put exited $RC - see the ci-logs artifact."
-            exit 1
-          fi
-
-          # Verify against the live worker instead of trusting the exit code. The value is
-          # probed by sending the token itself: 200/403 means the worker has *a* token and
-          # compared against it, 503 means no token is configured at all.
           B=https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
-          for i in 1 2 3 4 5; do
-            code=$(curl --silent --max-time 30 -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer $T" "$B/v1/admin/migrate/verify" || echo 000)
-            echo "probe $i: /v1/admin/migrate/verify -> $code"
-            [ "$code" != '503' ] && break
-            sleep 6
+          fingerprint=$(printf '%s' "$T" | sha256sum | cut -c1-16)
+          echo "token fingerprint (sha256, first 16): $fingerprint"
+
+          probe() {
+            curl --silent --max-time 30 -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $T" "$B/v1/admin/migrate/verify" || echo 000
+          }
+
+          for attempt in 1 2; do
+            set +e
+            printf '%s\n' "$T" | "$WRANGLER" secret put MIGRATION_ADMIN_TOKEN \
+              --name rough-firefly-dd7b > .ci-logs/secret-put.log 2>&1
+            RC=$?
+            set -e
+            sed -e "s/$T/***REDACTED***/g" .ci-logs/secret-put.log | tail -n 20
+            echo "secret put attempt $attempt -> exit $RC"
+            [ "$RC" != '0' ] && continue
+
+            # Secrets take a moment to propagate to the edge; retry before declaring failure.
+            for i in 1 2 3 4 5; do
+              code=$(probe)
+              echo "  probe $i -> $code"
+              [ "$code" = '200' ] && break
+              sleep 6
+            done
+            [ "$code" = '200' ] && break
+            echo "  attempt $attempt did not take effect (last probe $code); retrying."
           done
-          if [ "$code" = '503' ]; then
-            echo '::error::The worker still reports no migration token after the upload.'
+
+          echo "$fingerprint" > .ci-logs/token-fingerprint.txt
+
+          if [ "$code" != '200' ]; then
+            case "$code" in
+              401|403) echo "::error::The worker has a different migration token than the one generated here. Store MIGRATION_ADMIN_TOKEN as a repository secret so the same value is used, or delete the worker secret and re-run." ;;
+              503) echo '::error::The worker reports no migration token even after two uploads.' ;;
+              *) echo "::error::/v1/admin/migrate is not reachable (HTTP $code). Deploy the worker first." ;;
+            esac
             exit 1
           fi
-          echo "Migration token installed on the worker (probe returned $code)."
+          echo 'Migration token installed on the worker and accepted by it.'
+          echo 'TOKEN_OK=true' >> "$GITHUB_ENV"
 
       # ============ STEP 3: RUN MIGRATION ============
       - name: Confirm the worker routes are live before touching data
@@ -256,7 +273,7 @@ jobs:
           B=https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
           code=$(curl --silent --show-error --max-time 30 -o /tmp/v.json -w '%{http_code}' \
             -H "Authorization: Bearer $TOKEN" "$B/v1/admin/migrate/verify" || echo 000)
-          echo "migrate/verify -> $code"
+          echo "migrate/verify -> $code (token fingerprint $(sha256sum <<< "$TOKEN" | cut -c1-16))"
           case "$code" in
             200) echo 'Migration API is live and the token is accepted.' ;;
             401|403) echo '::error::The worker rejected the migration token.'; exit 1 ;;
