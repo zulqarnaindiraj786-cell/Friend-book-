@@ -22,6 +22,13 @@ import java.util.Map;
  */
 public final class DataRouter {
 
+    /**
+     * The release the D1 data plane shipped in.
+     *
+     * <p>Named so a crash report or a log line can be tied to a build that has the switch.
+     */
+    public static final String D1_DATA_PLANE_SINCE = "2.9.0";
+
     private DataRouter() {
     }
 
