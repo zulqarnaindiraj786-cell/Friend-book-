@@ -1466,10 +1466,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             String me = Fb.uid();
             Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
                     .limit(1).get().addOnSuccessListener(snap -> {
-                        for (com.friendbook.social.core.Doc d : snap) {
-                            List<String> parts = Models.ChatRoom.fromMap(d.getId(), d.getData()).participants;
+                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             if (parts.contains(uid)) {
                                 d.getReference().delete();
+                                com.friendbook.social.core.DataRouter.mirrorDelete("friends", d.getId());
                                 com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount", FieldValue.increment(-1));
                                 Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
                                 com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "friendsCount", FieldValue.increment(-1));

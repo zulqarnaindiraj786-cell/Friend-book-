@@ -690,10 +690,16 @@ public class Models {
         }
 
         @SuppressWarnings("unchecked")
-        public static Message fromDoc(DocumentSnapshot d) {
+        /**
+         * Builds a message from a stored row.
+         *
+         * <p>The D1 mirror keeps the send map, and the two stores are read through this one
+         * parser so a message looks the same whichever answered. Firestore's version estimates
+         * its server timestamp; the D1 copy carries createdAtMs for the same purpose.
+         */
+        public static Message fromMap(String id, Map<String, Object> m) {
             Message m0 = new Message();
-            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
-            m0.id = d.getId();
+            m0.id = id;
             m0.senderId = Format.str(m, "senderId");
             m0.senderName = Format.str(m, "senderName");
             m0.senderPhoto = Format.str(m, "senderPhoto");
@@ -753,6 +759,12 @@ public class Models {
                 }
             }
             return m0;
+        }
+
+        /** Firestore's own reader, kept for the compatibility paths that still use it. */
+        public static Message fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(),
+                    d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE));
         }
 
         /** Like-style reaction summary with total count: e.g. "👍 1", "👍 4", "👍 ❤️ 5". */

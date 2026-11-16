@@ -52,7 +52,7 @@ public class AdminLiveFragment extends Fragment {
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
-                    java.util.java.util.List<com.friendbook.social.core.Doc> docs = snap == null
+                    java.util.List<com.friendbook.social.core.Doc> docs = snap == null
                             ? new java.util.ArrayList<>()
                             : new java.util.ArrayList<>(snap.getDocuments());
                     java.util.Collections.sort(docs, (d1, d2) -> Long.compare(

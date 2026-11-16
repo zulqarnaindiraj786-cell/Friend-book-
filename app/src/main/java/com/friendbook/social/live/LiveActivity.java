@@ -261,6 +261,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private boolean pkVictoryPhase = false;
     private boolean isMePkGuest = false;
     private String pkBattleId = "";
+    /** The two PK media rows, read on the live tick instead of being subscribed to. */
+    private String pkMediaAId, pkMediaBId;
     private String pkRole = ""; // "A", "B", or "viewer"
     private String pkHostAUid = "";
     private String pkHostAName = "";

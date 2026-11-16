@@ -791,9 +791,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     if(restored>=0)manager.scrollToPositionWithOffset(restored,top);
                     historyButton.setVisibility(View.GONE);
                     // History does not trigger sounds or bulk seen/delivered writes.
-                }).addOnFailureListener(error -> {
-                    if(generation!=historyGeneration) return;
-                    historyLoading=false;historyFailed=true;historySpinner.setVisibility(View.GONE);historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
                 });
     }
 
