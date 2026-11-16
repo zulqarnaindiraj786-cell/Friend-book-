@@ -228,31 +228,54 @@ jobs:
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
           echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify the deployed build serves the new routes
+        env:
+          # Only used for the job summary text; never printed.
+          MIGRATION_TOKEN_PRESENT: ${{ secrets.MIGRATION_ADMIN_TOKEN != '' }}
         run: |
           # Proves the code actually on the worker, not just that a deploy exited 0.
           # Every check is read-only; none of them writes user data.
+          #
+          # The invariant for a routed endpoint is "not 404". The exact status then depends
+          # on configuration - the migration API answers 503 when no token is installed and
+          # 401/403 once one is - so pinning a single code would make the check fail for a
+          # correctly configured worker.
           B=https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
           fail=0
-          check() { # label method path expected [curl-args...]
+          check() { # label method path allowed-statuses [curl-args...]
             label="$1"; method="$2"; path="$3"; want="$4"; shift 4
             code=$(curl --silent --show-error --max-time 30 -X "$method" "$@" -o /tmp/r.json -w '%{http_code}' "$B$path" || echo 000)
             body=$(head -c 200 /tmp/r.json 2>/dev/null || true)
-            if [ "$code" = "$want" ]; then
+            if echo " $want " | grep -q " $code "; then
               echo "  OK   $label -> $code"
             else
-              echo "::error::$label expected HTTP $want but got $code. Body: $body"
+              echo "::error::$label expected one of [$want] but got $code. Body: $body"
               fail=1
             fi
           }
           echo 'Routing checks (post-deploy):'
           # data-api is off by default, so its paths must still answer 404.
-          check 'data-api dark' GET '/v1/posts/feed' 404
-          # The migration API is routed: unauthenticated is 401, never 404.
-          check 'migrate no token' GET '/v1/admin/migrate/verify' 401
-          check 'migrate bad token' GET '/v1/admin/migrate/verify' 403 -H 'Authorization: Bearer definitely-not-the-token'
+          check 'data-api dark'        GET    '/v1/posts/feed'                 404
+          # The migration API must be routed: 503 (no token), 401 (no header) or 403
+          # (wrong token) all prove the handler is live. 404 would mean it never shipped.
+          check 'migrate routed'       GET    '/v1/admin/migrate/verify'       '401 403 503'
+          check 'migrate rejects'      GET    '/v1/admin/migrate/verify'       '401 403 503' -H 'Authorization: Bearer definitely-not-the-token'
           # The document store routes exist and demand a Firebase identity.
-          check 'docs query route' GET '/v1/docs?collection=posts&limit=5' 401
-          check 'docs delete route' DELETE '/v1/docs/posts/nonexistent-id' 401
+          check 'docs query route'     GET    '/v1/docs?collection=posts&limit=5'      401
+          check 'docs delete route'    DELETE '/v1/docs/posts/nonexistent-id'          401
+          {
+            echo '### Deployed worker route check'
+            echo ''
+            echo '| route | result |'
+            echo '|---|---|'
+            echo "| data-api (dark) | $([ $fail -eq 0 ] && echo ok || echo see errors) |"
+            echo ''
+            if [ -n "$MIGRATION_TOKEN_PRESENT" ]; then
+              echo 'Migration token is installed on the worker: `/v1/admin/migrate` is usable.'
+            else
+              echo 'No migration token on the worker: `/v1/admin/migrate` answers 503 (fails closed).'
+              echo 'Add a repository secret named `MIGRATION_ADMIN_TOKEN` (32+ chars) to enable it.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
           exit $fail
 
       - name: Verify public Android-only release metadata
