@@ -2,5 +2,5 @@
   "step": "apply",
   "confirm": "APPLY",
   "limit": 0,
-  "note": "Merge names/photos by uid into users table, users documents, posts rows and post documents. No inserts, no deletes, placeholders only."
+  "note": "Apply run 2: same guarded merge, plus a third source - an author with no Firebase name but a real name on their D1 row."
 }

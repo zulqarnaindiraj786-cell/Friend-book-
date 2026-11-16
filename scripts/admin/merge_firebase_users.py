@@ -394,6 +394,34 @@ def apply(limit=0):
         if changed:
             updateDocument(record['path'], document, now)
 
+    # Third pass: an author with no name in Firebase (92 of 412 accounts never set one) but a
+    # real name on their D1 row still has a name we can show. Same guard, same direction.
+    stats['postsTableNameFromD1'] = 0
+    stats['postDocumentsNameFromD1'] = 0
+    d1Names = {row['uid']: row['display_name'] for row in rows("SELECT uid, display_name FROM users")
+               if not placeholder(row['display_name'])}
+    stats['d1NamesAvailable'] = len(d1Names)
+    for record in postDocs:
+        authorId = record.get('owner_uid')
+        # Firebase wins: never let the D1 copy replace a name the live profile just gave us.
+        if byUid.get(authorId, {}).get('name'):
+            continue
+        name = d1Names.get(authorId)
+        if not name:
+            continue
+        try:
+            document = json.loads(record['document_json'] or '{}')
+        except ValueError:
+            continue
+        if placeholder(document.get('authorName')):
+            document['authorName'] = name
+            stats['postDocumentsNameFromD1'] += 1
+            updateDocument(record['path'], document, now)
+            _, meta = d1("UPDATE posts SET author_name = ? WHERE author_id = ? "
+                         "AND (author_name IS NULL OR TRIM(author_name) IN ('', 'User'))",
+                         [name, authorId])
+            stats['postsTableNameFromD1'] += int((meta or {}).get('changes') or 0)
+
     stats['notInD1'] = {'count': len(stats['notInD1']), 'sample': stats['notInD1']}
     say({'mode': 'APPLY', 'changed': stats})
     verify()
@@ -411,7 +439,21 @@ def verify():
     stats = placeholderStats()
     realTable = counters()['postsTable'] - stats['postsTableWithoutAuthorName']
     realDocs = counters()['postDocs'] - stats['postDocumentsWithoutAuthorName']
+    outstanding = rows(
+        "SELECT p.id, p.author_id, "
+        "(SELECT display_name FROM users u WHERE u.uid = p.author_id) AS usersTableName, "
+        "p.author_name AS rowName, json_extract(d.document_json, '$.authorName') AS docName "
+        "FROM friendbook_cf_documents d JOIN posts p ON d.path = 'posts/' || p.id "
+        "WHERE d.collection = 'posts' AND (json_extract(d.document_json, '$.authorName') IS NULL "
+        "OR TRIM(json_extract(d.document_json, '$.authorName')) IN ('', 'User'))")
+    fixable = [row for row in outstanding if not placeholder(row['usersTableName'])]
     say({'mode': 'VERIFY',
+         'outstanding': {'documentsWithoutAuthorName': len(outstanding),
+                         'fixableFromD1UsersTable': len(fixable),
+                         'authorsWithNoNameAnywhere': len(outstanding) - len(fixable),
+                         'sample': [{'id': row['id'], 'authorId': (row['author_id'] or '')[:6] + '…',
+                                     'd1Name': row['usersTableName']}
+                                    for row in outstanding[:MAX_SAMPLE]]},
          'users': {'withoutName': stats['usersTableWithoutName'],
                    'withoutPhoto': stats['usersTableWithoutPhoto'],
                    'documentsWithoutName': stats['userDocumentsWithoutName']},
