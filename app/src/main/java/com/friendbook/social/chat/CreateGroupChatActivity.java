@@ -137,7 +137,7 @@ public class CreateGroupChatActivity extends Activity {
 
     private void loadPeople() {
         String me = Fb.uid();
-        Fb.db().collection("users").limit(250).get().addOnSuccessListener(snap -> {
+        Fb.db().collection("users").limit(1000).get().addOnSuccessListener(snap -> {
             allUsers.clear();
             if (snap != null) {
                 for (DocumentSnapshot d : snap.getDocuments()) {

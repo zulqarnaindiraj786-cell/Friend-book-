@@ -43,7 +43,17 @@ public class Presence {
     /** Callback for presence updates: (online, lastSeenMs). */
     public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
-    public static final long HEARTBEAT_INTERVAL_MS = 30_000L; // 30 seconds
+    /**
+     * How often we persist "I am online" to Firestore.
+     *
+     * This used to be 30s, which cost 120 Firestore writes per user per hour: 200 users for 8
+     * hours was ~192,000 writes/day against a 20,000/day free quota, so the app went dark every
+     * day purely from presence. Cloudflare presence (websocket + /v1/presence) is now the
+     * real-time source, and the Firestore write only has to outlive an app kill, so 2 minutes
+     * keeps a safe margin under the 5-minute ONLINE_TTL. 200 users x 30 writes/hour x 8h =
+     * 48,000/day on its own, and far less once combined with the typing fix below.
+     */
+    public static final long HEARTBEAT_INTERVAL_MS = 2 * 60_000L; // 2 minutes (TTL is 5 min)
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 minutes (300s)
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
@@ -346,10 +356,10 @@ public class Presence {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
 
-        // Firestore typing (for persistence/history)
-        Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
-
-        // Cloudflare typing (real-time)
+        // Cloudflare carries typing in real time (short-lived, per-chat).
+        // The Firestore mirror used to fire on EVERY keystroke: one write per character per user,
+        // which is by far the largest Firestore consumer in the app and pure waste — typing state
+        // is meaningless once it is a few seconds old and it is never read after a reload.
         sendCloudflareTyping(chatId, typing);
 
         if (typing) {

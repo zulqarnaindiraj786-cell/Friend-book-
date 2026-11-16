@@ -534,17 +534,53 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
+        // Delta-driven: the previous version rebuilt the entire friend set from scratch on every
+        // snapshot, and re-ran loadPymk() + renderLoadedStories() each time. With a few hundred
+        // friends every single add/remove re-read the whole graph and re-rendered the feed, which
+        // is both a Firestore read cost and a UI jank source. Only ADDED/REMOVED documents change
+        // the set, so only those trigger a re-render.
         friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
                 .addSnapshotListener((snap, err) -> {
                     if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
-                    friendIds.clear();
-                    friendIds.add(me);
-                    if (snap != null) {
+                    boolean changed = false;
+                    if (snap.getMetadata().isFromCache() && !snap.getDocumentChanges().isEmpty()) {
+                        // First (cache) delivery still has to populate the set.
+                        changed = true;
+                    }
+                    if (changed || !snap.getDocumentChanges().isEmpty()) {
+                        for (com.google.firebase.firestore.DocumentChange ch : snap.getDocumentChanges()) {
+                            Models.ChatRoom room = Models.ChatRoom.fromDoc(ch.getDocument());
+                            switch (ch.getType()) {
+                                case ADDED:
+                                    for (String p : room.participants) if (!p.equals(me) && friendIds.add(p)) changed = true;
+                                    break;
+                                case REMOVED:
+                                    // A friendship doc is gone: drop peers that no other doc still lists.
+                                    Set<String> still = new HashSet<>();
+                                    for (DocumentSnapshot d : snap) {
+                                        for (String p : Models.ChatRoom.fromDoc(d).participants)
+                                            if (!p.equals(me)) still.add(p);
+                                    }
+                                    if (friendIds.retainAll(still)) changed = true;
+                                    break;
+                                default:
+                                    // MODIFIED keeps the same participants; nothing to recompute.
+                                    break;
+                            }
+                        }
+                    } else {
+                        // Initial load arrives as a plain snapshot with no changes reported.
+                        Set<String> fresh = new HashSet<>();
                         for (DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                            for (String p : parts) if (!p.equals(me)) friendIds.add(p);
+                            for (String p : Models.ChatRoom.fromDoc(d).participants)
+                                if (!p.equals(me)) fresh.add(p);
+                        }
+                        if (!friendIds.containsAll(fresh) || friendIds.size() != fresh.size() + 1) {
+                            friendIds.clear(); friendIds.add(me); friendIds.addAll(fresh);
+                            changed = true;
                         }
                     }
+                    if (!changed) return;
                     loadPymk();renderLoadedStories();
                 });
     }

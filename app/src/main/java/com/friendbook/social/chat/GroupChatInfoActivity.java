@@ -405,7 +405,7 @@ public class GroupChatInfoActivity extends Activity {
         sv.addView(list);
         final Set<Models.User> picked = new LinkedHashSet<>();
 
-        Fb.db().collection("users").limit(200).get().addOnSuccessListener(snap -> {
+        Fb.db().collection("users").limit(1000).get().addOnSuccessListener(snap -> {
             if (snap == null || isFinishing()) return;
             for (DocumentSnapshot d : snap.getDocuments()) {
                 Models.User u = Models.User.fromDoc(d);
