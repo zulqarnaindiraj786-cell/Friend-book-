@@ -88,6 +88,14 @@ public final class ForceUpdate {
         return true;
     }
 
+    /**
+     * Clears the "a dialog is already up" latch. Test-only: the latch exists so a second call
+     * cannot stack dialogues, and unit tests share one JVM across cases.
+     */
+    static void resetGateForTests() {
+        blocking = false;
+    }
+
     /** True when this build is below the required version. */
     public static boolean isBlocked(Activity activity) {
         if (activity == null) return false;

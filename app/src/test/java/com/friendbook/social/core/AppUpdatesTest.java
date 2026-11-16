@@ -13,7 +13,7 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowAlertDialog;
+import org.robolectric.shadows.ShadowDialog;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -33,6 +33,7 @@ import static org.junit.Assert.assertTrue;
 public class AppUpdatesTest {
 
     private Activity activity() {
+        ForceUpdate.resetGateForTests();
         return Robolectric.buildActivity(Activity.class).setup().get();
     }
 
@@ -42,7 +43,7 @@ public class AppUpdatesTest {
         ForceUpdate.showBlocking(a, a.getSharedPreferences("force_update", 0));
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
-        AlertDialog dialog = (AlertDialog) ShadowAlertDialog.getLatestAlertDialog();
+        AlertDialog dialog = (AlertDialog) ShadowDialog.getLatestDialog();
         assertNotNull("the blocking dialog must be shown", dialog);
         assertTrue(dialog.isShowing());
         assertEquals("Play Store Se Update Karo",
@@ -57,7 +58,7 @@ public class AppUpdatesTest {
         ForceUpdate.showBlocking(a, a.getSharedPreferences("force_update", 0));
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
-        AlertDialog dialog = (AlertDialog) ShadowAlertDialog.getLatestAlertDialog();
+        AlertDialog dialog = (AlertDialog) ShadowDialog.getLatestDialog();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
@@ -75,7 +76,7 @@ public class AppUpdatesTest {
         ForceUpdate.showBlocking(a, a.getSharedPreferences("force_update", 0));
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
-        AlertDialog dialog = (AlertDialog) ShadowAlertDialog.getLatestAlertDialog();
+        AlertDialog dialog = (AlertDialog) ShadowDialog.getLatestDialog();
         assertFalse("the dialog itself must not be cancelable", isCancelable(dialog));
         boolean consumed = dialog.onKeyDown(KeyEvent.KEYCODE_BACK,
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
