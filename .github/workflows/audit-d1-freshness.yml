@@ -21,6 +21,7 @@ on:
       - 'scripts/audit_d1_freshness.py'
       - 'scripts/d1_coverage.py'
       - 'scripts/verify_posts_mapping.py'
+      - 'scripts/inspect_documents.py'
   workflow_dispatch:
 
 permissions:
@@ -33,6 +34,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Dump what the document store actually contains
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+        run: python3 scripts/inspect_documents.py
 
       - name: Verify the posts mapping against real rows
         env:
