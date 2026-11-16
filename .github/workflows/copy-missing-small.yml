@@ -1,0 +1,70 @@
+name: Copy Missing in Small Pages
+
+# Resumable, small-page copy from Firestore to D1. Runs after the daily Firestore allowance
+# resets, copies what it can in 20-document pages, and records its cursor so the next run
+# continues instead of starting over.
+#
+# The previous attempts asked for whole collections. One large collection spent the day's reads
+# before the walk finished, and the next attempt began again at the first document - so the same
+# reads were paid for repeatedly and nothing was ever completed.
+#
+# Runs on a schedule at 08:10 UTC, ten minutes after the allowance resets, and can be started by
+# hand. Nothing here scans a collection.
+
+on:
+  schedule:
+    - cron: '10 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    name: Small-page copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Firestore client
+        run: pip install --quiet firebase-admin
+
+      - name: What is left
+        continue-on-error: true
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+        run: PYTHONPATH=scripts python3 scripts/copy_missing_small.py --plan
+
+      - name: Copy pages
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: >-
+            ${{ secrets.CF_ACCOUNT_ID != '' &&
+                secrets.CF_ACCOUNT_ID ||
+                '92f3d04598822de2e49e14561218d090' }}
+          D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+          COPY_PAGE_LIMIT: '20'
+        run: PYTHONPATH=scripts python3 scripts/copy_missing_small.py --copy --pages 25
+
+      - name: Save the cursor so the next run resumes
+        if: always()
+        run: |
+          if [ -f firestore-copy-progress.json ]; then
+            git config user.name 'friendbook-copy'
+            git config user.email 'copy@friendbook.invalid'
+            git add firestore-copy-progress.json
+            git commit -m 'Record copy cursor after $(date -u +%Y-%m-%dT%H:%MZ)' || true
+            git push || true
+          fi
