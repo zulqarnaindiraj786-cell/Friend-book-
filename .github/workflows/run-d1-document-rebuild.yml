@@ -1,0 +1,128 @@
+name: Run D1 document rebuild (D1 API, gated)
+
+# Converts D1's normalised rows into the app document store through the D1 REST API.
+#
+# Why this runner and not the Worker route: /v1/admin/migrate/documents/* is gated behind
+# MIGRATION_ADMIN_TOKEN, which is not a repository secret. CLOUDFLARE_API_TOKEN is, and
+# scripts/d1_coverage.py already reads this database with it. The mapping and the gate are
+# the same code paths as the Worker module (scripts/tests/test_rebuild_mapping_parity.py
+# asserts both produce identical documents).
+#
+# Triggered by a committed request file, so ordinary pushes do nothing:
+#   cloudflare/test/d1-rebuild-request.json
+#   { "step": "none" | "flow" | "plan" | "dry-run" | "verify",
+#     "collection": "posts", "apply": false, "confirm": "APPLY", "note": "..." }
+#
+# "flow" without apply is read-only (plan + posts dry run + checks).
+# "flow" with apply:true AND confirm:APPLY writes documents, and only after the plan and
+# the posts dry run pass.
+
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['cloudflare/test/d1-rebuild-request.json']
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'none | flow | plan | dry-run | verify'
+        required: true
+        default: none
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: friendbook-d1-document-rebuild
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || '92f3d04598822de2e49e14561218d090' }}
+      D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+      REQUEST_FILE: cloudflare/test/d1-rebuild-request.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Read the request
+        id: request
+        env:
+          DISPATCH_STEP: ${{ inputs.step }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib
+          step = (os.environ.get('DISPATCH_STEP') or '').strip()
+          data = {}
+          path = pathlib.Path(os.environ['REQUEST_FILE'])
+          if path.exists():
+              data = json.loads(path.read_text())
+          if not step:
+              step = str(data.get('step') or 'none')
+          collection = str(data.get('collection') or 'posts')
+          apply_writes = bool(data.get('apply')) and data.get('confirm') == 'APPLY'
+          print(f"step={step}")
+          print(f"collection={collection}")
+          print(f"apply={'true' if apply_writes else 'false'}")
+          print(f"note={str(data.get('note') or '')[:200]}")
+          PY
+
+      - name: Nothing requested
+        if: steps.request.outputs.step == 'none'
+        run: |
+          echo "step=none — no database work requested."
+          echo "### No work requested" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Offline mapping parity and runner tests (no network)
+        if: steps.request.outputs.step != 'none'
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_rebuild_mapping_parity.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_document_rebuild_tool.py'
+
+      - name: Read-only flow (plan + posts dry run, writes nothing)
+        if: steps.request.outputs.step == 'flow' && steps.request.outputs.apply != 'true'
+        run: |
+          python3 scripts/admin/rebuild_documents_d1.py flow | tee rebuild-output.json
+          {
+            echo '### Read-only flow'
+            echo '```json'
+            cat rebuild-output.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply flow (plan, posts dry run, posts apply, verify, remaining nine)
+        if: steps.request.outputs.step == 'flow' && steps.request.outputs.apply == 'true'
+        run: |
+          echo "Writes are authorised by the request file (confirm=APPLY)."
+          python3 scripts/admin/rebuild_documents_d1.py flow --apply | tee rebuild-output.json
+          {
+            echo '### Apply flow'
+            echo '```json'
+            cat rebuild-output.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan only
+        if: steps.request.outputs.step == 'plan'
+        run: |
+          python3 scripts/admin/rebuild_documents_d1.py plan | tee rebuild-output.json
+          { echo '### Plan'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry run only
+        if: steps.request.outputs.step == 'dry-run'
+        run: |
+          python3 scripts/admin/rebuild_documents_d1.py run "${{ steps.request.outputs.collection }}" | tee rebuild-output.json
+          { echo '### Dry run'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify only
+        if: steps.request.outputs.step == 'verify'
+        run: |
+          python3 scripts/admin/rebuild_documents_d1.py verify "${{ steps.request.outputs.collection }}" | tee rebuild-output.json
+          { echo '### Verify'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
