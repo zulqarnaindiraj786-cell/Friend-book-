@@ -3,5 +3,5 @@
   "collection": "posts",
   "apply": true,
   "confirm": "APPLY",
-  "note": "Apply: posts first, verify, gate, then the remaining nine collections. Additive only - INSERT ... ON CONFLICT DO NOTHING, nothing replaced."
+  "note": "Apply run 2: posts write, verify, gate, then the nine remaining collections. Additive only."
 }
