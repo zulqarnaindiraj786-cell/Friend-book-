@@ -148,15 +148,6 @@ public class FeedPreferencesActivity extends Activity {
         if (me == null) { finish(); return; }
         // Shares the session-wide users/{me} listener.
         Fb.observeMe(meObserver);
-    }
-
-    private final Fb.MeObserver meObserver = d -> {
-                    favorites.clear();
-                    if (d != null && d.exists())
-                        favorites.addAll(com.friendbook.social.core.Format.listOf(d.getData(), "favoriteUids"));
-                    else if (Fb.me != null && Fb.me.favoriteUids != null) favorites.addAll(Fb.me.favoriteUids);
-                    render();
-    };
         reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
                 Fb.db().collection("friends").whereArrayContains("participants",me),20,"feed-preference-friends",(snap,err)-> {
                     friends.clear();
@@ -171,6 +162,13 @@ public class FeedPreferencesActivity extends Activity {
                 });
     }
 
+    private final Fb.MeObserver meObserver = d -> {
+                    favorites.clear();
+                    if (d != null && d.exists())
+                        favorites.addAll(com.friendbook.social.core.Format.listOf(d.getData(), "favoriteUids"));
+                    else if (Fb.me != null && Fb.me.favoriteUids != null) favorites.addAll(Fb.me.favoriteUids);
+                    render();
+    };
     private void loadUsers(List<String> ids) {
         if (ids.isEmpty()) {
             countT.setText("Add friends first to customize your Feed 🙂");

@@ -129,6 +129,12 @@ public class MonetizationActivity extends Activity {
         if (me == null) { finish(); return; }
         // Shares the session-wide users/{me} listener.
         Fb.observeMe(meObserver);
+        Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
+                .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
+        if (subsCountReg != null) subsCountReg.remove();
+        subsCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("subscriptions")
+                .whereEqualTo("creatorId",me).whereEqualTo("status","active"),total->
+                    subsCountT.setText("Active VIP Fan Club members: "+total));
     }
 
     private final Fb.MeObserver meObserver = d -> {
@@ -157,14 +163,6 @@ public class MonetizationActivity extends Activity {
         if (u.followers != null) m.put("followers", u.followers);
         return m;
     }
-        Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
-                .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
-        if (subsCountReg != null) subsCountReg.remove();
-        subsCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("subscriptions")
-                .whereEqualTo("creatorId",me).whereEqualTo("status","active"),total->
-                    subsCountT.setText("Active VIP Fan Club members: "+total));
-    }
-
     private void checkEligibility(int followers, int reels) {
         if (reels < 0) return;
         boolean ok1 = followers >= FOLLOWERS_FOR_CREATOR;
