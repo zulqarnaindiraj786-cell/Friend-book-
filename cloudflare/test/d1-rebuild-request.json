@@ -1,7 +1,7 @@
 {
-  "step": "none",
+  "step": "flow",
   "collection": "posts",
   "apply": false,
   "confirm": "",
-  "note": "Set step to flow for the read-only plan + dry run; add apply:true and confirm:APPLY to write."
+  "note": "Read-only: plan + posts dry run. No document is written by this request."
 }
