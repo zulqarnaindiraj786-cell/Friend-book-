@@ -74,6 +74,10 @@ class FirestoreParsingTests(unittest.TestCase):
                 class Response:
                     status_code = 403
 
+                    @staticmethod
+                    def json():
+                        return {'error': {'message': 'insufficient permissions'}}
+
                 return Response()
 
         with self.assertRaises(merge.MergeError):
@@ -103,10 +107,10 @@ class ApplySafetyTests(unittest.TestCase):
             return object()
 
         with patch.object(merge, 'd1', fakeD1), \
-                patch.object(merge, 'firestore_users', lambda session: firebaseUsers), \
-                patch.object(merge, 'firestore_session', fakeSession), \
+                patch.object(merge, 'load_profiles',
+                             lambda: (firebaseUsers, {'test': len(firebaseUsers)})), \
                 patch.object(merge, 'verify', lambda: 0), \
-                patch.object(merge.say, '__call__', lambda payload: None) if False else patch.object(merge, 'say', lambda payload: None):
+                patch.object(merge, 'say', lambda payload: None):
             merge.apply()
         return statements
 

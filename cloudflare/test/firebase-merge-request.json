@@ -2,5 +2,5 @@
   "step": "plan",
   "confirm": "",
   "limit": 0,
-  "note": "Read-only: how many Firebase users exist, how many D1 users still render as 'User'."
+  "note": "Read-only plan, run 2: Firestore answered 429, so Auth (same profiles, separate quota) is the source."
 }

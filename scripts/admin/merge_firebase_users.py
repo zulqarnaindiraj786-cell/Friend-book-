@@ -54,7 +54,7 @@ def placeholder(value):
 
 # --------------------------------------------------------------------------- Firebase
 
-def firestore_session():
+def firestore_session(scopes=None):
     raw = os.environ.get('FIREBASE_ADMIN_SERVICE_ACCOUNT', '').strip()
     if not raw:
         raise MergeError('FIREBASE_ADMIN_SERVICE_ACCOUNT is missing; nothing was read or written')
@@ -66,8 +66,53 @@ def firestore_session():
         raise MergeError('the secret is not a service-account JSON')
     from google.auth.transport.requests import AuthorizedSession
     from google.oauth2 import service_account
-    credentials = service_account.Credentials.from_service_account_info(info, scopes=[SCOPE])
+    credentials = service_account.Credentials.from_service_account_info(
+        info, scopes=scopes or [SCOPE])
     return AuthorizedSession(credentials)
+
+
+def identity_users(session):
+    """The same profiles through Firebase Authentication.
+
+    Firestore reads are quota-metered per project and answer 429 with a lot of room left in
+    the day (observed live). Auth keeps the display name and photo for every account and is
+    metered separately, so it is the fallback - and the tie-breaker - for the same fields.
+    """
+    url = f'https://identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:batchGet'
+    token = None
+    users = []
+    while True:
+        params = {'maxResults': 1000}
+        if token:
+            params['nextPageToken'] = token
+        response = session.get(url, params=params, timeout=90)
+        if response.status_code != 200:
+            detail = ''
+            try:
+                detail = str((response.json() or {}).get('error', {}).get('message', ''))[:160]
+            except (ValueError, AttributeError):
+                pass
+            raise MergeError(f'Firebase Auth read failed (HTTP {response.status_code}'
+                             f'{": " + detail if detail else ""}); nothing was written')
+        body = response.json()
+        for account in body.get('users', []):
+            uid = account.get('localId')
+            if not uid:
+                continue
+            name = account.get('displayName')
+            photo = account.get('photoUrl')
+            if not photo:
+                for provider in account.get('providerUserInfo') or []:
+                    if provider.get('photoUrl'):
+                        photo = provider['photoUrl']
+                        break
+            users.append({'uid': uid,
+                          'name': name.strip() if isinstance(name, str) and name.strip() else None,
+                          'photo': photo.strip() if isinstance(photo, str) and photo.strip() else None})
+        token = body.get('nextPageToken')
+        if not token:
+            break
+    return users
 
 
 def firestore_value(field):
@@ -99,8 +144,13 @@ def firestore_users(session):
             params['pageToken'] = token
         response = session.get(url, params=params, timeout=90)
         if response.status_code != 200:
-            raise MergeError(f'Firestore users read failed (HTTP {response.status_code}); '
-                             'nothing was written')
+            detail = ''
+            try:
+                detail = str((response.json() or {}).get('error', {}).get('message', ''))[:160]
+            except (ValueError, AttributeError):
+                pass
+            raise MergeError(f'Firestore users read failed (HTTP {response.status_code}'
+                             f'{": " + detail if detail else ""}); nothing was written')
         body = response.json()
         for document in body.get('documents', []):
             uid = document.get('name', '').rsplit('/', 1)[-1]
@@ -173,9 +223,53 @@ def placeholderStats():
 
 # --------------------------------------------------------------------------- plan
 
+SOURCE = os.environ.get('PROFILE_SOURCE', 'auto').strip().lower()
+
+
+def load_profiles():
+    """Every profile we can read, Firestore first and Auth filling whatever it could not.
+
+    Returns (users, sources). A source that refuses (quota, permission) is reported, not
+    fatal, as long as the other one answered - the merge only needs names and photos.
+    """
+    sources = {}
+    firestore = []
+    auth = []
+    if SOURCE in ('auto', 'firestore'):
+        try:
+            firestore = firestore_users(firestore_session())
+            sources['firestore'] = len(firestore)
+        except MergeError as error:
+            sources['firestoreError'] = str(error)[:200]
+            if SOURCE == 'firestore':
+                raise
+    if SOURCE in ('auto', 'auth'):
+        try:
+            auth = identity_users(firestore_session(
+                ['https://www.googleapis.com/auth/cloud-platform',
+                 'https://www.googleapis.com/auth/identitytoolkit']))
+            sources['auth'] = len(auth)
+        except MergeError as error:
+            sources['authError'] = str(error)[:200]
+            if SOURCE == 'auth':
+                raise
+    if not firestore and not auth:
+        raise MergeError(f'no profile source answered ({sources})')
+
+    merged = {}
+    for user in auth:                     # Auth is complete for every account
+        merged[user['uid']] = dict(user)
+    for user in firestore:                # a Firestore profile wins when it has the field
+        current = merged.setdefault(user['uid'], {'uid': user['uid'], 'name': None, 'photo': None})
+        if user['name']:
+            current['name'] = user['name']
+        if user['photo']:
+            current['photo'] = user['photo']
+    return list(merged.values()), sources
+
+
 def plan():
-    session = firestore_session()
-    firebase = firestore_users(session)
+    firebase, sources = load_profiles()
     firebaseByName = {user['uid']: user for user in firebase}
     d1Users = rows('SELECT uid, display_name, photo_url FROM users')
     missingInD1 = [user['uid'] for user in firebase if user['uid'] not in {u['uid'] for u in d1Users}]
@@ -187,6 +281,7 @@ def plan():
                   if not firebaseByName.get(author['author_id'], {}).get('name')]
 
     say({'mode': 'PLAN',
+         'sources': sources,
          'firebase': {'users': len(firebase),
                       'withName': sum(1 for u in firebase if u['name']),
                       'withPhoto': sum(1 for u in firebase if u['photo']),
@@ -214,12 +309,11 @@ def updateDocument(path, document, now):
 
 
 def apply(limit=0):
-    session = firestore_session()
-    firebase = firestore_users(session)
+    firebase, sources = load_profiles()
     if limit:
         firebase = firebase[:limit]
     now = int(time.time() * 1000)
-    stats = {'firebaseUsers': len(firebase), 'noNameInFirebase': 0,
+    stats = {'sources': sources, 'firebaseUsers': len(firebase), 'noNameInFirebase': 0,
              'usersTableName': 0, 'usersTablePhoto': 0,
              'userDocumentsName': 0, 'userDocumentsPhoto': 0,
              'postsTableName': 0, 'postsTablePhoto': 0,
