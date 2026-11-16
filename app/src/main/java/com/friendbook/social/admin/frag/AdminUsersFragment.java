@@ -171,15 +171,18 @@ public class AdminUsersFragment extends Fragment {
                 Admin.setGlobalModerator(a, u.uid, u.displayName, true);
             else if (sel.contains("Remove App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
-            else if (sel.contains("Make FULL Admin"))
+            else if (sel.contains("Make FULL Admin")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "isAdmin", true);
                 Fb.db().collection("users").document(u.uid).update("isAdmin", true);
-            else if (sel.contains("Remove FULL Admin"))
+            }
+            else if (sel.contains("Remove FULL Admin")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "isAdmin", false);
                 Fb.db().collection("users").document(u.uid).update("isAdmin", false);
-            else if (sel.contains("Unban"))
+            }
+            else if (sel.contains("Unban")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "banned", false);
                 Fb.db().collection("users").document(u.uid).update("banned", false);
+            }
             else if (sel.contains("Ban user"))
                 Ui.confirm(a, "Ban " + u.displayName + "?", "They'll be signed out and blocked.",
                         "Ban", () -> Fb.db().collection("users").document(u.uid).update("banned", true));
