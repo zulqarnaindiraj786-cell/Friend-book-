@@ -342,7 +342,7 @@ public class Reactions {
 
     public static void reconcileFromCollection(final Context c, final String postId, final int storedLikes) {
         if (postId == null || postId.isEmpty()) return;
-        if(com.friendbook.social.core.D1Client.routed("posts",post==null?null:post.id))return;
+        if(com.friendbook.social.core.D1Client.routed("posts",postId))return;
         final String me = Fb.uid();
         final Long tapBeforeFetch = FastCache.isLocalReactionInFlight(postId) ? System.currentTimeMillis() : null;
         Fb.db().collection("posts").document(postId).collection("reactions")
