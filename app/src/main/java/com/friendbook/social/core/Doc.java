@@ -19,6 +19,13 @@ import java.util.Map;
  */
 public final class Doc {
 
+    /*
+     * A Doc is what a screen reads now that its data comes from D1. It deliberately has no
+     * getReference(): D1 has no document references, so a write addresses a collection and an
+     * id. Leaving that method off is what stopped the migration from silently carrying a
+     * Firestore write path along with a D1 read path.
+     */
+
     private final String id;
     private final Map<String, Object> data;
 
