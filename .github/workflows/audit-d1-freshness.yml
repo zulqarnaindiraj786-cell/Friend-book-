@@ -71,8 +71,9 @@ jobs:
                   print(f"::error::FIRESTORE CLOSED: {coll} -> {type(e).__name__}: {str(e)[:120]}")
           PYEOF
 
-      # Counts only. The writes themselves are a separate, deliberate step.
-      - name: Repair dry run (counts only)
+      # Writes. Only the rows measured as broken are touched: 36 posts documents in wire
+      # format, and messages that have no chatId but do have one in the table.
+      - name: Repair the unreadable documents
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: >-
@@ -80,7 +81,7 @@ jobs:
                 secrets.CF_ACCOUNT_ID ||
                 '92f3d04598822de2e49e14561218d090' }}
           D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
-        run: python3 scripts/repair_documents.py
+        run: python3 scripts/repair_documents.py --apply --confirm REPAIR
 
       - name: Dump what the document store actually contains
         continue-on-error: true
