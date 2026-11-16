@@ -153,3 +153,28 @@ export function checkRateLimit(uid, action, maxRequests = 60, windowMs = 60000) 
     resetAt: limit.resetAt,
   };
 }
+/**
+ * Constant-time string comparison for shared secrets.
+ *
+ * Workers has no node:crypto timingSafeEqual, and a plain `!==` short-circuits on the
+ * first differing byte, which leaks how much of a token a caller guessed correctly.
+ * Hashing both sides first also makes the comparison length-independent. Returns a
+ * boolean synchronously by comparing digests that were already computed - callers await
+ * this variant when they need the async digest.
+ */
+export async function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  // Reject absurd lengths before hashing so a 10 MB token cannot be used as a DoS.
+  if (a.length > 4096 || b.length > 4096) return false;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', new Uint8Array(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const [da, db] = await Promise.all([
+    crypto.subtle.sign('HMAC', key, encoder.encode(a)),
+    crypto.subtle.sign('HMAC', key, encoder.encode(b)),
+  ]);
+  const va = new Uint8Array(da);
+  const vb = new Uint8Array(db);
+  let diff = 0;
+  for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+  return diff === 0;
+}

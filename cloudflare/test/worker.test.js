@@ -123,3 +123,44 @@ test('data-api routing never steals the endpoints that already have handlers', a
   assert.equal(me.status, 503);
   assert.match((await me.json()).error, /existing app data is unchanged/);
 });
+
+test('the migration API fails closed without a configured token', async () => {
+  const w = createWorker(async () => 'uid_test');
+  const base = { FIREBASE_PROJECT_ID: 'friendbook-test', DB: {} };
+
+  // No token configured at all: refuse, and do not fall back to a built-in default.
+  const unconfigured = await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Bearer anything' } }), base);
+  assert.equal(unconfigured.status, 503);
+
+  // The old hardcoded placeholder must not be accepted anywhere.
+  const placeholder = await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Bearer MIGRATION_ADMIN_TOKEN_CHANGE_ME' } }), base);
+  assert.equal(placeholder.status, 503);
+
+  // A short token is treated as unconfigured rather than as a weak secret.
+  const shortToken = await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Bearer short' } }), { ...base, MIGRATION_ADMIN_TOKEN: 'short' });
+  assert.equal(shortToken.status, 503);
+});
+
+test('the migration API rejects wrong tokens and needs no Firebase identity', async () => {
+  const w = createWorker(async () => { throw new Error('must not verify a Firebase token here'); });
+  const token = 'x'.repeat(48);
+  const env = { FIREBASE_PROJECT_ID: 'friendbook-test', DB: {}, MIGRATION_ADMIN_TOKEN: token };
+
+  // No header, and a header that is not a bearer token.
+  assert.equal((await w.fetch(new Request('https://example.com/v1/admin/migrate/verify'), env)).status, 401);
+  assert.equal((await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Basic abc' } }), env)).status, 401);
+
+  // Wrong token of the same length must not be accepted.
+  const wrong = await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Bearer ' + 'y'.repeat(48) } }), env);
+  assert.equal(wrong.status, 403);
+
+  // A prefix of the real token must not be accepted either.
+  const prefix = await w.fetch(new Request('https://example.com/v1/admin/migrate/verify',
+    { headers: { Authorization: 'Bearer ' + 'x'.repeat(47) } }), env);
+  assert.equal(prefix.status, 403);
+});

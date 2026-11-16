@@ -4,9 +4,8 @@
  * Only accessible with admin token
  */
 
-import { json, verifyAdmin } from './utils.js';
+import { timingSafeEqual } from './utils.js';
 
-const ADMIN_TOKEN = "MIGRATION_ADMIN_TOKEN_CHANGE_ME"; // Set via env var
 
 function cors(status = 200, body = null) {
   return new Response(body ? JSON.stringify(body) : null, {
@@ -22,15 +21,20 @@ function cors(status = 200, body = null) {
 
 export async function migrationApi(request, env) {
   if (request.method === 'OPTIONS') return cors();
-  
-  // Verify admin token
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return cors(401, { error: 'Unauthorized' });
+
+  // This endpoint bulk-writes arbitrary rows into every table, so it fails closed:
+  //  - no MIGRATION_ADMIN_TOKEN configured means no migration API at all. There is no
+  //    default token; an unconfigured deployment must not be writable.
+  //  - comparison is timing-safe and length-safe, so the token cannot be recovered by
+  //    timing. A plain !== leaks the shared prefix length.
+  const expected = typeof env?.MIGRATION_ADMIN_TOKEN === 'string' ? env.MIGRATION_ADMIN_TOKEN : '';
+  if (expected.length < 32) {
+    return cors(503, { error: 'Migration API is not configured' });
   }
-  
-  const token = authHeader.slice(7);
-  if (token !== ADMIN_TOKEN && token !== env.MIGRATION_ADMIN_TOKEN) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const match = /^Bearer (.+)$/.exec(authHeader);
+  if (!match) return cors(401, { error: 'Unauthorized' });
+  if (!(await timingSafeEqual(match[1], expected))) {
     return cors(403, { error: 'Invalid admin token' });
   }
   

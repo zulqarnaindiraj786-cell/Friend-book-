@@ -5,6 +5,7 @@ import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { dataApi } from './cloudflare/data-api.js';
+import { migrationApi } from './cloudflare/migration-api.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const googleKeys = createRemoteJWKSet(new URL(
@@ -65,7 +66,10 @@ export function createWorker(verify = verifyFirebaseToken) {
       // actually migrated.
       const dataRoute = DATA_API_PATHS.some(p => path === p || path.startsWith(p + '/'));
       const dataApiOn = dataRoute && env.DATA_API_ENABLED === 'true';
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !dataApiOn) return json({ error: 'Not found' }, 404);
+      // The migration API is authenticated by its own shared secret, not by a Firebase
+      // token, so it must be dispatched before token verification below.
+      const migration = path === '/v1/admin/migrate' || path.startsWith('/v1/admin/migrate/');
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !dataApiOn && !migration) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -87,6 +91,9 @@ export function createWorker(verify = verifyFirebaseToken) {
           return json({ ok: row?.connected === 1, views }, row?.connected === 1 ? 200 : 503);
         } catch { return json({ ok: false, views }, 503); }
       }
+      // Migration runs on a shared secret: it has no Firebase user, and it must keep working
+      // even if token verification is unavailable.
+      if (migration) return migrationApi(request, env);
       if (!env.FIREBASE_PROJECT_ID) return json({ error: 'Service unavailable' }, 503);
       const bearer = /^Bearer ([^\s]+)$/i.exec(request.headers.get('Authorization') || '');
       if (!bearer || bearer[1].length > 8192) return json({ error: 'Unauthorized' }, 401);
