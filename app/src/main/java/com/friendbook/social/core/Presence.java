@@ -343,6 +343,25 @@ public class Presence {
         } catch (Throwable ignored) { }
     }
 
+    /** Same freshness rule, for a D1 row. */
+    public static long extractLastSeenMs(@Nullable com.friendbook.social.core.Doc d) {
+        if (d == null || !d.exists()) return 0L;
+        long ms = Format.longOf(d.getData(), "lastSeenMs");
+        long ts = Format.ts(d.get("lastSeen"));
+        return ts > 0 ? ts : ms;
+    }
+
+    private static boolean activeOf(java.util.Map<String, Object> m) {
+        if (m == null) return false;
+        Object active = m.get("isActive"), legacy = m.get("isOnline");
+        if (Boolean.FALSE.equals(active) || Boolean.FALSE.equals(legacy)) return false;
+        return Boolean.TRUE.equals(active) || Boolean.TRUE.equals(legacy);
+    }
+
+    private static boolean firestoreActive(com.friendbook.social.core.Doc d) {
+        return activeOf(d == null ? null : d.getData());
+    }
+
     private static boolean firestoreActive(DocumentSnapshot data) {
         Boolean active = data.getBoolean("isActive"), legacy = data.getBoolean("isOnline");
         if (Boolean.FALSE.equals(active) || Boolean.FALSE.equals(legacy)) return false;

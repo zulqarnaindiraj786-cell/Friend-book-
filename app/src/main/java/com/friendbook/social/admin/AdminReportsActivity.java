@@ -16,7 +16,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 
@@ -71,7 +70,7 @@ public class AdminReportsActivity extends Activity {
         if (reg != null) reg.remove();
     }
 
-    private String describe(DocumentSnapshot d) {
+    private String describe(com.friendbook.social.core.Doc d) {
         Map<String, Object> m = d.getData();
         if (m == null) return "Unknown report";
         if (m.containsKey("postId")) return "📝 Reported post: " + Format.str(m, "postId");
@@ -83,7 +82,7 @@ public class AdminReportsActivity extends Activity {
         return "Report";
     }
 
-    private void actOn(DocumentSnapshot d) {
+    private void actOn(com.friendbook.social.core.Doc d) {
         Map<String, Object> m = d.getData();
         String[] opts = {"🗑 Delete reported content", "🚫 Ban content author", "✖ Dismiss report"};
         Ui.choose(this, describe(d), opts, w -> {
@@ -144,7 +143,7 @@ public class AdminReportsActivity extends Activity {
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
-            DocumentSnapshot d = reports.get(position);
+            com.friendbook.social.core.Doc d = reports.get(position);
             h.title.setText(describe(d));
             Map<String, Object> m = d.getData();
             String by = Format.strOr(m, "reportedBy", "?");

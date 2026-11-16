@@ -16,6 +16,7 @@ import com.friendbook.social.core.AdQueueManager;
 import com.friendbook.social.core.AdsConfig;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
 import com.google.firebase.firestore.ListenerRegistration;
 
@@ -215,9 +216,11 @@ public class AdMobSettingsActivity extends Activity {
         if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
         com.friendbook.social.core.CloudflareStore.get("config", "ads", d -> {
                     if (d != null) {
-                        String fId = d.getString("feed_native_unit_v3");
-                        String rId = d.getString("reels_native_unit_v3");
-                        Boolean en = d.getBoolean("ads_enabled_v3");
+                        // d is the stored field map, not a document handle.
+                        String fId = Format.str(d, "feed_native_unit_v3");
+                        String rId = Format.str(d, "reels_native_unit_v3");
+                        Object rawEn = d.get("ads_enabled_v3");
+                        Boolean en = rawEn instanceof Boolean ? (Boolean) rawEn : null;
                         String activeFeed = AdsConfig.isRealProductionUnit(fId) ? fId : AdsConfig.FEED_NATIVE_ID;
                         String activeReels = AdsConfig.isRealProductionUnit(rId) ? rId : AdsConfig.REELS_NATIVE_ID;
                         feedNativeEdit.setText(activeFeed);

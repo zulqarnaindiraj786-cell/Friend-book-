@@ -1690,8 +1690,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     /** Fetches the broadcast document and hands it to the existing render logic. */
-    private String pkBattleId, pkMediaAId, pkMediaBId;
-
     /** Reads the three PK documents once. Called from the live poll, so there is one timer. */
     private void fetchPkSignals() {
         if (pkBattleId != null) {

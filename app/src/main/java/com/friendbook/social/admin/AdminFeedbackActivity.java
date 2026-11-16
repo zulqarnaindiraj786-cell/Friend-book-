@@ -16,7 +16,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 
@@ -95,7 +94,7 @@ public class AdminFeedbackActivity extends Activity {
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
-            DocumentSnapshot d = items.get(position);
+            com.friendbook.social.core.Doc d = items.get(position);
             Map<String, Object> m = d.getData();
             h.from.setText(Format.strOr(m, "name", "User"));
             h.text.setText(Format.str(m, "text"));

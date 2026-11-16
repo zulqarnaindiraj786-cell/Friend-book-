@@ -108,7 +108,8 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
      * `chats/{chatId}` document snapshot updates. Automatically opens Incoming Call UI when ringing!
      */
     @SuppressWarnings("unchecked")
-    public static void maybeHandleIncomingFromRoomDoc(@Nullable Context c, @Nullable DocumentSnapshot roomDoc) {
+    public static void maybeHandleIncomingFromRoomDoc(@Nullable Context c,
+                                                      @Nullable com.friendbook.social.core.Doc roomDoc) {
         if (c == null || roomDoc == null || !roomDoc.exists()) return;
         String me = Fb.uid();
         if (me == null || activeCallScreenOpen) return;

@@ -85,7 +85,7 @@ public class AdminPaymentsFragment extends Fragment {
         if (reg != null) reg.remove();
     }
 
-    private View row(android.app.Activity a, DocumentSnapshot d) {
+    private View row(android.app.Activity a, com.friendbook.social.core.Doc d) {
         java.util.Map<String, Object> m = d.getData();
         String userId = Format.str(m, "userId");
         String email = Format.str(m, "userEmail");
@@ -174,16 +174,17 @@ public class AdminPaymentsFragment extends Fragment {
     }
 
     /** Approve = write payment approved + activate the purchased thing, in one batch. */
-    private void approve(DocumentSnapshot d, java.util.Map<String, Object> m) {
+    private void approve(com.friendbook.social.core.Doc d, java.util.Map<String, Object> m) {
         android.app.Activity a = getActivity();
         String type = Format.str(m, "type");
         String uid = Format.str(m, "userId");
+        // The row came from D1, which has no document reference: name the collection and id.
         WriteBatch batch = Fb.db().batch();
-        batch.update(d.getReference(), "status", "approved",
+        batch.update(Fb.db().collection("payments").document(d.getId()), "status", "approved",
                 "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
         // serverTimestamp is a sentinel; D1 additionally stamps updatedAt on its own, so the
         // approval time is recorded either way.
-        com.friendbook.social.core.DataRouter.mirrorUpdatePath(d.getReference().getPath(),
+        com.friendbook.social.core.DataRouter.mirrorPut("payments", d.getId(),
                 "status", "approved", "approvedBy", Fb.uid());
 
         if (type != null && type.startsWith("tick_")) {

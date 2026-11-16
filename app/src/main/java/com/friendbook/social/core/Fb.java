@@ -209,9 +209,9 @@ public class Fb {
     /** Live listeners on users/{me}, shared by every screen that needs them. */
     private static final java.util.List<MeObserver> meObservers = new java.util.ArrayList<>();
 
-    /** Called with the current user document whenever {@code users/{me}} changes. */
+    /** Called with the current user document whenever this session reads {@code users/{me}}. */
     public interface MeObserver {
-        void onMe(DocumentSnapshot doc);
+        void onMe(com.friendbook.social.core.Doc doc);
     }
 
     /**
@@ -245,7 +245,7 @@ public class Fb {
     }
 
     /** Delivers a fresh users/{me} document to every subscribed screen. */
-    private static void notifyMeObservers(DocumentSnapshot doc) {
+    private static void notifyMeObservers(com.friendbook.social.core.Doc doc) {
         java.util.List<MeObserver> copy;
         synchronized (meObservers) { copy = new java.util.ArrayList<>(meObservers); }
         for (MeObserver o : copy) {
