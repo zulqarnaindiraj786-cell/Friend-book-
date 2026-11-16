@@ -11,7 +11,9 @@ test('public APK metadata matches Android version; no database, auth or website 
  assert.equal(response.status,200);assert.deepEqual(await response.json(),androidRelease);
  assert.equal(response.headers.get('Cache-Control'),'no-store');
  assert.equal(androidRelease.packageName,'com.friendbook.social');
- assert.match(androidRelease.apkUrl,/^https:\/\/github\.com\/zulqarnaindiraj786-cell\/Friend-book-\/releases\/latest\/download\/friendbook\.apk$/);
+ // The app must never point people at a GitHub APK: Play is the only update path.
+ assert.match(androidRelease.apkUrl,/^https:\/\/play\.google\.com\/store\/apps\/details\?id=com\.friendbook\.social$/);
+ assert.equal(androidRelease.minVersionCode, androidRelease.versionCode);
 });
 test('release metadata cannot be changed by callers',async()=>{
  assert.equal((await worker.fetch(new Request('https://test.invalid/v1/android-release',{method:'POST',body:'{}'}),{})).status,405);

@@ -22,7 +22,19 @@ public class SplashActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         FastCache.init(this);
-        route();
+        // The update gate runs before anything else is routed. A build below the minimum
+        // supported version must not reach the login screen, the feed, or a session listener:
+        // the backend it has to talk to has moved on, and letting it through is exactly what
+        // makes the app look broken to people who never reinstalled. The gate is synchronous,
+        // so an unreachable policy server can never be mistaken for "you are up to date".
+        com.friendbook.social.core.ForceUpdate.gate(this, this::route);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // The gate blocks the launcher, so a user who backs out of Play Store lands here again.
+        com.friendbook.social.core.ForceUpdate.recheck(this);
     }
 
     private void route() {

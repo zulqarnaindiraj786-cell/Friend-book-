@@ -1,4 +1,4 @@
-# Recheck Git-connected deployment after outage; both D1 gates remain OFF.
+# Both data gates are ON: D1 owns app data, Firebase owns auth/FCM only.
 # Git-connected build trigger; no runtime or database changes.
 name = "rough-firefly-dd7b"
 main = "worker.js"
@@ -8,6 +8,9 @@ compatibility_date = "2024-01-01"
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
 D1_INTERACTIONS_ENABLED = "true"
+# The app REST surface in data-api.js (/v1/posts, /v1/chats, /v1/users, ...). It is
+# gated so a deploy can be rolled back to the old endpoints without a code change.
+DATA_API_ENABLED = "true"
 VIDEO_R2_ENABLED = "true"
 VIDEO_R2_RETENTION_VERIFIED = "true"
 REALTIME_WS_ENABLED = "true"

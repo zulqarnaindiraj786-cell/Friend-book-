@@ -86,6 +86,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        // Re-checked here as well as in the launcher: a process that was left in the
+        // background resumes straight into this activity, skipping SplashActivity entirely.
+        com.friendbook.social.core.ForceUpdate.recheck(this);
         com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;

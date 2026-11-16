@@ -1,57 +1,72 @@
 package com.friendbook.social.core;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.Intent;
-import android.net.Uri;
-import android.os.Handler;
-import android.os.Looper;
-import com.friendbook.social.BuildConfig;
-import org.json.JSONObject;
-import java.net.URL;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Optional update notice. Never blocks launch, changes backend or installs silently. */
+import com.friendbook.social.BuildConfig;
+import com.google.android.play.core.appupdate.AppUpdateManager;
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory;
+import com.google.android.play.core.appupdate.AppUpdateOptions;
+import com.google.android.play.core.install.model.AppUpdateType;
+import com.google.android.play.core.install.model.UpdateAvailability;
+
+/**
+ * Update entry point used by the settings screen and by app launch.
+ *
+ * <p>There is exactly one update channel: the Play Store. The previous implementation
+ * downloaded an APK from a GitHub release, which was both a security problem (a sideloaded
+ * binary is not the artifact Play reviewers signed off on) and a support problem (users ended
+ * up on a build with no Play update state, so they could never be moved forward again). Both
+ * are gone: the only action offered anywhere is the Play Store listing.
+ */
 public final class AppUpdates {
- private AppUpdates(){}
- static final String APK="https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk";
- private static final String POLICY="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/android-release";
- private static final AtomicBoolean BUSY=new AtomicBoolean();
- static boolean valid(JSONObject policy){
-  Object code=policy.opt("versionCode");
-  return code instanceof Number && ((Number)code).doubleValue()==((Number)code).longValue()
-   && ((Number)code).longValue()>0 && ((Number)code).longValue()<=Integer.MAX_VALUE
-   && BuildConfig.APPLICATION_ID.equals(policy.optString("packageName"))
-   && APK.equals(policy.optString("apkUrl")) && policy.optString("versionName").matches("[0-9]+(\\.[0-9]+){1,3}");
- }
- public static void check(Activity activity,boolean manual){
-  android.content.SharedPreferences prefs=activity.getSharedPreferences("apk_updates",0);
-  long last=prefs.getLong("checked_at",0),now=System.currentTimeMillis();
-  if(!manual&&last<=now&&now-last<12*60*60*1000L)return;
-  if(!BUSY.compareAndSet(false,true))return;
-  new Thread(()->{
-   JSONObject policy=null;
-   try{policy=D1HttpTransport.send(new URL(POLICY),"GET",null,null);if(!valid(policy))policy=null;}
-   catch(Exception ignored){}
-   final JSONObject result=policy;
-   new Handler(Looper.getMainLooper()).post(()->{
-    BUSY.set(false);
-    if(activity.isFinishing()||activity.isDestroyed())return;
-    if(result==null){if(manual)Ui.toast(activity,"Couldn't check for updates. Please retry.");return;}
-    prefs.edit().putLong("checked_at",System.currentTimeMillis()).apply();
-    if(result.optInt("versionCode")>BuildConfig.VERSION_CODE)show(activity,result);
-    else if(manual)Ui.toast(activity,"You have the latest APK.");
-   });
-  },"APK update check").start();
- }
- static void show(Activity activity,JSONObject policy){
-  if(!valid(policy)||policy.optInt("versionCode")<=BuildConfig.VERSION_CODE)return;
-  new AlertDialog.Builder(activity).setTitle("APK update available")
-   .setMessage("Version "+policy.optString("versionName")+" is available. Install it over the existing app. Do not uninstall or clear app data. This notice does not change the interaction backend.")
-   .setNegativeButton("Later",null)
-   .setPositiveButton("Download APK",(dialog,which)->{
-    try{activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(APK)));}
-    catch(Exception error){Ui.toast(activity,"No browser available to download the APK.");}
-   }).show();
- }
+
+    private AppUpdates() {
+    }
+
+    /**
+     * Checks Play for a newer build.
+     *
+     * @param manual true when the user tapped a menu item, so we explain a no-op result
+     */
+    public static void check(final Activity activity, final boolean manual) {
+        if (activity == null || activity.isFinishing()) return;
+
+        // A build below the floor is blocked outright; the blocking screen is the answer.
+        if (ForceUpdate.isBlocked(activity)) {
+            ForceUpdate.recheck(activity);
+            return;
+        }
+
+        try {
+            final AppUpdateManager manager = AppUpdateManagerFactory.create(activity);
+            manager.getAppUpdateInfo().addOnSuccessListener(info -> {
+                if (activity.isFinishing() || activity.isDestroyed()) return;
+                boolean available = info != null
+                        && info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE;
+                if (available && info.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)) {
+                    try {
+                        manager.startUpdateFlow(info, activity,
+                                AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build());
+                        return;
+                    } catch (Throwable ignored) {
+                        // Fall through to the listing.
+                    }
+                }
+                if (available) {
+                    ForceUpdate.openPlayStore(activity);
+                } else if (manual) {
+                    Ui.toast(activity, "Aap ke paas latest version hai (" + BuildConfig.VERSION_NAME + ").");
+                }
+            }).addOnFailureListener(error -> {
+                // Sideloaded builds have no Play state; send them to the listing rather than
+                // claiming they are current.
+                if (manual && !activity.isFinishing()) ForceUpdate.openPlayStore(activity);
+            });
+        } catch (Throwable missingPlayServices) {
+            if (manual) {
+                Ui.toast(activity, "Play Store se app update karo.");
+                ForceUpdate.openPlayStore(activity);
+            }
+        }
+    }
 }

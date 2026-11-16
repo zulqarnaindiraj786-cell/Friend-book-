@@ -16,13 +16,14 @@ android {
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
         // D1, no KV. Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
-        // Cloudflare Data API (Firestore/RTDB replacement) - enable after migration verified
-        buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'false'
+        // Cloudflare Data API (Firestore/RTDB replacement). ON: the app's data plane is the
+        // Worker + D1. Firebase keeps auth, FCM, Crashlytics and the offline document cache only.
+        buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'true'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 124
-        versionName '2.8.92'
+        versionCode 126
+        versionName '2.9.0'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -100,6 +101,11 @@ dependencies {
     implementation 'com.google.firebase:firebase-messaging'
     // 🔐 App Check with Play Integrity (production) — MONITOR mode first, then ENFORCE
     implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+    // Play In-App Updates. This is the only update path: a build older than the minimum
+    // supported version must be replaced through the Play Store, never by sideloading an
+    // APK, because a sideloaded build is not the artifact Play Store reviews analyse.
+    implementation 'com.google.android.play:app-update:2.1.0'
+    implementation 'com.google.android.play:app-update-ktx:2.1.0'
     implementation 'androidx.work:work-runtime:2.10.0'
     implementation 'com.google.guava:guava:33.3.1-android'
 

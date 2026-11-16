@@ -19,6 +19,52 @@ function cors(status = 200, body = null) {
   });
 }
 
+/**
+ * Mirrors every migrated document into the app document store as well.
+ *
+ * The app reads documents back through /v1/docs, which is served from
+ * friendbook_cf_documents. The row-by-row writers below target the normalised tables
+ * (users, posts, chats, ...). Those two shapes were never connected, so a migration that
+ * reported success left D1 with millions of rows in tables nothing read, and the app
+ * still looked empty. Both are written now.
+ *
+ * Best effort by design: a mirror failure is reported but never rolls back the primary
+ * write, and never turns an otherwise successful batch into a failed one.
+ */
+async function mirrorDocuments(env, collection, documents) {
+  let mirrored = 0;
+  const failures = [];
+  try {
+    const stmt = env.DB.prepare(
+      `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         document_json = excluded.document_json,
+         updated_at = excluded.updated_at`
+    );
+    const statements = [];
+    for (const doc of documents || []) {
+      const id = doc && (doc.__id || doc.id);
+      if (typeof id !== 'string' || !id.length || id.length > 128) continue;
+      const plain = { ...doc, id };
+      delete plain.__id;
+      if (!plain.createdAt) plain.createdAt = Date.now();
+      const owner = String(plain.authorId || plain.uid || plain.senderId || plain.toUserId || '');
+      statements.push(stmt.bind(`${collection}/${id}`, collection, id, owner,
+        JSON.stringify(plain), Date.now()));
+    }
+    for (let i = 0; i < statements.length; i += 50) {
+      const slice = statements.slice(i, i + 50);
+      if (typeof env.DB.batch === 'function') await env.DB.batch(slice);
+      else for (const statement of slice) await statement.run();
+      mirrored += slice.length;
+    }
+  } catch (error) {
+    failures.push(String(error && error.message ? error.message : error).slice(0, 120));
+  }
+  return { mirrored, failures };
+}
+
 export async function migrationApi(request, env) {
   if (request.method === 'OPTIONS') return cors();
 
@@ -124,7 +170,7 @@ async function migrateUsers(env, body) {
           tag_privacy, two_factor_pin, favorite_uids, restricted_uids, close_friends_uids,
           highlight_story_ids, saved_reel_ids, hobbies, pinned_post_id, status_note,
           status_note_at, daily_streak, last_bonus_at, followers, following, blocked
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(uid) DO UPDATE SET
           display_name = excluded.display_name,
           email = excluded.email,
@@ -255,7 +301,8 @@ async function migrateUsers(env, body) {
     }
   }
   
-  return cors(200, { inserted, updated, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'users', documents);
+  return cors(200, { inserted, updated, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migratePosts(env, body) {
@@ -283,7 +330,7 @@ async function migratePosts(env, body) {
           shares, views, created_at, saved_by, subscribed_uids, subscribed_by, media_urls,
           tagged_uids, tagged_names, poll_options, poll_votes, pinned_comment_id,
           inline_comments, reactions_map, author_verified, author_tick_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           author_id = excluded.author_id,
           author_name = excluded.author_name,
@@ -398,7 +445,8 @@ async function migratePosts(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'posts', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateChats(env, body) {
@@ -457,7 +505,8 @@ async function migrateChats(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'chats', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateGroups(env, body) {
@@ -531,7 +580,8 @@ async function migrateGroups(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'groups', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateFriendRequests(env, body) {
@@ -575,7 +625,8 @@ async function migrateFriendRequests(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'friend_requests', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateNotifications(env, body) {
@@ -627,7 +678,8 @@ async function migrateNotifications(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'notifications', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateStories(env, body) {
@@ -687,7 +739,8 @@ async function migrateStories(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'stories', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateReels(env, body) {
@@ -713,7 +766,7 @@ async function migrateReels(env, body) {
           filter_preset, filter_overlay_color, beauty_level, playback_speed,
           mute_original_audio, audio_title, audio_url, sound_author_photo,
           trim_start_ms, trim_end_ms, liked_by, saved_by, reactions, inline_comments
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           author_id = excluded.author_id,
           author_name = excluded.author_name,
@@ -802,7 +855,8 @@ async function migrateReels(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'reels', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateComments(env, body) {
@@ -860,7 +914,8 @@ async function migrateComments(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'comments', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function migrateMessages(env, body) {
@@ -884,7 +939,7 @@ async function migrateMessages(env, body) {
           live_title, reply_to_text, reply_to_sender, call_type, call_status, call_duration_sec,
           forwarded, voice_duration_sec, is_seen, is_delivered, is_deleted, created_at,
           reactions, reactor_names, reactor_photos
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           chat_id = excluded.chat_id,
           sender_id = excluded.sender_id,
@@ -957,7 +1012,8 @@ async function migrateMessages(env, body) {
     }
   }
   
-  return cors(200, { inserted, errors, total: documents.length });
+  const mirror = await mirrorDocuments(env, 'messages', documents);
+  return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
 
 async function verifyCounts(env) {
