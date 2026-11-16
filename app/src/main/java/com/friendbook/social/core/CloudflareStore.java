@@ -14,6 +14,7 @@ import org.json.JSONObject;
 
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -27,7 +28,8 @@ import java.util.function.Consumer;
 public final class CloudflareStore {
     private CloudflareStore() {}
 
-    private static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/docs";
+    private static final String ORIGIN = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
+    private static final String BASE = ORIGIN + "/v1/docs";
     private static final long LIST_CACHE_TTL_MS = 5 * 60_000L;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -101,7 +103,7 @@ public final class CloudflareStore {
 
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {
         if (!enabled() || collection == null || callback == null) return;
-        final int safeLimit = Math.max(1, Math.min(50, limit));
+        final int safeLimit = Math.max(1, Math.min(DocQuery.MAX_LIMIT, limit));
         final String cacheKey = collection + ":" + safeLimit;
         long now = android.os.SystemClock.elapsedRealtime();
         List<Map<String, Object>> cached = LIST_CACHE.get(cacheKey);
@@ -129,5 +131,95 @@ public final class CloudflareStore {
                 });
             });
         } catch (Throwable ignored) { }
+    }
+
+    /** A page of results from the document store. */
+    public static final class Page {
+        public final List<Map<String, Object>> documents;
+        public final boolean hasMore;
+        public final String nextCursor;
+
+        Page(List<Map<String, Object>> documents, boolean hasMore, String nextCursor) {
+            this.documents = documents;
+            this.hasMore = hasMore;
+            this.nextCursor = nextCursor;
+        }
+
+        public boolean isEmpty() { return documents.isEmpty(); }
+    }
+
+    /**
+     * Runs a filtered, ordered, paginated query. Unlike {@link #list}, results are never
+     * cached: they depend on caller parameters and on a cursor, and a stale page would
+     * silently repeat or skip rows.
+     *
+     * <p>{@code callback} runs on the main thread. On any failure it receives an empty page,
+     * never null, so callers can render "no results" without a separate error path.
+     */
+    public static void query(DocQuery query, Consumer<Page> callback) {
+        if (!enabled() || query == null || callback == null) return;
+        FirebaseUser user = currentUser();
+        if (user == null) {
+            MAIN.post(() -> callback.accept(emptyPage()));
+            return;
+        }
+        user.getIdToken(false).addOnSuccessListener(res -> {
+            String token = res != null ? res.getToken() : null;
+            if (token == null || token.isEmpty()) {
+                MAIN.post(() -> callback.accept(emptyPage()));
+                return;
+            }
+            IO.execute(() -> {
+                Page page;
+                try {
+                    URL url = new URL(ORIGIN + query.toPath());
+                    JSONObject data = D1HttpTransport.send(url, "GET", token, null);
+                    JSONArray arr = data != null ? data.optJSONArray("documents") : null;
+                    List<Map<String, Object>> docs = arr != null ? D1Client.maps(arr) : new ArrayList<>();
+                    String next = data != null ? data.optString("nextCursor", null) : null;
+                    if (next != null && next.isEmpty()) next = null;
+                    page = new Page(docs, data != null && data.optBoolean("hasMore", false), next);
+                } catch (Throwable ignored) {
+                    page = emptyPage();
+                }
+                final Page result = page;
+                MAIN.post(() -> callback.accept(result));
+            });
+        });
+    }
+
+    /**
+     * Deletes one document. Owner-only on the server; deleting something already absent is a
+     * success, which makes retries safe.
+     */
+    public static void delete(String collection, String docId, Runnable onSuccess) {
+        if (!enabled() || collection == null || docId == null || docId.isEmpty()) return;
+        FirebaseUser user = currentUser();
+        if (user == null) return;
+        user.getIdToken(false).addOnSuccessListener(res -> {
+            String token = res != null ? res.getToken() : null;
+            if (token == null || token.isEmpty()) return;
+            IO.execute(() -> {
+                try {
+                    URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
+                    D1HttpTransport.send(url, "DELETE", token, null);
+                    LIST_CACHE.evictAll();
+                    LIST_CACHE_AT.evictAll();
+                    if (onSuccess != null) MAIN.post(onSuccess);
+                } catch (Throwable ignored) { }
+            });
+        });
+    }
+
+    private static FirebaseUser currentUser() {
+        try {
+            return Fb.auth().getCurrentUser();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Page emptyPage() {
+        return new Page(Collections.emptyList(), false, null);
     }
 }
