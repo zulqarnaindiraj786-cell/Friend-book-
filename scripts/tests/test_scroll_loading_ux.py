@@ -8,7 +8,9 @@ class ScrollLoadingUx(unittest.TestCase):
         requests=code.split('if (section == SEC_REQUESTS) {',1)[1].split('} else if (section == SEC_SUGGESTIONS)',1)[0]
         self.assertIn('People you may know',requests)
         self.assertIn('addSuggestions(rows)',requests)
-        self.assertIn('suggestionPager.close()',code)
+        # Both pagers close on hide/stop; they are D1 pagers now.
+        self.assertIn('suggestionDocPager.close()',code)
+        self.assertIn('activeDocPager.close()',code)
         self.assertIn('if(loading){requestRender();return;}',code)
         self.assertNotIn('root.addView(refresh)',code)
         self.assertNotIn('moreButton',code)

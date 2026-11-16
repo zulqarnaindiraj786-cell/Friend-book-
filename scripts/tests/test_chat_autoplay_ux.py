@@ -4,9 +4,13 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class ChatAutoplayUx(unittest.TestCase):
     def test_ten_chats_and_ten_latest_and_older_messages(self):
         inbox=(JAVA/'chat/ConversationsActivity.java').read_text();chat=(JAVA/'chat/ChatActivity.java').read_text()
-        # Stable list with snapshot listener + DiffUtil
-        for token in ['cachedRooms++ >= 30', 'addSnapshotListener', '.limit(100)', 'DiffUtil.calculateDiff', 'RoomDiffCallback']:
+        # The inbox reads D1 now, so there is no snapshot listener to guard. What still has to
+        # hold is that the list renders through DiffUtil and that a stale chat cannot stay on
+        # screen after the server stops returning it.
+        for token in ['cachedRooms++ >= 30', 'DocQuery.of("chats")', 'DocQuery.MAX_LIMIT', 'DiffUtil.calculateDiff', 'RoomDiffCallback',
+                      'allRooms.removeIf(r -> !seen.contains(r.room.id))']:
             self.assertIn(token, inbox)
+        self.assertNotIn('addSnapshotListener', inbox)
         self.assertIn('.limitToLast(20)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(20)',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()

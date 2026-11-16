@@ -8,8 +8,13 @@ class CursorContracts(unittest.TestCase):
             self.assertIn(token,code)
         self.assertNotIn('cursor=',code.split('.addOnFailureListener',1)[1])
     def test_requested_list_pages_and_controls(self):
-        for path,token in [('friends/FollowListActivity.java',',20,"follow:'),('main/NotificationsFragment.java',',20,"notifications:'),('profile/ProfileActivity.java',',7,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',30,"post-reactions:')]:
+        for path,token in [('friends/FollowListActivity.java',',20,"follow:'),('profile/ProfileActivity.java',',7,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',30,"post-reactions:')]:
             self.assertIn(token,(ROOT/path).read_text())
+        # Notifications moved to D1, so it pages with DocPager rather than CursorPager.
+        notifications=(ROOT/'main/NotificationsFragment.java').read_text()
+        self.assertIn('new com.friendbook.social.core.DocPager(nb.build(),20',notifications)
+        self.assertIn('DocQuery.of("notifications")',notifications)
+        self.assertIn('.orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC)',notifications)
     def test_profile_lazy_reels_and_privacy_before_photo_hydration(self):
         code=(ROOT/'profile/ProfileActivity.java').read_text()
         self.assertIn('if(idx==1 && videoPager==null)',code)
