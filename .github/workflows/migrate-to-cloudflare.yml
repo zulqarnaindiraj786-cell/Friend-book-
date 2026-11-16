@@ -323,8 +323,12 @@ jobs:
           # covers a per-minute rate limit, which clears in seconds, and gives up long before
           # it could ever reach a daily reset. Pages are 300 documents, so the whole copy fits
           # comfortably inside one day's allowance.
-          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '6' }}
-          MIGRATION_PROBE_BACKOFF_SECONDS: '5'
+          # One short burst, then stop. The refusal carries no metric name, no quota id and no
+          # retry hint - it is a project-level throttle, not Firestore's own quota error, and
+          # every retry inside it keeps the gate shut. Four attempts over two minutes is enough
+          # to tell a transient blip from a gate that needs time.
+          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '2' }}
+          MIGRATION_PROBE_BACKOFF_SECONDS: '10'
           MIGRATION_PAGE_SIZE: '300'
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
