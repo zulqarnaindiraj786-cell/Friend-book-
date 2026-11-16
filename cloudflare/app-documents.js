@@ -114,6 +114,12 @@ function getDbMap(store, db) {
   return map;
 }
 
+// Used after a bulk rebuild so this isolate does not keep serving its cached reads.
+export function invalidateDocumentCaches(db) {
+  docCache.delete(db);
+  listCache.delete(db);
+}
+
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   const now = Date.now();

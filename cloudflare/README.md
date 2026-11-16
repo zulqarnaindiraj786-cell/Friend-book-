@@ -37,6 +37,13 @@ then deploy automatically. No GitHub Actions Cloudflare API secret is required.
 `https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health`
 should return `{"ok":true}`. This verifies the binding, not the application schema.
 
+`/v1/admin/migrate/documents/{plan,rebuild,verify}` convert the normalised D1 tables into
+the documents the app reads (`cloudflare/document-rebuild.js`). They reuse the migration
+API's existing `MIGRATION_ADMIN_TOKEN` (≥ 32 characters); writes happen only with
+`{"apply": true}`, existing documents are kept unless `{"overwrite": true}`, and every
+collection except `posts` is blocked until the live posts gate passes. Runbook:
+[docs/testing/d1-document-rebuild.md](../docs/testing/d1-document-rebuild.md).
+
 `GET /v1/me` requires `Authorization: Bearer <Firebase ID token>`; verifies RS256
 signature against Google's public keys plus project audience, issuer, expiry,
 issued-at, subject and auth_time. A valid token reads only its own optional D1

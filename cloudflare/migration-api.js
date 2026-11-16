@@ -5,6 +5,7 @@
  */
 
 import { timingSafeEqual } from './utils.js';
+import { documentRebuildAction } from './document-rebuild.js';
 
 /** Collections this endpoint will answer questions about. */
 const MIGRATABLE_COLLECTIONS = new Set([
@@ -167,6 +168,14 @@ export async function migrationApi(request, env) {
 
     if (path === '/v1/admin/migrate/existing' && request.method === 'POST') {
       return await listExisting(env, await request.json());
+    }
+
+    // Convert normalised rows into the document store the app reads (/v1/admin/migrate/documents/*).
+    // Dry run by default; posts first, the other nine only after the posts gate passes.
+    if (path.startsWith('/v1/admin/migrate/documents')) {
+      const action = await documentRebuildAction(env.DB, url, request);
+      if (!action) return cors(404, { error: 'Not found' });
+      return cors(action.status, action.body);
     }
     
     return cors(404, { error: 'Not found' });

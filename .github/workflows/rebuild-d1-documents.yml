@@ -1,0 +1,124 @@
+name: Rebuild D1 rows into document store (plan / dry run / gated apply)
+
+# Owner-triggered only. Nothing runs on push, and nothing is written unless
+# mode=apply AND confirm=APPLY.
+#
+# Default flow (safe): collection=posts, mode=dry-run -> prints the plan, then reads and
+# maps every posts row without writing anything. The remaining nine collections stay
+# blocked (409) until the live posts gate passes.
+#
+# Uses the same MIGRATION_ADMIN_TOKEN secret (at least 32 characters) as the other
+# migration jobs. CF_WORKERS_API_BASE may be the Worker root or the .../v1/admin/migrate
+# URL; both are accepted.
+
+on:
+  workflow_dispatch:
+    inputs:
+      collection:
+        description: 'plan = counts only; posts = the agreed test collection; all = every collection after the gate'
+        required: true
+        default: posts
+        type: choice
+        options:
+          - plan
+          - posts
+          - users
+          - comments
+          - reels
+          - stories
+          - chats
+          - messages
+          - groups
+          - friend_requests
+          - notifications
+          - all
+      mode:
+        description: 'dry-run reads and maps rows without writing; apply writes documents'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      overwrite:
+        description: 'Replace documents that already exist (default: keep them)'
+        required: true
+        default: false
+        type: boolean
+      confirm:
+        description: 'Type APPLY to allow mode=apply (ignored for dry-run)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: friendbook-document-rebuild
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CF_WORKERS_API_BASE: ${{ secrets.CF_WORKERS_API_BASE || 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev' }}
+      MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check configuration and confirmation
+        run: |
+          if [ -z "$MIGRATION_ADMIN_TOKEN" ]; then
+            echo "::error::MIGRATION_ADMIN_TOKEN secret is not set"
+            exit 1
+          fi
+          if [ "${{ inputs.collection }}" = "plan" ] && [ "${{ inputs.mode }}" = "apply" ]; then
+            echo "::error::collection=plan is read-only; choose mode=dry-run or pick a collection"
+            exit 1
+          fi
+          if [ "${{ inputs.mode }}" = "apply" ] && [ "${{ inputs.confirm }}" != "APPLY" ]; then
+            echo "::error::mode=apply requires confirm=APPLY"
+            exit 1
+          fi
+          echo "collection=${{ inputs.collection }} mode=${{ inputs.mode }} overwrite=${{ inputs.overwrite }}"
+
+      - name: Offline safety tests (no network, no database)
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_document_rebuild_tool.py'
+          npm ci --no-audit --no-fund
+          node --test cloudflare/test/document-rebuild.test.js
+
+      - name: Plan (read-only counts, gate and pending work)
+        run: |
+          python3 scripts/admin/rebuild_documents.py plan | tee plan.json
+          {
+            echo "### Plan"
+            echo '```json'
+            cat plan.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry run (reads and maps every row, writes nothing)
+        if: inputs.mode == 'dry-run' && inputs.collection != 'plan'
+        run: python3 scripts/admin/rebuild_documents.py run "${{ inputs.collection }}"
+
+      - name: Apply (writes documents; gate enforced)
+        if: inputs.mode == 'apply' && inputs.collection != 'plan'
+        run: |
+          ARGS=""
+          if [ "${{ inputs.overwrite }}" = "true" ]; then ARGS="--overwrite"; fi
+          python3 scripts/admin/rebuild_documents.py run "${{ inputs.collection }}" --apply $ARGS
+
+      - name: Verify posts after a posts rebuild
+        if: inputs.mode == 'apply' && (inputs.collection == 'posts' || inputs.collection == 'all')
+        run: python3 scripts/admin/rebuild_documents.py verify posts --sample 40
+
+      - name: Final plan (counts and gate after the run)
+        if: always() && inputs.collection != 'plan'
+        run: python3 scripts/admin/rebuild_documents.py plan || true
