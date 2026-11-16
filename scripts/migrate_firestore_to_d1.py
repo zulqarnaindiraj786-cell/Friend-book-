@@ -202,6 +202,25 @@ def probe_firestore(fs_client):
         except Exception as exc:
             text = f"{type(exc).__name__}: {str(exc)[:300]}"
             print(f"Firestore read probe FAILED (attempt {attempt}): {text}")
+            # "Quota exceeded" without naming the quota is not actionable: it can be document
+            # reads, bandwidth, or a per-minute cap, and only one of those is fixed by waiting
+            # until tomorrow. The gRPC metadata names the quota, so print it.
+            try:
+                details = getattr(exc, "metadata", None)
+                if details:
+                    named = []
+                    for item in details:
+                        for key, value in item:
+                            if key in ("quota_metric", "quota_id", "quota_value",
+                                       "consumer", "retry_delay", "limit"):
+                                named.append(f"{key}={value}")
+                    if named:
+                        line = "quota_detail: " + " ".join(named)
+                        print(line)
+                        print(f"::notice::{line[:900]}")
+            except Exception as meta_exc:
+                print(f"  (could not read quota metadata: {type(meta_exc).__name__})")
+            print(f"  full error repr: {repr(exc)[:600]}")
             if not is_quota_refusal(exc):
                 # A credential or network failure will not fix itself by waiting.
                 print(f"::error::Firestore read probe failed: {text}")
