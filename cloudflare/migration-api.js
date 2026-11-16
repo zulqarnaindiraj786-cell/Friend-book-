@@ -1024,57 +1024,76 @@ async function migrateMessages(env, body) {
  * How fresh is what D1 holds?
  *
  * <p>Counts alone cannot answer "is this a copy or the live data". A copied row and a row the
- * app wrote a minute ago look identical in a COUNT. What separates them is the timestamp:
- * every write through the document API stamps updated_at, so a table whose newest row is
- * from today is being written to right now, and a table whose rows all predate the copy is a
- * one-time snapshot nobody has touched since.
+ * app wrote a minute ago are identical in a COUNT. What separates them is the timestamp, and
+ * there is exactly one place that has one: friendbook_cf_documents, where the document API
+ * stamps updated_at on every put. The per-feature tables (users, posts, chats, ...) are
+ * projections written by the copy and carry no timestamp of their own, so they are counted
+ * for completeness but cannot speak to recency.
  *
- * <p>It also reports which documents still carry the shape only the copy produces, so a
- * table that is half copied is visible as such rather than as a healthy count.
+ * <p>So the answer is derived from the document table's spread: a newest row minutes old means
+ * the app is writing here right now, and an oldest row older than the copy means those rows
+ * came from it.
  */
 async function auditFreshness(env) {
   const now = Date.now();
   const summary = {};
-  for (const table of ['users', 'posts', 'chats', 'groups', 'notifications', 'comments', 'messages']) {
-    try {
-      const row = await env.DB.prepare(
-        `SELECT COUNT(*) AS total,
-                MIN(updated_at) AS oldest,
-                MAX(updated_at) AS newest
-         FROM ${table}`
-      ).first();
-      const total = row?.total || 0;
-      const newest = row?.newest || 0;
-      const oldest = row?.oldest || 0;
-      summary[table] = {
-        total,
-        oldest: oldest ? new Date(oldest).toISOString() : null,
-        newest: newest ? new Date(newest).toISOString() : null,
+  const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+
+  // Per-collection recency from the one table that actually records writes.
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT collection,
+              COUNT(*) AS total,
+              MIN(updated_at) AS oldest,
+              MAX(updated_at) AS newest
+       FROM friendbook_cf_documents
+       GROUP BY collection
+       ORDER BY total DESC`
+    ).all();
+    for (const row of rows.results || []) {
+      const newest = row.newest || 0;
+      summary[row.collection] = {
+        total: row.total || 0,
+        oldest: iso(row.oldest),
+        newest: iso(newest),
         newestAgeMinutes: newest ? Math.round((now - newest) / 60000) : null,
-        writtenToday: newest ? new Date(newest).toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10) : false,
+        writtenToday:
+          newest > 0 && new Date(newest).toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10),
       };
-    } catch (error) {
-      summary[table] = { error: String(error && error.message ? error.message : error).slice(0, 120) };
     }
+  } catch (error) {
+    summary.documents = { error: String(error && error.message ? error.message : error).slice(0, 160) };
   }
 
-  // The flat document table is what the app actually reads for most screens.
+  // Whole-table recency, which is the headline number.
   try {
     const row = await env.DB.prepare(
       `SELECT COUNT(*) AS total, MIN(updated_at) AS oldest, MAX(updated_at) AS newest
        FROM friendbook_cf_documents`
     ).first();
     const newest = row?.newest || 0;
-    summary.documents = {
+    summary.totals = {
       total: row?.total || 0,
-      oldest: row?.oldest ? new Date(row.oldest).toISOString() : null,
-      newest: newest ? new Date(newest).toISOString() : null,
+      oldest: iso(row?.oldest),
+      newest: iso(newest),
       newestAgeMinutes: newest ? Math.round((now - newest) / 60000) : null,
     };
   } catch (error) {
-    summary.documents = { error: String(error && error.message ? error.message : error).slice(0, 120) };
+    summary.totals = { error: String(error && error.message ? error.message : error).slice(0, 160) };
   }
 
+  // The projections, counted only — they carry no timestamp, so they can show coverage but
+  // never recency.
+  const projections = {};
+  for (const table of ['users', 'posts', 'chats', 'groups', 'notifications', 'comments', 'messages']) {
+    try {
+      const row = await env.DB.prepare(`SELECT COUNT(*) AS total FROM ${table}`).first();
+      projections[table] = { total: row?.total || 0 };
+    } catch (error) {
+      projections[table] = { error: String(error && error.message ? error.message : error).slice(0, 120) };
+    }
+  }
+  summary.projections = projections;
   summary.serverTime = new Date(now).toISOString();
   return cors(200, summary);
 }

@@ -1,0 +1,57 @@
+name: Audit D1 Freshness
+
+# Answers one question and nothing else: is D1 the live data, or a stale copy?
+#
+# The counts we had were compatible with both answers. 4,651 rows in D1 against ~4,377 in
+# Firestore says D1 is not short of documents, but it says nothing about whether anything has
+# been written to it since a copy finished. The timestamps say that, and they cost one
+# authenticated GET and zero Firestore reads — so this stays safe to run while the Firestore
+# read path is blocked.
+#
+# Read-only by construction: it calls /v1/admin/migrate/audit, which runs SELECTs and returns
+# JSON. It never touches Firestore and never writes to D1.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/audit-d1-freshness.yml'
+      - 'cloudflare/migration-api.js'
+      - 'scripts/report_d1_audit.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: What D1 Holds Right Now
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Query the audit endpoint
+        env:
+          API_BASE: >-
+            ${{ secrets.CF_WORKERS_API_BASE != '' &&
+                secrets.CF_WORKERS_API_BASE ||
+                'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev' }}
+          API_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$API_TOKEN" ]; then
+            echo "::error::MIGRATION_ADMIN_TOKEN is not set"
+            exit 1
+          fi
+          URL="${API_BASE%/}/v1/admin/migrate/audit"
+          echo "GET $URL"
+          STATUS=$(curl -sS -m 60 -o /tmp/audit.json -w '%{http_code}' \
+            -H "Authorization: Bearer $API_TOKEN" "$URL" || echo 000)
+          echo "HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::audit endpoint returned HTTP $STATUS"
+            head -c 400 /tmp/audit.json 2>/dev/null || true
+            exit 1
+          fi
+          cat /tmp/audit.json
+          echo
+          python3 scripts/report_d1_audit.py /tmp/audit.json
