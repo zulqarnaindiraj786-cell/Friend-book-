@@ -44,7 +44,12 @@ jobs:
                 secrets.CF_ACCOUNT_ID ||
                 '92f3d04598822de2e49e14561218d090' }}
           D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
-        run: python3 scripts/inspect_documents.py
+        # The check-run only keeps ten annotations, so the full dump goes to a file that is
+        # readable from the job output rather than being cut off mid-collection.
+        run: |
+          python3 scripts/inspect_documents.py 2>&1 | tee inspect-documents.log
+          echo '--- full dump ---'
+          cat inspect-documents.log
 
       - name: Verify the posts mapping against real rows
         env:

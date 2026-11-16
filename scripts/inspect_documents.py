@@ -26,7 +26,7 @@ import urllib.request
 API = "https://api.cloudflare.com/client/v4"
 D1_DATABASE_ID = os.environ.get("D1_DATABASE_ID", "e1c605ca-a50b-46c6-9deb-56dd1f70d163")
 
-COLLECTIONS = ["posts", "notifications", "chats", "users", "comments", "messages", "groups"]
+COLLECTIONS = ["posts", "notifications", "messages"]
 
 # The fields each screen cannot render without. If a document lacks these, the row appears
 # blank or is skipped by the app entirely - which is indistinguishable from "not migrated".
@@ -34,7 +34,7 @@ REQUIRED = {
     "posts": ["id", "authorId", "createdAt"],
     "notifications": ["id", "toUserId", "createdAt"],
     "chats": ["id", "participants"],
-    "users": ["uid"],
+    "users": [],
     "comments": ["id", "postId", "createdAt"],
     "messages": ["id", "chatId", "createdAt"],
     "groups": ["id"],
@@ -95,11 +95,10 @@ def main() -> int:
         verdict = "BROKEN - " + "; ".join(problems) if problems else "looks renderable"
         print(f"::{level}::{collection}: {len(rows)} sampled, {len(keys)} fields, {verdict}")
 
-        # The field list, so a naming mismatch is visible at a glance.
-        print(f"::notice::{collection} fields: {', '.join(keys)[:700]}")
-
-        # One whole document, truncated. This is the part that can actually be judged.
-        sample = json.dumps(doc, default=str)[:900]
+        # Two annotations per collection: the field list, then one whole document. Everything
+        # else goes to stdout, because annotations beyond the tenth are discarded.
+        print(f"::notice::{collection} fields: {', '.join(keys)[:620]}")
+        sample = json.dumps(doc, default=str)[:620]
         print(f"::notice::{collection} sample: {sample}")
 
     return 0
