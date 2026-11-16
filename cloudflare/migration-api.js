@@ -6,6 +6,15 @@
 
 import { timingSafeEqual } from './utils.js';
 
+/** Collections this endpoint will answer questions about. */
+const MIGRATABLE_COLLECTIONS = new Set([
+  'users', 'posts', 'reels', 'stories', 'chats', 'messages',
+  'friend_requests', 'follows', 'friends', 'groups', 'pages',
+  'notifications', 'official_broadcasts', 'lives', 'live_chat',
+  'comments', 'subscriptions', 'pokes',
+]);
+
+
 
 function cors(status = 200, body = null) {
   return new Response(body ? JSON.stringify(body) : null, {
@@ -154,6 +163,10 @@ export async function migrationApi(request, env) {
 
     if (path === '/v1/admin/migrate/audit' && request.method === 'GET') {
       return await auditFreshness(env);
+    }
+
+    if (path === '/v1/admin/migrate/existing' && request.method === 'POST') {
+      return await listExisting(env, await request.json());
     }
     
     return cors(404, { error: 'Not found' });
@@ -1039,6 +1052,89 @@ async function migrateMessages(env, body) {
   const mirror = await mirrorDocuments(env, 'messages', documents);
   return cors(200, { inserted, errors, total: documents.length , mirrored: mirror.mirrored, mirrorErrors: mirror.failures.length });
 }
+
+/**
+ * Which of these documents does D1 already have?
+ *
+ * <p>A migration that re-sends everything is a copy of Firestore over live data, and once the
+ * app is writing to D1 the Firestore copy is the older of the two. So the question a safe
+ * migration has to answer first is not "what is in Firestore" but "what is in Firestore that
+ * D1 does not already have".
+ *
+ * <p>Existence is checked in both places a document can live, because they disagree. The app
+ * reads from friendbook_cf_documents, but earlier migration runs wrote only the normalised
+ * tables, so a document can be present in `posts` while absent from the document store. Asking
+ * only the document store would report those as missing and re-copy data that is already here
+ * in another shape.
+ *
+ * <p>Read-only: SELECTs only.
+ */
+async function listExisting(env, body) {
+  const collection = typeof body?.collection === 'string' ? body.collection : '';
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((id) => typeof id === 'string' && id.length <= 128) : [];
+  if (!collection || !MIGRATABLE_COLLECTIONS.has(collection)) {
+    return cors(400, { error: 'Unsupported collection' });
+  }
+  if (ids.length > 5000) {
+    return cors(400, { error: 'Too many ids in one request; send at most 5000' });
+  }
+
+  const existing = new Set();
+  try {
+    // Document store: the path is collection/id.
+    for (let i = 0; i < ids.length; i += 100) {
+      const slice = ids.slice(i, i + 100);
+      const placeholders = slice.map(() => '?').join(',');
+      const rows = await env.DB.prepare(
+        `SELECT doc_id FROM friendbook_cf_documents
+         WHERE collection = ? AND doc_id IN (${placeholders})`
+      ).bind(collection, ...slice).all();
+      for (const row of rows.results || []) existing.add(row.doc_id);
+    }
+
+    // Normalised table: only for collections that have one, and only by primary key.
+    const pk = PROJECTION_PK[collection];
+    if (pk) {
+      for (let i = 0; i < ids.length; i += 100) {
+        const slice = ids.slice(i, i + 100);
+        const placeholders = slice.map(() => '?').join(',');
+        let rows;
+        try {
+          rows = await env.DB.prepare(
+            `SELECT ${pk} AS id FROM ${collection} WHERE ${pk} IN (${placeholders})`
+          ).bind(...slice).all();
+        } catch {
+          break; // no such table in this deployment; the document store answer stands
+        }
+        for (const row of rows.results || []) existing.add(String(row.id));
+      }
+    }
+  } catch (error) {
+    return cors(503, { error: String(error && error.message ? error.message : error).slice(0, 200) });
+  }
+
+  return cors(200, {
+    collection,
+    checked: ids.length,
+    existing: [...existing],
+    missing: ids.filter((id) => !existing.has(id)),
+  });
+}
+
+/** Primary key column of each normalised table, for the existence check above. */
+const PROJECTION_PK = {
+  users: 'uid',
+  posts: 'id',
+  comments: 'id',
+  chats: 'id',
+  messages: 'id',
+  groups: 'id',
+  friendRequests: 'id',
+  friend_requests: 'id',
+  notifications: 'id',
+  stories: 'id',
+  reels: 'id',
+};
 
 /**
  * How fresh is what D1 holds?

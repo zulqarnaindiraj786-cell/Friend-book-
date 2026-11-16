@@ -311,6 +311,32 @@ jobs:
       # project-level block without that. This asks over REST, where the failure body names
       # the quota, and checks whether a managed export can run instead - an export is billed
       # to Storage and costs no document reads at all.
+      # What is in Firestore that D1 does not already have. This runs BEFORE the copy so the
+      # copy knows which documents to send: re-sending one D1 already has would replace the
+      # live version with Firestore's older one, and not sending a missing one is what makes
+      # old content invisible in the app. Read-only against both stores.
+      - name: Plan Which Documents Are Missing
+        continue-on-error: true
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+          MIGRATION_ADMIN_TOKEN: ${{ env.TOKEN }}
+          CF_API_BASE: ${{ env.CF_API_BASE }}
+          MIGRATION_MAX_DOCS: ${{ inputs.max_docs || env.MIGRATION_MAX_DOCS_DEFAULT }}
+          MIGRATION_ONLY: ${{ inputs.only_collections || env.MIGRATION_ONLY_DEFAULT }}
+          MIGRATION_PLAN_PATH: migration-plan.json
+        run: |
+          set +e
+          python3 scripts/plan_missing_documents.py > .ci-logs/plan.log 2>&1
+          RC=$?
+          set -e
+          echo "plan exit=$RC"
+          tail -n 25 .ci-logs/plan.log || true
+          # The plan has to exist for the copy below to be selective. If it does not, the copy
+          # step will refuse rather than fall back to a full overwrite.
+          if [ "$RC" != '0' ] || [ ! -f migration-plan.json ]; then
+            echo '::warning::no usable plan; the copy step will refuse to run rather than overwrite D1'
+          fi
+
       - name: Diagnose Firestore Access
         continue-on-error: true
         env:
@@ -351,7 +377,10 @@ jobs:
           # before the diagnostics below ever ran. That is exactly why the previous
           # failures produced no output.
           set +e
-          python3 -u scripts/migrate_firestore_to_d1.py > .ci-logs/migration.log 2>&1
+          # --only-missing is not optional here. Without the plan the script falls back to
+          # sending every document, which overwrites live D1 rows with older Firestore ones.
+          python3 -u scripts/migrate_firestore_to_d1.py --only-missing migration-plan.json \
+            > .ci-logs/migration.log 2>&1
           RC=$?
           set -e
           echo "migration script exit=$RC"

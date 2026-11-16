@@ -312,18 +312,58 @@ def convert_firestore_value(value):
         return convert_firestore_value(value.__dict__)
     return str(value)
 
+# Set by --only-missing: the ids worth copying, and the collections that have one. When this is
+# present the run copies those documents and nothing else, because every other document is
+# already in D1 - and re-copying it would replace D1's newer version with Firestore's older one.
+MISSING_PLAN = None
+
+
+def load_missing_plan(path):
+    """Read the plan produced by plan_missing_documents.py."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    plan = {}
+    for entry in data.get("collections", []):
+        ids = entry.get("missingIds")
+        if ids is not None:
+            plan[entry["collection"]] = set(ids)
+    total = sum(len(ids) for ids in plan.values())
+    print(f"::notice::loaded plan: {len(plan)} collections, {total} documents to copy")
+    return plan
+
+
 def migrate_collection(fs_client, collection_name, limit=None):
-    """Migrate a single collection to D1 via Cloudflare Workers"""
+    """Copy the planned documents from one Firestore collection to D1.
+
+    <p>When a plan is loaded, only its ids are sent. The documents that are already in D1 are
+    skipped here rather than at the worker, so the read and the request both shrink and the log
+    says exactly what was copied.
+    """
     print(f"\n{'='*60}")
     print(f"Migrating {collection_name}...")
     print(f"{'='*60}")
-    
+
+    wanted = None
+    if MISSING_PLAN is not None:
+        wanted = MISSING_PLAN.get(collection_name)
+        if wanted is None:
+            print(f"  {collection_name}: not in the plan, nothing to copy")
+            return 0, 0
+        if not wanted:
+            print(f"  {collection_name}: plan says nothing is missing, skipping")
+            return 0, 0
+
     coll_ref = fs_client.collection(collection_name)
     print(f"  reading {collection_name}..."
           + (f" (cap {limit})" if limit else
              (f" (cap {MAX_DOCS_PER_COLLECTION})" if MAX_DOCS_PER_COLLECTION else "")))
     docs = read_documents(coll_ref, collection_name, limit)
     print(f"  read {len(docs)} documents from {collection_name}")
+
+    if wanted is not None:
+        before = len(docs)
+        docs = [doc for doc in docs if doc.id in wanted]
+        print(f"  keeping {len(docs)} of {before}: the rest are already in D1")
     
     batch = []
     total = 0
@@ -502,6 +542,28 @@ def main():
     # like a successful migration that wrote zero rows.
     print(f"Target: {CF_API_BASE}")
     print(f"Token: {'set (' + str(len(CF_API_TOKEN)) + ' chars)' if CF_API_TOKEN else 'MISSING'}")
+
+    # --only-missing <plan.json> restricts the run to the documents the plan identified as
+    # absent from D1. Without it this is a full copy, which is only safe against an empty D1.
+    global MISSING_PLAN
+    if "--only-missing" in sys.argv:
+        index = sys.argv.index("--only-missing")
+        try:
+            plan_path = sys.argv[index + 1]
+        except IndexError:
+            print("ERROR: --only-missing needs a plan file, e.g. --only-missing migration-plan.json")
+            return 2
+        try:
+            MISSING_PLAN = load_missing_plan(plan_path)
+        except (OSError, ValueError) as error:
+            print(f"ERROR: could not read the plan {plan_path}: {error}")
+            return 2
+        if not MISSING_PLAN:
+            print("ERROR: the plan is empty; refusing to start a run that would copy nothing.")
+            return 3
+    else:
+        print("::warning::no --only-missing plan; this run will send every Firestore document, "
+              "including ones D1 already has.")
     if not CF_API_TOKEN:
         print("ERROR: CF_API_TOKEN is not set.")
         print("The migration needs a Cloudflare migration token (wrangler secret put MIGRATION_ADMIN_TOKEN).")

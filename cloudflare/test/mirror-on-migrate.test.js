@@ -199,3 +199,51 @@ test('a newer copy still updates the document', async () => {
   );
   assert.equal((await read.json()).document.content, 'second');
 });
+
+// A safe copy has to know what is already here. Two shapes hold documents: the app document
+// store, and the normalised tables that earlier runs wrote. A document present only in a
+// normalised table is not missing, and reporting it as missing would re-copy data D1 has.
+test('the existence check looks in both places a document can live', async () => {
+  const { db } = createSqliteD1();
+  const worker = createWorker(async () => 'uid_check');
+  env.current = env(db);
+
+  // In the document store only.
+  await migrate(worker, 'posts', [{
+    __id: 'post_in_docs', authorId: 'uid_check', content: 'visible', createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+  }]);
+  // In the normalised table only, via a direct insert that skips the mirror.
+  db.prepare(
+    `INSERT INTO posts (id, author_id, author_name, content, created_at)
+     VALUES ('post_in_table', 'uid_check', 'User', 'old shape', 1700000000000)`
+  ).run();
+
+  const response = await worker.fetch(new Request('https://test.invalid/v1/admin/migrate/existing', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      collection: 'posts',
+      ids: ['post_in_docs', 'post_in_table', 'post_truly_missing'],
+    }),
+  }), env.current);
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.existing.sort(), ['post_in_docs', 'post_in_table']);
+  assert.deepEqual(body.missing, ['post_truly_missing']);
+});
+
+test('the existence check refuses collections it cannot answer for', async () => {
+  const { db } = createSqliteD1();
+  const worker = createWorker(async () => 'uid_check');
+  env.current = env(db);
+
+  const response = await worker.fetch(new Request('https://test.invalid/v1/admin/migrate/existing', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ collection: 'not_a_collection', ids: ['x'] }),
+  }), env.current);
+
+  assert.equal(response.status, 400);
+});
