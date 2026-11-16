@@ -156,6 +156,92 @@ public final class CloudflareStore {
         }
     }
 
+    /** How long a successful count is reused before asking D1 again. */
+    private static final long COUNT_TTL_MS = 60_000L;
+    private static final java.util.Map<String, long[]> COUNT_CACHE = new java.util.HashMap<>();
+    private static final java.util.Map<String, java.util.Map<String, Object>> COUNT_VALUES = new java.util.HashMap<>();
+
+    /**
+     * Counts matching documents without listing them, and remembers the answer.
+     *
+     * <p>Every count in this app is shown on a screen the user re-opens (invite tiers,
+     * subscriber totals, unread badges), so the same count was being asked for again on each
+     * entry. D1 has a daily read budget too, and a count over a whole collection is exactly the
+     * kind of query that eats it. A result is therefore reused for {@link #COUNT_TTL_MS}, and a
+     * failed count falls back to the last known value instead of showing zero.
+     */
+    public static void count(DocQuery query, Consumer<Long> callback) {
+        count(query, callback, null);
+    }
+
+    public static void count(DocQuery query, Consumer<Long> callback, Runnable onFailure) {
+        if (!enabled() || query == null || callback == null) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
+        final String key = query.key();
+        synchronized (COUNT_VALUES) {
+            long[] at = COUNT_CACHE.get(key);
+            Object cached = COUNT_VALUES.get(key);
+            if (at != null && cached instanceof Long
+                    && android.os.SystemClock.elapsedRealtime() - at[0] < COUNT_TTL_MS) {
+                final long value = (Long) cached;
+                MAIN.post(() -> callback.accept(value));
+                return;
+            }
+        }
+        try {
+            FirebaseUser user = Fb.auth().getCurrentUser();
+            if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
+            user.getIdToken(false).addOnSuccessListener(res -> {
+                String token = res != null ? res.getToken() : null;
+                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
+                IO.execute(() -> {
+                    try {
+                        URL url = new URL(query.toCountPath());
+                        JSONObject data = D1HttpTransport.send(url, "GET", token, null);
+                        long total = data == null ? -1 : data.optLong("total", -1);
+                        if (total < 0) {
+                            if (onFailure != null) MAIN.post(onFailure);
+                            return;
+                        }
+                        synchronized (COUNT_VALUES) {
+                            COUNT_CACHE.put(key, new long[]{android.os.SystemClock.elapsedRealtime()});
+                            COUNT_VALUES.put(key, total);
+                        }
+                        final long value = total;
+                        MAIN.post(() -> callback.accept(value));
+                    } catch (Throwable refused) {
+                        // Serve the last known value rather than a lie; zero is a real answer.
+                        synchronized (COUNT_VALUES) {
+                            Object last = COUNT_VALUES.get(key);
+                            if (last instanceof Long) {
+                                final long value = (Long) last;
+                                MAIN.post(() -> callback.accept(value));
+                                return;
+                            }
+                        }
+                        if (onFailure != null) MAIN.post(onFailure);
+                    }
+                });
+            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        } catch (Throwable refused) {
+            if (onFailure != null) MAIN.post(onFailure);
+        }
+    }
+
+    /** Drops one collection's cached counts, after a write that changes what they would say. */
+    public static void invalidateCounts(String collection) {
+        synchronized (COUNT_VALUES) {
+            for (String key : new java.util.ArrayList<>(COUNT_VALUES.keySet())) {
+                if (key.startsWith(collection + "|") || key.contains("|" + collection + "|")) {
+                    COUNT_VALUES.remove(key);
+                    COUNT_CACHE.remove(key);
+                }
+            }
+        }
+    }
+
     /**
      * Applies atomic field operations to one document.
      *
@@ -414,18 +500,6 @@ public final class CloudflareStore {
                 }
             });
         }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
-    }
-
-    /**
-     * Polls {@code query} and reports deltas, as a replacement for a Firestore snapshot
-     * listener. See {@link DocWatch}. The watch stops itself when {@code stopped} reports true,
-     * and callers must still {@link DocWatch#stop()} when they finish early.
-     */
-    public static DocWatch watch(DocQuery query, long intervalMs, DocWatch.Stopped stopped,
-                                 Consumer<DocWatch.Delta> listener) {
-        DocWatch w = new DocWatch(query, intervalMs, stopped, listener);
-        if (enabled()) w.start();
-        return w;
     }
 
     private static FirebaseUser currentUser() {

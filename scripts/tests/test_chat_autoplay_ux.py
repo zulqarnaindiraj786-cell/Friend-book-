@@ -11,13 +11,22 @@ class ChatAutoplayUx(unittest.TestCase):
                       'allRooms.removeIf(r -> !seen.contains(r.room.id))']:
             self.assertIn(token, inbox)
         self.assertNotIn('addSnapshotListener', inbox)
-        self.assertIn('.limitToLast(20)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(20)',chat)
+        # Chat reads its window from D1 now: one bounded page each time, no listener.
+        self.assertIn('DocQuery.of("messages")',chat);self.assertIn('.limit(20).build()',chat)
+        self.assertIn('D1Snap.read(older',chat)
+        self.assertNotIn('addSnapshotListener',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()
-        self.assertIn('MetadataChanges.EXCLUDE).isEmpty()',chat)
+        # The old guard pinned Firestore's cache/pending metadata, which D1 does not have.
+        # What still matters is that an unchanged tick does not re-render and does not sound.
+        self.assertIn('delta.added.isEmpty() && delta.updated.isEmpty()',chat)
+        # There is no watch/poll class any more: a refresh is one fetch, and an unchanged page
+        # still must not re-render. DocDelta is what decides "unchanged".
+        self.assertIn('DocDelta.compute(signatureForSnap',chat)
+        self.assertIn('boolean changed()',(JAVA/'core/DocDelta.java').read_text())
         self.assertIn('if(oldKeys.equals(newKeys))return;',adapter)
-        live=chat.split('.limitToLast(20)',1)[1].split('private void loadOlderMessages()',1)[0]
-        self.assertLess(live.index('markVisibleReceipts();\n'),live.index('adapter.setData(list)'))
+        live=chat.split('DocQuery.of("messages")',1)[1].split('private void loadOlderMessages()',1)[0]
+        self.assertLess(live.index('markVisibleReceipts();'),live.index('adapter.setData(list)'))
         for token in ['!chatVisible','receiptInFlight.contains(m.id)','receiptFailed.contains(m.id)','batch.update(', 'receiptFailed.addAll(claimed)']:
             self.assertIn(token,chat)
     def test_history_restores_id_anchor_and_does_not_clear_on_each_resume(self):
@@ -26,7 +35,7 @@ class ChatAutoplayUx(unittest.TestCase):
         self.assertIn('manager.scrollToPositionWithOffset(restored,top)',chat)
         self.assertIn('if(!java.util.Objects.equals(messageActor,Fb.uid()))',chat)
         self.assertIn('historyButton.setVisibility(View.GONE)',chat)
-        self.assertIn('older.endBefore(historyEnd)',chat)
+        self.assertIn('whereGreaterThan("createdAtMs", storedMillis(historyEnd))',chat)
         self.assertIn('historyRanges.push(new HistoryResume',chat)
         self.assertIn('historyRanges.pop()',chat)
     def test_reel_selected_video_autoplays_but_no_offscreen_prefetch(self):

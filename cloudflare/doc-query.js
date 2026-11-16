@@ -150,6 +150,28 @@ export function decodeCursor(raw) {
  * Ordering is always deterministic by (orderValue, doc_id) so cursors never skip
  * or repeat a document between pages.
  */
+/**
+ * Builds a COUNT over the same filters a query would use.
+ *
+ * <p>Counting by listing was the alternative, and it is what the app used to do: fetch up to a
+ * page of documents and take the length. That reads every document to answer "how many", turns
+ * a cheap question into an expensive one, and reports the page ceiling as the answer once the
+ * real count is larger.
+ */
+export function buildCountQuery({ collection, wheres = [] }) {
+  const params = [];
+  const clauses = ['collection = ?'];
+  params.push(collection);
+  for (const raw of wheres) {
+    const predicate = typeof raw === 'string' ? parseWhere(raw) : raw;
+    clauses.push(predicateSql(predicate, params));
+  }
+  return {
+    sql: `SELECT COUNT(*) AS total FROM friendbook_cf_documents WHERE ${clauses.join(' AND ')}`,
+    params,
+  };
+}
+
 export function buildQuery({ collection, wheres = [], orderBy = null, limit = DEFAULT_LIMIT, after = null }) {
   const params = [];
   const clauses = ['collection = ?'];

@@ -147,13 +147,11 @@ public class MarketplaceActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(200)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("posts").orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).limit(200).build(),snap->{
                     allItems.clear();
                     if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Post p = Models.Post.fromDoc(d);
+                        for (com.friendbook.social.core.Doc d : snap) {
+                            Models.Post p = Models.Post.fromMap(d.getId(), d.getData());
                             if (p.trashedAt > 0 || p.archived) continue;
                             boolean legacySale = p.content != null &&
                                     (p.content.toLowerCase().contains("#forsale")

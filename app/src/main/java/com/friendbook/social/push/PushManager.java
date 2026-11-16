@@ -51,6 +51,9 @@ public final class PushManager {
         if (type == null) return;
         // The live chat snapshot provides the in-conversation ding; avoid a second notification-channel sound.
         if ("message".equals(type) && com.friendbook.social.core.SoundEffects.isVisibleChat(d.get("chatId"))) {
+            // The conversation is on screen, so no notification - but it still has to learn that
+            // the message exists. Nudge it to re-read its window instead of leaving it on a timer.
+            com.friendbook.social.core.SoundEffects.notifyChatPush();
             PushTrace.stage("display_skipped", "reason=chat_already_visible"); return;
         }
         if ((type.contains("like") || type.equals("reaction")) && !Prefs.notifLikes(c)) { PushTrace.stage("display_skipped", "reason=likes_disabled"); return; }

@@ -1,5 +1,5 @@
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
-import { buildQuery, parseQueryParams, encodeCursor } from './doc-query.js';
+import { buildQuery, buildCountQuery, parseQueryParams, encodeCursor } from './doc-query.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -201,6 +201,25 @@ export async function appDocuments(request, env, identity) {
       return json({ collection, documents, hasMore, nextCursor });
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
+    }
+  }
+
+  // Count without listing. The app used to answer "how many referrals / subscribers /
+  // messages" by fetching a page and taking its length, which reads everything to answer a
+  // one-number question and reports the page ceiling once the real number is larger.
+  if (path === '/v1/docs/count') {
+    let query;
+    try { query = parseQueryParams(request.url); }
+    catch { return json({ error: 'Invalid query' }, 400); }
+    if (!ALLOWED_COLLECTIONS.has(query.collection)) {
+      return json({ error: 'Unsupported collection' }, 400);
+    }
+    try {
+      const built = buildCountQuery(query);
+      const row = await env.DB.prepare(built.sql).bind(...built.params).first();
+      return json({ collection: query.collection, total: Number(row?.total || 0) });
+    } catch {
+      return json({ error: 'Count unavailable' }, 503);
     }
   }
 

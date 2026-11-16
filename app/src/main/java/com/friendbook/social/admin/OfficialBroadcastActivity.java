@@ -55,6 +55,8 @@ public final class OfficialBroadcastActivity extends Activity {
         TextView remove = Ui.btnGrey(this, "Remove attachment"); body.addView(remove);
         remove.setOnClickListener(v -> { if (!busy) { selected = null; mediaUrl = ""; mediaType = ""; uploadPath = ""; renderAttachment(); } });
         status = Ui.tv(this, "Images: Cloudinary (20 MB). Videos: 480p, R2 Save Forever (99 MB per upload).", 13, Ui.sub(this));
+        // Progress is fetched on demand rather than polled: tap the status line to refresh.
+        status.setOnClickListener(v -> { if (jobId != null && !jobId.isEmpty()) watchJob(); });
         body.addView(status);
         send = Ui.btn(this, "Send to everyone"); body.addView(send); send.setOnClickListener(v -> send());
         ScrollView scroll = new ScrollView(this); scroll.addView(body); setContentView(scroll);
@@ -143,14 +145,25 @@ public final class OfficialBroadcastActivity extends Activity {
                 });
     }
     private void fail(String reason) { busy = false; send.setEnabled(true); message.setEnabled(true); status.setText(reason); }
+    /**
+     * Shows the progress of a broadcast job.
+     *
+     * <p>This used to be a listener, so the progress counter updated itself as the worker
+     * advanced. D1 has no push, and an interval poll for the ~minute a broadcast runs would be
+     * spent reads on every admin client. Instead it reads once when the job is started or the
+     * screen resumes, and offers an explicit refresh - the operator is watching one screen and
+     * a tap is cheaper than a timer.
+     */
     private void watchJob() {
-        listener = Fb.db().collection("officialBroadcasts").document(jobId).addSnapshotListener((doc, error) -> {
-            if (error != null || doc == null || !doc.exists()) return;
-            String state = doc.getString("status");
-            status.setText("Broadcast: " + state + " • " + doc.getLong("processed") + " accounts processed");
+        com.friendbook.social.core.CloudflareStore.get("officialBroadcasts", jobId, doc -> {
+            if (doc == null) return;
+            String state = com.friendbook.social.core.Format.str(doc, "status");
+            Long processed = doc.get("processed") instanceof Number
+                    ? ((Number) doc.get("processed")).longValue() : 0L;
+            status.setText("Broadcast: " + state + " • " + processed + " accounts processed");
             if ("complete".equals(state) || "queued".equals(state) || "sending".equals(state) || "retrying".equals(state)) {
                 busy = true; send.setEnabled(false); message.setEnabled(false);
-            } else if ("permission_denied".equals(state)) fail("Broadcast stopped: Firestore permission denied. Deploy the admin rules before retrying.");
+            } else if ("permission_denied".equals(state)) fail("Broadcast stopped: permission denied. Deploy the admin rules before retrying.");
         });
     }
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -158,5 +171,6 @@ public final class OfficialBroadcastActivity extends Activity {
         out.putString("uri", selected == null ? null : selected.toString()); out.putString("type", mediaType);
         out.putString("url", mediaUrl); out.putString("path", uploadPath); out.putString("text", message.getText().toString());
     }
+    @Override protected void onResume() { super.onResume(); if (jobId != null && !jobId.isEmpty()) watchJob(); }
     @Override protected void onDestroy() { if (listener != null) listener.remove(); super.onDestroy(); }
 }

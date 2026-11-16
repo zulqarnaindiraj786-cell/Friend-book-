@@ -134,28 +134,11 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        handle.add(handle.query.limit(50).addSnapshotListener((page,error) -> {
+        // One read. A comment thread does not need push: the only writer that matters is the
+        // reader themself, and their comment is added locally the moment it is sent.
+        handle.add(handle.query.limit(50).get().addOnSuccessListener(page -> {
             if(!handle.active()) return;
-            if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
-            for(com.google.firebase.firestore.DocumentChange change:page.getDocumentChanges()) {
-                if(change.getType()==com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
-                    final String id=change.getDocument().getId();
-                    change.getDocument().getReference().get().addOnSuccessListener(current -> {
-                        if(!handle.active()) return;
-                        if(!current.exists()) { handle.deleted.add(id); handle.older.remove(id); handle.latest.remove(id); }
-                        handle.emit();
-                    });
-                }
-            }
-            handle.latest.clear();
-            for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
-            if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.more=page.size()==50;
-                if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
-            }
-            handle.emit();
-        }));
         return handle;
     }
 

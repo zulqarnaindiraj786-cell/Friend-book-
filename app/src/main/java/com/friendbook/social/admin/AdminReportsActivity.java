@@ -27,7 +27,7 @@ import java.util.Map;
 /** Admin reports queue: act on reported posts / comments / messages / users. */
 public class AdminReportsActivity extends Activity {
 
-    private final List<DocumentSnapshot> reports = new ArrayList<>();
+    private final java.util.List<com.friendbook.social.core.Doc> reports = new ArrayList<>();
     private Adapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
@@ -57,9 +57,7 @@ public class AdminReportsActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("reports")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("reports").orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).limit(100).build(),snap->{
                     reports.clear();
                     if (snap != null) reports.addAll(snap.getDocuments());
                     adapter.notifyDataSetChanged();
@@ -105,17 +103,20 @@ public class AdminReportsActivity extends Activity {
                     com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "banned", true);
                     Fb.db().collection("users").document(uid).update("banned", true);
                 }
-                d.getReference().delete();
+                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Content deleted ✓");
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
                 com.friendbook.social.core.DataRouter.mirrorPut("users", author, "banned", true);
                 Fb.db().collection("users").document(author).update("banned", true);
-                d.getReference().delete();
+                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Author banned ✓");
             } else {
-                d.getReference().delete();
+                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Report dismissed");
             }
         });

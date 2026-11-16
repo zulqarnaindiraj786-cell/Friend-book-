@@ -72,15 +72,13 @@ public class AdminReferralsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("referrals")
-                .orderBy("date", Query.Direction.DESCENDING).limit(400)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("referrals").orderBy("date",com.friendbook.social.core.DocQuery.DESC).limit(400).build(),snap->{
                     if (snap == null) return;
                     Map<String, Integer> counts = new HashMap<>();
                     Map<String, Long> latest = new HashMap<>();
                     Map<String, List<String>> kids = new HashMap<>();
                     int total = snap.size();
-                    for (DocumentSnapshot d : snap) {
+                    for (com.friendbook.social.core.Doc d : snap) {
                         String by = Format.str(d.getData(), "refBy");
                         String to = Format.str(d.getData(), "refTo");
                         if (by.isEmpty()) continue;

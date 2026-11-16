@@ -19,8 +19,13 @@ class RemainingPaging(unittest.TestCase):
         # Counting moved from a Firestore server aggregation (which cannot succeed with the
         # network off) to a D1 query.
         source=(JAVA/'core/CountReads.java').read_text()
-        self.assertIn('CloudflareStore.query(',source)
+        # A real COUNT endpoint, not a page whose length is taken: listing to count reads every
+        # document and silently reports the page ceiling once the real number is larger.
+        self.assertIn('CloudflareStore.count(',source)
         self.assertNotIn('AggregateSource.SERVER',source)
+        worker=(Path(__file__).resolve().parents[2]/'cloudflare/app-documents.js').read_text()
+        self.assertIn("path === '/v1/docs/count'",worker)
+        self.assertIn('COUNT(*)',(Path(__file__).resolve().parents[2]/'cloudflare/doc-query.js').read_text())
         # Settings counts from D1 now, because a Firestore count with the network off read the
         # local cache and reported zero.
         for name in ['bluetick/BlueTickActivity.java','bluetick/MonetizationActivity.java','main/MainActivity.java']:

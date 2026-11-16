@@ -7,10 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Pure change-detection for {@link DocWatch}. No Android types, no Handler, no network: given
+ * Pure change-detection for a re-read page. No Android types, no Handler, no network: given
  * the previous window and the newly polled one, it says what actually changed.
  *
- * <p>Kept separate from {@code DocWatch} so the rules that decide whether a feed re-renders can
+ * <p>Kept separate from its callers so the rules that decide whether a feed re-renders can
  * be tested without a Looper, and so a bug here cannot be masked by a bug there.
  */
 public final class DocDelta {

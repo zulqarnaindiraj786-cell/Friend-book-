@@ -160,11 +160,10 @@ public class EventsActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("events").limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("events").limit(100).build(),snap->{
                     allEvents.clear();
                     long cutoff = System.currentTimeMillis() - 86400_000L;
-                    if (snap != null) for (DocumentSnapshot d : snap) {
+                    if (snap != null) for (com.friendbook.social.core.Doc d : snap) {
                         Event e = new Event();
                         e.id = d.getId();
                         e.title = d.getString("title");

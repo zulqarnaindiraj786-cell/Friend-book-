@@ -184,12 +184,14 @@ public class BlueTickActivity extends Activity {
                         Admin.autoGrantByReferrals(this, count);
                     }
                 });
-        reqReg = Fb.db().collection("payments")
-                .whereEqualTo("userId", uid)
-                .whereEqualTo("status", "pending")
-                .limit(1)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null || snap.isEmpty()) { reviewT.setText(""); return; }
+        // One read: whether a review is pending changes only when an admin acts, and that is
+        // rare enough that a subscription (or a timer) costs far more than it saves.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("payments")
+                        .whereEqualTo("userId", uid)
+                        .whereEqualTo("status", "pending")
+                        .limit(1).build(), snap -> {
+                    if (snap.isEmpty()) { reviewT.setText(""); return; }
                     String type = Format.str(snap.getDocuments().get(0).getData(), "type");
                     String label = type != null && type.startsWith("tick_")
                             ? "Your free " + Admin.tickLabel(type.substring(5)) + " review"

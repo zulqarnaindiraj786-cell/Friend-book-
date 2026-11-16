@@ -62,9 +62,7 @@ public class AdminPaymentsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("payments")
-                .orderBy("date", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("payments").orderBy("date",com.friendbook.social.core.DocQuery.DESC).limit(100).build(),snap->{
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
@@ -77,7 +75,7 @@ public class AdminPaymentsFragment extends Fragment {
                         return;
                     }
                     countT.setText(snap.size() + " request(s) — newest first");
-                    for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(a, d));
+                    for (com.friendbook.social.core.Doc d : snap.getDocuments()) list.addView(row(a, d));
                 });
     }
 

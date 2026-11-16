@@ -208,10 +208,9 @@ public class GroupChatInfoActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("chats").document(chatId)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) { finish(); return; }
-                    room = Models.ChatRoom.fromDoc(d);
+        com.friendbook.social.core.CloudflareStore.get("chats", chatId, doc -> {
+                    if (doc == null) { finish(); return; }
+                    room = Models.ChatRoom.fromMap(chatId, doc);
                     renderRoom();
                 });
     }

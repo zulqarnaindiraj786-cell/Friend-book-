@@ -147,14 +147,12 @@ public class AdminEarningsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        payReg = Fb.db().collection("payments")
-                .whereEqualTo("status", "approved").limit(1000)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("payments").whereEqualTo("status",approved).limit(1000).build(),snap->{
                     tickBlue = tickGold = tickDiamond = subs = 0;
                     monthly.clear();
                     seedMonths();
                     if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             Map<String, Object> m = d.getData();
                             String type = Format.str(m, "type");
                             long amount = Format.intOf(m, "amount");
@@ -173,10 +171,9 @@ public class AdminEarningsFragment extends Fragment {
                     }
                     render();
                 });
-        giftReg = Fb.db().collection("gifts").limit(1000)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("gifts").limit(1000).build(),snap->{
                     liveStars = 0;
-                    if (snap != null) for (DocumentSnapshot d : snap)
+                    if (snap != null) for (com.friendbook.social.core.Doc d : snap)
                         liveStars += Format.intOf(d.getData(), "stars");
                     render();
                 });

@@ -311,9 +311,9 @@ public class FullscreenMediaActivity extends Activity {
         super.onStart();
         if (postId != null && !postId.isEmpty()) {
             FastCache.addReactionObserver(reactionObserver);
-            postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
-                if (d == null || !d.exists()) return;
-                livePost = Models.Post.fromDoc(d);
+            com.friendbook.social.core.CloudflareStore.get("posts", postId, doc -> {
+                if (doc == null) return;
+                livePost = Models.Post.fromMap(postId, doc);
                 Reactions.syncPostReactions(this, livePost);
                 renderPostReactionBar();
             });

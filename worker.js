@@ -51,7 +51,9 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
-      const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
+      // /v1/docs/count is a distinct route; without it the two-segment pattern below would
+      // never match and the count would 404 at the fall-through.
+      const docs = path === '/v1/docs' || path === '/v1/docs/count' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);

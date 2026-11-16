@@ -343,13 +343,16 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (postReg != null) { postReg.remove(); postReg = null; }
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
-        postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
-            if (d == null || !d.exists()) {
+        // Read once instead of listening. The post body does not change while it is open -
+        // reactions and comment counts arrive through their own cached paths - so a listener
+        // here bought nothing and cost a document subscription per opened post.
+        com.friendbook.social.core.CloudflareStore.get("posts", postId, doc -> {
+            if (doc == null) {
                 if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
                 finish();
                 return;
             }
-            post = Models.Post.fromDoc(d);
+            post = Models.Post.fromMap(postId, doc);
             commentsAdapter.postAuthorId = post.authorId;
             commentsAdapter.pinnedCommentId = post.pinnedCommentId;
             if (postId != null && postId.startsWith("sponsored_ad_")) {

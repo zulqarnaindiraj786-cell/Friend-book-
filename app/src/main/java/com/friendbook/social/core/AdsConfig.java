@@ -275,9 +275,10 @@ public class AdsConfig {
     public static void startWatching() {
         if (reg != null) return;
         try {
-            reg = Fb.db().collection("config").document("ads")
-                    .addSnapshotListener((snap, err) -> {
-                        if (snap != null && snap.exists()) {
+            // One read, not a listener. Config changes are an admin action; an interval watch
+            // would spend reads on every client forever to catch a handful of edits.
+            com.friendbook.social.core.CloudflareStore.get("config", "ads", doc -> {
+                        if (doc != null) {
                             String fId = snap.getString("feed_native_unit_v3");
                             String rId = snap.getString("reels_native_unit_v3");
                             Boolean en = snap.getBoolean("ads_enabled_v3");

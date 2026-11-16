@@ -175,32 +175,17 @@ public class Fb {
         }
         if (meReg != null) meReg.remove();
         if (com.friendbook.social.BuildConfig.CLOUDFLARE_DATA_ENABLED) hydrateMeFromD1();
-        meReg = db().collection("users").document(uid)
-                .addSnapshotListener((doc, err) -> {
+        // One read of the signed-in user's document. This used to be a subscription, which meant
+        // every screen holding a MeObserver re-rendered on any change to the account and D1 was
+        // asked again for the same document on each app start. hydrateMeFromD1 above already
+        // serves the cached copy while this lands.
+        CloudflareStore.get("users", uid, doc -> {
                     if (doc == null) return;
-                    if (!doc.exists()) {
-                        if (!doc.getMetadata().isFromCache()) {
-                            com.google.firebase.auth.FirebaseUser fu = auth().getCurrentUser();
-                            if (fu != null && uid.equals(fu.getUid())) {
-                                String em = com.friendbook.social.auth.GoogleAuthHelper.resolveGoogleEmail(fu);
-                                String rawN = fu.getDisplayName();
-                                String dn = (rawN != null && !rawN.trim().isEmpty())
-                                        ? rawN.trim()
-                                        : (!em.isEmpty() && em.contains("@") ? em.substring(0, em.indexOf('@')) : "friendbook User");
-                                String ph = fu.getPhotoUrl() != null
-                                        ? fu.getPhotoUrl().toString().replace("=s96-c", "=s400-c") : "";
-                                db().collection("users").document(uid).set(
-                                        com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph),
-                                        com.google.firebase.firestore.SetOptions.merge());
-                            }
-                        }
-                        return;
-                    }
-                    Models.User u = Models.User.fromDoc(doc);
+                    Models.User u = Models.User.fromMap(uid, doc);
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
                     syncProfileToCloudflare(u);
-                    notifyMeObservers(doc);
+                    notifyMeObservers(com.friendbook.social.core.Doc.of(uid, doc));
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);

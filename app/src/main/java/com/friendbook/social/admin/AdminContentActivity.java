@@ -98,12 +98,15 @@ public class AdminContentActivity extends Activity {
     private void listen() {
         if (reg != null) reg.remove();
         String orderField = tab.equals("chats") ? "lastMessageTime" : "createdAt";
-        reg = Fb.db().collection(tab)
-                .orderBy(orderField, Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        // One read per tab. The tab is chosen by the moderator, so re-reading on selection is
+        // the explicit action that refreshes it - no background subscription.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of(tab)
+                        .orderBy(orderField, com.friendbook.social.core.DocQuery.DESC)
+                        .limit(100).build(), snap -> {
                     items.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
+                    {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             Item it = new Item();
                             it.id = d.getId();
                             switch (tab) {

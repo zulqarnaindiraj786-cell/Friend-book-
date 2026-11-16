@@ -17,15 +17,15 @@ import java.util.function.LongConsumer;
 public final class CountReads {
     private CountReads() {}
 
-    /** Marks a count that stopped at the page ceiling and is therefore a lower bound. */
-    public static final long AT_LEAST = DocQuery.MAX_LIMIT;
-
     public static ListenerRegistration once(DocQuery query, LongConsumer result) {
         String actor = Fb.uid();
         boolean[] closed = {false};
-        CloudflareStore.query(query.limit(DocQuery.MAX_LIMIT), page -> {
+        // A real COUNT on the server, not a page whose length is taken. Listing to count reads
+        // every matching document and reports the page ceiling as the answer once the real
+        // number is larger - and these counts only ever get compared against a small threshold.
+        CloudflareStore.count(query, total -> {
             if (!closed[0] && java.util.Objects.equals(actor, Fb.uid())) {
-                result.accept(page.documents.size());
+                result.accept(total);
             }
         }, () -> {
             // A refusal is "no answer", not zero. Calling back with zero here is exactly how a

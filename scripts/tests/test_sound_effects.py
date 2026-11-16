@@ -24,10 +24,19 @@ class SoundEffectsTest(unittest.TestCase):
             self.assertFalse((ROOT/f'app/src/main/res/raw/{name}.wav').exists())
     def test_all_chat_sends_remain_immediate(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);\n        batch.commit()'),3)
+        # Every send path sounds immediately; the commit line that follows changed shape when
+        # chat moved from a listener to a re-read, so count the sound itself, not its neighbour.
+        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);'),3)
+        self.assertEqual(chat.count('batch.commit()'),4)
         self.assertIn('SoundManager.playNewMessage(this)',chat)
-        self.assertIn('MetadataChanges.INCLUDE',chat)
-        self.assertIn('snap.getMetadata().hasPendingWrites()',chat)
+        # A new-message sound must fire only for messages that are genuinely new to this
+        # screen. Firestore used to answer that with cache/pending metadata; D1 always returns
+        # server truth, so the guard is the delta itself plus the sound gate.
+        self.assertIn('D1Snap.ofDocs(page.documents, chatId + "_")',chat)
+        self.assertIn('SoundEffects.onChatPush',chat)
+        self.assertIn('soundGate.observe(',chat)
+        self.assertIn('RealtimeSoundGate',chat)
+        self.assertNotIn('addSnapshotListener',chat)
         self.assertIn('chat_already_visible',(JAVA/'push/PushManager.java').read_text())
     def test_mute_lifecycle_and_no_bind_playback(self):
         manager=(JAVA/'core/SoundEffects.java').read_text()

@@ -48,13 +48,11 @@ public class AdminLiveFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("lives")
-                .limit(50)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("lives").limit(50).build(),snap->{
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
-                    java.util.List<DocumentSnapshot> docs = snap == null
+                    java.util.java.util.List<com.friendbook.social.core.Doc> docs = snap == null
                             ? new java.util.ArrayList<>()
                             : new java.util.ArrayList<>(snap.getDocuments());
                     java.util.Collections.sort(docs, (d1, d2) -> Long.compare(
@@ -116,7 +114,7 @@ public class AdminLiveFragment extends Fragment {
             end.setPadding(Ui.dp(a, 8), Ui.dp(a, 8), 0, 0);
             end.setOnClickListener(v -> Ui.confirm(a, "End this live?",
                     "Viewers will see it end immediately.", "End live", () ->
-                            d.getReference().update("status", "ended", "endedAt", FieldValue.serverTimestamp())));
+                            endLive(d.getId())));
             right.addView(end);
         }
         card.addView(right);
@@ -127,5 +125,13 @@ public class AdminLiveFragment extends Fragment {
             a.startActivity(i);
         });
         return card;
+    }
+
+    /** Ends a broadcast by id; the id is all a Doc carries, so the write names it explicitly. */
+    private void endLive(String liveId) {
+        Fb.db().collection("lives").document(liveId)
+                .update("status", "ended", "endedAt", FieldValue.serverTimestamp());
+        com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId,
+                Fb.map("status", "ended", "endedAt", System.currentTimeMillis()));
     }
 }

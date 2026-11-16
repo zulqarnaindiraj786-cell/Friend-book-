@@ -103,12 +103,11 @@ public class AdminModeratorsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("users").limit(400)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("users").limit(400).build(),snap->{
                     allUsers.clear();
                     if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            allUsers.add(Models.User.fromDoc(d));
+                        for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
+                            allUsers.add(Models.User.fromMap(d.getId(), d.getData()));
                         }
                     }
                     render();

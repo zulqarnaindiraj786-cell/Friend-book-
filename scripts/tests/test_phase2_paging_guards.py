@@ -10,7 +10,9 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('.addSnapshotListener',source)
     def test_open_chat_window_and_lifecycle(self):
         source=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['.limitToLast(20)','Query.Direction.DESCENDING).startAfter(historyCursor)',
+        # Chat pages older history out of D1 on a keyset cursor, so the guard pins the cursor
+        # arithmetic rather than the Firestore query object that used to carry it.
+        for token in ['.limit(20).build()','whereLessThan("createdAtMs", beforeMs)',
                       'chatGeneration!=historyGeneration','generation!=historyGeneration']:
             self.assertIn(token,source)
     def test_reel_fallback_cannot_prepare_offscreen(self):
@@ -22,7 +24,8 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('ReelVideoCache.prefetchSingle(', (JAVA/'post/FeedAdapter.java').read_text())
     def test_comments_do_not_expand_frozen_map(self):
         source=(JAVA/'post/CommentsEngine.java').read_text()
-        self.assertIn('handle.query.limit(50).addSnapshotListener',source)
+        self.assertIn('handle.query.limit(50).get()',source)
+        self.assertNotIn('addSnapshotListener',source)
         self.assertIn('query.startAfter(cursor).limit(50).get()',source)
         self.assertIn('patch.put("lastComment",commentMap)',source)
         self.assertNotIn('dot.put("commentsMap." + c.id + ".',source)

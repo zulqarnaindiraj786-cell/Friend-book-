@@ -27,7 +27,6 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
@@ -45,12 +44,12 @@ import java.util.Set;
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private static final int PICK_IMG = 51;
-    private DocumentSnapshot historyCursor,historyEnd,lastServerMessage;
+    private com.friendbook.social.core.Doc historyCursor,historyEnd,lastServerMessage;
     private Set<String> maskedHistoryIds=new HashSet<>();
     private final java.util.Deque<HistoryResume> historyRanges=new java.util.ArrayDeque<>();
     private static final class HistoryResume {
-        final DocumentSnapshot cursor,end;final boolean more;final Set<String> masked;
-        HistoryResume(DocumentSnapshot c,DocumentSnapshot e,boolean m,Set<String> ids){cursor=c;end=e;more=m;masked=new HashSet<>(ids);}
+        final com.friendbook.social.core.Doc cursor,end;final boolean more;final Set<String> masked;
+        HistoryResume(com.friendbook.social.core.Doc c,com.friendbook.social.core.Doc e,boolean m,Set<String> ids){cursor=c;end=e;more=m;masked=new HashSet<>(ids);}
     }
     private boolean historyLoading, historyMore=true,historyFailed;
     private int historyGeneration;
@@ -81,6 +80,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private MessagesAdapter adapter;
     private RecyclerView rv;
     private ListenerRegistration msgReg, userReg, roomReg;
+    /** Signatures of the last message page, so a refresh reports only what changed. */
+    private final Map<String, String> signatureForSnap = new HashMap<>();
+    /** Registered on the push hook; removed when the screen closes. */
+    private Runnable chatPushAction;
     private Presence.Handle presence, typingH;
     private boolean peerOnline = false;
     private long peerLastSeen = 0L;
@@ -498,11 +501,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if(Fb.uid()==null || (messageActor!=null && !java.util.Objects.equals(messageActor,Fb.uid()))){finish();return;}
 
         if (isGroupChat) {
-            roomReg = Fb.db().collection("chats").document(chatId)
-                    .addSnapshotListener((d, err) -> {
-                        if (d == null || !d.exists()) { finish(); return; }
-                        CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
-                        groupRoom = Models.ChatRoom.fromDoc(d);
+            com.friendbook.social.core.CloudflareStore.get("chats", chatId, doc -> {
+                        if (doc == null) { finish(); return; }
+                        CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this,
+                                com.friendbook.social.core.Doc.of(chatId, doc));
+                        groupRoom = Models.ChatRoom.fromMap(chatId, doc);
                         peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())
                                 ? "Group Chat" : groupRoom.groupName;
                         peerPhoto = groupRoom.groupPhoto == null ? "" : groupRoom.groupPhoto;
@@ -548,18 +551,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             presenceTv.setVisibility(View.VISIBLE);
         } else {
             // Listen for incoming Voice/Video Calls on this 1:1 chat doc too!
-            roomReg = Fb.db().collection("chats").document(chatId)
-                    .addSnapshotListener((d, err) -> {
-                        if (d != null && d.exists()) {
-                            CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
+            com.friendbook.social.core.CloudflareStore.get("chats", chatId, doc -> {
+                        if (doc != null) {
+                            CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this,
+                                    com.friendbook.social.core.Doc.of(chatId, doc));
                         }
                     });
 
             // Peer profile (live)
-            userReg = Fb.db().collection("users").document(peerId)
-                    .addSnapshotListener((d, err) -> {
-                        if (d == null || !d.exists()) return;
-                        Models.User u = Models.User.fromDoc(d);
+            com.friendbook.social.core.CloudflareStore.get("users", peerId, doc -> {
+                        if (doc == null) return;
+                        Models.User u = Models.User.fromMap(peerId, doc);
                         com.friendbook.social.core.FastCache.putUser(u);
                         if (u.displayName != null && !u.displayName.isEmpty()) peerName = u.displayName;
                         peerPhoto = u.photoUrl == null ? "" : u.photoUrl;
@@ -611,17 +613,53 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
         final boolean[] firstServer={true};
         final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
-        msgReg = Fb.db().collection("chats").document(chatId)
-                .collection("messages")
-                .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(20)
-                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+        // The message list refreshes from D1 while this screen is open, and stops the moment it
+        // is not. Firestore pushed those updates for free; D1 has no push, so the cost is one
+        // bounded query per tick instead of a subscription that re-reads the whole recent window
+        // whenever any message in it changes. The delta logic below is unchanged.
+        refreshMessages(chatGeneration, chatActor, knownAtAttach, firstServer, soundGate);
+
+        // A message arrives from the peer, so the phone gets a push for it. That push is the
+        // trigger to re-read this conversation - there is no timer, and no read happens while
+        // the thread is quiet. Sending is the other trigger, handled where the send completes.
+        chatPushAction = () -> refreshMessages(chatGeneration, chatActor, knownAtAttach, firstServer, soundGate);
+        com.friendbook.social.core.SoundEffects.onChatPush(chatPushAction);
+    }
+
+    /** Re-reads the open conversation's window once and re-renders from it. */
+    private void refreshMessages(int chatGeneration, String chatActor, Set<String> knownAtAttach,
+                                 boolean[] firstServer,
+                                 com.friendbook.social.core.RealtimeSoundGate soundGate) {
+        com.friendbook.social.core.DocQuery window = com.friendbook.social.core.DocQuery.of("messages")
+                .whereEqualTo("chatId", chatId)
+                // Ordered by the stored millisecond value: the mirrored send map carries
+                // createdAtMs, so ordering on a placeholder field would sort nothing.
+                .orderBy("createdAtMs", com.friendbook.social.core.DocQuery.DESC)
+                .limit(20).build();
+        com.friendbook.social.core.CloudflareStore.query(window, page -> {
+                    com.friendbook.social.core.D1Snap snap =
+                            com.friendbook.social.core.D1Snap.ofDocs(page.documents, chatId + "_");
+                    com.friendbook.social.core.DocDelta.Result delta =
+                            com.friendbook.social.core.DocDelta.compute(signatureForSnap, page.documents);
+                    // Remember what this page looked like so the next refresh reports only the
+                    // messages that actually changed rather than re-parsing all twenty.
+                    signatureForSnap.clear();
+                    for (Map<String, Object> row : delta.documents) {
+                        String rowId = com.friendbook.social.core.DocDelta.idOf(row);
+                        if (rowId != null) {
+                            signatureForSnap.put(rowId, com.friendbook.social.core.DocDelta.signature(row));
+                        }
+                    }
+
+                    // D1 hands back stored documents rather than cache-first deliveries, so every
+                    // page here is server truth: no entry is stale-cached and no local write is
+                    // pending. The rest of the branch is the same logic on that guarantee.
+                    if (chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     boolean bridged=false;
-                    if(!snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()){
+                    if(!snap.isEmpty()){
                         Set<String> known=firstServer[0]?knownAtAttach:new HashSet<>(historyMessages.keySet());
                         if(!firstServer[0])known.addAll(messageSnapshots.keySet());
-                        Set<String> headIds=new HashSet<>();for(DocumentSnapshot doc:snap)headIds.add(doc.getId());
+                        Set<String> headIds=new HashSet<>();for(com.friendbook.social.core.Doc doc:snap)headIds.add(doc.getId());
                         if(lastServerMessage!=null && historyCursor!=null && !known.isEmpty() && java.util.Collections.disjoint(known,headIds)){
                             historyRanges.push(new HistoryResume(historyCursor,historyEnd,historyMore,maskedHistoryIds));
                             historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=new HashSet<>(known);bridged=true;
@@ -629,39 +667,39 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==20;}
                         lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
                     }
-                    if(snap.getDocumentChanges(com.google.firebase.firestore.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
-                        boolean cached=snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites(),playSound=false;
-                        boolean eligible=soundGate.begin(cached);Set<String> hidden=hiddenMsgs();
-                        for(DocumentSnapshot doc:snap){Models.Message m=messageSnapshots.get(doc.getId());
-                            if(m!=null && soundGate.observe(m.id,m.createdAt,Presence.now(),eligible) && !hidden.contains(m.id)
-                                    && !java.util.Objects.equals(Fb.uid(),m.senderId) && !m.isDeleted && !"system".equals(m.type) && !"call".equals(m.type))playSound=true;}
-                        soundGate.end(cached);if(playSound)com.friendbook.social.core.SoundManager.playNewMessage(this);
+                    if(delta.added.isEmpty() && delta.updated.isEmpty() && !bridged){
+                        // Nothing arrived since the last tick: no re-render, and no sound to gate.
                         markVisibleReceipts();return;
                     }
-                    Set<String> liveIds=new HashSet<>();for(DocumentSnapshot doc:snap)liveIds.add(doc.getId());
+                    Set<String> liveIds=new HashSet<>();for(com.friendbook.social.core.Doc doc:snap)liveIds.add(doc.getId());
                     for(String id:new ArrayList<>(messageSnapshots.keySet()))if(!liveIds.contains(id))historyMessages.put(id,messageSnapshots.remove(id));
                     LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
                     int prevCount = adapter.getItemCount();
                     int lastVis = lm != null ? lm.findLastVisibleItemPosition() : prevCount - 1;
                     boolean nearBottom = !initialScrollDone || forceScrollBottom || (prevCount - lastVis <= 4);
 
-                    boolean soundEligible = soundGate.begin(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    boolean soundEligible = soundGate.begin(false);
                     boolean incomingSound = false;
                     List<Models.Message> list = new ArrayList<>();
                     Set<String> hidden = hiddenMsgs();
                     String me = Fb.uid();
-                    for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
-                        String id = change.getDocument().getId();
-                        if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
-                            Models.Message evicted=messageSnapshots.remove(id);
-                            if(evicted!=null) historyMessages.put(id,evicted);
-                        } else {
-                            messageSnapshots.put(id, Models.Message.fromDoc(change.getDocument()));
+                    for (String raw : delta.removed) {
+                        String id = bareMessageId(raw);
+                        Models.Message evicted=messageSnapshots.remove(id);
+                        if(evicted!=null) historyMessages.put(id,evicted);
+                    }
+                    // Re-parse only the documents that actually changed this tick.
+                    Set<String> touched = new HashSet<>();
+                    for (Map<String, Object> row : delta.added) touched.add(bareMessageId(row.get("id")));
+                    for (Map<String, Object> row : delta.updated) touched.add(bareMessageId(row.get("id")));
+                    for (com.friendbook.social.core.Doc d : snap) {
+                        if (touched.contains(d.getId())) {
+                            messageSnapshots.put(d.getId(), Models.Message.fromMap(d.getId(), d.getData()));
                         }
                     }
-                    for (DocumentSnapshot d : snap) {
+                    for (com.friendbook.social.core.Doc d : snap) {
                         Models.Message m = messageSnapshots.get(d.getId());
-                        if (m == null) { m = Models.Message.fromDoc(d); messageSnapshots.put(d.getId(), m); }
+                        if (m == null) { m = Models.Message.fromMap(d.getId(), d.getData()); messageSnapshots.put(d.getId(), m); }
                         boolean freshSound = soundGate.observe(m.id, m.createdAt, Presence.now(), soundEligible);
                         if (hidden.contains(m.id)) continue;
                         list.add(m);
@@ -669,7 +707,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                                 && !"system".equals(m.type) && !"call".equals(m.type)) incomingSound = true;
                     }
                     markVisibleReceipts();
-                    soundGate.end(snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
+                    soundGate.end(false);
                     if (incomingSound) com.friendbook.social.core.SoundManager.playNewMessage(this);
                     Map<String,Models.Message> combined=new HashMap<>(historyMessages);
                     for(Models.Message message:list) combined.put(message.id,message);
@@ -690,18 +728,45 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         rv.scrollToPosition(list.size() - 1);
                     }
 
+                
                 });
+    }
+
+    /**
+     * Milliseconds for a message row's ordering field.
+     *
+     * <p>The D1 mirror holds the send map, where {@code createdAt} is a server-timestamp
+     * placeholder rather than a number, so the pageable value is {@code createdAtMs}.
+     */
+    private long storedMillis(com.friendbook.social.core.Doc doc) {
+        Map<String, Object> m = doc == null ? null : doc.getData();
+        long ts = com.friendbook.social.core.Format.longOf(m, "createdAtMs");
+        return ts > 0 ? ts : System.currentTimeMillis();
+    }
+
+    /** The message id without the {@code <chatId>_} prefix the flat D1 table stores. */
+    private String bareMessageId(Object rowId) {
+        String id = String.valueOf(rowId);
+        if (chatId != null && id.startsWith(chatId + "_")) id = id.substring(chatId.length() + 1);
+        return id;
     }
 
     private void loadOlderMessages() {
         if(historyLoading || !historyMore || historyCursor==null) return;
         historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
         historyButton.setVisibility(View.GONE);historySpinner.setVisibility(View.VISIBLE);
-        Query older=Fb.db().collection("chats").document(chatId).collection("messages")
-                .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
-        if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(20).get(com.google.firebase.firestore.Source.SERVER)
-                .addOnSuccessListener(page -> {
+        // Older pages come from D1, keyset-paged on createdAt. The cursor is the last row already
+        // on screen, so each page is one bounded query and no offset scan.
+        final long beforeMs = storedMillis(historyCursor);
+        com.friendbook.social.core.DocQuery.Builder olderQ = com.friendbook.social.core.DocQuery.of("messages")
+                .whereEqualTo("chatId", chatId)
+                .whereLessThan("createdAtMs", beforeMs);
+        if (historyEnd != null) {
+            olderQ = olderQ.whereGreaterThan("createdAtMs", storedMillis(historyEnd));
+        }
+        com.friendbook.social.core.DocQuery older = olderQ
+                .orderBy("createdAtMs", com.friendbook.social.core.DocQuery.DESC).limit(20).build();
+        com.friendbook.social.core.D1Snap.read(older, page -> {
                     if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
                     historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==20;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
@@ -710,7 +775,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
                     int top=anchor==null?0:anchor.getTop();
                     String anchorId=adapter.idAt(first);
-                    for(DocumentSnapshot doc:page) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
+                    for(com.friendbook.social.core.Doc doc:page) { String mid=bareMessageId(doc.getId()); Models.Message message=Models.Message.fromMap(mid,doc.getData()); historyMessages.put(mid,message); }
                     Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots);
                     Set<String> hidden=hiddenMsgs(); List<Models.Message> rows=new ArrayList<>(combined.values());
                     rows.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id)); rows.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
@@ -779,6 +844,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     @Override protected void onResume() {
         super.onResume();chatVisible=true;receiptFailed.clear();unreadResetOnce=false;markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+        // Coming back to the thread is a reason to re-read it: messages may have landed while
+        // this screen was paused and the push hook was detached.
+        if (chatPushAction != null) chatPushAction.run();
     }
     @Override protected void onPause() {
         chatVisible=false;com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
@@ -789,6 +857,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         super.onStop();
         historyGeneration++; historyLoading=false;
         if (msgReg != null) { msgReg.remove(); msgReg = null; }
+        if (chatPushAction != null) {
+            com.friendbook.social.core.SoundEffects.offChatPush(chatPushAction);
+            chatPushAction = null;
+        }
         if (userReg != null) { userReg.remove(); userReg = null; }
         if (roomReg != null) { roomReg.remove(); roomReg = null; }
         if (presence != null) { presence.close(); presence = null; }
@@ -913,6 +985,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         com.google.firebase.firestore.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         Map<String, Object> msg = Fb.map(
+                // chatId is what the D1 message table is queried by; the Firestore copy lives in
+                // a subcollection and gets the parent from its path instead.
+                "chatId", chatId,
                 "senderId", me,
                 "senderName", Fb.myName(),
                 "senderPhoto", Fb.myPhoto(),
@@ -946,6 +1021,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+            // The peer's push cannot confirm our own message; re-read locally so it appears.
+            if (chatPushAction != null) chatPushAction.run();
         })
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
     }
@@ -1023,6 +1100,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
         Map<String, Object> msg = Fb.map(
+                // chatId is what the D1 message table is queried by; the Firestore copy lives in
+                // a subcollection and gets the parent from its path instead.
+                "chatId", chatId,
                 "senderId", me,
                 "senderName", Fb.myName(),
                 "senderPhoto", Fb.myPhoto(),
@@ -1046,7 +1126,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "messages", chatId + "_" + msgRef.getId(), msg);
         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit()
+        // Every send path re-reads once when it lands, so own messages show immediately.
+        batch.commit().addOnCompleteListener(t -> { if (chatPushAction != null) chatPushAction.run(); });
                 .addOnSuccessListener(x -> {
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                 })
@@ -1088,6 +1169,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         opt.createdAt = now;
 
         Map<String, Object> msg = Fb.map(
+                // chatId is what the D1 message table is queried by; the Firestore copy lives in
+                // a subcollection and gets the parent from its path instead.
+                "chatId", chatId,
                 "senderId", me,
                 "senderName", Fb.myName(),
                 "senderPhoto", Fb.myPhoto(),
@@ -1138,6 +1222,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+            // The peer's push cannot confirm our own message; re-read locally so it appears.
+            if (chatPushAction != null) chatPushAction.run();
         }).addOnFailureListener(e ->
                 Ui.toast(this, "Queued offline — will sync automatically"));
     }

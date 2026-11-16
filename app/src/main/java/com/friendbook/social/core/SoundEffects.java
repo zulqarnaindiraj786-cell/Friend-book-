@@ -30,6 +30,18 @@ public final class SoundEffects {
     public static long ticket() { return SystemClock.elapsedRealtime(); }
     public static void visibleChat(String id) { visibleChat=id; }
     public static void clearVisibleChat(String id) { if (Objects.equals(id,visibleChat)) visibleChat=null; }
+    /**
+     * Runs {@code action} when a push arrives for the conversation on screen.
+     *
+     * <p>This is how an open chat learns about a new message without polling: the push already
+     * carries the chat id, so the screen re-reads its window once when one lands. Without this
+     * the screen would have had to ask D1 on a timer for a change it was already being told
+     * about.
+     */
+    private static final java.util.List<Runnable> chatListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    public static void onChatPush(Runnable action) { if (action!=null) chatListeners.add(action); }
+    public static void offChatPush(Runnable action) { chatListeners.remove(action); }
+    public static void notifyChatPush() { for (Runnable r : chatListeners) { try { r.run(); } catch (Throwable ignored) { } } }
     public static boolean isVisibleChat(String id) { return id!=null && id.equals(visibleChat) && App.isForeground(); }
     private static boolean allowed(Context context) {
         if (context==null || !App.isForeground() || Prefs.quiet(context) || !Prefs.inAppSounds(context)) return false;

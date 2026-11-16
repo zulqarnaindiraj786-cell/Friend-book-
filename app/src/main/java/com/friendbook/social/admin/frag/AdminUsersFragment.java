@@ -92,11 +92,9 @@ public class AdminUsersFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("users")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(300)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("users").orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).limit(300).build(),snap->{
                     all.clear();
-                    if (snap != null) for (DocumentSnapshot d : snap) all.add(Models.User.fromDoc(d));
+                    if (snap != null) for (com.friendbook.social.core.Doc d : snap) all.add(Models.User.fromMap(d.getId(), d.getData()));
                     render();
                 });
     }

@@ -425,8 +425,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             noteUsers.clear();
             long now = System.currentTimeMillis();
             if (snap != null) {
-                for (DocumentSnapshot d : snap.getDocuments()) {
-                    Models.User u = Models.User.fromDoc(d);
+                for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
+                    Models.User u = Models.User.fromMap(d.getId(), d.getData());
                     FastCache.putUser(u);
                     if (u.statusNote != null && !u.statusNote.isEmpty()
                             && (now - u.statusNoteAt) < NOTE_TTL_MS) {
@@ -542,19 +542,16 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (livesReg != null && now0 - lastLivesStart < LIVES_CACHE_MS) return;
         if (livesReg != null) { livesReg.remove(); livesReg = null; }
         lastLivesStart = now0;
-        livesReg = Fb.db().collection("lives")
-                .whereEqualTo("status", "live")
-                .limit(25)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null && err != null) {
-                        // Keep the previous strip rather than blanking it on a refused read.
-                        com.friendbook.social.core.QuotaGuard.noteFailure(err);
-                        return;
-                    }
+        // One read, cached by LIVES_CACHE_MS above. The strip used to be a subscription, which
+        // re-read every live document whenever any broadcast changed its heartbeat.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("lives")
+                        .whereEqualTo("status", "live")
+                        .limit(25).build(), snap -> {
                     List<Map<String, Object>> lives = new ArrayList<>();
                     long now = System.currentTimeMillis();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
+                    {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             Map<String, Object> raw = d.getData();
                             if (raw == null) continue;
                             long hb = com.friendbook.social.core.Format.longOf(raw, "lastHeartbeatMs");
@@ -577,54 +574,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
-        // Delta-driven: the previous version rebuilt the entire friend set from scratch on every
-        // snapshot, and re-ran loadPymk() + renderLoadedStories() each time. With a few hundred
-        // friends every single add/remove re-read the whole graph and re-rendered the feed, which
-        // is both a Firestore read cost and a UI jank source. Only ADDED/REMOVED documents change
-        // the set, so only those trigger a re-render.
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
-                    if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
-                    boolean changed = false;
-                    if (snap.getMetadata().isFromCache() && !snap.getDocumentChanges().isEmpty()) {
-                        // First (cache) delivery still has to populate the set.
-                        changed = true;
-                    }
-                    if (changed || !snap.getDocumentChanges().isEmpty()) {
-                        for (com.google.firebase.firestore.DocumentChange ch : snap.getDocumentChanges()) {
-                            Models.ChatRoom room = Models.ChatRoom.fromDoc(ch.getDocument());
-                            switch (ch.getType()) {
-                                case ADDED:
-                                    for (String p : room.participants) if (!p.equals(me) && friendIds.add(p)) changed = true;
-                                    break;
-                                case REMOVED:
-                                    // A friendship doc is gone: drop peers that no other doc still lists.
-                                    Set<String> still = new HashSet<>();
-                                    for (DocumentSnapshot d : snap) {
-                                        for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                            if (!p.equals(me)) still.add(p);
-                                    }
-                                    if (friendIds.retainAll(still)) changed = true;
-                                    break;
-                                default:
-                                    // MODIFIED keeps the same participants; nothing to recompute.
-                                    break;
-                            }
-                        }
-                    } else {
-                        // Initial load arrives as a plain snapshot with no changes reported.
-                        Set<String> fresh = new HashSet<>();
-                        for (DocumentSnapshot d : snap) {
-                            for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                if (!p.equals(me)) fresh.add(p);
-                        }
-                        if (!friendIds.containsAll(fresh) || friendIds.size() != fresh.size() + 1) {
-                            friendIds.clear(); friendIds.add(me); friendIds.addAll(fresh);
-                            changed = true;
+        // One read. The friend set only changes when a friendship is added or removed, and this
+        // screen re-reads it when it becomes visible again - a subscription here re-read the
+        // whole graph on every unrelated write to any friend's document.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants", me).limit(50).build(), snap -> {
+                    if (!java.util.Objects.equals(me, Fb.uid()) || !isAdded()) return;
+                    java.util.Set<String> fresh = new HashSet<>();
+                    for (com.friendbook.social.core.Doc d : snap) {
+                        for (String p : Models.ChatRoom.fromMap(d.getId(), d.getData()).participants) {
+                            if (!p.equals(me)) fresh.add(p);
                         }
                     }
+                    boolean changed = !friendIds.containsAll(fresh) || friendIds.size() != fresh.size() + 1;
                     if (!changed) return;
-                    loadPymk();renderLoadedStories();
+                    friendIds.clear();
+                    friendIds.add(me);
+                    friendIds.addAll(fresh);
+                    loadPymk();
+                    renderLoadedStories();
                 });
     }
 
@@ -728,7 +697,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     // ---------- posts ----------
     private boolean postsFallbackUsed;
     private final List<Models.Post> cfPosts = new ArrayList<>();
-    private List<DocumentSnapshot> lastPostDocs = new ArrayList<>();
+    private java.util.List<com.friendbook.social.core.Doc> lastPostDocs = new ArrayList<>();
 
     private void restartPostsListener() {
         if(loadingPosts) return;
@@ -820,7 +789,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
     }
 
-    private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean ordered, boolean persistCache) {
+    private void consumePostsSnapshot(java.util.List<com.friendbook.social.core.Doc> docs, boolean ordered, boolean persistCache) {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
         if (docs != null) lastPostDocs = docs;
@@ -841,7 +810,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                         "policy_violation", "Safety flagged post", null);
                 continue;
             }
-            Models.Post p = Models.Post.fromDoc(d);
+            Models.Post p = Models.Post.fromMap(d.getId(), d.getData());
             String mediaCheck = (p.mediaUrls != null && !p.mediaUrls.isEmpty())
                     ? p.mediaUrls.get(0) : p.mediaUrl;
             if (com.friendbook.social.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(

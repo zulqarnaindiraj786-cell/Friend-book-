@@ -76,6 +76,21 @@ public final class DocQuery {
         return new DocQuery(collection, wheres, orderBy, size, after);
     }
 
+    /** The count endpoint for this query's filters. Ordering and limit do not affect a count. */
+    public String toCountPath() {
+        StringBuilder sb = new StringBuilder("/v1/docs/count?collection=").append(encode(collection));
+        for (String w : wheres) sb.append("&where=").append(encode(w));
+        return sb.toString();
+    }
+
+    /** Stable identity for caching a result, independent of page position. */
+    public String key() {
+        StringBuilder sb = new StringBuilder(collection);
+        for (String w : wheres) sb.append("|").append(w);
+        if (orderBy != null) sb.append("|o:").append(orderBy);
+        return sb.toString();
+    }
+
     /** A copy of this query positioned after {@code cursor}, for the next page. */
     public DocQuery nextPage(String cursor) {
         return new DocQuery(collection, wheres, orderBy, limit, cursor);

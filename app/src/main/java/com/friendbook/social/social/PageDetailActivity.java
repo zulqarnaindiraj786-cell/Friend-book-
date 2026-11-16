@@ -198,10 +198,9 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
     @Override
     protected void onStart() {
         super.onStart();
-        pageReg = Fb.db().collection("pages").document(pageId)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    pageData = d.getData();
+        com.friendbook.social.core.CloudflareStore.get("pages", pageId, pageDoc -> {
+                    if (pageDoc == null) return;
+                    pageData = pageDoc;
                     pageName = Format.strOr(pageData, "name", "Page");
                     String cat = Format.strOr(pageData, "category", "Community");
                     String about = Format.str(pageData, "about");

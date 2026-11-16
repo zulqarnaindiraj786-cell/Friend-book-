@@ -118,7 +118,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private final List<Models.Post> allLoadedPosts = new ArrayList<>();
     private final Fb.MeObserver meObserver = d -> {
         if (isFinishing()) return;
-        Models.User u = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+        Models.User u = d != null && d.exists() ? Models.User.fromMap(d.getId(), d.getData()) : Fb.me;
         if (u == null) return;
         user = u;
         FastCache.putUser(u);
@@ -837,16 +837,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             if (user == null) user = Fb.me;
             if (user != null) { bindUser(); if (activeTab == 3 && friendPager == null) startFriendPages(); }
         } else {
-            userReg = Fb.db().collection("users").document(uid)
-                    .addSnapshotListener((d, err) -> {
-                        if (d == null || !d.exists()) {
+            com.friendbook.social.core.CloudflareStore.get("users", uid, d -> {
+                        if (d == null) {
                             // A refused read is not a missing user. Saying "not found" here made a
                             // spent quota look like deleted accounts.
-                            if (com.friendbook.social.core.QuotaGuard.noteFailure(err)) return;
                             nameT.setText("User not found");
                             return;
                         }
-                        user = Models.User.fromDoc(d);
+                        user = Models.User.fromMap(uid, d);
                         FastCache.putUser(user);
                         bindUser();
                         if(activeTab==3 && friendPager==null)startFriendPages();
@@ -856,20 +854,24 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me != null && !mine) {
             // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
-            friendsReg=Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
-                    java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
-                friendIds.clear();if(snap!=null && !snap.isEmpty())friendIds.add(uid);
+            com.friendbook.social.core.D1Snap.read(
+                    com.friendbook.social.core.DocQuery.of("friends")
+                            .whereArrayContains("participants", me).limit(50).build(), snap -> {
+                friendIds.clear();
+                for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
+                    Object parts = d.get("participants");
+                    if (parts instanceof java.util.List && ((java.util.List<?>) parts).contains(uid)) {
+                        friendIds.add(uid);
+                        break;
+                    }
+                }
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
-            outReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
-                    .addSnapshotListener((snap, err) -> {
+            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("toUid",uid).whereEqualTo("status",pending).limit(1).build(),snap->{
                         hasOut = snap != null && !snap.isEmpty();
                         computeFriendState();
                     });
-            inReg = Fb.db().collection("friend_requests")
-                    .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
-                    .addSnapshotListener((snap, err) -> {
+            com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("fromUid",uid).whereEqualTo("toUid",me).whereEqualTo("status",pending).limit(1).build(),snap->{
                         hasIn = snap != null && !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
@@ -911,7 +913,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
-                            Models.Post p = Models.Post.fromDoc(d);
+                            Models.Post p = Models.Post.fromMap(d.getId(), d.getData());
                             allLoadedPosts.add(p);
                         }
                     }
@@ -1333,14 +1335,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void watchSubscription() {
         if (subReg != null) subReg.remove();
         if (mine || Fb.uid() == null) return;
-        subReg = Fb.db().collection("subscriptions")
-                .whereEqualTo("creatorId", uid)
-                .whereEqualTo("subscriberId", Fb.uid())
-                .limit(1)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("subscriptions")
+                        .whereEqualTo("creatorId", uid)
+                        .whereEqualTo("subscriberId", Fb.uid())
+                        .limit(1).build(), snap -> {
                     subscribedActive = false;
-                    if (snap != null && !snap.isEmpty()) {
-                        DocumentSnapshot d = snap.getDocuments().get(0);
+                    if (!snap.isEmpty()) {
+                        com.friendbook.social.core.Doc d = snap.getDocuments().get(0);
                         Map<String, Object> m = d.getData();
                         boolean active = "active".equals(Format.str(m, "status"));
                         long exp = Format.ts(m == null ? null : m.get("expiry"));
@@ -1464,8 +1466,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             String me = Fb.uid();
             Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
                     .limit(1).get().addOnSuccessListener(snap -> {
-                        for (DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
+                        for (com.friendbook.social.core.Doc d : snap) {
+                            List<String> parts = Models.ChatRoom.fromMap(d.getId(), d.getData()).participants;
                             if (parts.contains(uid)) {
                                 d.getReference().delete();
                                 com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount", FieldValue.increment(-1));

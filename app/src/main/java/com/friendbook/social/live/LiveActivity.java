@@ -306,7 +306,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
     /** Polling stand-ins for the Firestore listeners; D1 has no push for these documents. */
-    private static final long LIVE_POLL_MS = 3000L;
+    /**
+     * How often the live room re-reads its documents.
+     *
+     * <p>This is the one screen that keeps a timer: a broadcast's chat and viewer count are
+     * useless if they land a minute late, and neither is pushed over FCM. Five seconds instead
+     * of three is a third fewer reads while still being fast enough to feel live.
+     */
+    private static final long LIVE_POLL_MS = 5000L;
     private final android.os.Handler livePollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable chatPollRunnable;
     private ListenerRegistration pkBattleReg;
@@ -1673,14 +1680,55 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (isFinishing() || isDestroyed() || liveId == null) return;
             fetchLiveRoom();
             fetchLiveChat();
+            fetchPkSignals();
             livePollHandler.postDelayed(chatPollRunnable, LIVE_POLL_MS);
         };
         fetchLiveRoom();
         fetchLiveChat();
+        fetchPkSignals();
         livePollHandler.postDelayed(chatPollRunnable, LIVE_POLL_MS);
     }
 
     /** Fetches the broadcast document and hands it to the existing render logic. */
+    private String pkBattleId, pkMediaAId, pkMediaBId;
+
+    /** Reads the three PK documents once. Called from the live poll, so there is one timer. */
+    private void fetchPkSignals() {
+        if (pkBattleId != null) {
+            com.friendbook.social.core.CloudflareStore.get("chats", pkBattleId, doc -> {
+                if (isFinishing() || isEnded || doc == null) return;
+                onPkBattleDocSnapshot(com.friendbook.social.core.Doc.of(pkBattleId, doc));
+            });
+        }
+        if (pkMediaAId != null && "B".equals(pkRole)) {
+            com.friendbook.social.core.CloudflareStore.get("chats", pkMediaAId, doc -> {
+                if (isFinishing() || isEnded || !pkBattleActive || doc == null) return;
+                onPkMediaDoc(pkLeftRemoteImg, pkLeftFallbackBox, doc);
+            });
+        }
+        if (pkMediaBId != null && "A".equals(pkRole)) {
+            com.friendbook.social.core.CloudflareStore.get("chats", pkMediaBId, doc -> {
+                if (isFinishing() || isEnded || !pkBattleActive || doc == null) return;
+                onPkMediaDoc(pkRightRemoteImg, pkRightFallbackBox, doc);
+            });
+        }
+    }
+
+    /** Applies one PK media document to the remote video pane. */
+    private void onPkMediaDoc(android.widget.ImageView img, android.view.View fallback, Map<String, Object> m) {
+        if (Boolean.TRUE.equals(m.get("camOff"))) {
+            img.setVisibility(View.GONE);
+            fallback.setVisibility(View.VISIBLE);
+        } else {
+            fallback.setVisibility(View.GONE);
+            String v = Format.str(m, "v");
+            if (!v.isEmpty()) {
+                img.setVisibility(View.VISIBLE);
+                Ui.img(LiveActivity.this, img, v);
+            }
+        }
+    }
+
     private void fetchLiveRoom() {
         if (liveId == null || isFinishing()) return;
         com.friendbook.social.core.CloudflareStore.get("lives", liveId, m -> {
@@ -3526,52 +3574,15 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
         } catch (Throwable ignored) { }
 
-        pkBattleReg = Fb.db().collection("chats").document("pkbattle_" + targetPkId)
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || snap == null || !snap.exists()) return;
-                    onPkBattleDocSnapshot(snap);
-                });
+        // PK signalling is read on the same tick as the live room, not on its own subscription.
+        // Both sides already refresh every few seconds, so a second channel only doubles the
+        // reads without making the battle start any sooner.
+        pkBattleId = "pkbattle_" + targetPkId;
+        pkMediaAId = "pkmedia_" + targetPkId + "_a";
+        pkMediaBId = "pkmedia_" + targetPkId + "_b";
+        fetchPkSignals();
 
-        pkMediaAReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_a")
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
-                    if ("A".equals(pkRole)) return; // Don't decode our own Side A stream!
-                    Map<String, Object> m = snap.getData();
-                    if (m == null) return;
-                    if (Boolean.TRUE.equals(m.get("camOff"))) {
-                        pkLeftRemoteImg.setVisibility(View.GONE);
-                        pkLeftFallbackBox.setVisibility(View.VISIBLE);
-                    } else {
-                        String v = Format.str(m, "v");
-                        long vs = Format.longOf(m, "vs");
-                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, false);
-                    }
-                    String a = Format.str(m, "a");
-                    long as = Format.longOf(m, "as");
-                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, false);
-                });
-
-        pkMediaBReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_b")
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
-                    if ("B".equals(pkRole)) return; // Don't decode our own Side B stream!
-                    Map<String, Object> m = snap.getData();
-                    if (m == null) return;
-                    if (Boolean.TRUE.equals(m.get("camOff"))) {
-                        pkRightRemoteImg.setVisibility(View.GONE);
-                        pkRightFallbackBox.setVisibility(View.VISIBLE);
-                    } else {
-                        String v = Format.str(m, "v");
-                        long vs = Format.longOf(m, "vs");
-                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, true);
-                    }
-                    String a = Format.str(m, "a");
-                    long as = Format.longOf(m, "as");
-                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, true);
-                });
-    }
-
-    private void onPkBattleDocSnapshot(@NonNull DocumentSnapshot snap) {
+    private void onPkBattleDocSnapshot(@NonNull com.friendbook.social.core.Doc snap) {
         Map<String, Object> m = snap.getData();
         if (m == null) return;
         String status = Format.str(m, "status");

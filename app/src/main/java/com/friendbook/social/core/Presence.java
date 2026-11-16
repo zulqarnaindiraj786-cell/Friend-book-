@@ -271,20 +271,21 @@ public class Presence {
             if (!h.closed) cb.onPresence(fsOnline[0], fsLastSeen[0]);
         };
 
-        // Firestore snapshot listener (authoritative for privacy flags)
-        h.fsL = Fb.db().collection("users").document(uid)
-                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (d, err) -> {
+        // Read once. Privacy flags (showActiveStatus, deactivated, banned) change when the user
+        // edits their settings, not continuously, and a per-contact subscription re-read that
+        // document every time anything about the account changed.
+        CloudflareStore.get("users", uid, doc -> {
                     if (h.closed) return;
-                    if (d == null || !d.exists()) {
+                    if (doc == null) {
                         fsSeen[0] = false; fsOnline[0] = false; fsLastSeen[0] = 0L; emit.run(); return;
                     }
-                    fsSeen[0] = !d.getMetadata().isFromCache();
-                    Boolean show = d.getBoolean("showActiveStatus");
-                    boolean allowed = (show == null || show)
-                            && !Boolean.TRUE.equals(d.getBoolean("deactivated"))
-                            && !Boolean.TRUE.equals(d.getBoolean("banned"));
-                    fsOnline[0] = allowed && firestoreActive(d);
-                    fsLastSeen[0] = extractLastSeenMs(d);
+                    fsSeen[0] = true;
+                    Object show = doc.get("showActiveStatus");
+                    boolean allowed = (!(show instanceof Boolean) || (Boolean) show)
+                            && !Boolean.TRUE.equals(doc.get("deactivated"))
+                            && !Boolean.TRUE.equals(doc.get("banned"));
+                    fsOnline[0] = allowed && firestoreActive(com.friendbook.social.core.Doc.of(uid, doc));
+                    fsLastSeen[0] = extractLastSeenMs(com.friendbook.social.core.Doc.of(uid, doc));
                     emit.run();
                 });
 
@@ -414,13 +415,12 @@ public class Presence {
             if (!h.closed) cb.accept(fsTyping[0] || cfTyping[0]);
         };
 
-        // Firestore typing snapshot
-        h.fsL = Fb.db().collection("chats").document(chatId)
-                .addSnapshotListener((d, err) -> {
+        // Read once; typing state refreshes on the next watch rather than being subscribed to.
+        CloudflareStore.get("chats", chatId, doc -> {
                     if (h.closed) return;
                     fsTyping[0] = false;
-                    if (d != null && d.exists()) {
-                        Object t = d.get("typing");
+                    if (doc != null) {
+                        Object t = doc.get("typing");
                         if (t instanceof Map) {
                             for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
                                 if (!String.valueOf(e.getKey()).equals(myUid)
@@ -434,41 +434,12 @@ public class Presence {
                     emit.run();
                 });
 
-        // Cloudflare typing polling
-        if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
-            h.ticker = () -> {
-                if (!h.closed) {
-                    fetchCloudflareTyping(chatId, myUid, h, cfTyping, emit);
-                    H.postDelayed(h.ticker, 3_000L); // poll every 3s
-                }
-            };
-            H.post(h.ticker); // immediate first fetch
-        }
+        // Typing has no Cloudflare channel to read, and polling for it every few seconds was
+        // the single most expensive thing the app did to D1: one request per open chat per three
+        // seconds, for a hint that disappears on its own. The indicator is dropped rather than
+        // billed; the message itself still arrives.
 
         return h;
-    }
-
-    private static void fetchCloudflareTyping(String chatId, String myUid, Handle h, boolean[] cfTyping, Runnable emit) {
-        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || chatId == null) return;
-        try {
-            FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty() || h.closed) return;
-                CF_IO.execute(() -> {
-                    try {
-                        JSONObject data = D1HttpTransport.send(new java.net.URL(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId)), "GET", token, null);
-                        boolean typing = data.optBoolean("typing", false);
-                        H.post(() -> {
-                            if (h.closed) return;
-                            cfTyping[0] = typing;
-                            emit.run();
-                        });
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
     }
 
     // ---------- RTDB: ONLY for activeCall (call signaling) ----------

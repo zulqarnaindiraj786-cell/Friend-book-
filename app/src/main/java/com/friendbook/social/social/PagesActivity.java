@@ -168,10 +168,9 @@ public class PagesActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("pages").limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("pages").limit(100).build(),snap->{
                     allPages.clear();
-                    if (snap != null) for (DocumentSnapshot d : snap) {
+                    if (snap != null) for (com.friendbook.social.core.Doc d : snap) {
                         Page p = new Page();
                         p.id = d.getId();
                         p.name = d.getString("name");

@@ -590,17 +590,18 @@ public class MainActivity extends Activity {
         String me = Fb.uid();
         if (me == null) return;
         if (notifReg != null) notifReg.remove();
-        notifReg = Fb.db().collection("notifications")
-                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null && err != null) {
-                        if (QuotaGuard.noteFailure(err)) noteBackendDegraded();
-                        return;
-                    }
+        // One read per refresh instead of a subscription. A listener re-delivers its whole
+        // result set on any change, and every document in it is billed - so a quiet user still
+        // paid for the badge. The badge now updates when the app foregrounds, when the
+        // notification screen is left, and after an action that changes it.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("notifications")
+                        .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                        .limit(100).build(), snap -> {
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
-                        if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        {
+                            for (com.friendbook.social.core.Doc d : snap) {
                                 currentUnreadNotifIds.add(d.getId());
                             }
                         }
@@ -619,7 +620,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.notifBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts > clearedAt) {
                                 unseen++;
@@ -635,25 +636,20 @@ public class MainActivity extends Activity {
         // in one chat re-reads every chat the user is in - which is why ~200 active users were
         // enough to exhaust a 50,000 reads/day plan. A cap does not make it free, but it stops
         // the cost from growing with account age.
-        chatReg = Fb.db().collection("chats")
-                .whereArrayContains("participants", me)
-                .limit(CHAT_BADGE_LIMIT)
-                .addSnapshotListener((snap, err) -> {
-                    // A failed read is NOT an empty inbox. Zeroing the badges here made the app
-                    // look like the user had no chats at all, which is the difference between
-                    // "quiet day" and "the app is broken, uninstall it".
-                    if (snap == null && err != null) {
-                        if (QuotaGuard.noteFailure(err)) noteBackendDegraded();
-                        return;
-                    }
-                    if (err == null) QuotaGuard.noteSuccess();
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("chats")
+                        .whereArrayContains("participants", me)
+                        .limit(CHAT_BADGE_LIMIT).build(), snap -> {
+                    // A failed read is NOT an empty inbox: the failure path never reaches here,
+                    // and the badge keeps its last value instead of dropping to zero.
+                    QuotaGuard.noteSuccess();
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {
                         currentUnreadChatIds.clear();
                     }
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             // 📞 Detect incoming Voice / Video Calls anywhere in friendbook!
                             com.friendbook.social.chat.CallActivity.maybeHandleIncomingFromRoomDoc(this, d);
 
@@ -682,13 +678,11 @@ public class MainActivity extends Activity {
                 });
 
         if (reqReg != null) reqReg.remove();
-        reqReg = Fb.db().collection("friend_requests")
-                .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status",pending).limit(50).build(),snap->{
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.core.Doc d : snap) {
                                 currentPendingReqIds.add(d.getId());
                             }
                         }
@@ -702,7 +696,7 @@ public class MainActivity extends Activity {
                         if (snap != null && !snap.isEmpty()) {
                             java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
                             boolean hasUnseen = false;
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.core.Doc d : snap) {
                                 if (!seenIds.contains(d.getId())) {
                                     hasUnseen = true;
                                     break;
@@ -716,7 +710,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.friendRequestsClearedAt(this, me);
                     int count = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             if (seenIds.contains(d.getId())) continue;
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt > 0L && ts > 0L && ts <= clearedAt) continue;
@@ -739,7 +733,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.core.Doc d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
                                 unseen++;

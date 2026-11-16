@@ -190,7 +190,17 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     private DocumentReference myMediaRef;
     private DocumentReference remoteMediaRef;
     private ListenerRegistration signalReg;
+    private String signalChatId, remoteMediaId;
+    /**
+     * Call signalling needs a fresh document every couple of seconds or the call cannot be
+     * answered. Firestore pushed those updates; D1 cannot, so the call borrows the same kind of
+     * tick - but only while a call is actually connected. Nothing polls when no call is up.
+     */
+    private static final long CALL_SIGNAL_MS = 1500L;
+    private final android.os.Handler callPollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable callPollRunnable;
     private ListenerRegistration remoteMediaReg;
+    private boolean remoteMediaReady;
     private com.google.firebase.database.DatabaseReference myRtdbMediaRef;
     private com.google.firebase.database.DatabaseReference remoteRtdbMediaRef;
     private com.google.firebase.database.ValueEventListener remoteRtdbListener;
@@ -312,11 +322,13 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         }
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
 
+        signalChatId = chatId;
         chatDocRef = Fb.db().collection("chats").document(chatId);
         String mySuffix = isCaller ? "_a" : "_b";
         String remSuffix = isCaller ? "_b" : "_a";
         myMediaRef = Fb.db().collection("chats").document("callmedia_" + callId + mySuffix);
-        remoteMediaRef = Fb.db().collection("chats").document("callmedia_" + callId + remSuffix);
+        remoteMediaId = "callmedia_" + callId + remSuffix;
+        remoteMediaRef = Fb.db().collection("chats").document(remoteMediaId);
 
         engine = new LiveStreamEngine(this, this);
         engine.setStreamQuality(LiveStreamEngine.QUALITY_DATA_SAVER);
@@ -639,10 +651,45 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         chatDocRef.set(roomPatch, SetOptions.merge());
     }
 
+    /** Receives one signalling document; the body is the old listener body. */
+    private java.util.function.Consumer<Map<String, Object>> onSignalDoc;
+
+    /** Starts the call's signalling tick. Safe to call twice. */
+    private void startCallPolling() {
+        if (callPollRunnable != null) return;
+        callPollRunnable = () -> {
+            if (ended || isFinishing() || isDestroyed()) { stopCallPolling(); return; }
+            if (signalChatId != null) {
+                com.friendbook.social.core.CloudflareStore.get("chats", signalChatId, doc -> {
+                    if (doc != null && onSignalDoc != null) onSignalDoc.accept(doc);
+                });
+            }
+            if (remoteMediaId != null && remoteMediaReady) {
+                com.friendbook.social.core.CloudflareStore.get("chats", remoteMediaId, doc -> {
+                    if (doc != null && onRemoteMediaDoc != null) onRemoteMediaDoc.accept(doc);
+                });
+            }
+            callPollHandler.postDelayed(callPollRunnable, CALL_SIGNAL_MS);
+        };
+        callPollHandler.post(callPollRunnable);
+    }
+
+    private void stopCallPolling() {
+        if (callPollRunnable != null) {
+            callPollHandler.removeCallbacks(callPollRunnable);
+            callPollRunnable = null;
+        }
+    }
+
+    /** Receives the remote media document while a call is connected. */
+    private java.util.function.Consumer<Map<String, Object>> onRemoteMediaDoc;
+
     @SuppressWarnings("unchecked")
     private void attachSignalingListener() {
-        signalReg = chatDocRef.addSnapshotListener((snap, err) -> {
-            if (ended || isFinishing() || snap == null || !snap.exists()) return;
+        startCallPolling();
+        // The body below is unchanged: it is fed the same map it used to receive from Firestore.
+        onSignalDoc = (snap) -> {
+            if (ended || isFinishing() || snap == null) return;
             Object raw = snap.get("activeCall");
             if (!(raw instanceof Map)) return;
             Map<String, Object> ac = (Map<String, Object>) raw;
@@ -660,7 +707,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             } else if ("ended".equals(st) || "missed".equals(st) || "cancelled".equals(st)) {
                 endCallInternal(st, false);
             }
-        });
+        };
     }
 
     private void acceptIncomingCall() {
@@ -772,7 +819,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void attachRemoteMediaListener() {
-        if (remoteMediaReg != null || remoteMediaRef == null) return;
+        if (remoteMediaReady || remoteMediaRef == null) return;
         try {
             com.google.firebase.database.FirebaseDatabase rtdb = Fb.rtdb();
             if (rtdb != null && callId != null && !callId.isEmpty()) {
@@ -808,27 +855,29 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             }
         } catch (Throwable ignored) { }
 
-        remoteMediaReg = remoteMediaRef.addSnapshotListener((snap, err) -> {
-            if (ended || isFinishing() || snap == null || !snap.exists() || engine == null) return;
+        // Signals "the remote pane exists" so the poll starts fetching its document.
+        remoteMediaReady = true;
+        onRemoteMediaDoc = (snap) -> {
+            if (ended || isFinishing() || snap == null || engine == null) return;
 
-            Long aSeq = snap.getLong("audioSeq");
-            String aChunk = snap.getString("audioChunk");
+            Long aSeq = snap.get("audioSeq") instanceof Number ? ((Number) snap.get("audioSeq")).longValue() : null;
+            String aChunk = Format.str(snap, "audioChunk");
             if (aChunk != null && !aChunk.isEmpty()) {
                 engine.enqueueRemoteAudio(aChunk, aSeq != null ? aSeq : 0L, false);
             }
 
-            Boolean remCamOff = snap.getBoolean("camOff");
+            Object remCamOff = snap.get("camOff");
             if (Boolean.TRUE.equals(remCamOff)) {
                 remoteVideoView.setVisibility(View.GONE);
                 centerProfileBox.setVisibility(View.VISIBLE);
             } else {
-                Long vSeq = snap.getLong("videoSeq");
-                String vFrame = snap.getString("videoFrame");
+                Long vSeq = snap.get("videoSeq") instanceof Number ? ((Number) snap.get("videoSeq")).longValue() : null;
+                String vFrame = Format.str(snap, "videoFrame");
                 if (vFrame != null && !vFrame.isEmpty()) {
                     engine.decodeRemoteFrame(vFrame, vSeq != null ? vSeq : 0L, false);
                 }
             }
-        });
+        };
     }
 
     // ==================== LiveStreamEngine.Listener ====================
@@ -1089,6 +1138,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void releaseResources() {
+        stopCallPolling();
         if (signalReg != null) {
             try { signalReg.remove(); } catch (Throwable ignored) { }
             signalReg = null;

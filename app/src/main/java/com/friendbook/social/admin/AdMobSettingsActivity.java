@@ -213,9 +213,8 @@ public class AdMobSettingsActivity extends Activity {
     protected void onStart() {
         super.onStart();
         if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
-        reg = Fb.db().collection("config").document("ads")
-                .addSnapshotListener((d, err) -> {
-                    if (d != null && d.exists()) {
+        com.friendbook.social.core.CloudflareStore.get("config", "ads", d -> {
+                    if (d != null) {
                         String fId = d.getString("feed_native_unit_v3");
                         String rId = d.getString("reels_native_unit_v3");
                         Boolean en = d.getBoolean("ads_enabled_v3");

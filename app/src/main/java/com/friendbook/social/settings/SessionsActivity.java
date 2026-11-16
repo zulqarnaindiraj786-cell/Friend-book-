@@ -89,9 +89,13 @@ public class SessionsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        reg = Fb.db().collection("users").document(me).collection("sessions")
-                .orderBy("at", Query.Direction.DESCENDING).limit(30)
-                .addSnapshotListener((snap, err) -> {
+        // Firestore kept sessions in a per-user subcollection. D1 is flat, so the same rows live
+        // in "sessions" with the owner recorded as uid and are filtered on it.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("sessions")
+                        .whereEqualTo("uid", me)
+                        .orderBy("at", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(30).build(), snap -> {
                     while (list.getChildCount() > 2) list.removeViewAt(2);
                     if (snap == null || snap.isEmpty()) {
                         TextView e = Ui.tv(this, "No sessions recorded yet.", 13, Ui.sub(this));
@@ -99,7 +103,7 @@ public class SessionsActivity extends Activity {
                         return;
                     }
                     int i = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
+                    for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
                         Map<String, Object> m = d.getData();
                         LinearLayout card = Ui.row(this);
                         card.setBackground(Ui.round(this, Ui.card(this), 12));

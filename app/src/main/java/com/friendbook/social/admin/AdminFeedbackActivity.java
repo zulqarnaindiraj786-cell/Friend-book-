@@ -27,7 +27,7 @@ import java.util.Map;
 /** Admin feedback inbox: what users reported via shake-to-report. */
 public class AdminFeedbackActivity extends Activity {
 
-    private final List<DocumentSnapshot> items = new ArrayList<>();
+    private final java.util.List<com.friendbook.social.core.Doc> items = new ArrayList<>();
     private Adapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
@@ -57,9 +57,7 @@ public class AdminFeedbackActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("feedback")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("feedback").orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).limit(100).build(),snap->{
                     items.clear();
                     if (snap != null) items.addAll(snap.getDocuments());
                     adapter.notifyDataSetChanged();
@@ -103,7 +101,10 @@ public class AdminFeedbackActivity extends Activity {
             h.text.setText(Format.str(m, "text"));
             h.meta.setText(Format.str(m, "app") + " · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))));
             h.del.setOnClickListener(v -> {
-                d.getReference().delete();
+                // A Doc has no Firestore reference, so the collection and id are named here -
+                // which is also what lets the delete be mirrored into D1.
+                Fb.db().collection("feedback").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.mirrorDelete("feedback", d.getId());
                 Ui.toast(AdminFeedbackActivity.this, "Archived");
             });
         }

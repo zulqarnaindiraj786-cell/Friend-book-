@@ -120,25 +120,21 @@ public class ModeratorDeskActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        postsReg = Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(100)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(100).build(), snap -> {
                     posts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            posts.add(Models.Post.fromDoc(d));
-                        }
+                    for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
+                        posts.add(Models.Post.fromMap(d.getId(), d.getData()));
                     }
                     render();
                 });
-        usersReg = Fb.db().collection("users")
-                .limit(250)
-                .addSnapshotListener((snap, err) -> {
+        com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("users").limit(250).build(),snap->{
                     users.clear();
                     if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            users.add(Models.User.fromDoc(d));
+                        for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
+                            users.add(Models.User.fromMap(d.getId(), d.getData()));
                         }
                     }
                     render();
