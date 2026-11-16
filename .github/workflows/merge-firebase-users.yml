@@ -1,0 +1,172 @@
+name: Merge Firebase user profiles into D1 (names + photos)
+
+# Fills the author names and photos that still live only in Firebase, so the feed stops
+# rendering the schema default ('User', grey avatar). Additive only: no INSERT, no DELETE,
+# and a value is written only where the stored one is a placeholder.
+#
+# Triggered by a committed request file, so ordinary pushes do nothing:
+#   cloudflare/test/firebase-merge-request.json
+#   { "step": "plan" | "apply" | "verify" | "none", "confirm": "APPLY", "limit": 0 }
+#
+# "plan" and "verify" are read-only. "apply" writes only with confirm=APPLY.
+
+on:
+  push:
+    branches: ['arena/**']
+    paths: ['cloudflare/test/firebase-merge-request.json']
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'none | plan | apply | verify'
+        required: true
+        default: none
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: friendbook-firebase-user-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+      FIREBASE_PROJECT_ID: friendbook-17551
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || '92f3d04598822de2e49e14561218d090' }}
+      D1_DATABASE_ID: e1c605ca-a50b-46c6-9deb-56dd1f70d163
+      REQUEST_FILE: cloudflare/test/firebase-merge-request.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the Google auth client used for read-only Firestore access
+        run: pip install --disable-pip-version-check --quiet google-auth requests
+
+      - name: Read the request
+        id: request
+        env:
+          DISPATCH_STEP: ${{ inputs.step }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib
+          step = (os.environ.get('DISPATCH_STEP') or '').strip()
+          data = {}
+          path = pathlib.Path(os.environ['REQUEST_FILE'])
+          if path.exists():
+              data = json.loads(path.read_text())
+          if not step:
+              step = str(data.get('step') or 'none')
+          writes = bool(data.get('confirm') == 'APPLY')
+          print(f"step={step}")
+          print(f"writes={'true' if writes else 'false'}")
+          print(f"limit={int(data.get('limit') or 0)}")
+          print(f"note={str(data.get('note') or '')[:160]}")
+          PY
+
+      - name: Nothing requested
+        if: steps.request.outputs.step == 'none'
+        run: echo "step=none - no Firebase merge requested."
+
+      - name: Offline tests (no network)
+        if: steps.request.outputs.step != 'none'
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_merge_firebase_users.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_rebuild_mapping_parity.py'
+
+      - name: Run the request
+        id: work
+        if: steps.request.outputs.step != 'none'
+        continue-on-error: true
+        run: |
+          set +e
+          STEP="${{ steps.request.outputs.step }}"
+          WRITES="${{ steps.request.outputs.writes }}"
+          LIMIT="${{ steps.request.outputs.limit }}"
+          case "$STEP" in
+            plan)   python3 scripts/admin/merge_firebase_users.py plan > merge-output.json 2> merge-error.log ;;
+            verify) python3 scripts/admin/merge_firebase_users.py verify > merge-output.json 2> merge-error.log ;;
+            apply)
+              if [ "$WRITES" != "true" ]; then
+                echo "refusing to write: the request file has no confirm=APPLY" > merge-error.log
+                false
+              else
+                if [ "$LIMIT" != "0" ]; then
+                  python3 scripts/admin/merge_firebase_users.py apply --limit="$LIMIT" > merge-output.json 2> merge-error.log
+                else
+                  python3 scripts/admin/merge_firebase_users.py apply > merge-output.json 2> merge-error.log
+                fi
+              fi ;;
+            *) echo "unknown step: $STEP" > merge-error.log; false ;;
+          esac
+          CODE=$?
+          echo "$CODE" > merge-exit.txt
+          echo "step=$STEP writes=$WRITES exit=$CODE"
+          test -f merge-output.json && cat merge-output.json
+          test -f merge-error.log && cat merge-error.log >&2
+          exit 0
+
+      - name: Worker health (read-only HTTP check)
+        if: always() && steps.request.outputs.step != 'none'
+        run: |
+          URL="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/health"
+          CODE=$(curl -sS -o health-body.json -w '%{http_code}' --max-time 30 "$URL" || echo 000)
+          echo "$CODE" > health-code.txt
+          head -c 600 health-body.json > health-body.txt 2>/dev/null || true
+          echo "GET $URL -> $CODE"
+
+      - name: Publish the result
+        if: always() && steps.request.outputs.step != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STEP: ${{ steps.request.outputs.step }}
+          WRITES: ${{ steps.request.outputs.writes }}
+        run: |
+          {
+            echo "### Firebase -> D1 user merge: ${STEP} (writes=${WRITES})"
+            echo ""
+            if [ -f merge-output.json ]; then
+              echo '```json'
+              head -c 40000 merge-output.json
+              echo '```'
+            else
+              echo '_no output file produced_'
+            fi
+            if [ -s merge-error.log ]; then
+              echo ''
+              echo '**stderr**'
+              echo '```'
+              head -c 4000 merge-error.log
+              echo '```'
+            fi
+            echo ''
+            echo "exit=$(cat merge-exit.txt 2>/dev/null || echo missing)"
+            echo ''
+            echo "**GET /v1/health -> $(cat health-code.txt 2>/dev/null || echo missing)**"
+            if [ -s health-body.txt ]; then
+              echo '```json'
+              head -c 600 health-body.txt
+              echo '```'
+            fi
+            echo "commit=${{ github.sha }}"
+          } > merge-comment.md
+          cat merge-comment.md >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment 31 --repo "$GITHUB_REPOSITORY" --body-file merge-comment.md \
+            || gh issue comment 31 --repo "$GITHUB_REPOSITORY" --body-file merge-comment.md \
+            || echo "::warning::could not post the result comment"
+
+      - name: Fail if the request failed
+        if: always() && steps.request.outputs.step != 'none'
+        run: |
+          CODE=$(cat merge-exit.txt 2>/dev/null || echo 1)
+          echo "recorded exit=$CODE"
+          test "$CODE" = "0"

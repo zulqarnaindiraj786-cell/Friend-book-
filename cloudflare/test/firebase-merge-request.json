@@ -1,0 +1,6 @@
+{
+  "step": "plan",
+  "confirm": "",
+  "limit": 0,
+  "note": "Read-only: how many Firebase users exist, how many D1 users still render as 'User'."
+}

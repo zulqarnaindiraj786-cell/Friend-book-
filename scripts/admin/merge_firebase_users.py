@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Merge Firestore user profiles into D1 - names and photos only, nothing else.
+
+The document rebuild converted D1's own rows into documents, so every author still renders
+as the schema default: `users.display_name` is `NOT NULL DEFAULT 'User'` and the feed shows
+that default with a grey avatar. The real names and photos only exist in Firebase, which the
+rebuild deliberately left untouched.
+
+This fills the gaps by uid, and only the gaps:
+
+  users.display_name / users.photo_url          the data API's author fields
+  users document displayName / photoUrl         what the app reads for a profile
+  posts.author_name / posts.author_photo        the feed row
+  posts documents authorName / authorPhoto      the feed document
+
+Rules, enforced in the SQL itself:
+  * no INSERT and no DELETE - a user that is not already in D1 is reported, never created;
+  * a name or photo is written only when the stored value is a placeholder
+    (NULL, '', 'User'), so real data is never replaced;
+  * a post is only touched when its author exists in Firebase with a real name.
+
+Subcommands:
+  plan     read-only: who is in Firebase, who is in D1, what would change
+  apply    the merge (guarded updates above)
+  verify   read-only: what the feed would render now, plus a few real rows
+"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from rebuild_documents_d1 import d1, say  # noqa: E402  (same D1 REST helper as the rebuild)
+
+PROJECT = os.environ.get('FIREBASE_PROJECT_ID', 'friendbook-17551')
+SCOPE = 'https://www.googleapis.com/auth/datastore'
+PAGE = 400
+PLACEHOLDER_NAMES = ('', 'user', 'unknown', 'null', 'none')
+MAX_SAMPLE = 6
+
+
+class MergeError(RuntimeError):
+    pass
+
+
+def placeholder(value):
+    """True when a stored name is the schema default rather than a real one."""
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text.lower() in PLACEHOLDER_NAMES
+
+
+# --------------------------------------------------------------------------- Firebase
+
+def firestore_session():
+    raw = os.environ.get('FIREBASE_ADMIN_SERVICE_ACCOUNT', '').strip()
+    if not raw:
+        raise MergeError('FIREBASE_ADMIN_SERVICE_ACCOUNT is missing; nothing was read or written')
+    try:
+        info = json.loads(raw)
+    except ValueError as error:
+        raise MergeError(f'FIREBASE_ADMIN_SERVICE_ACCOUNT is not JSON: {error}') from None
+    if info.get('type') != 'service_account':
+        raise MergeError('the secret is not a service-account JSON')
+    from google.auth.transport.requests import AuthorizedSession
+    from google.oauth2 import service_account
+    credentials = service_account.Credentials.from_service_account_info(info, scopes=[SCOPE])
+    return AuthorizedSession(credentials)
+
+
+def firestore_value(field):
+    """Unwrap one Firestore typed value (only the types a profile can use)."""
+    if not isinstance(field, dict):
+        return None
+    for key in ('stringValue', 'timestampValue'):
+        if key in field:
+            return field[key]
+    if 'integerValue' in field:
+        return int(field['integerValue'])
+    if 'doubleValue' in field:
+        return field['doubleValue']
+    if 'booleanValue' in field:
+        return bool(field['booleanValue'])
+    if 'nullValue' in field:
+        return None
+    return None
+
+
+def firestore_users(session):
+    """Every user document: uid plus the first non-empty name and photo it carries."""
+    url = f'https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents/users'
+    token = None
+    users = []
+    while True:
+        params = {'pageSize': PAGE}
+        if token:
+            params['pageToken'] = token
+        response = session.get(url, params=params, timeout=90)
+        if response.status_code != 200:
+            raise MergeError(f'Firestore users read failed (HTTP {response.status_code}); '
+                             'nothing was written')
+        body = response.json()
+        for document in body.get('documents', []):
+            uid = document.get('name', '').rsplit('/', 1)[-1]
+            if not uid:
+                continue
+            fields = document.get('fields', {})
+            name = None
+            for key in ('displayName', 'name', 'fullName', 'username'):
+                candidate = firestore_value(fields.get(key))
+                if isinstance(candidate, str) and candidate.strip() and not placeholder(candidate):
+                    name = candidate.strip()
+                    break
+            photo = None
+            for key in ('photoUrl', 'photoURL', 'photo', 'profilePhoto', 'profilePhotoUrl'):
+                candidate = firestore_value(fields.get(key))
+                if isinstance(candidate, str) and candidate.strip():
+                    photo = candidate.strip()
+                    break
+            users.append({'uid': uid, 'name': name, 'photo': photo})
+        token = body.get('nextPageToken')
+        if not token:
+            break
+    return users
+
+
+# --------------------------------------------------------------------------- D1 reads
+
+def rows(sql, params=()):
+    result, _ = d1(sql, params)
+    return result
+
+
+def all_rows(sql, params=(), page=500, key='path'):
+    """Keyset paginate a read so a big collection never truncates silently."""
+    collected = []
+    cursor = ''
+    while True:
+        batch = rows(sql + ' AND ' + key + ' > ? ORDER BY ' + key + ' LIMIT ?',
+                     [*params, cursor, page])
+        if not batch:
+            return collected
+        collected.extend(batch)
+        cursor = batch[-1][key]
+        if len(batch) < page:
+            return collected
+
+
+def counters():
+    sql = ("SELECT (SELECT COUNT(*) FROM users) AS usersTable,"
+           " (SELECT COUNT(*) FROM posts) AS postsTable,"
+           " (SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection = 'users') AS userDocs,"
+           " (SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection = 'posts') AS postDocs")
+    return rows(sql)[0]
+
+
+def placeholderStats():
+    users = rows("SELECT COUNT(*) AS n FROM users WHERE display_name IS NULL OR TRIM(display_name) IN ('', 'User')")[0]['n']
+    userPhotos = rows("SELECT COUNT(*) AS n FROM users WHERE photo_url IS NULL OR TRIM(photo_url) = ''")[0]['n']
+    userDocs = rows("SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE collection = 'users' "
+                    "AND (json_extract(document_json, '$.displayName') IS NULL "
+                    "OR TRIM(json_extract(document_json, '$.displayName')) IN ('', 'User'))")[0]['n']
+    postDocs = rows("SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE collection = 'posts' "
+                    "AND (json_extract(document_json, '$.authorName') IS NULL "
+                    "OR TRIM(json_extract(document_json, '$.authorName')) IN ('', 'User'))")[0]['n']
+    postRows = rows("SELECT COUNT(*) AS n FROM posts WHERE author_name IS NULL OR TRIM(author_name) IN ('', 'User')")[0]['n']
+    return {'usersTableWithoutName': users, 'usersTableWithoutPhoto': userPhotos,
+            'userDocumentsWithoutName': userDocs, 'postDocumentsWithoutAuthorName': postDocs,
+            'postsTableWithoutAuthorName': postRows}
+
+
+# --------------------------------------------------------------------------- plan
+
+def plan():
+    session = firestore_session()
+    firebase = firestore_users(session)
+    firebaseByName = {user['uid']: user for user in firebase}
+    d1Users = rows('SELECT uid, display_name, photo_url FROM users')
+    missingInD1 = [user['uid'] for user in firebase if user['uid'] not in {u['uid'] for u in d1Users}]
+    authors = rows('SELECT author_id, COUNT(*) AS posts FROM posts GROUP BY author_id')
+
+    resolvable = sum(1 for author in authors
+                     if firebaseByName.get(author['author_id'], {}).get('name'))
+    unresolved = [author['author_id'] for author in authors
+                  if not firebaseByName.get(author['author_id'], {}).get('name')]
+
+    say({'mode': 'PLAN',
+         'firebase': {'users': len(firebase),
+                      'withName': sum(1 for u in firebase if u['name']),
+                      'withPhoto': sum(1 for u in firebase if u['photo']),
+                      'sample': [{'uid': u['uid'][:6] + '…', 'name': u['name'],
+                                  'hasPhoto': bool(u['photo'])} for u in firebase[:MAX_SAMPLE]]},
+         'd1': {'users': len(d1Users),
+                'usersMissingFromD1': len(missingInD1),
+                'usersMissingFromD1Sample': [uid[:6] + '…' for uid in missingInD1[:MAX_SAMPLE]],
+                **placeholderStats()},
+         'posts': {'rows': counters()['postsTable'],
+                   'distinctAuthors': len(authors),
+                   'authorsResolvableFromFirebase': resolvable,
+                   'authorsStillUnresolved': len(unresolved),
+                   'unresolvedSample': [uid[:6] + '…' for uid in unresolved[:MAX_SAMPLE]],
+                   'documents': counters()['postDocs']}})
+    return 0
+
+
+# --------------------------------------------------------------------------- apply
+
+def updateDocument(path, document, now):
+    """Write back one document we edited in memory. Only ever an UPDATE of that path."""
+    d1('UPDATE friendbook_cf_documents SET document_json = ?, updated_at = ? WHERE path = ?',
+       [json.dumps(document, ensure_ascii=False, sort_keys=True), now, path])
+
+
+def apply(limit=0):
+    session = firestore_session()
+    firebase = firestore_users(session)
+    if limit:
+        firebase = firebase[:limit]
+    now = int(time.time() * 1000)
+    stats = {'firebaseUsers': len(firebase), 'noNameInFirebase': 0,
+             'usersTableName': 0, 'usersTablePhoto': 0,
+             'userDocumentsName': 0, 'userDocumentsPhoto': 0,
+             'postsTableName': 0, 'postsTablePhoto': 0,
+             'postDocumentsName': 0, 'postDocumentsPhoto': 0,
+             'notInD1': []}
+
+    d1Uids = {row['uid'] for row in rows('SELECT uid FROM users')}
+    userDocs = {row['doc_id']: row for row in all_rows(
+        "SELECT path, doc_id, document_json FROM friendbook_cf_documents WHERE collection = 'users'")}
+
+    for user in firebase:
+        uid, name, photo = user['uid'], user['name'], user['photo']
+        if not name:
+            stats['noNameInFirebase'] += 1
+        if uid not in d1Uids:
+            # Never create a user: report it so the caller can decide.
+            if len(stats['notInD1']) < 50:
+                stats['notInD1'].append(uid[:6] + '…')
+            continue
+        if name:
+            _, meta = d1("UPDATE users SET display_name = ? WHERE uid = ? "
+                         "AND (display_name IS NULL OR TRIM(display_name) IN ('', 'User'))",
+                         [name, uid])
+            stats['usersTableName'] += int((meta or {}).get('changes') or 0)
+            _, meta = d1("UPDATE posts SET author_name = ? WHERE author_id = ? "
+                         "AND (author_name IS NULL OR TRIM(author_name) IN ('', 'User'))",
+                         [name, uid])
+            stats['postsTableName'] += int((meta or {}).get('changes') or 0)
+        if photo:
+            _, meta = d1("UPDATE users SET photo_url = ? WHERE uid = ? "
+                         "AND (photo_url IS NULL OR TRIM(photo_url) = '')", [photo, uid])
+            stats['usersTablePhoto'] += int((meta or {}).get('changes') or 0)
+            _, meta = d1("UPDATE posts SET author_photo = ? WHERE author_id = ? "
+                         "AND (author_photo IS NULL OR TRIM(author_photo) = '')", [photo, uid])
+            stats['postsTablePhoto'] += int((meta or {}).get('changes') or 0)
+
+        record = userDocs.get(uid)
+        if not record or not record.get('document_json'):
+            continue
+        try:
+            document = json.loads(record['document_json'])
+        except ValueError:
+            continue
+        changed = False
+        if name and placeholder(document.get('displayName')):
+            document['displayName'] = name
+            stats['userDocumentsName'] += 1
+            changed = True
+        if photo and placeholder(document.get('photoUrl')):
+            document['photoUrl'] = photo
+            stats['userDocumentsPhoto'] += 1
+            changed = True
+        if changed:
+            updateDocument(record['path'], document, now)
+
+    # Posts documents: patch the authors' feed copy in place, never the whole document.
+    byUid = {user['uid']: user for user in firebase}
+    postDocs = all_rows("SELECT path, doc_id, owner_uid, document_json "
+                        "FROM friendbook_cf_documents WHERE collection = 'posts'")
+    for record in postDocs:
+        authorId = record.get('owner_uid')
+        user = byUid.get(authorId)
+        if not user or not (user['name'] or user['photo']):
+            continue
+        try:
+            document = json.loads(record['document_json'] or '{}')
+        except ValueError:
+            continue
+        changed = False
+        if user['name'] and placeholder(document.get('authorName')):
+            document['authorName'] = user['name']
+            stats['postDocumentsName'] += 1
+            changed = True
+        if user['photo'] and placeholder(document.get('authorPhoto')):
+            document['authorPhoto'] = user['photo']
+            stats['postDocumentsPhoto'] += 1
+            changed = True
+        if changed:
+            updateDocument(record['path'], document, now)
+
+    stats['notInD1'] = {'count': len(stats['notInD1']), 'sample': stats['notInD1']}
+    say({'mode': 'APPLY', 'changed': stats})
+    verify()
+    return 0
+
+
+# --------------------------------------------------------------------------- verify
+
+def verify():
+    sample = rows("SELECT p.id, p.author_id, p.author_name, p.author_photo, "
+                  "json_extract(d.document_json, '$.authorName') AS docAuthorName, "
+                  "json_extract(d.document_json, '$.authorPhoto') AS docAuthorPhoto "
+                  "FROM posts p JOIN friendbook_cf_documents d "
+                  "ON d.path = 'posts/' || p.id ORDER BY p.id LIMIT ?", [MAX_SAMPLE])
+    stats = placeholderStats()
+    realTable = counters()['postsTable'] - stats['postsTableWithoutAuthorName']
+    realDocs = counters()['postDocs'] - stats['postDocumentsWithoutAuthorName']
+    say({'mode': 'VERIFY',
+         'users': {'withoutName': stats['usersTableWithoutName'],
+                   'withoutPhoto': stats['usersTableWithoutPhoto'],
+                   'documentsWithoutName': stats['userDocumentsWithoutName']},
+         'posts': {'rowsWithRealAuthorName': realTable,
+                   'rowsWithoutAuthorName': stats['postsTableWithoutAuthorName'],
+                   'documentsWithRealAuthorName': realDocs,
+                   'documentsWithoutAuthorName': stats['postDocumentsWithoutAuthorName'],
+                   'sample': [{'id': row['id'], 'authorId': (row['author_id'] or '')[:6] + '…',
+                               'rowName': row['author_name'], 'docName': row['docAuthorName'],
+                               'hasRowPhoto': bool(row['author_photo']),
+                               'hasDocPhoto': bool(row['docAuthorPhoto'])}
+                              for row in sample]}})
+    return 0
+
+
+def main(argv):
+    command = (argv[1] if len(argv) > 1 else 'plan').strip()
+    if command == 'plan':
+        return plan()
+    if command == 'apply':
+        limit = 0
+        for flag in argv[2:]:
+            if flag.startswith('--limit='):
+                limit = int(flag.split('=', 1)[1])
+        return apply(limit)
+    if command == 'verify':
+        return verify()
+    print('usage: merge_firebase_users.py [plan|apply [--limit=N]|verify]', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv))
+    except MergeError as error:
+        print(f'::error::{error}', file=sys.stderr)
+        sys.exit(1)
