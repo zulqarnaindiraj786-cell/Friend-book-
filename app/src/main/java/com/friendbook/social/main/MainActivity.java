@@ -80,8 +80,6 @@ public class MainActivity extends Activity {
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
-    private final java.util.Set<String> currentUnreadChatIds = new java.util.HashSet<>();
-    private final java.util.Set<String> currentUnreadNotifIds = new java.util.HashSet<>();
 
     @Override
     protected void onCreate(Bundle b) {
@@ -590,92 +588,83 @@ public class MainActivity extends Activity {
         String me = Fb.uid();
         if (me == null) return;
         if (notifReg != null) notifReg.remove();
-        // One read per refresh instead of a subscription. A listener re-delivers its whole
-        // result set on any change, and every document in it is billed - so a quiet user still
-        // paid for the badge. The badge now updates when the app foregrounds, when the
-        // notification screen is left, and after an action that changes it.
-        com.friendbook.social.core.D1Snap.read(
+        // A badge is a number, so it is counted, not downloaded. Fetching a page to take its
+        // length reads every matching document and reports the page ceiling once the real
+        // number is larger; COUNT answers the same question from one row. CloudflareStore
+        // caches the answer for a minute, so repeated foregrounds cost nothing, and the badge
+        // still refreshes on foreground, on leaving the notification screen, and after any
+        // action that changes it.
+        final long clearedAt = Prefs.notifBadgeClearedAt(this, me);
+        com.friendbook.social.core.DocQuery.Builder unseenQuery =
                 com.friendbook.social.core.DocQuery.of("notifications")
-                        .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                        .limit(100).build(), snap -> {
-                    synchronized (currentUnreadNotifIds) {
-                        currentUnreadNotifIds.clear();
-                        {
-                            for (com.friendbook.social.core.Doc d : snap) {
-                                currentUnreadNotifIds.add(d.getId());
-                            }
-                        }
-                    }
-                    if (Prefs.quiet(this)) {
-                        Ui.setBadge(notifBadge, 0);
-                        return;
-                    }
-                    if (active == TAB_NOTIFS) {
-                        Ui.setBadge(notifBadge, 0);
-                        if (snap != null && !snap.isEmpty()) {
-                            clearNotificationsBadgeNow();
-                        }
-                        return;
-                    }
-                    long clearedAt = Prefs.notifBadgeClearedAt(this, me);
-                    int unseen = 0;
-                    if (snap != null) {
-                        for (com.friendbook.social.core.Doc d : snap) {
-                            long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
-                            if (clearedAt <= 0L || ts > clearedAt) {
-                                unseen++;
-                            }
-                        }
-                    }
-                    Ui.setBadge(notifBadge, unseen);
-                });
+                        .whereEqualTo("toUserId", me).whereEqualTo("isRead", false);
+        // "Unseen since I last cleared the badge" is a filter, so it belongs in the query
+        // rather than in a page of results that the count would otherwise include.
+        if (clearedAt > 0L) {
+            unseenQuery = unseenQuery.whereGreaterThan("createdAt", clearedAt);
+        }
+        com.friendbook.social.core.CloudflareStore.count(unseenQuery.build(), total -> {
+            if (Prefs.quiet(this)) {
+                Ui.setBadge(notifBadge, 0);
+                return;
+            }
+            if (active == TAB_NOTIFS) {
+                Ui.setBadge(notifBadge, 0);
+                if (total > 0) {
+                    clearNotificationsBadgeNow();
+                }
+                return;
+            }
+            Ui.setBadge(notifBadge, (int) Math.min(Integer.MAX_VALUE, total));
+        }, () -> {
+            // A refusal is not zero. Leaving the badge at its last value is the honest
+            // outcome; setting it to zero would tell the user they have nothing waiting.
+        });
 
         if (chatReg != null) chatReg.remove();
-        // Bounded on purpose. This listener re-delivers its ENTIRE result set on any change to
-        // any chat, and every document in that set is billed as a read. Unbounded, one message
-        // in one chat re-reads every chat the user is in - which is why ~200 active users were
-        // enough to exhaust a 50,000 reads/day plan. A cap does not make it free, but it stops
-        // the cost from growing with account age.
+        // The badge is a number, so it is counted. Fetching a page of chats to take its length
+        // read every chat the user is in - which is how ~200 active users exhausted a 50,000
+        // reads/day plan - and reported the page ceiling rather than the real total once the
+        // user had more chats than the cap.
+        //
+        // The fetch is still needed for one thing a count cannot answer: whether any chat is
+        // ringing. It is bounded and asks only for the field that matters.
         com.friendbook.social.core.D1Snap.read(
                 com.friendbook.social.core.DocQuery.of("chats")
                         .whereArrayContains("participants", me)
+                        .whereExists("activeCall")
                         .limit(CHAT_BADGE_LIMIT).build(), snap -> {
-                    // A failed read is NOT an empty inbox: the failure path never reaches here,
-                    // and the badge keeps its last value instead of dropping to zero.
-                    QuotaGuard.noteSuccess();
-                    int total = 0;
-                    long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
-                    synchronized (currentUnreadChatIds) {
-                        currentUnreadChatIds.clear();
-                    }
                     if (snap != null) {
                         for (com.friendbook.social.core.Doc d : snap) {
-                            // 📞 Detect incoming Voice / Video Calls anywhere in friendbook!
+                            // 📞 A ringing call must be picked up wherever the user is, so this
+                            // check cannot move to the count.
                             com.friendbook.social.chat.CallActivity.maybeHandleIncomingFromRoomDoc(this, d);
-
-                            int roomUnread = 0;
-                            Object u = d.get("unreadCount");
-                            if (u instanceof Map) {
-                                Object n = ((Map<?, ?>) u).get(me);
-                                if (n instanceof Number) roomUnread = ((Number) n).intValue();
-                            }
-                            if (roomUnread > 0) {
-                                synchronized (currentUnreadChatIds) {
-                                    currentUnreadChatIds.add(d.getId());
-                                }
-                                long msgTs = com.friendbook.social.core.Format.ts(d.get("lastMessageTime"));
-                                Object msRaw = d.get("lastMessageTimeMs");
-                                if (msRaw instanceof Number) {
-                                    msgTs = Math.max(msgTs, ((Number) msRaw).longValue());
-                                }
-                                if (!Prefs.quiet(this) && (chatClearedAt <= 0L || msgTs > chatClearedAt)) {
-                                    total += roomUnread;
-                                }
-                            }
                         }
                     }
-                    Ui.setBadge(msgBadge, total);
                 });
+
+        // Bounded. A chat with an unread message and an old lastMessageTime is a corner case
+        // (the two fields are written together), and sampling it is still cheaper than reading
+        // every chat on every foreground.
+        final long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
+        com.friendbook.social.core.DocQuery.Builder unreadChats =
+                com.friendbook.social.core.DocQuery.of("chats")
+                        .whereArrayContains("participants", me)
+                        .whereGreaterThan("unreadCount." + me, 0);
+        if (chatClearedAt > 0L) {
+            unreadChats = unreadChats.whereGreaterThan("lastMessageTimeMs", chatClearedAt);
+        }
+        com.friendbook.social.core.CloudflareStore.count(unreadChats.build(), total -> {
+            QuotaGuard.noteSuccess();
+            if (Prefs.quiet(this) || active == TAB_MESSAGES) {
+                Ui.setBadge(msgBadge, 0);
+                return;
+            }
+            Ui.setBadge(msgBadge, (int) Math.min(Integer.MAX_VALUE, total));
+        }, () -> {
+            // A refusal is not an empty inbox: the badge keeps its last value rather than
+            // dropping to zero, which would read as "you have nothing waiting".
+        });
 
         if (reqReg != null) reqReg.remove();
         com.friendbook.social.core.D1Snap.read(com.friendbook.social.core.DocQuery.of("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending").limit(50).build(),snap->{

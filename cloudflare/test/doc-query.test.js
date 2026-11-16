@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { buildQuery, parseWhere, parseOrderBy, parseQueryParams, decodeCursor, encodeCursor, QueryError } from '../doc-query.js';
+import { buildQuery, buildCountQuery, parseWhere, parseOrderBy, parseQueryParams, decodeCursor, encodeCursor, QueryError } from '../doc-query.js';
 
 // Minimal D1-shaped adapter over node:sqlite, matching what the worker receives.
 function db() {
@@ -151,4 +151,34 @@ test('exists and not_exists filter on field presence', async () => {
   d.insert('posts', 'noMedia', {});
   assert.deepEqual((await run(d, { collection: 'posts', wheres: ['mediaUrl:exists:1'] })).map(x => x.id), ['withMedia']);
   assert.deepEqual((await run(d, { collection: 'posts', wheres: ['mediaUrl:not_exists:1'] })).map(x => x.id), ['noMedia']);
+});
+
+// A badge asks "how many chats have unread messages for me", and the answer lives at
+// unreadCount.<uid> - a nested field. Without dotted paths that filter cannot be expressed as
+// a COUNT, so the alternative was fetching every chat document to count them in the app.
+test('a dotted field name filters a nested value', () => {
+  const built = buildCountQuery({
+    collection: 'chats',
+    wheres: ['unreadCount.uid_a:gt:0'],
+  });
+  assert.match(built.sql, /json_extract\(document_json, '\$\.unreadCount\.uid_a'\)/);
+  assert.deepEqual(built.params, ['chats', 0]);
+});
+
+// The dot must not become a way to inject arbitrary text into the generated JSON path.
+test('a dotted field name is validated segment by segment', () => {
+  for (const bad of [
+    "unreadCount.uid') OR 1=1 --",
+    'unreadCount.',
+    '.unreadCount',
+    'unreadCount.a.b.c.d.e.f',
+    'unreadCount..uid',
+    'unreadCount.uid;DROP',
+  ]) {
+    assert.throws(
+      () => buildCountQuery({ collection: 'chats', wheres: [bad + ':gt:0'] }),
+      /Invalid where field|Invalid field/,
+      'must reject ' + bad
+    );
+  }
 });

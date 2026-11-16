@@ -119,8 +119,31 @@ public final class DocQuery {
             this.collection = collection;
         }
 
+        /**
+         * Validates a field name, including a dotted path.
+         *
+         * <p>A badge asks "how many chats have unread messages for me", and the answer lives at
+         * {@code unreadCount.<uid>}. Refusing the dot would force that question back to fetching
+         * every chat document and counting them here, which is the cost this replaces. Each
+         * segment is validated independently, and the worker validates again on arrival.
+         */
+        private static boolean validField(String field) {
+            if (field == null || field.isEmpty() || field.length() > 256) return false;
+            for (String segment : field.split("\\.", -1)) {
+                if (segment.isEmpty() || segment.length() > 64) return false;
+                for (int i = 0; i < segment.length(); i++) {
+                    char c = segment.charAt(i);
+                    boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                            || (c >= '0' && c <= '9') || c == '_';
+                    if (!ok) return false;
+                }
+            }
+            return true;
+        }
+
         private void add(String field, String op, String value) {
             if (field == null || field.isEmpty()) throw new IllegalArgumentException("field is required");
+            if (!validField(field)) throw new IllegalArgumentException("invalid field name");
             if (value == null) throw new IllegalArgumentException("value is required for " + field);
             // The wire format is field:op:value, so neither the field nor the operator may
             // contain the separator.

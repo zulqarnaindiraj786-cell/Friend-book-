@@ -21,7 +21,11 @@ const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
 
 // Field names are interpolated into a JSON path, so they must be strictly validated.
+// A dotted name selects a nested value (unreadCount.<uid>, activeCall.status). Every segment
+// is validated separately, so the dot can never be used to smuggle arbitrary text into the
+// generated JSON path.
 const FIELD_RE = /^[A-Za-z0-9_]{1,64}$/;
+const DOTTED_RE = /^[A-Za-z0-9_]{1,64}(\.[A-Za-z0-9_]{1,64}){1,3}$/;
 
 export class QueryError extends Error {
   constructor(message, status = 400) {
@@ -31,6 +35,7 @@ export class QueryError extends Error {
 }
 
 function jsonPath(field) {
+  if (DOTTED_RE.test(field)) return `$.${field}`;
   if (!FIELD_RE.test(field)) throw new QueryError('Invalid field name');
   return `$.${field}`;
 }
@@ -39,6 +44,11 @@ function jsonPath(field) {
 function orderField(field) {
   if (!FIELD_RE.test(field)) throw new QueryError('Invalid orderBy field');
   return field;
+}
+
+/** True when a field name can be used in a where clause, including a dotted path. */
+export function isQueryableField(field) {
+  return typeof field === 'string' && (FIELD_RE.test(field) || DOTTED_RE.test(field));
 }
 
 /**
@@ -55,7 +65,7 @@ export function parseWhere(raw) {
   const field = raw.slice(0, first);
   const op = raw.slice(first + 1, second);
   const value = raw.slice(second + 1);
-  if (!FIELD_RE.test(field)) throw new QueryError('Invalid where field');
+  if (!FIELD_RE.test(field) && !DOTTED_RE.test(field)) throw new QueryError('Invalid where field');
 
   const allowed = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin',
     'array_contains', 'array_contains_any', 'exists', 'not_exists']);
