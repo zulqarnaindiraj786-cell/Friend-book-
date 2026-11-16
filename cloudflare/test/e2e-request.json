@@ -1,4 +1,4 @@
 {
   "step": "run",
-  "note": "Live E2E run 2: the web API key comes from app/google-services.json (public client id, secret not set)."
+  "note": "Live E2E run 3: explicit User-Agent, because a bare urllib UA can be stopped by Cloudflare bot protection."
 }

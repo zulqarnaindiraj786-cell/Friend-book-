@@ -60,6 +60,10 @@ def http(method, url, body=None, token=None, timeout=45):
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header('Content-Type', 'application/json')
+    # A real UA: the worker's own domain sits behind Cloudflare, and a bare library UA can be
+    # answered by bot protection before the request ever reaches the Worker.
+    request.add_header('User-Agent', 'FriendBookE2E/1.0 (Android-compatible client)')
+    request.add_header('Accept', 'application/json')
     if token:
         request.add_header('Authorization', f'Bearer {token}')
     try:
