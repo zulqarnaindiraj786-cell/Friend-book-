@@ -283,44 +283,80 @@ def send_batch(collection, batch):
         return False
 
 def migrate_subcollections(fs_client):
-    """Migrate subcollections (comments on posts, messages in chats)"""
+    """Copy the two subcollections the app reads: comments on posts, messages in chats.
+
+    D1 is flat, so a subcollection row is stored in its own table under an id that
+    includes the parent: <chatId>_<messageId> for messages. That is exactly the id the app
+    writes, and the id it strips again before rendering, so the copy has to use the same
+    shape. A bare message id here would land rows the chat window never looks for, and the
+    conversation would look empty after the cutover.
+
+    Also stamps createdAtMs. The live client writes it, and it is the field the chat window
+    pages and sorts on, so a copied message without it cannot be ordered.
+    """
     print(f"\n{'='*60}")
     print(f"Migrating subcollections...")
     print(f"{'='*60}")
-    
-    # Comments on posts
-    posts = fs_client.collection("posts").limit(100).stream()
-    for post in posts:
-        comments = post.reference.collection("comments").stream()
+
+    def page_through(collection, description):
+        """Every document of a parent collection, paged, with no per-run cap."""
+        last = None
+        while True:
+            query = fs_client.collection(collection).order_by("__name__").limit(300)
+            if last is not None:
+                query = query.start_after(last)
+            batch_docs = with_retry(description, lambda: list(query.stream()))
+            if not batch_docs:
+                return
+            for doc in batch_docs:
+                yield doc
+            last = batch_docs[-1]
+
+    # Comments on posts -> comments
+    posts_seen = 0
+    for post in page_through("posts", "posts for comment copy"):
+        posts_seen += 1
+        comments = with_retry(f"comments of post {post.id}",
+                              lambda: list(post.reference.collection("comments").stream()))
+        if not comments:
+            continue
         batch = []
         for comment in comments:
             data = comment.to_dict()
-            data['__id'] = comment.id
-            data['postId'] = post.id
+            data["__id"] = comment.id
+            data["postId"] = post.id
             converted = {k: convert_firestore_value(v) for k, v in data.items()}
+            converted["__id"] = comment.id
             batch.append(converted)
-        
-        if batch:
-            if not send_batch("comments", batch):
-                raise MigrationError(f"Failed to upload comments for post {post.id}")
-            print(f"  ✓ Post {post.id}: {len(batch)} comments")
-    
-    # Messages in chats
-    chats = fs_client.collection("chats").limit(100).stream()
-    for chat in chats:
-        messages = chat.reference.collection("messages").stream()
+        if not send_batch("comments", batch):
+            raise MigrationError(f"Failed to upload comments for post {post.id}")
+        print(f"  ✓ Post {post.id}: {len(batch)} comments")
+    print(f"  comments copied from {posts_seen} posts")
+
+    # Messages in chats -> messages, keyed <chatId>_<messageId>
+    chats_seen = 0
+    for chat in page_through("chats", "chats for message copy"):
+        chats_seen += 1
+        messages = with_retry(f"messages of chat {chat.id}",
+                              lambda: list(chat.reference.collection("messages").stream()))
+        if not messages:
+            continue
         batch = []
         for message in messages:
             data = message.to_dict()
-            data['__id'] = message.id
-            data['chatId'] = chat.id
             converted = {k: convert_firestore_value(v) for k, v in data.items()}
+            # The flat id, then the parent id the window queries by.
+            converted["__id"] = f"{chat.id}_{message.id}"
+            converted["chatId"] = chat.id
+            if not converted.get("createdAtMs"):
+                converted["createdAtMs"] = converted.get("createdAt") or 0
+            if not converted.get("createdAt"):
+                converted["createdAt"] = converted.get("createdAtMs") or 0
             batch.append(converted)
-        
-        if batch:
-            if not send_batch("messages", batch):
-                raise MigrationError(f"Failed to upload messages for chat {chat.id}")
-            print(f"  ✓ Chat {chat.id}: {len(batch)} messages")
+        if not send_batch("messages", batch):
+            raise MigrationError(f"Failed to upload messages for chat {chat.id}")
+        print(f"  ✓ Chat {chat.id}: {len(batch)} messages")
+    print(f"  messages copied from {chats_seen} chats")
 
 def verify_counts(fs_client):
     """Verify document counts match between Firestore and D1"""

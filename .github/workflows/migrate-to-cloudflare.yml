@@ -36,11 +36,15 @@ permissions:
 
 env:
   # A push-triggered run has no workflow_dispatch inputs, so these defaults are what a
-  # push-run canary uses. They are deliberately the first, cheap step of the ladder:
-  # 100 documents from two collections only. Widen them by editing this block, never by
-  # dispatching from the UI - that is how a "canary" turned into a full dump before.
-  MIGRATION_MAX_DOCS_DEFAULT: '100'
-  MIGRATION_ONLY_DEFAULT: 'users,posts'
+  # push run uses. The canary rungs are done: everything the app reads now comes from D1,
+  # so a partial copy is worse than no copy - a collection left behind means a screen that
+  # is empty for every existing user. This is the full copy, every collection, no cap.
+  #
+  # MIGRATION_ONLY_DEFAULT lists the collections the copy script knows about. It is not
+  # "some of them": the script skips anything not named here, so a new collection has to
+  # be added in both places.
+  MIGRATION_MAX_DOCS_DEFAULT: '0'
+  MIGRATION_ONLY_DEFAULT: 'users,posts,chats,groups,friendRequests,notifications,stories,reels,comments'
   FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
   FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
   CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
