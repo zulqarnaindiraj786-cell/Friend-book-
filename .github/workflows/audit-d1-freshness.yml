@@ -15,10 +15,12 @@ name: Audit D1 Freshness
 # Read-only by construction: every statement below is a SELECT.
 
 on:
-  # No push trigger. It had one, and ten commits in one evening started eighteen runs, each
-  # scanning every collection several times over - about half a million rows read to answer a
-  # question that did not change between them. A diagnostic that spends the resource it is
-  # diagnosing must be asked for deliberately.
+  # Not on every push, and not dispatchable from CI (that returns 403). It runs only when its
+  # own definition changes: a diagnostic that spends the read budget it is diagnosing must be
+  # asked for on purpose, and touching this file is the deliberate act.
+  push:
+    paths:
+      - '.github/workflows/audit-d1-freshness.yml'
   workflow_dispatch:
 
 permissions:
