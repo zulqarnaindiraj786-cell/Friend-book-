@@ -80,7 +80,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private int feedGeneration;
     private long lastFeedFetch;
     private String feedAccount;
-    private Query feedQuery, storyQuery;
+    /** Story strip still pages with Firestore; the feed pages with a D1 DocQuery. */
+    private Query storyQuery;
+    private com.friendbook.social.core.DocQuery feedQuery;
     private DocumentSnapshot storyCursor;
     private boolean loadingStories, moreStories;
     private long lastStoryFetch;

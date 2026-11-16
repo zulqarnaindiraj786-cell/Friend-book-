@@ -196,16 +196,30 @@ public final class CloudflareStore {
      * never null, so callers can render "no results" without a separate error path.
      */
     public static void query(DocQuery query, Consumer<Page> callback) {
-        if (!enabled() || query == null || callback == null) return;
+        query(query, callback, null);
+    }
+
+    /**
+     * Runs a query, reporting a refusal as well as a result.
+     *
+     * <p>A refusal used to be delivered as an empty page, which is why every caller showed a
+     * blank list with no error: "the worker said no" and "there is nothing here" were the same
+     * value. An {@code onFailure} caller now gets the distinction.
+     */
+    public static void query(DocQuery query, Consumer<Page> callback, Runnable onFailure) {
+        if (!enabled() || query == null || callback == null) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
         FirebaseUser user = currentUser();
         if (user == null) {
-            MAIN.post(() -> callback.accept(emptyPage()));
+            refuse(callback, onFailure, emptyPage());
             return;
         }
         user.getIdToken(false).addOnSuccessListener(res -> {
             String token = res != null ? res.getToken() : null;
             if (token == null || token.isEmpty()) {
-                MAIN.post(() -> callback.accept(emptyPage()));
+                refuse(callback, onFailure, emptyPage());
                 return;
             }
             IO.execute(() -> {
@@ -218,12 +232,24 @@ public final class CloudflareStore {
                     String next = data != null ? data.optString("nextCursor", null) : null;
                     if (next != null && next.isEmpty()) next = null;
                     page = new Page(docs, data != null && data.optBoolean("hasMore", false), next);
-                } catch (Throwable ignored) {
-                    page = emptyPage();
+                } catch (Throwable refused) {
+                    MAIN.post(() -> { if (onFailure != null) onFailure.run(); });
+                    return;
                 }
                 final Page result = page;
                 MAIN.post(() -> callback.accept(result));
             });
+        }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+    }
+
+    /**
+     * Reports a refusal to the caller that can handle it, or - for a caller that cannot - hands
+     * back the empty page it would always have received.
+     */
+    private static void refuse(Consumer<Page> callback, Runnable onFailure, Page empty) {
+        MAIN.post(() -> {
+            if (onFailure != null) onFailure.run();
+            else if (callback != null) callback.accept(empty);
         });
     }
 
