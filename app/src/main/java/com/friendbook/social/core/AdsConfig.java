@@ -46,6 +46,23 @@ public class AdsConfig {
     public static final String REELS_NATIVE_ID = "ca-app-pub-3387480177023669/6468085788";
     public static final String REELS_UNIT_NAME = "Reels Native";
 
+    /**
+     * Meta Audience Network app + placement used through AdMob mediation.
+     *
+     * <p>These are deliberately not ad unit IDs. In a mediated setup the app requests the
+     * AdMob unit above, and AdMob's waterfall decides whether Meta answers; the adapter reads
+     * the Meta placement from the mediation group in the AdMob console, not from here. The
+     * IDs are kept so the manifest, the SDK initialiser and this class cannot drift apart -
+     * Meta refuses to fill if the initialised app ID differs from the one on the placement.
+     */
+    public static final String META_APP_ID = "4871960679794940";
+    public static final String META_PLACEMENT_ID = "4871960679794940_4871960806461594";
+
+    /** True when the Meta adapter is on the mediation path for this build. */
+    public static boolean metaMediationConfigured() {
+        return META_APP_ID.length() > 0 && META_PLACEMENT_ID.startsWith(META_APP_ID + "_");
+    }
+
     public static final String DEFAULT_INTERSTITIAL_ID = "";
 
     /** Official Google Docs Policy URL (Privacy Policy, Terms of Service & Zero-Tolerance CSAE Policy). */
