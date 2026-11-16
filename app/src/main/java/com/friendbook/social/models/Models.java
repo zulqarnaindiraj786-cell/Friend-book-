@@ -800,9 +800,13 @@ public class Models {
         }
 
         public static ChatRoom fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE));
+        }
+
+        /** Same mapping for a D1 document, so a chat renders the same from either store. */
+        public static ChatRoom fromMap(String id, Map<String, Object> m) {
             ChatRoom c = new ChatRoom();
-            Map<String, Object> m = d.getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE);
-            c.id = d.getId();
+            c.id = id;
             c.isGroup = Format.boolOf(m, "isGroup");
             c.groupName = Format.str(m, "groupName");
             c.groupPhoto = Format.str(m, "groupPhoto");
@@ -871,9 +875,13 @@ public class Models {
         }
 
         public static Group fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** Same mapping for a D1 document. */
+        public static Group fromMap(String id, Map<String, Object> m) {
             Group g = new Group();
-            Map<String, Object> m = d.getData();
-            g.id = d.getId();
+            g.id = id;
             g.name = Format.strOr(m, "name", "Group");
             g.about = Format.str(m, "about");
             g.category = Format.strOr(m, "category", "Community");
@@ -906,9 +914,13 @@ public class Models {
         public long createdAt;
 
         public static FriendRequest fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** Same mapping for a D1 document. */
+        public static FriendRequest fromMap(String id, Map<String, Object> m) {
             FriendRequest r = new FriendRequest();
-            Map<String, Object> m = d.getData();
-            r.id = d.getId();
+            r.id = id;
             r.fromUid = Format.str(m, "fromUid");
             r.fromName = Format.str(m, "fromUserName");
             r.fromPhoto = Format.str(m, "fromUserPhotoUrl");
@@ -925,9 +937,13 @@ public class Models {
         public long createdAt;
 
         public static Notif fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** Same mapping for a D1 document. */
+        public static Notif fromMap(String id, Map<String, Object> m) {
             Notif n = new Notif();
-            Map<String, Object> m = d.getData();
-            n.id = d.getId();
+            n.id = id;
             n.toUserId = Format.str(m, "toUserId");
             n.fromUserId = Format.str(m, "fromUserId");
             n.fromUserName = Format.strOr(m, "fromUserName", "Someone");

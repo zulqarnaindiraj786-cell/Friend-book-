@@ -34,13 +34,14 @@ import com.google.firebase.firestore.ListenerRegistration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /** Notifications tab: realtime list, unread highlight, mark-all-read, deep links. */
 public class NotificationsFragment extends Fragment {
 
     private NotifAdapter adapter;
     private ListenerRegistration reg;
-    private com.friendbook.social.core.CursorPager pager;
+    private com.friendbook.social.core.DocPager pager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private TextView moreButton;
     private TextView empty;
@@ -141,7 +142,14 @@ public class NotificationsFragment extends Fragment {
                 .limit(450).get().addOnSuccessListener(snap -> {
                     if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
                     com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
-                    for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
+                    for (DocumentSnapshot d : snap) {
+                        batch.update(d.getReference(), "isRead", true);
+                        // Marking read is per-document, and this walk already has each
+                        // reference in hand - mirroring the batch as a whole would lose 449 of
+                        // the 450 documents.
+                        com.friendbook.social.core.DataRouter.mirrorPutPath(
+                                d.getReference().getPath(), "isRead", true);
+                    }
                     batch.commit().addOnSuccessListener(v -> {
                         if (!me.equals(Fb.uid())) return;
                         markAllReadOptimisticNow();
@@ -178,13 +186,17 @@ public class NotificationsFragment extends Fragment {
         if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
         loadedActor = me;
         initialLoaded = true;
-        com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
-        if(unreadOnly)query=query.whereEqualTo("isRead",false);
-        pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
+        // D1, newest first. Ordering on the server means the client no longer receives an
+        // arbitrary 20 notifications and sorts them; it receives the newest 20, which is the
+        // difference between a usable inbox and one that looks empty.
+        com.friendbook.social.core.DocQuery.Builder nb=com.friendbook.social.core.DocQuery.of("notifications")
+                .whereEqualTo("toUserId",me).orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC);
+        if(unreadOnly)nb.whereEqualTo("isRead",false);
+        pager=new com.friendbook.social.core.DocPager(nb.build(),20,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
-            data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
+            data.clear();for(Map<String,Object> doc:docs){Models.Notif n=Models.Notif.fromMap(Format.str(doc,"id"),doc);if(allowedByPrefs(act,n.type))data.add(n);}
             Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
             if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
             adapter.notifyDataSetChanged();empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);

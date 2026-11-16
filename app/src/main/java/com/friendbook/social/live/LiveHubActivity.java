@@ -145,23 +145,24 @@ public class LiveHubActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("lives")
-                .whereEqualTo("status", "live")
-                .limit(40)
-                .addSnapshotListener((snap, err) -> {
+        // D1 read for the live board. With Firestore's network off this listener only replayed
+        // the local cache, so the board showed nothing to a viewer who had just installed.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("lives")
+                        .whereEqualTo("status", "live")
+                        .orderBy("startedAtMs", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(40).build(),
+                page -> {
                     allActiveLives.clear();
                     long now = System.currentTimeMillis();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            Map<String, Object> raw = d.getData();
-                            if (raw == null) continue;
-                            long hb = Format.longOf(raw, "lastHeartbeatMs");
-                            // Skip crashed/abandoned live rooms with stale heartbeats (> 2.5 min)
-                            if (hb > 0 && (now - hb) > 150_000L) continue;
-                            Map<String, Object> m = new HashMap<>(raw);
-                            m.put("_id", d.getId());
-                            allActiveLives.add(m);
-                        }
+                    for (Map<String, Object> raw : page.documents) {
+                        if (raw == null) continue;
+                        long hb = Format.longOf(raw, "lastHeartbeatMs");
+                        // Skip crashed/abandoned live rooms with stale heartbeats (> 2.5 min)
+                        if (hb > 0 && (now - hb) > 150_000L) continue;
+                        Map<String, Object> m = new HashMap<>(raw);
+                        m.put("_id", Format.str(raw, "id"));
+                        allActiveLives.add(m);
                     }
                     Collections.sort(allActiveLives, (a, b) -> {
                         int va = Math.max(Format.intOf(a, "viewers"), Format.intOf(a, "viewerCount"));
@@ -170,7 +171,7 @@ public class LiveHubActivity extends Activity {
                         return Long.compare(Format.longOf(b, "startedAtMs"), Format.longOf(a, "startedAtMs"));
                     });
                     renderCards();
-                });
+                }, () -> { });
     }
 
     @Override

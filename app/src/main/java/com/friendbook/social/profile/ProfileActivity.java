@@ -1397,11 +1397,27 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     if (w == 0) {
                         WriteBatch batch = Fb.db().batch();
                         batch.update(Fb.db().collection("friend_requests").document(incomingRequestId), "status", "accepted");
-                        batch.set(Fb.db().collection("friends").document(), Fb.map(
+                        com.google.firebase.firestore.DocumentReference newFriendRef =
+                                Fb.db().collection("friends").document();
+                        java.util.Map<String, Object> friendDoc = Fb.map(
                                 "participants", java.util.Arrays.asList(Fb.uid(), uid),
-                                "createdAt", FieldValue.serverTimestamp()));
+                                "createdAt", FieldValue.serverTimestamp());
+                        batch.set(newFriendRef, friendDoc);
+                        // The auto-id is reused so the friendship is one row, not two.
+                        com.friendbook.social.core.DataRouter.mirrorPut(
+                                "friends", newFriendRef.getId(), Fb.map(
+                                        "participants", java.util.Arrays.asList(Fb.uid(), uid)));
                         batch.update(Fb.db().collection("users").document(Fb.uid()), "friendsCount", FieldValue.increment(1));
                         batch.update(Fb.db().collection("users").document(uid), "friendsCount", FieldValue.increment(1));
+                        // Accepting from the profile is the same write as accepting from the
+                        // friends list; both must land in D1 or the count depends on where the
+                        // user tapped.
+                        com.friendbook.social.core.DataRouter.mirrorPut(
+                                "friend_requests", incomingRequestId, "status", "accepted");
+                        com.friendbook.social.core.DataRouter.mirrorOps("users", Fb.uid(),
+                                com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
+                        com.friendbook.social.core.DataRouter.mirrorOps("users", uid,
+                                com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
                         batch.commit().addOnSuccessListener(x -> {
                             Notify.send(uid, "friend_accept", "accepted your friend request");
                             Ui.toast(this, "You're now friends 🎉");

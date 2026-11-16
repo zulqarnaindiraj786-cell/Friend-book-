@@ -117,6 +117,92 @@ public final class DataRouter {
         if (!fields.isEmpty()) CloudflareStore.put(collection, docId, fields);
     }
 
+    /**
+     * Mirrors a write addressed by a Firestore path like {@code users/abc123}.
+     *
+     * <p>Batch writes hand the reference around as an argument, so there is no statement
+     * boundary to hang a mirror on. Taking the path keeps the mirror next to the reference it
+     * belongs to instead of guessing from the surrounding text.
+     */
+    public static void mirrorPutPath(String path, java.util.Map<String, Object> fields) {
+        String[] parts = splitPath(path);
+        if (parts != null) mirrorPut(parts[0], parts[1], fields);
+    }
+
+    /** Mirrors an {@code update(field, value, ...)} addressed by a Firestore path. */
+    public static void mirrorPutPath(String path, Object... fieldValuePairs) {
+        String[] parts = splitPath(path);
+        if (parts != null) mirrorPut(parts[0], parts[1], fieldValuePairs);
+    }
+
+    /** Mirrors a delete addressed by a Firestore path. */
+    public static void mirrorDeletePath(String path) {
+        String[] parts = splitPath(path);
+        if (parts != null) mirrorDelete(parts[0], parts[1]);
+    }
+
+    /**
+     * Returns {collection, docId}, or null when the path is not a single document.
+     *
+     * <p>Subcollection paths like {@code chats/a/messages/b} are rejected on purpose: the D1
+     * table is keyed by collection and id, so flattening them would put a message in the chat's
+     * table under a made-up id.
+     */
+    private static String[] splitPath(String path) {
+        if (path == null) return null;
+        int slash = path.indexOf('/');
+        if (slash <= 0 || slash == path.length() - 1) return null;
+        if (path.indexOf('/', slash + 1) >= 0) return null;
+        return new String[]{path.substring(0, slash), path.substring(slash + 1)};
+    }
+
+    /**
+     * Mirrors an {@code update(field, value, ...)} into D1.
+     *
+     * <p>Sentinel values are refused rather than written. {@code FieldValue.increment(1)} is an
+     * object, so a plain put stores the object and the counter reads as garbage forever. The
+     * sites that use sentinels call {@link #mirrorOps} with the operation spelled out instead.
+     */
+    public static void mirrorUpdate(String collection, String docId, Object... fieldValuePairs) {
+        if (!d1First(collection) || docId == null || docId.isEmpty()) return;
+        if (fieldValuePairs == null || fieldValuePairs.length < 2) return;
+        java.util.Map<String, Object> plain = new java.util.HashMap<>();
+        for (int i = 0; i + 1 < fieldValuePairs.length; i += 2) {
+            Object key = fieldValuePairs[i];
+            Object value = fieldValuePairs[i + 1];
+            if (!(key instanceof String)) continue;
+            if (value instanceof com.google.firebase.firestore.FieldValue) continue;
+            plain.put((String) key, value);
+        }
+        if (!plain.isEmpty()) CloudflareStore.put(collection, docId, plain);
+    }
+
+    /**
+     * Mirrors explicit atomic operations into D1.
+     *
+     * <p>These exist because the values a counter needs are not always expressible as a
+     * literal. The caller knows whether it is adding one, subtracting one, or adding this exact
+     * uid to a list, so it says so, and D1 applies it without reading the old value back.
+     */
+    public static void mirrorOps(String collection, String docId, org.json.JSONObject... ops) {
+        if (!d1First(collection) || docId == null || docId.isEmpty() || ops == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (org.json.JSONObject op : ops) if (op != null && op.length() > 0) arr.put(op);
+        if (arr.length() > 0) CloudflareStore.patch(collection, docId, arr);
+    }
+
+    /** Mirrors explicit atomic operations on a document named by a Firestore path. */
+    public static void mirrorOpsPath(String path, org.json.JSONObject... ops) {
+        String[] parts = splitPath(path);
+        if (parts != null) mirrorOps(parts[0], parts[1], ops);
+    }
+
+    /** Mirrors a plain (sentinel-free) update on a document named by a Firestore path. */
+    public static void mirrorUpdatePath(String path, Object... fieldValuePairs) {
+        String[] parts = splitPath(path);
+        if (parts != null) mirrorUpdate(parts[0], parts[1], fieldValuePairs);
+    }
+
     /** Mirrors a delete into D1. */
     public static void mirrorDelete(String collection, String docId) {
         if (!d1First(collection) || docId == null || docId.isEmpty()) return;

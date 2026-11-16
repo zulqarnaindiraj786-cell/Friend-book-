@@ -24,6 +24,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.friendbook.social.core.CfClient;
+import com.friendbook.social.core.CloudflareStore;
+import com.friendbook.social.core.DocQuery;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Format;
@@ -330,31 +332,24 @@ public class ConversationsActivity extends Activity {
         inboxActor = me;
         chatsListenerAttached = true;
 
-        // Query: all chats where current user is a participant
-        // Sort by lastMessageTime DESC in memory (Firestore can't do whereArrayContains + orderBy different field easily)
-        Query query = Fb.db().collection("chats")
+        // Read from D1. The Firestore listener is gone: with the network off it only ever
+        // replayed this device's cache, so a fresh install showed an empty inbox while the
+        // chats existed on the server. A DocQuery against D1 asks the source of truth.
+        DocQuery chatQuery = DocQuery.of("chats")
                 .whereArrayContains("participants", me)
-                .limit(100); // Load up to 100 chats for smooth scrolling
-
-        chatsReg = query.addSnapshotListener((snap, err) -> {
-            if (err != null || snap == null || isFinishing() || !java.util.Objects.equals(me, Fb.uid())) return;
-
-            // Process document changes incrementally - NEVER clear the list
-            for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
-                DocumentSnapshot d = change.getDocument();
-                String chatId = d.getId();
-
-                Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
-                        .getStringSet("hiddenChats", new HashSet<>());
-                if (hiddenChats.contains(chatId)) {
-                    // Remove if was hidden
-                    if (change.getType() != com.google.firebase.firestore.DocumentChange.Type.ADDED) {
-                        removeRoom(chatId);
-                    }
-                    continue;
-                }
-
-                Models.ChatRoom room = Models.ChatRoom.fromDoc(d);
+                .orderBy("lastMessageTimeMs", DocQuery.DESC)
+                .limit(DocQuery.MAX_LIMIT).build();
+        CloudflareStore.query(chatQuery, page -> {
+            if (isFinishing() || !java.util.Objects.equals(me, Fb.uid())) return;
+            List<Map<String, Object>> docs = page.documents;
+            Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
+                    .getStringSet("hiddenChats", new HashSet<>());
+            List<String> seen = new ArrayList<>();
+            for (Map<String, Object> d : docs) {
+                String chatId = Format.str(d, "id");
+                if (chatId.isEmpty()) continue;
+                if (hiddenChats.contains(chatId)) continue;
+                Models.ChatRoom room = Models.ChatRoom.fromMap(chatId, d);
                 String other = room.otherUid(me);
                 if (!room.isGroup && other.isEmpty()) continue;
                 if (!room.isGroup && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(other)) continue;
@@ -362,34 +357,22 @@ public class ConversationsActivity extends Activity {
                 Room r = new Room();
                 r.room = room;
                 r.other = other;
-
                 Object u = d.get("unreadCount");
                 if (u instanceof Map) {
                     Object n = ((Map<?, ?>) u).get(me);
                     if (n instanceof Number) r.unread = ((Number) n).intValue();
                 }
+                seen.add(chatId);
+                upsertRoom(r);
 
-                if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
-                    removeRoom(chatId);
-                } else {
-                    // ADDED or MODIFIED - upsert
-                    upsertRoom(r);
-                }
-
-                // Load user profile for 1:1 chats
                 if (!room.isGroup && !Ui.TEAM_USER_ID.equals(other) && !userCache.containsKey(other)) {
-                    Fb.getUser(other).addOnSuccessListener(us -> {
-                        if (us != null) {
-                            com.friendbook.social.core.FastCache.putUser(us);
-                            userCache.put(other, us);
-                            renderActiveNow();
-                            applyFilterAndSort();
-                        }
-                    });
+                    loadChatUser(other);
                 }
             }
+            // Rooms the server no longer returns are gone; without this a deleted chat stayed
+            // in the list until the app was restarted.
+            allRooms.removeIf(r -> !seen.contains(r.room.id));
 
-            // Update cache
             List<Models.ChatRoom> toCache = new ArrayList<>();
             for (Room r : allRooms) toCache.add(r.room);
             com.friendbook.social.core.FastCache.saveChats(toCache);
@@ -398,9 +381,22 @@ public class ConversationsActivity extends Activity {
             conversationsCache.put(cacheKey, new ArrayList<>(allRooms));
             conversationsCacheAt.put(cacheKey, android.os.SystemClock.elapsedRealtime());
 
-            // Sort and filter (this triggers DiffUtil in adapter)
             sortAndFilterRooms();
             renderActiveNow();
+        }, () -> {
+            // A refusal is not an empty inbox: keep whatever is on screen and stop silently.
+            chatsListenerAttached = false;
+        });
+    }
+
+    private void loadChatUser(String other) {
+        com.friendbook.social.core.CloudflareStore.get("users", other, us -> {
+            if (us == null || isFinishing()) return;
+            Models.User user = Models.User.fromMap(other, us);
+            com.friendbook.social.core.FastCache.putUser(user);
+            userCache.put(other, user);
+            renderActiveNow();
+            applyFilterAndSort();
         });
     }
 

@@ -8,7 +8,15 @@ const ALLOWED_COLLECTIONS = new Set([
   'users', 'posts', 'reels', 'stories', 'chats', 'messages',
   'friends', 'friend_requests', 'follows', 'groups', 'pages',
   'notifications', 'official_broadcasts', 'lives', 'pokes',
+  // Live broadcast chat packets. Firestore kept these in a subcollection; D1 is flat, so they
+  // are keyed by liveId and queried with whereEqualTo("liveId", ...).
+  'live_chat', 'comments', 'subscriptions',
 ]);
+
+// Field names come from the client and are interpolated into a JSON path, so they are
+// restricted to plain identifiers. A dotted or crafted name would address elsewhere in the
+// document, or break out of the '$.' prefix entirely.
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 function validSegment(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 128
@@ -243,6 +251,79 @@ export async function appDocuments(request, env, identity) {
       return json({ id: docId, deleted: true });
     } catch {
       return json({ error: 'Document delete unavailable' }, 503);
+    }
+  }
+
+  if (request.method === 'PATCH') {
+    // Atomic field operations. Firestore's increment/arrayUnion/arrayRemove cannot be
+    // expressed as a plain document PUT: sending the sentinel object would store it
+    // literally, and read-modify-write in the app would lose concurrent updates. So the
+    // read, the arithmetic and the write all happen inside one D1 statement pair, and two
+    // callers incrementing the same counter both count.
+    let patch;
+    try { patch = await request.json(); }
+    catch { return json({ error: 'Invalid JSON payload' }, 400); }
+    const ops = patch && Array.isArray(patch.ops) ? patch.ops : null;
+    if (!ops || ops.length === 0 || ops.length > 32) {
+      return json({ error: 'ops array required' }, 400);
+    }
+    const now = Date.now();
+    try {
+      for (const op of ops) {
+        if (!op || typeof op.field !== 'string' || !FIELD_NAME.test(op.field)) {
+          return json({ error: 'Invalid field' }, 400);
+        }
+        const field = op.field;
+        if (op.increment !== undefined) {
+          const amount = Number(op.increment);
+          if (!Number.isFinite(amount)) return json({ error: 'Invalid increment' }, 400);
+          // Read-modify-write inside one statement is not possible for a JSON blob, so the
+          // arithmetic uses SQLite's own JSON functions on the stored value.
+          await env.DB.prepare(
+            `UPDATE friendbook_cf_documents
+                SET document_json = json_set(
+                      document_json,
+                      '$.' || ?,
+                      COALESCE(json_extract(document_json, '$.' || ?), 0) + ?),
+                    updated_at = ?
+              WHERE path = ?`
+          ).bind(field, field, amount, now, docPath).run();
+        } else if (op.arrayUnion !== undefined || op.arrayRemove !== undefined) {
+          const adding = op.arrayUnion !== undefined;
+          const values = adding ? op.arrayUnion : op.arrayRemove;
+          if (!Array.isArray(values)) return json({ error: 'Invalid array operation' }, 400);
+          const row = await env.DB.prepare(
+            'SELECT document_json FROM friendbook_cf_documents WHERE path = ?'
+          ).bind(docPath).first();
+          if (!row) return json({ error: 'Not found' }, 404);
+          const current = toPlainDocument(row.document_json, docId) || {};
+          const existing = Array.isArray(current[field]) ? current[field] : [];
+          const wanted = values.map(String);
+          const next = adding
+            ? [...existing, ...wanted.filter(v => !existing.includes(v))]
+            : existing.filter(v => !wanted.includes(v));
+          await env.DB.prepare(
+            'UPDATE friendbook_cf_documents SET document_json = json_set(document_json, ?, json(?)), updated_at = ? WHERE path = ?'
+          ).bind(`$.${field}`, JSON.stringify(next), now, docPath).run();
+        } else {
+          await env.DB.prepare(
+            'UPDATE friendbook_cf_documents SET document_json = json_set(document_json, ?, json(?)), updated_at = ? WHERE path = ?'
+          ).bind(`$.${field}`, JSON.stringify(op.value === undefined ? null : op.value), now, docPath).run();
+        }
+        const changed = await env.DB.prepare('SELECT changes() AS n').first();
+        if (!changed || changed.n === 0) {
+          // A counter for a document that does not exist yet must not silently vanish.
+          return json({ error: 'Not found' }, 404);
+        }
+      }
+      getDbMap(docCache, env.DB).delete(docPath);
+      getDbMap(listCache, env.DB).clear();
+      const fresh = await env.DB.prepare(
+        'SELECT document_json FROM friendbook_cf_documents WHERE path = ?'
+      ).bind(docPath).first();
+      return json({ id: docId, document: fresh ? toPlainDocument(fresh.document_json, docId) : null });
+    } catch {
+      return json({ error: 'Document patch unavailable' }, 503);
     }
   }
 

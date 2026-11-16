@@ -183,11 +183,17 @@ public class AdminPaymentsFragment extends Fragment {
         WriteBatch batch = Fb.db().batch();
         batch.update(d.getReference(), "status", "approved",
                 "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
+        // serverTimestamp is a sentinel; D1 additionally stamps updatedAt on its own, so the
+        // approval time is recorded either way.
+        com.friendbook.social.core.DataRouter.mirrorUpdatePath(d.getReference().getPath(),
+                "status", "approved", "approvedBy", Fb.uid());
 
         if (type != null && type.startsWith("tick_")) {
             String level = type.substring(5);
             batch.set(Fb.db().collection("users").document(uid),
                     Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
+            com.friendbook.social.core.DataRouter.mirrorPut("users", uid,
+                    Fb.map("tickLevel", level, "isVerified", true));
         } else if ("subscription".equals(type)) {
             String subId = Format.str(m, "subscriptionId");
             if (!subId.isEmpty()) {
@@ -195,6 +201,10 @@ public class AdminPaymentsFragment extends Fragment {
                 batch.update(su, "status", "active",
                         "expiry", new com.google.firebase.Timestamp(
                                 new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
+                // The expiry is computed here rather than by the server, so D1 gets the same
+                // instant instead of a client-side clock read at a different moment.
+                com.friendbook.social.core.DataRouter.mirrorPut("subscriptions", subId,
+                        Fb.map("status", "active", "expiry", System.currentTimeMillis() + 30L * 24 * 3600 * 1000));
             }
         }
         batch.commit().addOnSuccessListener(x -> {

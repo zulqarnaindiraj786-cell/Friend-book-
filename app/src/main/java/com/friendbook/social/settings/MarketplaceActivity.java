@@ -408,12 +408,24 @@ public class MarketplaceActivity extends Activity {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("chats").document(chatId).collection("messages").document(), msg);
-        batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
+        // document() with no id asks Firestore for an auto-id, so the first message id is read
+        // back and reused for D1. Generating a second id here would file the message under a
+        // different key in each store.
+        com.google.firebase.firestore.DocumentReference firstMsgRef =
+                Fb.db().collection("chats").document(chatId).collection("messages").document();
+        batch.set(firstMsgRef, msg);
+        Map<String, Object> chatMeta = Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,
                 "lastMessageTimeMs", now,
-                "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
+                "lastMessageTime", FieldValue.serverTimestamp());
+        batch.set(Fb.db().collection("chats").document(chatId), chatMeta, SetOptions.merge());
+        com.friendbook.social.core.DataRouter.mirrorPut(
+                "messages", chatId + "_" + firstMsgRef.getId(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
+                "participants", Arrays.asList(me, p.authorId),
+                "lastMessage", text,
+                "lastMessageTimeMs", now));
         batch.commit().addOnSuccessListener(x -> {
             Intent i = new Intent(this, ChatActivity.class);
             i.putExtra("uid", p.authorId);

@@ -1027,7 +1027,11 @@ public class SettingsActivity extends Activity {
         String me = Fb.uid();
         if (me == null) return;
         Ui.toast(this, "Loading your account summary…");
-        com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+        // Counting from D1: with Firestore's network off, the count came from the local cache
+        // and read as zero on any device that had not cached every post.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("posts").whereEqualTo("authorId", me).limit(com.friendbook.social.core.DocQuery.MAX_LIMIT).build(),
+                counted -> { int totalPosts = counted.documents.size();
                     if(isFinishing() || isDestroyed())return;
                     Models.User u = Fb.me;
                     Ui.info(this, "📋 Your friendbook information",
@@ -1042,6 +1046,12 @@ public class SettingsActivity extends Activity {
                                     + "• Stars balance: " + (u != null ? u.stars : 0) + " ⭐\n"
                                     + "• Saved reels/highlights: " + (u != null ? u.highlightStoryIds.size() : 0));
                 });
+    }
+
+    /** Reads an integer field from a D1 document, defaulting to zero. */
+    private static int num(Map<String, Object> doc, String field) {
+        Object v = doc == null ? null : doc.get(field);
+        return v instanceof Number ? ((Number) v).intValue() : 0;
     }
 
     private void storageDialog() {
@@ -1117,8 +1127,10 @@ public class SettingsActivity extends Activity {
         Ui.choose(this, "Download your information",
                 new String[]{"📄 Readable text summary", "{ } JSON format (portable)"}, fmt -> {
                     Ui.toast(this, "Preparing your data export…");
-                    Fb.db().collection("users").document(me).get().addOnSuccessListener(d -> {
-                        Map<String, Object> m = d.getData();
+                    // The data export must read the profile from the same place the app does.
+                    // Asking Firestore returned an empty document on a fresh install, so "export
+                    // my data" produced a file with nothing in it.
+                    com.friendbook.social.core.CloudflareStore.get("users", me, m -> {
                         StringBuilder sb = new StringBuilder();
                         if (fmt == 1) {
                             sb.append("{\n  \"exportedAt\": \"").append(new Date()).append("\",\n");
@@ -1145,7 +1157,7 @@ public class SettingsActivity extends Activity {
                         share.setType("text/plain");
                         share.putExtra(Intent.EXTRA_TEXT, sb.toString());
                         startActivity(Intent.createChooser(share, "Export your data"));
-                    }).addOnFailureListener(e -> Ui.toast(this, "Export failed"));
+                    });
                 });
     }
 
@@ -1159,13 +1171,15 @@ public class SettingsActivity extends Activity {
 
     private void verifiedInsights() {
         Ui.toast(this, "Calculating insights…");
-        Fb.db().collection("posts").whereEqualTo("authorId", Fb.uid()).limit(300).get()
-                .addOnSuccessListener(snap -> {
-                    int posts = snap.size(), likes = 0, comments = 0, shares = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Long l = d.getLong("likes"); if (l != null) likes += l;
-                        Long c = d.getLong("comments"); if (c != null) comments += c;
-                        Long s = d.getLong("shares"); if (s != null) shares += s;
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("authorId", Fb.uid()).limit(com.friendbook.social.core.DocQuery.MAX_LIMIT).build(),
+                page -> {
+                    int posts = page.documents.size(), likes = 0, comments = 0, shares = 0;
+                    for (Map<String, Object> d : page.documents) {
+                        likes += num(d, "likes");
+                        comments += num(d, "comments");
+                        shares += num(d, "shares");
                     }
                     Models.User me = Fb.me;
                     Ui.info(this, "📊 Creator & Profile Insights",

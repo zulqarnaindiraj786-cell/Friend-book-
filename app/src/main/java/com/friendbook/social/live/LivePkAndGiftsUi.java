@@ -777,11 +777,11 @@ public final class LivePkAndGiftsUi {
         sheet.addView(sv, new LinearLayout.LayoutParams(-1, Ui.dp(a, 270)));
 
         final List<Models.User> friendUsers = new ArrayList<>();
-        Fb.db().collection("users").limit(50).get().addOnSuccessListener(snap -> {
-            if (a.isFinishing() || snap == null) return;
+        com.friendbook.social.core.CloudflareStore.list("users", 50, found -> {
+            if (a.isFinishing() || found == null) return;
             listCol.removeAllViews();
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
+            for (Map<String, Object> d : found) {
+                Models.User u = Models.User.fromMap(Format.str(d, "id"), d);
                 if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
                 if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
                 FastCache.putUser(u);
@@ -1029,24 +1029,25 @@ public final class LivePkAndGiftsUi {
         Ui.pad(loading, 4, 10, 4, 10);
         listCol.addView(loading);
 
-        Fb.db().collection("lives").whereEqualTo("status", "live").limit(25).get()
-                .addOnSuccessListener(snap -> {
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("lives")
+                        .whereEqualTo("status", "live").limit(25).build(),
+                page -> {
                     if (a.isFinishing()) return;
                     listCol.removeAllViews();
                     otherLiveRooms.clear();
                     long now = System.currentTimeMillis();
 
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            if (myLiveId.equals(d.getId())) continue;
-                            Map<String, Object> m = d.getData();
+                    {
+                        for (Map<String, Object> m : page.documents) {
+                            if (myLiveId.equals(Format.str(m, "id"))) continue;
                             if (m == null) continue;
                             String hUid = Format.str(m, "hostId");
                             if (hUid.isEmpty() || hUid.equals(me)) continue;
                             long hb = Format.longOf(m, "lastHeartbeatMs");
                             if (hb > 0 && (now - hb) > 150_000L) continue;
                             Map<String, Object> copy = new HashMap<>(m);
-                            copy.put("_id", d.getId());
+                            copy.put("_id", Format.str(m, "id"));
                             otherLiveRooms.add(copy);
                         }
                     }
@@ -1113,11 +1114,11 @@ public final class LivePkAndGiftsUi {
                     // 3. Invite Any Friend via Inbox Live Video Card!
                     final LinearLayout friendsSecCol = Ui.col(a);
                     listCol.addView(friendsSecCol);
-                    Fb.db().collection("users").limit(25).get().addOnSuccessListener(uSnap -> {
+                    com.friendbook.social.core.CloudflareStore.list("users", 25, uSnap -> {
                         if (a.isFinishing() || uSnap == null) return;
                         List<Models.User> fList = new ArrayList<>();
-                        for (DocumentSnapshot ud : uSnap.getDocuments()) {
-                            Models.User u = Models.User.fromDoc(ud);
+                        for (Map<String, Object> ud : uSnap) {
+                            Models.User u = Models.User.fromMap(Format.str(ud, "id"), ud);
                             if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
                             if (candidates.containsKey(u.uid)) continue;
                             if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;

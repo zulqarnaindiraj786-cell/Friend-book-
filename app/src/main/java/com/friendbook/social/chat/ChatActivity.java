@@ -757,12 +757,21 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
             Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
             batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
+            // Messages live in one D1 collection keyed by "chatId_messageId", which is the same
+            // shape the send path already writes. The nested Firestore path cannot be flattened
+            // to that, so the id is built here.
+            com.friendbook.social.core.DataRouter.mirrorPut("messages", chatId + "_" + m.id, patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
         
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
         batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
+        // FieldPath targets unreadCount.<me>, a per-member counter. Writing the whole
+        // unreadCount map from D1 would need the other members' values, so only this member's
+        // key is set.
+        com.friendbook.social.core.DataRouter.mirrorOps("chats", chatId,
+                com.friendbook.social.core.CloudflareStore.set("unreadCount", Fb.map(me, 0)));
         batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
     }
 
@@ -928,6 +937,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The message is addressed by its reference, so its D1 id comes from the same id the
+        // Firestore document gets - a different id here would make the two stores disagree
+        // about which message a reply belongs to.
+        com.friendbook.social.core.DataRouter.mirrorPut(
+                "messages", chatId + "_" + msgRef.getId(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
@@ -1024,6 +1039,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The message is addressed by its reference, so its D1 id comes from the same id the
+        // Firestore document gets - a different id here would make the two stores disagree
+        // about which message a reply belongs to.
+        com.friendbook.social.core.DataRouter.mirrorPut(
+                "messages", chatId + "_" + msgRef.getId(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit()
                 .addOnSuccessListener(x -> {
@@ -1108,6 +1129,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
+        // The message is addressed by its reference, so its D1 id comes from the same id the
+        // Firestore document gets - a different id here would make the two stores disagree
+        // about which message a reply belongs to.
+        com.friendbook.social.core.DataRouter.mirrorPut(
+                "messages", chatId + "_" + msgRef.getId(), msg);
+        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());

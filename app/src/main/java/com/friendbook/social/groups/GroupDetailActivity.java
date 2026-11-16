@@ -68,6 +68,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     private String id;
     private Models.Group group;
     private ListenerRegistration gReg, pReg;
+    private com.friendbook.social.core.DocPager groupPostsPager;
 
     // Header & Action UI
     private ImageView coverIv, groupIconIv;
@@ -271,37 +272,42 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     @Override
     protected void onStart() {
         super.onStart();
-        gReg = Fb.db().collection("groups").document(id)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) { finish(); return; }
-                    group = Models.Group.fromDoc(d);
-                    renderGroupHeader();
-                    refreshActiveTabView();
-                });
+        // Both reads now come from D1. The group document uses CloudflareStore.get so an
+        // opened group does not page the whole collection, and the posts use a query.
+        com.friendbook.social.core.CloudflareStore.get("groups", id, doc -> {
+            if (doc == null) { finish(); return; }
+            group = Models.Group.fromMap(id, doc);
+            renderGroupHeader();
+            refreshActiveTabView();
+        });
+        loadGroupPosts();
+    }
 
-        // Single-field whereEqualTo("groupId", id) so ZERO manual composite index is needed!
-        pReg = Fb.db().collection("posts")
-                .whereEqualTo("groupId", id)
-                .limit(120)
-                .addSnapshotListener((snap, err) -> {
+    private void loadGroupPosts() {
+        if (groupPostsPager != null) groupPostsPager.close();
+        groupPostsPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("groupId", id)
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .build(),
+                50, (docs, more, loading, error) -> {
                     approvedPosts.clear();
                     pendingPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            Models.Post p = Models.Post.fromDoc(d);
-                            if (p.archived || p.trashedAt > 0) continue;
-                            if ("pending".equals(p.groupApprovalStatus)) {
-                                pendingPosts.add(p);
-                            } else if (!"declined".equals(p.groupApprovalStatus)) {
-                                approvedPosts.add(p);
-                            }
+                    for (Map<String, Object> d : docs) {
+                        Models.Post p = Models.Post.fromMap(Format.str(d, "id"), d);
+                        if (p.archived || p.trashedAt > 0) continue;
+                        if ("pending".equals(p.groupApprovalStatus)) {
+                            pendingPosts.add(p);
+                        } else if (!"declined".equals(p.groupApprovalStatus)) {
+                            approvedPosts.add(p);
                         }
                     }
                     Collections.sort(approvedPosts, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     Collections.sort(pendingPosts, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     renderGroupHeader();
                     refreshActiveTabView();
-                });
+                }, () -> { });
+        groupPostsPager.start();
     }
 
     @Override
@@ -309,6 +315,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         super.onStop();
         if (gReg != null) gReg.remove();
         if (pReg != null) pReg.remove();
+        if (groupPostsPager != null) { groupPostsPager.close(); groupPostsPager = null; }
     }
 
     private void renderGroupHeader() {
@@ -552,10 +559,10 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         box.addView(peopleCol);
         final Set<String> selected = new LinkedHashSet<>();
 
-        Fb.db().collection("users").limit(200).get().addOnSuccessListener(snap -> {
-            if (snap == null || isFinishing()) return;
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
+        com.friendbook.social.core.CloudflareStore.list("users", 200, found -> {
+            if (found == null || isFinishing()) return;
+            for (Map<String, Object> d : found) {
+                Models.User u = Models.User.fromMap(Format.str(d, "id"), d);
                 if (group.members.contains(u.uid) || group.bannedMemberIds.contains(u.uid) || u.banned) continue;
                 LinearLayout row = Ui.row(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);

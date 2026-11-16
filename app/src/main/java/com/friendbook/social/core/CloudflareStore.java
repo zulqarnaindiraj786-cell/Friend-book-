@@ -37,7 +37,10 @@ public final class CloudflareStore {
     private static final android.util.LruCache<String, Long> LIST_CACHE_AT = new android.util.LruCache<>(16);
 
     public static boolean enabled() {
-        return BuildConfig.D1_INTERACTIONS_ENABLED;
+        // Both flags, not just the interactions one. The master switch is the rollback lever,
+        // and a store that keeps serving while the app has been switched off Firebase is a
+        // rollback that does not roll back.
+        return BuildConfig.D1_INTERACTIONS_ENABLED && BuildConfig.CLOUDFLARE_DATA_ENABLED;
     }
 
     public static JSONObject toJson(Map<String, Object> map) {
@@ -151,6 +154,101 @@ public final class CloudflareStore {
         } catch (Throwable refused) {
             if (onFailure != null) MAIN.post(onFailure);
         }
+    }
+
+    /**
+     * Applies atomic field operations to one document.
+     *
+     * <p>Counters and member lists were written with Firestore's {@code increment} and
+     * {@code arrayUnion} sentinels. Those are objects, not numbers, so a plain PUT stored the
+     * sentinel itself and the counter became garbage. Reading the value here and writing it
+     * back would lose concurrent updates instead, so the worker does the arithmetic.
+     */
+    public static void patch(String collection, String docId, JSONArray ops) {
+        patch(collection, docId, ops, null, null);
+    }
+
+    public static void patch(String collection, String docId, JSONArray ops,
+                             Runnable onSuccess, Runnable onFailure) {
+        if (!enabled() || collection == null || docId == null || docId.isEmpty() || ops == null
+                || ops.length() == 0) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("ops", ops);
+        } catch (Throwable ignored) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
+        try {
+            FirebaseUser user = Fb.auth().getCurrentUser();
+            if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
+            user.getIdToken(false).addOnSuccessListener(res -> {
+                String token = res != null ? res.getToken() : null;
+                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
+                IO.execute(() -> {
+                    try {
+                        URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
+                        D1HttpTransport.send(url, "PATCH", token, body);
+                        LIST_CACHE.evictAll();
+                        LIST_CACHE_AT.evictAll();
+                        if (onSuccess != null) MAIN.post(onSuccess);
+                    } catch (Throwable refused) {
+                        if (onFailure != null) MAIN.post(onFailure);
+                    }
+                });
+            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        } catch (Throwable refused) {
+            if (onFailure != null) MAIN.post(onFailure);
+        }
+    }
+
+    /** Builds one {@code increment} operation for {@link #patch}. */
+    public static JSONObject increment(String field, double amount) {
+        JSONObject op = new JSONObject();
+        try {
+            op.put("field", field);
+            op.put("increment", amount);
+        } catch (Throwable ignored) { }
+        return op;
+    }
+
+    /** Builds one {@code arrayUnion} operation for {@link #patch}. */
+    public static JSONObject arrayUnion(String field, Object... values) {
+        JSONObject op = new JSONObject();
+        try {
+            op.put("field", field);
+            op.put("arrayUnion", toJsonArray(values));
+        } catch (Throwable ignored) { }
+        return op;
+    }
+
+    /** Builds one {@code arrayRemove} operation for {@link #patch}. */
+    public static JSONObject arrayRemove(String field, Object... values) {
+        JSONObject op = new JSONObject();
+        try {
+            op.put("field", field);
+            op.put("arrayRemove", toJsonArray(values));
+        } catch (Throwable ignored) { }
+        return op;
+    }
+
+    /** Builds one plain set operation for {@link #patch}. */
+    public static JSONObject set(String field, Object value) {
+        JSONObject op = new JSONObject();
+        try {
+            op.put("field", field);
+            op.put("value", value == null ? JSONObject.NULL : value);
+        } catch (Throwable ignored) { }
+        return op;
+    }
+
+    private static JSONArray toJsonArray(Object... values) {
+        JSONArray arr = new JSONArray();
+        for (Object v : values) if (v != null) arr.put(String.valueOf(v));
+        return arr;
     }
 
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {

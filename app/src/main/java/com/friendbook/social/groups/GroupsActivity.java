@@ -23,6 +23,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
@@ -50,6 +51,7 @@ public class GroupsActivity extends Activity {
     };
 
     private ListenerRegistration reg;
+    private com.friendbook.social.core.DocPager groupPager;
     private final List<Models.Group> allGroups = new ArrayList<>();
     private final List<Models.Group> visible = new ArrayList<>();
     private GroupAdapter adapter;
@@ -147,20 +149,25 @@ public class GroupsActivity extends Activity {
     }
     private void startGroupPages() {
         if(reg!=null)reg.remove();
-        com.google.firebase.firestore.Query groupQuery=Fb.db().collection("groups");
-        if(tabMode==1)groupQuery=groupQuery.whereArrayContains("members",Fb.uid());
-        if(tabMode==2)groupQuery=groupQuery.whereArrayContains("invitedUids",Fb.uid());
-        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,groupQuery,20,"groups:"+tabMode,(snap,err)-> {
+        if(groupPager!=null){groupPager.close();groupPager=null;}
+        com.friendbook.social.core.DocQuery.Builder groupQuery=com.friendbook.social.core.DocQuery.of("groups")
+                .orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC);
+        if(tabMode==1)groupQuery.whereArrayContains("members",Fb.uid());
+        if(tabMode==2)groupQuery.whereArrayContains("invitedUids",Fb.uid());
+        // D1 instead of a Firestore listener: with the network off that listener only replayed
+        // this device's cache, so a new install showed no groups at all.
+        groupPager=new com.friendbook.social.core.DocPager(groupQuery.build(),20,(docs,more,loading,error)->{
                     allGroups.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            allGroups.add(Models.Group.fromDoc(d));
-                        }
+                    for (Map<String,Object> d : docs) {
+                        allGroups.add(Models.Group.fromMap(Format.str(d,"id"),d));
                     }
                     Collections.sort(allGroups, (a, b) -> Long.compare(b.createdAt, a.createdAt));
                     updateInviteBadge();
                     applyFilter();
+                }, () -> {
+                    // A refusal keeps the current list rather than clearing it.
                 });
+        groupPager.start();
     }
 
     private void updateInviteBadge() {
@@ -200,6 +207,7 @@ public class GroupsActivity extends Activity {
     protected void onStop() {
         super.onStop();
         if (reg != null) reg.remove();
+        if (groupPager != null) { groupPager.close(); groupPager = null; }
     }
 
     private void createDialog() {

@@ -27,6 +27,15 @@ public class Notify {
                 Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
         batch.set(Fb.db().collection("users").document(me),
                 Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
+        // The two halves are one batch in Firestore. D1 has no cross-document transaction, so
+        // they are two atomic patches: each is correct on its own, and a failure between them
+        // leaves one side updated rather than both wrong.
+        DataRouter.mirrorOps("users", toUid, following
+                ? CloudflareStore.arrayUnion("followers", me)
+                : CloudflareStore.arrayRemove("followers", me));
+        DataRouter.mirrorOps("users", me, following
+                ? CloudflareStore.arrayUnion("following", toUid)
+                : CloudflareStore.arrayRemove("following", toUid));
         batch.commit().addOnSuccessListener(v -> {
             if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
         }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
