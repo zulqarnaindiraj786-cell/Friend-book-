@@ -145,6 +145,7 @@ def main() -> int:
     newest_overall = 0
     oldest_overall = 0
 
+    lines: list[str] = []
     for row in rows:
         collection = row.get("collection", "?")
         total = int(row.get("total") or 0)
@@ -155,9 +156,12 @@ def main() -> int:
         oldest_overall = min(oldest_overall, oldest) if oldest_overall else oldest
 
         minutes = int((now_ms - newest) / 60000) if newest > 0 else None
-        print(
-            f"::notice::{collection}: {total} docs | newest {iso(newest)} "
-            f"({age_phrase(minutes)}) | oldest {iso(oldest)}"
+        # Kept as data rather than an annotation: GitHub drops everything after the tenth
+        # annotation on a check run, and the totals and verdict below matter more than any
+        # single line here.
+        lines.append(
+            f"  {collection:<14} {total:>5} docs  newest {iso(newest)} ({age_phrase(minutes)})"
+            f"  oldest {iso(oldest)}"
         )
         if minutes is not None and 0 <= minutes <= 60 * 24:
             fresh.append(collection)
@@ -165,10 +169,21 @@ def main() -> int:
             stale.append(collection)
 
     total_minutes = int((now_ms - newest_overall) / 60000) if newest_overall > 0 else None
-    print(
-        f"::notice::ALL COLLECTIONS: {total_rows} docs | newest {iso(newest_overall)} "
-        f"({age_phrase(total_minutes)}) | oldest {iso(oldest_overall)}"
-    )
+
+    # Everything above goes into the job summary, which is the readable artifact.
+    summary = [
+        "## D1 freshness",
+        "",
+        f"Audited {iso(now_ms)} (D1 server clock).",
+        "",
+        f"**{total_rows} documents** across {len(rows)} collections. Newest write "
+        f"{iso(newest_overall)} ({age_phrase(total_minutes)}), oldest {iso(oldest_overall)}.",
+        "",
+        "```",
+        *lines,
+        "```",
+        "",
+    ]
 
     # 2. Coverage of the projection tables, which carry no timestamps.
     parts = []
@@ -180,19 +195,36 @@ def main() -> int:
             parts.append(f"{table}=?")
             print(f"::warning::{table}: {error}")
     print("::notice::projection row counts: " + ", ".join(parts))
+    summary += ["Projection row counts (no timestamps): " + ", ".join(parts), ""]
 
     # 3. The verdict, stated plainly so the log answers the question on its own.
     if fresh:
-        print(
-            "::notice::VERDICT: D1 is being written to now — "
+        verdict = (
+            "D1 is being written to now — "
             + ", ".join(sorted(fresh))
             + " each have a document newer than 24 h. This is the live store."
         )
     else:
-        print(
-            "::notice::VERDICT: no collection has been written to in the last 24 h. "
+        verdict = (
+            "No collection has been written to in the last 24 h. "
             "D1 looks like a finished copy rather than the live store."
         )
+
+    # The headline numbers, in the two annotations that fit.
+    print(
+        f"::notice::D1 holds {total_rows} documents across {len(rows)} collections; "
+        f"newest {iso(newest_overall)} ({age_phrase(total_minutes)}), oldest {iso(oldest_overall)}"
+    )
+    print(f"::notice::VERDICT: {verdict}")
+    summary += [f"**Verdict:** {verdict}", ""]
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(summary) + "\n")
+
+    # Also on stdout, for anyone reading the raw log.
+    print("\n".join(lines))
     return 0
 
 
