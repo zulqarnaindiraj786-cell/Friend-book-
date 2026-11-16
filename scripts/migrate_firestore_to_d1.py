@@ -147,6 +147,30 @@ def is_quota_refusal(exc):
     return "resourceexhausted" in text or "resource exhausted" in text or "quota exceeded" in text
 
 
+def report_identity(fs_client):
+    """Print which project the reads are actually billed to.
+
+    A 429 says "quota exceeded" without saying whose quota. If the service account belongs to
+    a different project than the one being watched in the console, the console shows almost no
+    usage while every read is refused, and no amount of waiting fixes it. These three values
+    are IDs, not credentials, and they are the whole difference between those two cases.
+    """
+    try:
+        print(f"Firestore client project: {fs_client.project}")
+    except Exception as exc:
+        print(f"Firestore client project: unavailable ({type(exc).__name__})")
+    source = SERVICE_ACCOUNT
+    if source and source.lstrip().startswith("{"):
+        try:
+            info = json.loads(source)
+            email = str(info.get("client_email", ""))
+            print(f"Service account project_id: {info.get('project_id')}")
+            print(f"Service account domain: {email.split('@')[-1] if '@' in email else 'unknown'}")
+        except Exception as exc:
+            print(f"Service account unreadable: {type(exc).__name__}")
+    print(f"FIREBASE_PROJECT_ID: {PROJECT_ID}")
+
+
 def probe_firestore(fs_client):
     """One cheap read to prove the project is readable before any bulk walk.
 
@@ -451,6 +475,7 @@ def main():
         print(f"service account file exists: {os.path.exists(SERVICE_ACCOUNT)}")
         return 5
     print("✓ Firebase initialized")
+    report_identity(fs_client)
     if not probe_firestore(fs_client):
         print("ERROR: Firestore is not readable from this runner; nothing was copied.")
         return 6
