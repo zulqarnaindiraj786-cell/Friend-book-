@@ -134,24 +134,27 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        // One read. A comment thread does not need push: the only writer that matters is the
-        // reader themself, and their comment is added locally the moment it is sent.
-        handle.add(handle.query.limit(50).get().addOnSuccessListener(page -> {
+        // One read, no subscription. This branch is the Firestore compatibility path, so the
+        // snapshot keeps its Firestore shape; the D1 path above is the one the app uses.
+        handle.query.limit(50).get().addOnSuccessListener(page -> {
             if(!handle.active() || page == null) return;
             handle.older.putAll(handle.latest);
             handle.latest.clear();
-            for(com.friendbook.social.core.Doc doc:page.getDocuments()) {
-                Models.Comment c=Models.Comment.fromMap(doc.getId(),doc.getData());
+            for(DocumentSnapshot doc:page.getDocuments()) {
+                Models.Comment c=Models.Comment.fromDoc(doc);
                 handle.latest.put(c.id,c);
                 handle.deleted.remove(c.id);
             }
-            // D1 returns stored documents, so the first page is always server truth.
-            if(!handle.cursorReady) {
+            if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
                 handle.cursorReady=true; handle.more=page.size()==50;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();
-        }));
+        }).addOnFailureListener(e -> {
+            if(!handle.active()) return;
+            handle.error="Comments unavailable. Reopen to retry.";
+            handle.emit();
+        });
         return handle;
     }
 

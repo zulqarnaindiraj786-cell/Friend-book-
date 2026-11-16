@@ -5,8 +5,13 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class RemainingPaging(unittest.TestCase):
     def test_remaining_screen_controls_and_cache_adapter(self):
         # Groups reads D1 now, so it keeps its own DocPager; the rest still page Firestore.
-        for name in ['social/PageDetailActivity.java','social/PokesActivity.java','settings/ArchiveTrashActivity.java','chat/NewChatActivity.java','friends/BirthdaysActivity.java','settings/FeedPreferencesActivity.java']:
+        for name in ['social/PageDetailActivity.java','social/PokesActivity.java','settings/ArchiveTrashActivity.java','chat/NewChatActivity.java','friends/BirthdaysActivity.java']:
             source=(JAVA/name).read_text();self.assertIn('PagedLists.attach',source);self.assertIn('pageControls',source)
+        # Feed preferences needs friend ids, not an endless list, so it reads one D1 page.
+        prefs=(JAVA/'settings/FeedPreferencesActivity.java').read_text()
+        self.assertIn('D1Snap.read(',prefs)
+        self.assertNotIn('PagedLists.attach',prefs)
+        self.assertNotIn('addSnapshotListener',prefs)
         groups=(JAVA/'groups/GroupsActivity.java').read_text()
         self.assertIn('new com.friendbook.social.core.DocPager(groupQuery.build(),20',groups)
         self.assertIn('groupPager.start()',groups)

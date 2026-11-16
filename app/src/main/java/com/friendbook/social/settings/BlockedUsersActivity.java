@@ -58,7 +58,7 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
     }
 
     private final Fb.MeObserver meObserver = d -> {
-                    Models.User me2 = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+                    Models.User me2 = d != null && d.exists() ? Models.User.fromMap(d.getId(), d.getData()) : Fb.me;
                     if (me2 == null) return;
                     List<UsersAdapter.Row> rows = new ArrayList<>();
                     if (me2.blocked.isEmpty()) {

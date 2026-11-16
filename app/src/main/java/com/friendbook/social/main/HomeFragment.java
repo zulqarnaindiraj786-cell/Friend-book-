@@ -420,11 +420,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             return;
         }
         // 15 is plenty for a horizontal strip; the extra 15 were never rendered.
-        Fb.db().collection("users").limit(15).get().addOnSuccessListener(snap -> {
+        com.friendbook.social.core.D1Snap.read("users", 15, snap -> {
             notesFetchedAt = android.os.SystemClock.elapsedRealtime();
             noteUsers.clear();
             long now = System.currentTimeMillis();
-            if (snap != null) {
+            {
                 for (com.friendbook.social.core.Doc d : snap.getDocuments()) {
                     Models.User u = Models.User.fromMap(d.getId(), d.getData());
                     FastCache.putUser(u);
@@ -802,7 +802,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             allVisible.add(p);
             if (matchesFilter(p, filter)) filtered.add(p);
         }
-        if (docs != null) for (DocumentSnapshot d : docs) {
+        if (docs != null) for (com.friendbook.social.core.Doc d : docs) {
             if (d.getId() != null && !seenIds.add(d.getId())) continue;
             if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) {
                 com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(

@@ -504,7 +504,7 @@ public class MenuFragment extends Fragment {
 
     private final Fb.MeObserver meObserver = doc -> {
         if (getActivity() == null) return;
-        Models.User u = doc != null && doc.exists() ? Models.User.fromDoc(doc) : Fb.me;
+        Models.User u = doc != null && doc.exists() ? Models.User.fromMap(doc.getId(), doc.getData()) : Fb.me;
         renderHeader(u);
     };
 

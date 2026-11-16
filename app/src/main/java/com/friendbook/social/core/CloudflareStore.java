@@ -159,7 +159,7 @@ public final class CloudflareStore {
     /** How long a successful count is reused before asking D1 again. */
     private static final long COUNT_TTL_MS = 60_000L;
     private static final java.util.Map<String, long[]> COUNT_CACHE = new java.util.HashMap<>();
-    private static final java.util.Map<String, java.util.Map<String, Object>> COUNT_VALUES = new java.util.HashMap<>();
+    private static final java.util.Map<String, Long> COUNT_VALUES = new java.util.HashMap<>();
 
     /**
      * Counts matching documents without listing them, and remembers the answer.
@@ -207,7 +207,7 @@ public final class CloudflareStore {
                         }
                         synchronized (COUNT_VALUES) {
                             COUNT_CACHE.put(key, new long[]{android.os.SystemClock.elapsedRealtime()});
-                            COUNT_VALUES.put(key, total);
+                            COUNT_VALUES.put(key, Long.valueOf(total));
                         }
                         final long value = total;
                         MAIN.post(() -> callback.accept(value));

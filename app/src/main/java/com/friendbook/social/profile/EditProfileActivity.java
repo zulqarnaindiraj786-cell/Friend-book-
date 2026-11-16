@@ -193,7 +193,7 @@ public class EditProfileActivity extends Activity {
     }
 
     private final Fb.MeObserver meObserver = d -> {
-                    Models.User u = d != null && d.exists() ? Models.User.fromDoc(d) : Fb.me;
+                    Models.User u = d != null && d.exists() ? Models.User.fromMap(d.getId(), d.getData()) : Fb.me;
                     if (u != null) applyUser(u);
     };
 

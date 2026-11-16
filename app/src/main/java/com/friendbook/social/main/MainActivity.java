@@ -721,18 +721,17 @@ public class MainActivity extends Activity {
                 });
 
         // Video / Reels badge (capped at 15+ via Ui.setBadge)
-        Fb.db().collection("reels")
-                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
-                .limit(16)
-                .get()
-                .addOnSuccessListener(snap -> {
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("reels")
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(16).build(), snap -> {
                     if (Prefs.quiet(this) || active == TAB_REELS) {
                         Ui.setBadge(reelsBadge, 0);
                         return;
                     }
                     long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
                     int unseen = 0;
-                    if (snap != null) {
+                    {
                         for (com.friendbook.social.core.Doc d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {

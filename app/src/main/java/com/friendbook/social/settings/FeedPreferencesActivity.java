@@ -16,7 +16,6 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.UsersAdapter;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
@@ -148,17 +147,19 @@ public class FeedPreferencesActivity extends Activity {
         if (me == null) { finish(); return; }
         // Shares the session-wide users/{me} listener.
         Fb.observeMe(meObserver);
-        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("friends").whereArrayContains("participants",me),20,"feed-preference-friends",(snap,err)-> {
+        // One bounded read. This screen only needs the friend ids to draw a list of names, so
+        // paging it was extra requests for data that fits in a single page.
+        com.friendbook.social.core.D1Snap.read(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants", me)
+                        .limit(com.friendbook.social.core.DocQuery.MAX_LIMIT).build(), snap -> {
                     friends.clear();
-                    if (snap != null) {
-                        List<String> ids = new ArrayList<>();
-                        for (DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                            for (String p : parts) if (!p.equals(me)) ids.add(p);
-                        }
-                        loadUsers(ids);
+                    List<String> ids = new ArrayList<>();
+                    for (com.friendbook.social.core.Doc d : snap) {
+                        List<String> parts = Models.ChatRoom.fromMap(d.getId(), d.getData()).participants;
+                        for (String p : parts) if (!p.equals(me)) ids.add(p);
                     }
+                    loadUsers(ids);
                 });
     }
 
@@ -175,14 +176,18 @@ public class FeedPreferencesActivity extends Activity {
             return;
         }
         friends.clear();
-        for (List<String> chunk : Ui.chunks(ids, 10)) {
-            Fb.db().collection("users").whereIn(
-                    com.google.firebase.firestore.FieldPath.documentId(), chunk)
-                    .limit(10).get().addOnSuccessListener(snap -> {
-                        for (DocumentSnapshot d : snap) friends.add(Models.User.fromDoc(d));
-                        render();
-                    });
-        }
+        // D1 has no "id in (...)" filter, so read the page and keep only these ids. The friend
+        // list is capped at one page, so this is still a single request.
+        com.friendbook.social.core.D1Snap.read("users",
+                com.friendbook.social.core.DocQuery.MAX_LIMIT, snap -> {
+                    java.util.Set<String> wanted = new HashSet<>(ids);
+                    for (com.friendbook.social.core.Doc d : snap) {
+                        if (wanted.contains(d.getId())) {
+                            friends.add(Models.User.fromMap(d.getId(), d.getData()));
+                        }
+                    }
+                    render();
+                });
     }
 
     private void render() {
