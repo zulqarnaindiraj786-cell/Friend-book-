@@ -80,14 +80,30 @@ public final class CloudflareStore {
     }
 
     public static void put(String collection, String docId, Map<String, Object> fields, Runnable onSuccess) {
-        if (!enabled() || collection == null || docId == null || docId.isEmpty() || fields == null) return;
+        put(collection, docId, fields, onSuccess, null);
+    }
+
+    /**
+     * Writes a document, reporting both outcomes.
+     *
+     * <p>The one-callback form silently did nothing whenever the worker refused, the token was
+     * missing or the request threw - which is indistinguishable from success for the caller and
+     * is how a write could disappear with no error anywhere. A caller that passes
+     * {@code onFailure} is told, so it can retry or route the write elsewhere.
+     */
+    public static void put(String collection, String docId, Map<String, Object> fields,
+                           Runnable onSuccess, Runnable onFailure) {
+        if (!enabled() || collection == null || docId == null || docId.isEmpty() || fields == null) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
         final JSONObject body = toJson(fields);
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
+            if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
             user.getIdToken(false).addOnSuccessListener(res -> {
                 String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
+                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
                 IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
@@ -95,14 +111,33 @@ public final class CloudflareStore {
                         LIST_CACHE.evictAll();
                         LIST_CACHE_AT.evictAll();
                         if (onSuccess != null) MAIN.post(onSuccess);
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable refused) {
+                        if (onFailure != null) MAIN.post(onFailure);
+                    }
                 });
-            });
-        } catch (Throwable ignored) { }
+            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        } catch (Throwable refused) {
+            if (onFailure != null) MAIN.post(onFailure);
+        }
     }
 
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {
-        if (!enabled() || collection == null || callback == null) return;
+        list(collection, limit, callback, null);
+    }
+
+    /**
+     * Lists a collection, reporting a refusal as well as a result.
+     *
+     * <p>Without {@code onFailure} a caller cannot tell "the worker said no" from "the
+     * collection is empty", and every such caller in this app ended up showing a blank list.
+     * A caller that passes it can stop its spinner and say something true.
+     */
+    public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback,
+                            Runnable onFailure) {
+        if (!enabled() || collection == null || callback == null) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
         final int safeLimit = Math.max(1, Math.min(DocQuery.MAX_LIMIT, limit));
         final String cacheKey = collection + ":" + safeLimit;
         long now = android.os.SystemClock.elapsedRealtime();
@@ -114,10 +149,10 @@ public final class CloudflareStore {
         }
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
+            if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
             user.getIdToken(false).addOnSuccessListener(res -> {
                 String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
+                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
                 IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + safeLimit);
@@ -127,10 +162,14 @@ public final class CloudflareStore {
                         LIST_CACHE.put(cacheKey, docs);
                         LIST_CACHE_AT.put(cacheKey, android.os.SystemClock.elapsedRealtime());
                         MAIN.post(() -> callback.accept(docs));
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable refused) {
+                        if (onFailure != null) MAIN.post(onFailure);
+                    }
                 });
-            });
-        } catch (Throwable ignored) { }
+            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        } catch (Throwable refused) {
+            if (onFailure != null) MAIN.post(onFailure);
+        }
     }
 
     /** A page of results from the document store. */
@@ -193,12 +232,20 @@ public final class CloudflareStore {
      * success, which makes retries safe.
      */
     public static void delete(String collection, String docId, Runnable onSuccess) {
-        if (!enabled() || collection == null || docId == null || docId.isEmpty()) return;
+        remove(collection, docId, onSuccess, null);
+    }
+
+    /** Deletes a document, reporting both outcomes. See {@link #put} for why. */
+    public static void remove(String collection, String docId, Runnable onSuccess, Runnable onFailure) {
+        if (!enabled() || collection == null || docId == null || docId.isEmpty()) {
+            if (onFailure != null) MAIN.post(onFailure);
+            return;
+        }
         FirebaseUser user = currentUser();
-        if (user == null) return;
+        if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
         user.getIdToken(false).addOnSuccessListener(res -> {
             String token = res != null ? res.getToken() : null;
-            if (token == null || token.isEmpty()) return;
+            if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
             IO.execute(() -> {
                 try {
                     URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
@@ -206,9 +253,11 @@ public final class CloudflareStore {
                     LIST_CACHE.evictAll();
                     LIST_CACHE_AT.evictAll();
                     if (onSuccess != null) MAIN.post(onSuccess);
-                } catch (Throwable ignored) { }
+                } catch (Throwable refused) {
+                    if (onFailure != null) MAIN.post(onFailure);
+                }
             });
-        });
+        }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
     }
 
     /**

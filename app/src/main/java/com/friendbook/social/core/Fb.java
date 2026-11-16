@@ -33,6 +33,8 @@ public class Fb {
     private static FirebaseDatabase rtdb;
     private static boolean rtdbTried;
     private static boolean firestoreConfigured;
+    /** Latched once Firestore's network has been switched off for this process. */
+    private static boolean firestoreNetworkOff;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
     private static long meLastRefresh;
@@ -50,12 +52,55 @@ public class Fb {
                 FirebaseFirestore.getInstance().setFirestoreSettings(settings);
             } catch (Throwable ignored) { }
         }
+        // The data plane is D1. Firestore's network is switched off below, so this must run
+        // before anything has a chance to open a listener.
+        if (com.friendbook.social.BuildConfig.CLOUDFLARE_DATA_ENABLED) {
+            disableFirestoreNetwork();
+        }
         // Instant 0ms cold-start hydration of signed-in user from local snapshot
         String currentUid = uid();
         Models.User cachedMe = FastCache.getMe();
         if (currentUid != null && cachedMe != null && currentUid.equals(cachedMe.uid)) {
             me = cachedMe;
         }
+    }
+
+    /**
+     * Switches Firestore's network off for the whole process.
+     *
+     * <p>This is the actual "Firebase off, D1 on" switch. Firebase Auth, FCM, Crashlytics and
+     * App Check all keep working - they are separate Firebase products with their own
+     * transports, and disabling Firestore's network touches none of them.
+     *
+     * <p>What it stops: every snapshot listener and every query in this app reads Firestore,
+     * and a disabled network means those operations fail from the local cache instead of
+     * spending the daily read quota. With the Spark allowance exhausted, that is the difference
+     * between an app that shows cached content and one that hangs on a refused request.
+     *
+     * <p>What it does not do: it does not delete anything, on device or in the cloud. The
+     * Firestore database is untouched and still holds every document; re-enabling the network
+     * is a one-line revert. Writes that still target Firestore go to the local write queue and
+     * are flushed if the network is ever re-enabled, so nothing is lost either way.
+     */
+    private static void disableFirestoreNetwork() {
+        try {
+            if (firestoreNetworkOff) return;
+            firestoreNetworkOff = true;
+            FirebaseFirestore.getInstance().disableNetwork()
+                    .addOnSuccessListener(v -> android.util.Log.i("Fb",
+                            "Firestore network disabled: data plane is Cloudflare D1"))
+                    .addOnFailureListener(err -> {
+                        firestoreNetworkOff = false;
+                        android.util.Log.w("Fb", "Could not disable the Firestore network");
+                    });
+        } catch (Throwable unavailable) {
+            android.util.Log.w("Fb", "Could not disable the Firestore network");
+        }
+    }
+
+    /** True once Firestore's network has been switched off for this process. */
+    public static boolean isFirestoreNetworkOff() {
+        return firestoreNetworkOff;
     }
 
     public static FirebaseAuth auth() { return FirebaseAuth.getInstance(); }

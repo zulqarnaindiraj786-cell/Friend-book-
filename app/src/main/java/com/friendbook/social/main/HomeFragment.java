@@ -701,33 +701,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             }
             if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
         });
-        // 3. One-shot Firestore reels query (cache first, then network)
-        featuredReelsFetchedAt = android.os.SystemClock.elapsedRealtime();
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
-                .get(Source.CACHE)
-                .addOnSuccessListener(cacheSnap -> {
-                    if (!isAdded() || cacheSnap == null) return;
-                    boolean changed = false;
-                    for (DocumentSnapshot d : cacheSnap.getDocuments()) {
-                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
-                    }
-                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
-                });
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    featuredReelsLoading = false;
-                    featuredReelsLoaded = true;
-                    if (!isAdded() || snap == null) return;
-                    boolean changed = false;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
-                    }
-                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
-                })
-                .addOnFailureListener(err -> featuredReelsLoading = false);
+        // No Firestore query behind this. The card is filled from D1 and from cached video
+        // posts; a third source only ever added reads, and could put a Reel on screen whose id
+        // no longer exists in the store the app writes to.
+        featuredReelsLoading = false;
+        featuredReelsLoaded = true;
     }
 
     private boolean addFeaturedReelCandidate(Models.Reel r) {
@@ -761,60 +739,56 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final int generation=++feedGeneration;
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
-        com.friendbook.social.core.CloudflareStore.list("posts", PAGE, docs -> {
+        // One query object drives both the first page and every later page, so the cursor the
+        // worker hands back is always understood by the request that uses it. This used to be
+        // a Cloudflare list() for page 1 and a Firestore cursor for page 2.
+        feedQuery = com.friendbook.social.core.DocQuery.of("posts")
+                .orderByDescending("createdAt")
+                .limit(PAGE)
+                .build();
+        com.friendbook.social.core.CloudflareStore.query(feedQuery, page -> {
             if (generation != feedGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded()) return;
-            cfPosts.clear();
-            if (docs != null) {
-                for (Map<String, Object> m : docs) {
+            loadingPosts = false;
+            loadedPosts = true;
+            lastFeedFetch = android.os.SystemClock.elapsedRealtime();
+            moreAvailable = page != null && page.hasMore;
+            List<Models.Post> fresh = new ArrayList<>();
+            if (page != null) {
+                loadedPostIds.clear();
+                for (Map<String, Object> m : page.documents) {
                     String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
-                    if (!id.isEmpty()) cfPosts.add(Models.Post.fromMap(id, m));
+                    if (id.isEmpty()) continue;
+                    loadedPostIds.add(id);
+                    if (Boolean.TRUE.equals(m.get("safetyFlagged"))) continue;
+                    fresh.add(Models.Post.fromMap(id, m));
                 }
             }
-            if (loadedPosts || !cfPosts.isEmpty()) {
-                loadingPosts = false;
-                loadedPosts = true;
-                consumePostsSnapshot(lastPostDocs, ordered, true);
-            }
+            updatePagingUi();
+            consumePostsFresh(fresh, ordered);
+        }, () -> {
+            if (generation != feedGeneration || !isAdded()) return;
+            loadingPosts = false;
+            pageError = true;
+            updatePagingUi();
         });
-        Query query=Fb.db().collection("posts");
-        // Same ordering/cursor is retained for subsequent pages, including the fallback.
-        query=ordered?query.orderBy("createdAt",Query.Direction.DESCENDING)
-                :query.orderBy(com.google.firebase.firestore.FieldPath.documentId());
-        feedQuery=query;
-        final Query first=query.limit(PAGE);
-        if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
-            if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty())
-                consumePostsSnapshot(cache.getDocuments(),ordered,false);
-        });
-        first.get().addOnSuccessListener(snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingPosts=false;updatePagingUi(); loadedPosts=true;
-            lastFeedFetch=android.os.SystemClock.elapsedRealtime();
-            loadedPostIds.clear();
-            for(DocumentSnapshot doc:snapshot.getDocuments()) loadedPostIds.add(doc.getId());
-            moreAvailable=snapshot.size()==PAGE;
-            if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
-            consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
-        }).addOnFailureListener(error -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
-            loadingPosts=false;pageError=true;updatePagingUi();
-            boolean refused = com.friendbook.social.core.QuotaGuard.noteFailure(error);
-            if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); return; }
-            // The server refused us (quota spent / unreachable). Showing an empty feed here is
-            // what makes users think their data is gone, so fall back to whatever was cached
-            // on disk before saying anything.
-            if(refused) {
-                if(renderCachedFeed()) {
-                    if(getActivity()!=null) Ui.toast(getActivity(),
-                            com.friendbook.social.core.QuotaGuard.userMessage(getActivity()));
-                    return;
-                }
-                if(getActivity()!=null) Ui.toast(getActivity(),
-                        com.friendbook.social.core.QuotaGuard.userMessage(getActivity()));
-                return;
-            }
-            if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
-        });
+    }
+
+    /**
+     * Shows a freshly-read D1 page. Kept separate from the cached render path because this one
+     * is authoritative: it replaces the list rather than merging into it.
+     */
+    private void consumePostsFresh(List<Models.Post> posts, boolean ordered) {
+        if (adapter == null) return;
+        adapter.setPosts(posts);
+        sessionOrderIds.clear();
+        lastPostDocs = new ArrayList<>();
+        for (Models.Post post : posts) {
+            if (post != null && post.id != null) sessionOrderIds.add(post.id);
+        }
+        FastCache.saveFeed(getActivity(), posts);
+        if (posts.isEmpty()) adapter.notifyDataSetChanged();
+        if (!ordered) return;
+        loadFeaturedReelsForHome();
     }
 
     /**
@@ -1063,34 +1037,35 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public void loadMore() {
-        if(loadingPosts)return;
-        if(lastDoc==null){if(pageError)restartPostsListener();return;}
-        if(!moreAvailable || feedQuery==null){
-            return;
-        }
-        pageError=false;loadingPosts=true;updatePagingUi();
-        final int generation=feedGeneration; final String actor=feedAccount;
-        feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingPosts=false;
-            moreAvailable=snapshot.size()==PAGE;
-            if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
-            List<Models.Post> page=new ArrayList<>();
-            String filter=Prefs.feedFilter(getActivity());
-            for(DocumentSnapshot doc:snapshot.getDocuments()) {
-                if(!loadedPostIds.add(doc.getId())) continue;
-                Models.Post post=Models.Post.fromDoc(doc);
-                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                if(visible(post) && matchesFilter(post,filter)) { page.add(post); sessionOrderIds.add(post.id); }
+        if (loadingPosts) return;
+        if (lastDoc == null) { if (pageError) restartPostsListener(); return; }
+        if (!moreAvailable || feedQuery == null) return;
+        pageError = false; loadingPosts = true; updatePagingUi();
+        final int generation = feedGeneration; final String actor = feedAccount;
+        // Page from D1, with the same query shape the first page used. Firestore's cursor used
+        // to drive this, which meant page 2 could come from a different database than page 1.
+        com.friendbook.social.core.CloudflareStore.query(feedQuery, page -> {
+            if (generation != feedGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded()) return;
+            loadingPosts = false;
+            moreAvailable = page != null && page.hasMore;
+            List<Models.Post> out = new ArrayList<>();
+            String filter = Prefs.feedFilter(getActivity());
+            if (page != null) {
+                for (Map<String, Object> m : page.documents) {
+                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
+                    if (id.isEmpty() || !loadedPostIds.add(id)) continue;
+                    if (Boolean.TRUE.equals(m.get("safetyFlagged"))) continue;
+                    Models.Post post = Models.Post.fromMap(id, m);
+                    if (visible(post) && matchesFilter(post, filter)) {
+                        out.add(post);
+                        sessionOrderIds.add(post.id);
+                    }
+                }
             }
-            pageError=moreAvailable && page.isEmpty();
-            adapter.addPosts(page);
+            pageError = moreAvailable && out.isEmpty();
+            adapter.addPosts(out);
             updatePagingUi();
-            // Also refresh footer on empty/filtered final pages. No automatic drain loop.
-            if (page.isEmpty()) adapter.notifyDataSetChanged();
-        }).addOnFailureListener(error -> {
-            if(generation!=feedGeneration) return;
-            loadingPosts=false;pageError=true;updatePagingUi();
+            if (out.isEmpty()) adapter.notifyDataSetChanged();
         });
     }
 
