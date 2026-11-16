@@ -31,6 +31,7 @@ public final class DocPager {
     private final int size;
     private final String actor;
     private final Listener listener;
+    private final Runnable onFailure;
     private final LinkedHashMap<String, Map<String, Object>> records = new LinkedHashMap<>();
 
     private String cursor;
@@ -38,11 +39,20 @@ public final class DocPager {
     private boolean loading;
     private boolean closed;
 
-    public DocPager(DocQuery base, int size, Listener listener) {
+    /**
+     * @param onFailure run instead of the listener when a page is refused; may be null when the
+     *                  caller has nothing useful to say. A refusal never advances the cursor.
+     */
+    public DocPager(DocQuery base, int size, Listener listener, Runnable onFailure) {
         this.base = base;
         this.size = Math.max(1, Math.min(DocQuery.MAX_LIMIT, size));
         this.actor = Fb.uid();
         this.listener = listener;
+        this.onFailure = onFailure;
+    }
+
+    public DocPager(DocQuery base, int size, Listener listener) {
+        this(base, size, listener, null);
     }
 
     public void start() {
@@ -73,8 +83,10 @@ public final class DocPager {
         }, () -> {
             if (!active()) return;
             loading = false;
-            // The cursor is deliberately not advanced: the caller can retry this same page.
+            // The cursor is deliberately not advanced, so a retry asks for the same rows rather
+            // than quietly skipping the page that failed.
             emit("Couldn't load this page. Tap to retry.");
+            if (onFailure != null) onFailure.run();
         });
     }
 
