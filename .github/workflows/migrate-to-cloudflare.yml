@@ -306,6 +306,18 @@ jobs:
             *) echo "::error::/v1/admin/migrate is not routed (HTTP $code). Deploy the worker first: Actions -> Deploy existing Cloudflare Worker."; exit 1 ;;
           esac
 
+      # What is actually refusing us. The gRPC path reports only "Quota exceeded.", with no
+      # metric and no retry hint, and a per-minute cap cannot be told apart from a
+      # project-level block without that. This asks over REST, where the failure body names
+      # the quota, and checks whether a managed export can run instead - an export is billed
+      # to Storage and costs no document reads at all.
+      - name: Diagnose Firestore Access
+        continue-on-error: true
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: python3 -u scripts/probe_firestore_access.py
+
       - name: Run Firestore to D1 Migration
         env:
           CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
