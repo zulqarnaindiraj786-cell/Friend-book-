@@ -31,6 +31,10 @@ on:
 
 permissions:
   contents: read
+  # The result is posted back as a comment: Actions logs live on a host that tooling
+  # outside the runner cannot always reach, but an issue comment is readable everywhere.
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: friendbook-d1-document-rebuild
@@ -86,43 +90,73 @@ jobs:
           python3 -m unittest discover -s scripts/tests -p 'test_rebuild_mapping_parity.py'
           python3 -m unittest discover -s scripts/tests -p 'test_document_rebuild_tool.py'
 
-      - name: Read-only flow (plan + posts dry run, writes nothing)
-        if: steps.request.outputs.step == 'flow' && steps.request.outputs.apply != 'true'
+      - name: Run the request
+        id: work
+        if: steps.request.outputs.step != 'none'
+        continue-on-error: true
         run: |
-          python3 scripts/admin/rebuild_documents_d1.py flow | tee rebuild-output.json
+          set +e
+          STEP="${{ steps.request.outputs.step }}"
+          APPLY="${{ steps.request.outputs.apply }}"
+          COLLECTION="${{ steps.request.outputs.collection }}"
+          case "$STEP" in
+            flow)
+              if [ "$APPLY" = "true" ]; then
+                python3 scripts/admin/rebuild_documents_d1.py flow --apply > rebuild-output.json 2> rebuild-error.log
+              else
+                python3 scripts/admin/rebuild_documents_d1.py flow > rebuild-output.json 2> rebuild-error.log
+              fi ;;
+            plan)
+              python3 scripts/admin/rebuild_documents_d1.py plan > rebuild-output.json 2> rebuild-error.log ;;
+            dry-run)
+              python3 scripts/admin/rebuild_documents_d1.py run "$COLLECTION" > rebuild-output.json 2> rebuild-error.log ;;
+            verify)
+              python3 scripts/admin/rebuild_documents_d1.py verify "$COLLECTION" > rebuild-output.json 2> rebuild-error.log ;;
+            *)
+              echo "unknown step: $STEP" > rebuild-error.log
+              false ;;
+          esac
+          CODE=$?
+          echo "$CODE" > rebuild-exit.txt
+          echo "step=$STEP apply=$APPLY collection=$COLLECTION exit=$CODE"
+          test -f rebuild-output.json && cat rebuild-output.json
+          test -f rebuild-error.log && cat rebuild-error.log >&2
+          exit 0
+
+      - name: Publish the result
+        if: always() && steps.request.outputs.step != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STEP: ${{ steps.request.outputs.step }}
+          APPLY: ${{ steps.request.outputs.apply }}
+        run: |
           {
-            echo '### Read-only flow'
-            echo '```json'
-            cat rebuild-output.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "### D1 rebuild: ${STEP} (apply=${APPLY})"
+            echo ""
+            if [ -f rebuild-output.json ]; then
+              echo '```json'
+              head -c 52000 rebuild-output.json
+              echo '```'
+            else
+              echo '_no output file produced_'
+            fi
+            if [ -s rebuild-error.log ]; then
+              echo ''
+              echo '**stderr**'
+              echo '```'
+              head -c 4000 rebuild-error.log
+              echo '```'
+            fi
+            echo ''
+            echo "exit=$(cat rebuild-exit.txt 2>/dev/null || echo missing)"
+            echo "commit=${{ github.sha }}"
+          } > result-comment.md
+          cat result-comment.md >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment 31 --repo "$GITHUB_REPOSITORY" --body-file result-comment.md             || gh issue comment 31 --repo "$GITHUB_REPOSITORY" --body-file result-comment.md             || echo "::warning::could not post the result comment"
 
-      - name: Apply flow (plan, posts dry run, posts apply, verify, remaining nine)
-        if: steps.request.outputs.step == 'flow' && steps.request.outputs.apply == 'true'
+      - name: Fail if the request failed
+        if: always() && steps.request.outputs.step != 'none'
         run: |
-          echo "Writes are authorised by the request file (confirm=APPLY)."
-          python3 scripts/admin/rebuild_documents_d1.py flow --apply | tee rebuild-output.json
-          {
-            echo '### Apply flow'
-            echo '```json'
-            cat rebuild-output.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Plan only
-        if: steps.request.outputs.step == 'plan'
-        run: |
-          python3 scripts/admin/rebuild_documents_d1.py plan | tee rebuild-output.json
-          { echo '### Plan'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Dry run only
-        if: steps.request.outputs.step == 'dry-run'
-        run: |
-          python3 scripts/admin/rebuild_documents_d1.py run "${{ steps.request.outputs.collection }}" | tee rebuild-output.json
-          { echo '### Dry run'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Verify only
-        if: steps.request.outputs.step == 'verify'
-        run: |
-          python3 scripts/admin/rebuild_documents_d1.py verify "${{ steps.request.outputs.collection }}" | tee rebuild-output.json
-          { echo '### Verify'; echo '```json'; cat rebuild-output.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          CODE=$(cat rebuild-exit.txt 2>/dev/null || echo 1)
+          echo "recorded exit=$CODE"
+          test "$CODE" = "0"
