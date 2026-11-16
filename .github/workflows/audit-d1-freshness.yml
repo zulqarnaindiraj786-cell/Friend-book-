@@ -15,14 +15,10 @@ name: Audit D1 Freshness
 # Read-only by construction: every statement below is a SELECT.
 
 on:
-  push:
-    paths:
-      - '.github/workflows/audit-d1-freshness.yml'
-      - 'scripts/audit_d1_freshness.py'
-      - 'scripts/d1_coverage.py'
-      - 'scripts/verify_posts_mapping.py'
-      - 'scripts/inspect_documents.py'
-      - 'scripts/repair_documents.py'
+  # No push trigger. It had one, and ten commits in one evening started eighteen runs, each
+  # scanning every collection several times over - about half a million rows read to answer a
+  # question that did not change between them. A diagnostic that spends the resource it is
+  # diagnosing must be asked for deliberately.
   workflow_dispatch:
 
 permissions:

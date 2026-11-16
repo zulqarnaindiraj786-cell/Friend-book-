@@ -1,0 +1,67 @@
+name: Copy Everything to D1
+
+# Gets every document out of Firestore and into D1, including the subcollections the old
+# migration never walked, and then proves it by comparing the two sides.
+#
+# Manual only, on purpose. Ten commits in one evening once started eighteen diagnostic runs and
+# spent about half a million D1 reads answering a question that never changed; a job that reads
+# every document in two databases must not be something a push can start by accident.
+#
+# Order matters:
+#   1. inventory  - walk Firestore, list every document at every depth. No D1 writes.
+#   2. copy       - send them to D1. Existing rows are only replaced when Firestore's copy is
+#                   newer, so anything the app wrote after the switch survives.
+#   3. verify     - ask D1 which of the inventoried keys it holds, and fail on any gap.
+#
+# If the Firestore read gate (RESOURCE_EXHAUSTED 429) is still shut, step 1 stops and nothing
+# else runs. Re-running is safe: the copy is idempotent and the verify step is read-only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inventory = count only; copy = copy and verify'
+        required: true
+        default: inventory
+        type: choice
+        options:
+          - inventory
+          - copy
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    name: Firestore to D1
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Firestore client
+        run: pip install --quiet firebase-admin
+
+      - name: Inventory Firestore
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: python3 scripts/verify_all_copied.py inventory
+
+      - name: Copy to D1
+        if: ${{ inputs.mode == 'copy' }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+          MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+        run: python3 scripts/copy_all_to_d1.py --copy
+
+      - name: Verify every document arrived
+        if: ${{ inputs.mode == 'copy' }}
+        env:
+          MIGRATION_ADMIN_TOKEN: ${{ secrets.MIGRATION_ADMIN_TOKEN }}
+          CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+        run: python3 scripts/verify_all_copied.py verify
