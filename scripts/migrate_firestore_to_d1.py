@@ -38,9 +38,24 @@ BATCH_SIZE = 500
 MAX_WORKERS = 4
 
 def init_firebase():
+    """Initialise the Admin SDK from a key file, key JSON, or ADC.
+
+    FIREBASE_SERVICE_ACCOUNT is documented as a path, but in CI the same variable holds the
+    secret's JSON body. Treating the body as a path meant os.path.exists() was false, the
+    code fell through to ApplicationDefault(), and initialisation failed with a message that
+    pointed at credentials that were in fact present.
+    """
     if not firebase_admin._apps:
-        if os.path.exists(SERVICE_ACCOUNT):
-            cred = credentials.Certificate(SERVICE_ACCOUNT)
+        source = SERVICE_ACCOUNT
+        if source and source.lstrip().startswith('{'):
+            try:
+                cred = credentials.Certificate(json.loads(source))
+            except Exception as exc:
+                raise ValueError(
+                    f"FIREBASE_SERVICE_ACCOUNT looks like JSON but could not be parsed: {exc}"
+                ) from exc
+        elif source and os.path.exists(source):
+            cred = credentials.Certificate(source)
         else:
             cred = credentials.ApplicationDefault()
         firebase_admin.initialize_app(cred, {'projectId': PROJECT_ID})

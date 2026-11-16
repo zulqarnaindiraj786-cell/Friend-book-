@@ -8,6 +8,7 @@ without credentials looked exactly like a completed cutover in the logs.
 These tests pin the fail-closed behaviour without needing firebase-admin or a network.
 """
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -116,3 +117,45 @@ class UploadPayloadContract(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ServiceAccountSource(unittest.TestCase):
+    """FIREBASE_SERVICE_ACCOUNT is a path in the docs but a JSON body in CI."""
+
+    def test_json_body_is_used_as_credentials_not_as_a_path(self):
+        m = load()
+        body = '{"type": "service_account", "project_id": "friendbook-17551"}'
+        m.SERVICE_ACCOUNT = body
+        captured = {}
+
+        def certificate(arg):
+            captured['arg'] = arg
+            return 'CRED'
+
+        m.firebase_admin._apps = {}
+        with mock.patch.object(m.credentials, 'Certificate', side_effect=certificate), \
+             mock.patch.object(m.credentials, 'ApplicationDefault') as adc, \
+             mock.patch.object(m.firebase_admin, 'initialize_app'), \
+             mock.patch.object(m.firestore, 'client', return_value='FS'):
+            m.init_firebase()
+        self.assertEqual(captured['arg'], json.loads(body), 'the parsed JSON must be passed')
+        adc.assert_not_called()
+
+    def test_a_real_path_is_still_supported(self):
+        m = load()
+        m.SERVICE_ACCOUNT = __file__
+        captured = {}
+        m.firebase_admin._apps = {}
+        with mock.patch.object(m.credentials, 'Certificate', side_effect=lambda a: captured.setdefault('arg', a)), \
+             mock.patch.object(m.firebase_admin, 'initialize_app'), \
+             mock.patch.object(m.firestore, 'client', return_value='FS'):
+            m.init_firebase()
+        self.assertEqual(captured['arg'], __file__)
+
+    def test_invalid_json_raises_instead_of_falling_back_to_adc(self):
+        m = load()
+        m.SERVICE_ACCOUNT = '{not valid json'
+        m.firebase_admin._apps = {}
+        with mock.patch.object(m.credentials, 'ApplicationDefault') as adc:
+            with self.assertRaises(ValueError):
+                m.init_firebase()
+        adc.assert_not_called()
