@@ -145,14 +145,22 @@ v2.9.0 (versionCode 126) ke baad:
 | Auth, FCM, Crashlytics, App Check | Firebase |
 | Firestore network | **OFF** (`Fb.disableFirestoreNetwork()`) |
 
-Firestore ka network off hone ka matlab: jo reads abhi bhi `Fb.db()` se jaate hain
-(chat list, friends, notifications, settings, groups, live) woh **on-device cache
-se** aate hain. Pehli baar app kholne par, ya naye device par, woh khaali dikhenge
-jab tak unhe D1 par shift nahi kiya jata. Feed aur profile D1 se aate hain, is liye
-migration ke baad feed khud bhar jayega.
+Yeh screens D1 se padhti hain: feed, profile, **chat list, friends, notifications,
+settings, groups, live**. Inhe Firestore cache ki zaroorat nahi - naye install par
+bhi yeh seedha D1 se bharengi.
 
-Batch writes abhi mirror nahi hote (`batch.set/update`), sirf direct document
-writes. Yeh haath se karne hain.
+Counters aur member lists (`friendsCount`, `followers`, `invitedUids`,
+`unreadCount`) `PATCH /v1/docs/{collection}/{id}` se jaate hain, jisme
+`increment` / `arrayUnion` / `arrayRemove` server par lagte hain. Firestore ke
+`FieldValue.increment` sentinels ko seedha D1 mein likhna galat tha - woh object
+hain, number nahi, aur counter hamesha ke liye kharab ho jata.
+
+Batch writes ab mirror hote hain: 35 `batch.set/update/delete` calls, das files
+mein. Har ek ka mirror uske apne reference se banta hai, prefix guess nahi kiya
+jata.
+
+Firestore par ab bhi jo baaki hai: `auth` (login), FCM (push), Crashlytics, App
+Check. Yeh data plane nahi hain.
 
 ## Rollback
 
