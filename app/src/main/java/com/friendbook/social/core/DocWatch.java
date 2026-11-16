@@ -4,7 +4,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,23 +46,20 @@ public final class DocWatch {
     public static final long MIN_INTERVAL_MS = 5_000L;
     public static final long DEFAULT_INTERVAL_MS = 15_000L;
 
-    /** What changed between two polls. */
+    /** What changed between two polls. Delegates to the pure logic in {@link DocDelta}. */
     public static final class Delta {
         public final List<Map<String, Object>> added;
         public final List<Map<String, Object>> updated;
         public final List<String> removed;
-        /** False when the poll matched the previous one exactly. */
         public final boolean changed;
-        /** Every document in the current window, in query order. */
         public final List<Map<String, Object>> documents;
 
-        Delta(List<Map<String, Object>> added, List<Map<String, Object>> updated,
-              List<String> removed, List<Map<String, Object>> documents) {
-            this.added = added;
-            this.updated = updated;
-            this.removed = removed;
-            this.documents = documents;
-            this.changed = !added.isEmpty() || !updated.isEmpty() || !removed.isEmpty();
+        Delta(DocDelta.Result r) {
+            this.added = r.added;
+            this.updated = r.updated;
+            this.removed = r.removed;
+            this.documents = r.documents;
+            this.changed = r.changed();
         }
     }
 
@@ -79,8 +75,7 @@ public final class DocWatch {
     private final Stopped stopped;
     private final Runnable tick = this::poll;
 
-    /** Last seen documents by id, plus their serialised form for change detection. */
-    private final Map<String, Map<String, Object>> previous = new LinkedHashMap<>();
+    /** Signatures of the last delivered window, keyed by document id. */
     private final Map<String, String> previousSignature = new LinkedHashMap<>();
 
     private boolean stoppedFlag;
@@ -140,61 +135,20 @@ public final class DocWatch {
     }
 
     private void deliver(List<Map<String, Object>> documents) {
-        Map<String, Map<String, Object>> current = new LinkedHashMap<>();
-        Map<String, String> currentSignature = new LinkedHashMap<>();
-        for (Map<String, Object> doc : documents) {
-            String id = idOf(doc);
-            if (id == null) continue;
-            current.put(id, doc);
-            currentSignature.put(id, signature(doc));
-        }
-
-        List<Map<String, Object>> added = new ArrayList<>();
-        List<Map<String, Object>> updated = new ArrayList<>();
-        for (Map<String, Object> doc : current.values()) {
-            String id = idOf(doc);
-            if (!previous.containsKey(id)) {
-                added.add(doc);
-            } else if (!currentSignature.get(id).equals(previousSignature.get(id))) {
-                updated.add(doc);
-            }
-        }
-        List<String> removed = new ArrayList<>();
-        for (String id : previous.keySet()) {
-            if (!current.containsKey(id)) removed.add(id);
-        }
-
-        previous.clear();
-        previous.putAll(current);
+        DocDelta.Result result = DocDelta.compute(previousSignature, documents);
         previousSignature.clear();
-        previousSignature.putAll(currentSignature);
-
-        Delta delta = new Delta(added, updated, removed, new ArrayList<>(current.values()));
+        for (Map<String, Object> doc : result.documents) {
+            String id = DocDelta.idOf(doc);
+            if (id != null) previousSignature.put(id, DocDelta.signature(doc));
+        }
+        Delta delta = new Delta(result);
+        // A poll that matched the previous one must not re-render: an idle feed would
+        // otherwise recycle its scroll position every tick.
         if (!delta.changed) return;
         try {
             listener.accept(delta);
         } catch (Throwable t) {
             Log.w(TAG, "watch listener threw", t);
         }
-    }
-
-    /**
-     * Stable identity for a document. The store always sets {@code id}; falling back to the
-     * path-derived key keeps a document from looking new on every poll if it is missing.
-     */
-    private static String idOf(Map<String, Object> doc) {
-        Object id = doc.get("id");
-        if (id instanceof String && !((String) id).isEmpty()) return (String) id;
-        Object path = doc.get("path");
-        if (path instanceof String) {
-            String p = (String) path;
-            int slash = p.lastIndexOf('/');
-            if (slash >= 0 && slash + 1 < p.length()) return p.substring(slash + 1);
-        }
-        return null;
-    }
-
-    private static String signature(Map<String, Object> doc) {
-        return CloudflareStore.toJson(doc).toString();
     }
 }
