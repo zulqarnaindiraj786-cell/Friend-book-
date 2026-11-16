@@ -484,6 +484,7 @@ def verify():
          'feedNewestFirst': [{'id': row['id'], 'authorName': row['authorName'],
                               'authorRef': (row['rowAuthorId'] or row['docAuthorId']
                                             or row['ownerUid'] or '')[:6] or None,
+                              'authorPhoto': row['authorPhoto'],
                               'hasPhoto': bool(row['authorPhoto']),
                               'photoHost': (row['authorPhoto'] or '').split('/')[2]
                               if row['authorPhoto'] and '://' in row['authorPhoto'] else None,
