@@ -280,6 +280,12 @@ jobs:
       - name: Run Firestore to D1 Migration
         env:
           CF_API_BASE: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/admin/migrate
+          # The workflow-level env maps CF_API_TOKEN to secrets.CLOUDFLARE_API_TOKEN, which is
+          # the Cloudflare *management* token, not the worker's migration bearer. The script
+          # sends this value in an Authorization header to /v1/admin/migrate, so it has to be
+          # the token the previous step installed. Overriding here is the whole fix for the
+          # exit-4 failure.
+          CF_API_TOKEN: ${{ env.TOKEN }}
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
