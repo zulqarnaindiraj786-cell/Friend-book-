@@ -7,7 +7,7 @@ import os
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -80,22 +80,69 @@ def read_documents(coll_ref, description, limit=None):
     return with_retry(description, _read)
 
 
+# The Spark plan's daily read quota resets at midnight Pacific, which is 08:00 UTC -
+# not 00:00 UTC. Waiting for the wrong boundary is why earlier runs probed, failed and
+# gave up hours before the quota actually came back.
+QUOTA_RESET_HOUR_UTC = 8
+
+# A migration that dies at the probe has copied nothing, so waiting is free. The default
+# is zero (never wait) so a local run cannot hang; CI sets a budget.
+QUOTA_WAIT_MINUTES = int(os.environ.get("MIGRATION_QUOTA_WAIT_MINUTES", "0"))
+
+
+def seconds_until_quota_reset(now=None):
+    """Seconds until the next midnight-Pacific quota reset, plus a small safety margin."""
+    now = now or datetime.now(timezone.utc)
+    reset = now.replace(hour=QUOTA_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+    if reset <= now:
+        reset += timedelta(days=1)
+    return int((reset - now).total_seconds()) + 120
+
+
+def is_quota_refusal(exc):
+    """True only for a spent-quota refusal, never for a credential or network problem."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "resourceexhausted" in text or "resource exhausted" in text or "quota exceeded" in text
+
+
 def probe_firestore(fs_client):
     """One cheap read to prove the project is readable before any bulk walk.
 
     Reported separately from the migration counts: a credential or network problem and an
     empty collection both look like "0 documents", and only this distinguishes them.
+
+    A spent daily quota is waited out rather than reported as a failure. The probe reads a
+    single document, so every retry costs almost nothing, and the alternative - failing the
+    whole run - means the canary can only ever be run by someone who happens to be awake at
+    the moment the quota resets.
     """
-    try:
-        next(iter(fs_client.collection("users").limit(1).stream()), None)
-        print("Firestore read probe: OK")
-        return True
-    except Exception as exc:
-        print(f"Firestore read probe FAILED: {type(exc).__name__}: {str(exc)[:400]}")
-        # The exception type and first lines of the message are the only reliable signal;
-        # a truncated traceback tail has repeatedly hidden the real cause in this pipeline.
-        print(f"::error::Firestore read probe failed: {type(exc).__name__}: {str(exc)[:300]}")
-        return False
+    waited = 0
+    while True:
+        try:
+            next(iter(fs_client.collection("users").limit(1).stream()), None)
+            print("Firestore read probe: OK")
+            return True
+        except Exception as exc:
+            refusal = is_quota_refusal(exc)
+            print(f"Firestore read probe FAILED: {type(exc).__name__}: {str(exc)[:400]}")
+            if not refusal or waited >= QUOTA_WAIT_MINUTES:
+                if refusal and QUOTA_WAIT_MINUTES:
+                    print(f"::error::Firestore quota still exhausted after waiting {waited} min.")
+                # The exception type and first lines of the message are the only reliable
+                # signal; a truncated traceback tail has hidden the real cause before.
+                print(f"::error::Firestore read probe failed: {type(exc).__name__}: {str(exc)[:300]}")
+                return False
+            remaining = seconds_until_quota_reset()
+            if waited + remaining / 60 > QUOTA_WAIT_MINUTES:
+                # Not enough budget left to reach the next reset.
+                print(f"::error::Quota resets in {int(remaining / 60)} min, "
+                      f"but only {QUOTA_WAIT_MINUTES - waited} min of waiting budget remains.")
+                return False
+            print(f"Quota is spent; the daily allowance returns at 08:00 UTC "
+                  f"(in {int(remaining / 60)} min). Waiting for it - nothing has been copied yet.")
+            print(f"::notice::Waiting {int(remaining / 60)} min for the Firestore quota reset.")
+            time.sleep(remaining)
+            waited += int(remaining / 60) + 1
 
 def init_firebase():
     """Initialise the Admin SDK from a key file, key JSON, or ADC.
