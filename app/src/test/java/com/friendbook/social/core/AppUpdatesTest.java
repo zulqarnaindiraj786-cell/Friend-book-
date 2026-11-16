@@ -48,8 +48,14 @@ public class AppUpdatesTest {
         assertTrue(dialog.isShowing());
         assertEquals("Play Store Se Update Karo",
                 String.valueOf(dialog.getButton(AlertDialog.BUTTON_POSITIVE).getText()));
-        assertEquals("no negative button / no skip", -1, dialog.getButton(AlertDialog.BUTTON_NEGATIVE) == null ? -1 : 0);
-        assertEquals("no neutral button / no later", -1, dialog.getButton(AlertDialog.BUTTON_NEUTRAL) == null ? -1 : 0);
+        // AlertController always materialises the three button slots, so "no skip" means the
+        // slot carries no label and is not shown - not that the view is null.
+        android.widget.Button skip = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+        assertEquals("there must be no skip/later label", "", String.valueOf(skip.getText()));
+        assertFalse("the skip slot must not be visible", skip.getVisibility() == android.view.View.VISIBLE);
+        android.widget.Button later = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        assertEquals("there must be no neutral label", "", String.valueOf(later.getText()));
+        assertFalse("the neutral slot must not be visible", later.getVisibility() == android.view.View.VISIBLE);
     }
 
     @Test
