@@ -449,21 +449,45 @@ public class Ui {
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
         String fastUrl = optimizeImageUrl(c, url, false);
         Prefs.recordBytes(c, 38_000L, 162_000L);
-        if (Prefs.fullPhotoDisplay(c)) {
+        boolean fit = Prefs.fullPhotoDisplay(c);
+        // A 40 px thumbnail is requested alongside the full image. It arrives almost at once and
+        // paints a blurred stand-in, so a post shows its content immediately instead of an empty
+        // grey box while the full 1200 px WebP is still in flight.
+        String tinyUrl = tinyThumb(c, url);
+        if (fit) {
             Glide.with(c.getApplicationContext()).load(fastUrl)
                     .override(960, 1200)
                     .fitCenter()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+                    .placeholder(ph).error(ph)
+                    .thumbnail(tinyUrl == null
+                            ? Glide.with(c.getApplicationContext()).load(fastUrl).override(40, 40)
+                            : Glide.with(c.getApplicationContext()).load(tinyUrl))
+                    .into(iv);
         } else {
             Glide.with(c.getApplicationContext()).load(fastUrl)
                     .override(960, 1200)
                     .centerCrop()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+                    .placeholder(ph).error(ph)
+                    .thumbnail(tinyUrl == null
+                            ? Glide.with(c.getApplicationContext()).load(fastUrl).override(40, 40)
+                            : Glide.with(c.getApplicationContext()).load(tinyUrl))
+                    .into(iv);
         }
+    }
+
+    /** Cloudinary URL for a ~40 px WebP of the same image, or null when it is not Cloudinary. */
+    private static String tinyThumb(Context c, String url) {
+        int idx = url.indexOf("/image/upload/");
+        if (idx < 0) return null;
+        String after = url.substring(idx + "/image/upload/".length());
+        if (after.startsWith("w_") || after.startsWith("f_") || after.startsWith("q_") || after.startsWith("c_")) {
+            return null;
+        }
+        return url.substring(0, idx + "/image/upload/".length()) + "w_40,c_fill,f_webp,q_auto:eco/" + after;
     }
 
     /**

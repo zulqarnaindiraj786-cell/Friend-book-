@@ -172,7 +172,8 @@ public class BlueTickActivity extends Activity {
         if (uid == null) { finish(); return; }
         // Shares the session-wide users/{me} listener instead of opening another on the same doc.
         Fb.observeMe(meObserver);
-        refsReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",uid),total->{
+        refsReg=com.friendbook.social.core.CountReads.once(
+                com.friendbook.social.core.DocQuery.of("referrals").whereEqualTo("refBy",uid).build(),total->{
                     int count=(int)Math.min(Integer.MAX_VALUE,total);
                     for (int i = 0; i < 3; i++) {
                         bars[i].setProgress(Math.min(count, NEED[i]));

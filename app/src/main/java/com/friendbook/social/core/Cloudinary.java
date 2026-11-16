@@ -243,14 +243,20 @@ public class Cloudinary {
             int maxDim = slow2g ? 720 : (Prefs.turbo2g(ctx) ? 1080 : 1440);
             int quality = slow2g ? 60 : (Prefs.turbo2g(ctx) ? 75 : 85);
 
+            // Sample down to roughly the target size, not to double it. A 12 MP camera photo is
+            // ~4000 px on the long edge; stopping at 2x the target decoded it at ~2000 px and
+            // then scaled it again, which is a slow decode, a large bitmap, and a bigger upload
+            // than the post ever displays.
             int sample = 1;
             int w = bounds.outWidth, h = bounds.outHeight;
-            while (w / sample > maxDim * 2 || h / sample > maxDim * 2) {
+            while ((w / sample) > maxDim || (h / sample) > maxDim) {
                 sample *= 2;
             }
 
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
+            // Decode straight to the common display format. RGB_565 halves the memory and the
+            // JPEG re-encode work for photos whose darkest win is a feed thumbnail.
             opts.inPreferredConfig = Bitmap.Config.RGB_565;
             InputStream s2 = ctx.getContentResolver().openInputStream(uri);
             if (s2 == null) return null;

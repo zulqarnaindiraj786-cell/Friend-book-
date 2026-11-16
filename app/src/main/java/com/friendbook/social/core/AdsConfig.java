@@ -76,7 +76,14 @@ public class AdsConfig {
     public static final String TERMS_OF_SERVICE_URL = GOOGLE_DOCS_POLICY_URL;
     public static final String CHILD_SAFETY_URL = GOOGLE_DOCS_POLICY_URL;
     public static final String DELETE_ACCOUNT_URL = GOOGLE_DOCS_POLICY_URL;
-    public static final String PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.friendbook.social";
+    /**
+     * The one place the store link is defined.
+     *
+     * <p>Every share, copy and invite in the app must point here. It previously existed as two
+     * separate constants, so a change to one left the other pointing at the old listing, and a
+     * few screens shared a {@code friendbook://} URL that no installed app can open at all.
+     */
+    public static final String PLAY_STORE_URL = com.friendbook.social.core.Ui.PLAY_STORE_LINK;
     public static final String APP_ADS_TXT_RECORD =
             "google.com, pub-3387480177023669, DIRECT, f08c47fec0942fa0";
 

@@ -1,15 +1,36 @@
 package com.friendbook.social.core;
-import com.google.firebase.firestore.*;
-import java.util.Objects;
+import com.google.firebase.firestore.ListenerRegistration;
 import java.util.function.LongConsumer;
-/** Exact server aggregation, not an unlimited download or listener. Refresh on screen re-entry. */
+/**
+ * Counts matching documents for a D1 query.
+ *
+ * <p>This used to run a Firestore server-side aggregate. With the network off that can never
+ * succeed, so it failed silently and returned no
+ * count at all. It is now answered from D1, and for the same reason it is a real query rather
+ * than a Firestore aggregate: the worker has no count endpoint, and adding one would duplicate
+ * the filter logic that {@link DocQuery} already serialises.
+ *
+ * <p>The count is exact up to the page ceiling. Above that the caller is told the floor rather
+ * than a number that looks exact and is not, because every count in this app is compared
+ * against a small threshold (invite tiers, eligibility), never displayed as a total.
+ */
 public final class CountReads {
     private CountReads() {}
-    public static ListenerRegistration once(Query query,LongConsumer result) {
-        String actor=Fb.uid();boolean[] closed={false};
-        query.count().get(AggregateSource.SERVER).addOnSuccessListener(count->{
-            if(!closed[0] && Objects.equals(actor,Fb.uid()))result.accept(count.getCount());
+
+    /** Marks a count that stopped at the page ceiling and is therefore a lower bound. */
+    public static final long AT_LEAST = DocQuery.MAX_LIMIT;
+
+    public static ListenerRegistration once(DocQuery query, LongConsumer result) {
+        String actor = Fb.uid();
+        boolean[] closed = {false};
+        CloudflareStore.query(query.limit(DocQuery.MAX_LIMIT), page -> {
+            if (!closed[0] && java.util.Objects.equals(actor, Fb.uid())) {
+                result.accept(page.documents.size());
+            }
+        }, () -> {
+            // A refusal is "no answer", not zero. Calling back with zero here is exactly how a
+            // failed read used to unlock or relock a badge by accident.
         });
-        return ()->closed[0]=true;
+        return () -> closed[0] = true;
     }
 }

@@ -552,7 +552,8 @@ public class MainActivity extends Activity {
         String me = Fb.uid();
         if (me == null) return;
         if(referralReg!=null)referralReg.remove();
-        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->
+        referralReg=com.friendbook.social.core.CountReads.once(
+                com.friendbook.social.core.DocQuery.of("referrals").whereEqualTo("refBy",me).build(),total->
                 com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 

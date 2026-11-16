@@ -1133,6 +1133,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 vh.pageBadge.setVisibility(View.VISIBLE);
                 vh.pageBadge.setText(album + " photos");
             }
+            vh.boundPhotoPost = p;
+            vh.boundPhotoUrl = fImg;
+            vh.mediaWrap.setOnClickListener(null);
             vh.image.setOnTouchListener(vh.photoTouchListener);
         } else if (isVideo) {
             // Video posts: instant poster frame without decoding .mp4 files or doing disk I/O during scroll!
@@ -1144,9 +1147,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 try { com.bumptech.glide.Glide.with(c.getApplicationContext()).clear(vh.image); } catch (Throwable ignored) {}
                 vh.image.setImageDrawable(Ui.round(c, 0xFF18191A, 0));
             }
-            // Clear photo touch/click listeners for video posts
+            // The ImageView must not keep the photo gesture detector: it intercepts the tap for
+            // "open fullscreen photo" and the reel tap below never fires. The card-wide tap goes
+            // on mediaWrap, which is cleared and re-set every bind.
             vh.image.setOnTouchListener(null);
             vh.image.setOnClickListener(null);
+            vh.boundPhotoPost = null;
+            vh.boundPhotoUrl = null;
+            vh.mediaWrap.setOnClickListener(null);
             // Poster only. Full media is requested by the user's tap, never by feed binding.
             vh.playBadge.setVisibility(View.VISIBLE);
             vh.playBadge.setBackgroundColor(0x66000000);

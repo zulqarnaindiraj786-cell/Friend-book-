@@ -16,7 +16,11 @@ class RemainingPaging(unittest.TestCase):
         source=(JAVA/'core/QueryActions.java').read_text()
         for token in ['page.limit(50).get(Source.SERVER)','query.startAfter(cursor)','batch.commit()','Objects.equals(actor,Fb.uid())','done::trySetException','else deletePage(query,last,actor,done)','else updatePage(query,last,actor,patch,total+snap.size(),done)']:self.assertIn(token,source)
     def test_exact_counts_do_not_download_members(self):
-        source=(JAVA/'core/CountReads.java').read_text();self.assertIn('query.count().get(AggregateSource.SERVER)',source)
+        # Counting moved from a Firestore server aggregation (which cannot succeed with the
+        # network off) to a D1 query.
+        source=(JAVA/'core/CountReads.java').read_text()
+        self.assertIn('CloudflareStore.query(',source)
+        self.assertNotIn('AggregateSource.SERVER',source)
         # Settings counts from D1 now, because a Firestore count with the network off read the
         # local cache and reported zero.
         for name in ['bluetick/BlueTickActivity.java','bluetick/MonetizationActivity.java','main/MainActivity.java']:
@@ -30,7 +34,9 @@ class RemainingPaging(unittest.TestCase):
         self.assertIn('reg.remove()',source);self.assertIn('request!=generation[0]',source)
     def test_story_links_and_next_ten(self):
         source=(JAVA/'story/StoryViewerActivity.java').read_text()
-        for token in ['document(specificStoryId).get()','10,"story-viewer:"','advanceAfterPage=true','storyPages.next()','storyPages.close()','storyPages.forget(s.id)']:self.assertIn(token,source)
+        # The viewer reads D1 now, so its pages come from DocPager, not a Firestore CursorPager
+        # keyed by "story-viewer:". What must not change is that paging and per-item forget work.
+        for token in ['CloudflareStore.get("stories", specificStoryId','new com.friendbook.social.core.DocPager(','advanceAfterPage=true','storyPages.next()','storyPages.close()','storyPages.forget(s.id)']:self.assertIn(token,source)
     def test_no_migration_executed_by_application(self):
         # No runtime admin sweep or silent removal of old user data accompanies this rollout.
         for p in JAVA.rglob('*.java'):

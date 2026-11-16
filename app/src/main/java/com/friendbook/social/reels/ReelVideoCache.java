@@ -102,13 +102,18 @@ public final class ReelVideoCache {
         if (u.startsWith("file:") || u.startsWith("content:")) return u;
         int idx = u.indexOf("/video/upload/");
         if (idx > 0 && u.contains("cloudinary.com")) {
-            boolean explicitEco = c != null && (Prefs.dataSaver(c) || FastCache.isSlow2G(c));
-            if (explicitEco) {
-                String prefix = u.substring(0, idx + "/video/upload/".length());
-                String rest = u.substring(idx + "/video/upload/".length());
-                if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
-                    return prefix + "f_mp4,vc_h264,ac_aac,q_auto:good/" + rest;
+            String prefix = u.substring(0, idx + "/video/upload/".length());
+            String rest = u.substring(idx + "/video/upload/".length());
+            if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
+                // This used to transform only when Data Saver or 2G was detected, so on a normal
+                // 4G connection the player streamed the original upload - often a 15-40 MB
+                // phone video - and the reel took seconds to start. Re-encoding to a capped
+                // height is what actually makes playback start, not the bandwidth mode.
+                boolean eco = c != null && (Prefs.dataSaver(c) || FastCache.isSlow2G(c));
+                if (eco) {
+                    return prefix + "f_mp4,vc_h264,ac_aac,q_auto:eco,h_720,c_limit/" + rest;
                 }
+                return prefix + "f_mp4,vc_h264,ac_aac,q_auto:good,h_1080,c_limit/" + rest;
             }
         }
         return u;

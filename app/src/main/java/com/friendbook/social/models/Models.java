@@ -488,9 +488,13 @@ public class Models {
         public boolean expired() { return System.currentTimeMillis() > expiresAt; }
 
         public static Story fromDoc(DocumentSnapshot d) {
+            return fromMap(d.getId(), d.getData());
+        }
+
+        /** Same mapping for a D1 document. */
+        public static Story fromMap(String id, Map<String, Object> m) {
             Story s = new Story();
-            Map<String, Object> m = d.getData();
-            s.id = d.getId();
+            s.id = id;
             s.authorId = Format.str(m, "authorId");
             s.authorName = Format.strOr(m, "authorName", "User");
             s.authorPhoto = Format.str(m, "authorPhotoUrl");
