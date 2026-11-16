@@ -101,6 +101,8 @@ def walk(client):
     happens on each document, so subcollections are found without being named.
     """
     def visit(collection_ref, depth):
+        # Depth is the only guard needed: Firestore's collections() returns the subcollections
+        # of one document, and a path cannot repeat itself, so each is visited exactly once.
         if depth > MAX_DEPTH:
             return
         last = None
@@ -114,7 +116,10 @@ def walk(client):
                 return
             page += 1
             for doc in docs:
-                yield doc.reference.path, collection_ref.id, doc
+                # The FULL collection path, not just its name. Two chats' message
+                # subcollections are both called "messages"; flattening on the name alone would
+                # give every chat's messages the same key space and lose the parent.
+                yield doc.reference.path, collection_ref.path, doc
                 # Recurse into this document's own subcollections. `collections()` is what makes
                 # this complete: nothing has to be named in advance.
                 for sub in doc.reference.collections():
@@ -143,27 +148,18 @@ def flat_key(collection_path: str, doc_id: str) -> tuple[str, str]:
 
 
 def post_batch(collection: str, documents: list[dict]) -> tuple[bool, str]:
-    token = os.environ.get("MIGRATION_ADMIN_TOKEN", "")
-    if len(token) < 32:
-        raise SystemExit("MIGRATION_ADMIN_TOKEN is missing or too short")
-    url = f"{CF_API_BASE.rstrip('/')}/{collection}"
-    body = json.dumps({"documents": documents}).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
+    """Write a batch straight to D1 with the Cloudflare token the deploy job already uses.
+
+    This used to POST to the worker's admin endpoint, which needs MIGRATION_ADMIN_TOKEN - a
+    secret that was never set, so the copy failed on auth before touching any data. The D1 API
+    needs only CLOUDFLARE_API_TOKEN, which is present.
+    """
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return True, json.dumps(payload)
-    except urllib.error.HTTPError as error:
-        return False, f"HTTP {error.code}: {error.read().decode('utf-8', 'replace')[:200]}"
-    except Exception as error:  # noqa: BLE001
+        from d1_direct import insert_documents
+
+        count = insert_documents(collection, documents)
+        return True, f"wrote {count}"
+    except Exception as error:  # noqa: BLE001 - one failed batch must not stop the run
         return False, f"{type(error).__name__}: {error}"
 
 

@@ -38,22 +38,11 @@ def firestore_walk():
     return firestore_client(), walk
 
 
-def worker_post(path: str, payload: dict) -> dict:
-    token = os.environ.get("MIGRATION_ADMIN_TOKEN", "")
-    if len(token) < 32:
-        raise SystemExit("MIGRATION_ADMIN_TOKEN is missing or too short")
-    request = urllib.request.Request(
-        f"{CF_API_BASE.rstrip('/')}/{path.lstrip('/')}",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", "replace")[:300]
-        raise RuntimeError(f"HTTP {error.code}: {body}") from error
+def existing_from_d1(collection: str, ids: list[str]) -> set[str]:
+    """Ask D1 directly which of these ids it holds. No worker, no migration token."""
+    from d1_direct import existing_ids
+
+    return existing_ids(collection, ids)
 
 
 def cmd_inventory(argv: list[str]) -> int:
@@ -89,15 +78,12 @@ def cmd_verify(argv: list[str]) -> int:
     missing_total = 0
     checked_total = 0
     for name, ids in sorted(by_collection.items()):
-        missing: list[str] = []
-        for start in range(0, len(ids), CHUNK):
-            slice_ids = ids[start:start + CHUNK]
-            try:
-                answer = worker_post("existing", {"collection": name, "ids": slice_ids})
-            except RuntimeError as error:
-                print(f"::error::{name}: existence check failed - {error}")
-                return 1
-            missing.extend(answer.get("missing", []))
+        try:
+            present = existing_from_d1(name, ids)
+        except Exception as error:  # noqa: BLE001
+            print(f"::error::{name}: existence check failed - {error}")
+            return 1
+        missing = [doc_id for doc_id in ids if doc_id not in present]
         checked_total += len(ids)
         missing_total += len(missing)
         level = "error" if missing else "notice"
