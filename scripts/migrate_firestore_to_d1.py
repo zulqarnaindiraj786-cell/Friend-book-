@@ -112,11 +112,34 @@ def migrate_collection(fs_client, collection_name, limit=None):
     print(f"\n{collection_name}: {total} total, {errors} errors")
     return total, errors
 
-def send_batch(collection, batch):
-    """Send batch to Cloudflare Workers migration endpoint"""
+class MigrationError(RuntimeError):
+    """Raised when the migration cannot proceed without risking data loss."""
+
+
+def require_token():
+    """Refuse to run at all without a migration token.
+
+    This used to print a warning and return success, which meant a migration
+    with no CF_API_TOKEN reported every batch as uploaded while writing
+    nothing. A later verify step would then compare Firestore to an empty D1
+    and anyone reading the log would conclude the cutover had worked.
+    """
     if not CF_API_TOKEN:
-        print("  ⚠ CF_API_TOKEN not set, skipping actual upload")
-        return True
+        raise MigrationError(
+            "CF_API_TOKEN is not set. Refusing to run: every batch would report success "
+            "while writing nothing, and the verification step would compare Firestore "
+            "against an empty database."
+        )
+
+
+def send_batch(collection, batch):
+    """Send batch to Cloudflare Workers migration endpoint.
+
+    Returns True only when the worker confirmed the write. Any other outcome -
+    missing token, non-200, network error, malformed response - returns False so
+    the caller counts it as an error.
+    """
+    require_token()
     
     url = f"{CF_API_BASE}/{collection}"
     headers = {
@@ -155,7 +178,8 @@ def migrate_subcollections(fs_client):
             batch.append(converted)
         
         if batch:
-            send_batch("comments", batch)
+            if not send_batch("comments", batch):
+                raise MigrationError(f"Failed to upload comments for post {post.id}")
             print(f"  ✓ Post {post.id}: {len(batch)} comments")
     
     # Messages in chats
@@ -171,7 +195,8 @@ def migrate_subcollections(fs_client):
             batch.append(converted)
         
         if batch:
-            send_batch("messages", batch)
+            if not send_batch("messages", batch):
+                raise MigrationError(f"Failed to upload messages for chat {chat.id}")
             print(f"  ✓ Chat {chat.id}: {len(batch)} messages")
 
 def verify_counts(fs_client):
@@ -196,10 +221,14 @@ def main():
 ╚══════════════════════════════════════════════════════════════╝
     """)
     
+    # Fail before touching Firestore. There is no dry-run mode: the script has no
+    # "read everything, write nothing" path, so running without a token used to look
+    # like a successful migration that wrote zero rows.
     if not CF_API_TOKEN:
-        print("⚠ WARNING: CF_API_TOKEN not set!")
-        print("Set CF_API_TOKEN environment variable to enable actual migration.")
-        print("Running in DRY RUN mode...\n")
+        print("ERROR: CF_API_TOKEN is not set.")
+        print("The migration needs a Cloudflare migration token (wrangler secret put MIGRATION_ADMIN_TOKEN).")
+        print("Refusing to start: a run without it would report success while writing nothing.")
+        return 2
     
     fs_client = init_firebase()
     print("✓ Firebase initialized\n")
@@ -228,9 +257,15 @@ def main():
     
     if total_errors > 0:
         print("\n⚠ Some documents failed to migrate. Check logs and retry.")
-        sys.exit(1)
-    else:
-        print("\n✓ All documents migrated successfully!")
+        return 1
+    if total_docs == 0:
+        # Never report success for having written nothing. An empty source is either the
+        # wrong project or a broken credential, and calling that "migrated" is how an
+        # empty cutover gets signed off.
+        print("\nERROR: no documents were migrated. Refusing to report success.")
+        return 3
+    print("\n✓ All documents migrated successfully!")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
