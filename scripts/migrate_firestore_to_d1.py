@@ -79,6 +79,21 @@ def read_documents(coll_ref, description, limit=None):
         return list(ref.stream())
     return with_retry(description, _read)
 
+
+def probe_firestore(fs_client):
+    """One cheap read to prove the project is readable before any bulk walk.
+
+    Reported separately from the migration counts: a credential or network problem and an
+    empty collection both look like "0 documents", and only this distinguishes them.
+    """
+    try:
+        next(iter(fs_client.collection("users").limit(1).stream()), None)
+        print("Firestore read probe: OK")
+        return True
+    except Exception as exc:
+        print(f"Firestore read probe FAILED: {type(exc).__name__}: {str(exc)[:400]}")
+        return False
+
 def init_firebase():
     """Initialise the Admin SDK from a key file, key JSON, or ADC.
 
@@ -317,7 +332,11 @@ def main():
         print(f"GOOGLE_APPLICATION_CREDENTIALS={os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'unset')}")
         print(f"service account file exists: {os.path.exists(SERVICE_ACCOUNT)}")
         return 5
-    print("✓ Firebase initialized\n")
+    print("✓ Firebase initialized")
+    if not probe_firestore(fs_client):
+        print("ERROR: Firestore is not readable from this runner; nothing was copied.")
+        return 6
+    print()
     
     # Verify first
     verify_counts(fs_client)
