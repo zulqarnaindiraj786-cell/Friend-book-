@@ -18,13 +18,11 @@ on:
         required: false
         default: ''
         type: string
-  schedule:
-    # The Spark read quota comes back at midnight Pacific, which is 08:00 UTC. Firestore
-    # refuses to say how much of it is gone and the refusal is indistinguishable from a
-    # credential problem, so the only reliable trigger is "after the reset": 09:00 UTC,
-    # an hour of headroom, every day. Once the copy succeeds this can be deleted - re-running
-    # it is idempotent, but a daily run against a finished migration is just noise.
-    - cron: '0 9 * * *'
+      backup_first:
+        description: 'Full Firebase backup before copying (costs a whole day of reads)'
+        required: false
+        default: 'false'
+        type: string
   push:
     # Only this workflow's own edits retrigger it; a normal code push must never start
     # a data migration by accident.
@@ -136,6 +134,10 @@ jobs:
       - name: Run Firebase Backup
         id: backup
         continue-on-error: true
+        # Off by default. The backup walks 39 collections in full BEFORE the copy runs, and on
+        # a 50,000-read-per-day plan that walk is the quota. Turning it back on is how the
+        # copy ran out of reads the moment it started.
+        if: ${{ inputs.backup_first == 'true' }}
         run: |
           echo "Starting Firebase backup..."
           if [ -f "service-account.json" ]; then
@@ -317,11 +319,13 @@ jobs:
           MIGRATION_MAX_DOCS: ${{ inputs.max_docs || env.MIGRATION_MAX_DOCS_DEFAULT }}
           MIGRATION_ONLY: ${{ inputs.only_collections || env.MIGRATION_ONLY_DEFAULT }}
           MIGRATION_READ_RETRIES: '4'
-          # The daily run starts an hour after the reset, so waiting inside a run buys
-          # nothing: a spent quota means the run is a day early, and sleeping for hours only
-          # burns a runner. Fail fast and let tomorrow's cron try, with the numbers in the
-          # log saying exactly that.
-          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '10' }}
+          # Minutes of retrying the read probe. This is not "wait for tomorrow's reset": it
+          # covers a per-minute rate limit, which clears in seconds, and gives up long before
+          # it could ever reach a daily reset. Pages are 300 documents, so the whole copy fits
+          # comfortably inside one day's allowance.
+          MIGRATION_QUOTA_WAIT_MINUTES: ${{ inputs.quota_wait_minutes || '6' }}
+          MIGRATION_PROBE_BACKOFF_SECONDS: '5'
+          MIGRATION_PAGE_SIZE: '300'
         run: |
           # No "skip if no token" branch: the script fails closed on its own and exits
           # non-zero, and this step must not report success for a run that copied nothing.
