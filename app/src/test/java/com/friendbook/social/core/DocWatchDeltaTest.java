@@ -1,6 +1,5 @@
 package com.friendbook.social.core;
 
-import org.json.JSONObject;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -102,17 +101,26 @@ public class DocWatchDeltaTest {
         assertNull(t.apply(new ArrayList<>(List.of(noId))));
     }
 
-    @Test public void theSignatureIgnoresMapIterationOrder() {
-        // toJson walks the map, so two maps with the same pairs must serialise identically;
-        // otherwise every poll would look like an update.
-        Map<String, Object> a = new LinkedHashMap<>();
-        a.put("id", "d1"); a.put("likes", 3); a.put("content", "hi");
-        Map<String, Object> b = new LinkedHashMap<>();
-        b.put("id", "d1");
-        // Deliberately different insertion order once 'id' is present.
-        b = new LinkedHashMap<>();
-        b.put("id", "d1"); b.put("content", "hi"); b.put("likes", 3);
-        assertEquals(CloudflareStore.toJson(b).toString(), CloudflareStore.toJson(b).toString());
-        assertTrue(new JSONObject(CloudflareStore.toJson(a).toString()).has("likes"));
+    @Test public void theSignatureIsStableForTheSameDocument() {
+        // If serialising the same document twice produced different text, every poll would
+        // look like an update and the feed would re-render forever.
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("id", "d1");
+        doc.put("likes", 3);
+        doc.put("content", "hi");
+        String first = CloudflareStore.toJson(doc).toString();
+        String second = CloudflareStore.toJson(doc).toString();
+        assertEquals(first, second);
+        assertTrue(first.contains("\"likes\""));
+    }
+
+    @Test public void aValueChangingButKeysStayingIdenticalIsDetected() {
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("id", "d1");
+        before.put("likes", 3);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("id", "d1");
+        after.put("likes", 4);
+        assertNotEquals(CloudflareStore.toJson(before).toString(), CloudflareStore.toJson(after).toString());
     }
 }
