@@ -155,20 +155,27 @@ def report_identity(fs_client):
     usage while every read is refused, and no amount of waiting fixes it. These three values
     are IDs, not credentials, and they are the whole difference between those two cases.
     """
+    parts = []
     try:
-        print(f"Firestore client project: {fs_client.project}")
+        parts.append(f"client={fs_client.project}")
     except Exception as exc:
-        print(f"Firestore client project: unavailable ({type(exc).__name__})")
+        parts.append(f"client=unavailable({type(exc).__name__})")
     source = SERVICE_ACCOUNT
     if source and source.lstrip().startswith("{"):
         try:
             info = json.loads(source)
             email = str(info.get("client_email", ""))
-            print(f"Service account project_id: {info.get('project_id')}")
-            print(f"Service account domain: {email.split('@')[-1] if '@' in email else 'unknown'}")
+            domain = email.split("@")[-1] if "@" in email else "unknown"
+            parts.append(f"key_project={info.get('project_id')}")
+            parts.append(f"key_domain={domain}")
         except Exception as exc:
-            print(f"Service account unreadable: {type(exc).__name__}")
-    print(f"FIREBASE_PROJECT_ID: {PROJECT_ID}")
+            parts.append(f"key=unreadable({type(exc).__name__})")
+    parts.append(f"env={PROJECT_ID}")
+    # Also a workflow annotation: the job log is downloaded from a blob store that has been
+    # returning EOF, so a plain print can be invisible exactly when it matters.
+    line = "identity: " + " ".join(parts)
+    print(line)
+    print(f"::notice::{line}")
 
 
 def probe_firestore(fs_client):
