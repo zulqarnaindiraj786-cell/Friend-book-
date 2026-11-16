@@ -656,7 +656,7 @@ public class MainActivity extends Activity {
         }
         com.friendbook.social.core.CloudflareStore.count(unreadChats.build(), total -> {
             QuotaGuard.noteSuccess();
-            if (Prefs.quiet(this) || active == TAB_MESSAGES) {
+            if (Prefs.quiet(this)) {
                 Ui.setBadge(msgBadge, 0);
                 return;
             }
@@ -696,13 +696,13 @@ public class MainActivity extends Activity {
                         return;
                     }
                     java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
-                    long clearedAt = Prefs.friendRequestsClearedAt(this, me);
+                    long reqClearedAt = Prefs.friendRequestsClearedAt(this, me);
                     int count = 0;
                     if (snap != null) {
                         for (com.friendbook.social.core.Doc d : snap) {
                             if (seenIds.contains(d.getId())) continue;
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
-                            if (clearedAt > 0L && ts > 0L && ts <= clearedAt) continue;
+                            if (reqClearedAt > 0L && ts > 0L && ts <= reqClearedAt) continue;
                             count++;
                         }
                     }
