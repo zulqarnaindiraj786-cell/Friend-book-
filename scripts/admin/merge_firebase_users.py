@@ -505,6 +505,35 @@ def verify():
     return 0
 
 
+def preview(limit=12):
+    """Read-only: the newest posts the feed will actually draw, after the merge.
+
+    Same document fields the app binds, so the result can be compared with the screen instead of
+    trusted as a number.
+    """
+    feed = rows(
+        "SELECT p.id, json_extract(d.document_json, '$.authorName') AS authorName, "
+        "json_extract(d.document_json, '$.authorPhoto') AS authorPhoto, "
+        "json_extract(d.document_json, '$.content') AS content, "
+        "json_extract(d.document_json, '$.likes') AS likes, "
+        "json_extract(d.document_json, '$.createdAt') AS createdAt, "
+        "json_extract(d.document_json, '$.mediaUrl') AS mediaUrl "
+        "FROM friendbook_cf_documents d LEFT JOIN posts p ON d.path = 'posts/' || p.id "
+        "WHERE d.collection = 'posts' "
+        "AND json_extract(d.document_json, '$.authorName') IS NOT NULL "
+        "AND TRIM(json_extract(d.document_json, '$.authorName')) NOT IN ('', 'User') "
+        "ORDER BY COALESCE(json_extract(d.document_json, '$.createdAt'), 0) DESC LIMIT ?",
+        [limit])
+    rendered = [{'id': row['id'], 'authorName': row['authorName'],
+                 'authorPhoto': row['authorPhoto'], 'content': row['content'],
+                 'mediaUrl': row['mediaUrl'], 'likes': row['likes'],
+                 'createdAt': row['createdAt']} for row in feed]
+    say({'mode': 'PREVIEW', 'count': len(rendered),
+         'anonymousInFeed': placeholderStats()['postDocumentsWithoutAuthorName'],
+         'posts': rendered})
+    return 0
+
+
 def orphans(limit=5):
     """Read-only: the documents the feed still cannot attribute, in full.
 
@@ -550,6 +579,12 @@ def main(argv):
         return apply(limit)
     if command == 'verify':
         return verify()
+    if command == 'preview':
+        limit = 12
+        for flag in argv[2:]:
+            if flag.startswith('--limit='):
+                limit = int(flag.split('=', 1)[1])
+        return preview(limit)
     if command == 'orphans':
         limit = 5
         for flag in argv[2:]:

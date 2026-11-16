@@ -1,6 +1,6 @@
 {
-  "step": "verify",
+  "step": "preview",
   "confirm": "",
-  "limit": 0,
-  "note": "Read-only final proof: newest documents with the exact author name and avatar URL the feed binds."
+  "limit": 12,
+  "note": "Read-only: the newest posts the feed will draw now - name, avatar URL, content, likes."
 }

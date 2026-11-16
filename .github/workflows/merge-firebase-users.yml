@@ -96,6 +96,7 @@ jobs:
             plan)   python3 scripts/admin/merge_firebase_users.py plan > merge-output.json 2> merge-error.log ;;
             verify) python3 scripts/admin/merge_firebase_users.py verify > merge-output.json 2> merge-error.log ;;
             orphans) python3 scripts/admin/merge_firebase_users.py orphans --limit=5 > merge-output.json 2> merge-error.log ;;
+            preview) python3 scripts/admin/merge_firebase_users.py preview --limit=12 > merge-output.json 2> merge-error.log ;;
             apply)
               if [ "$WRITES" != "true" ]; then
                 echo "refusing to write: the request file has no confirm=APPLY" > merge-error.log
