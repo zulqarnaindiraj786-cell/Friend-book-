@@ -211,6 +211,18 @@ public final class CloudflareStore {
         });
     }
 
+    /**
+     * Polls {@code query} and reports deltas, as a replacement for a Firestore snapshot
+     * listener. See {@link DocWatch}. The watch stops itself when {@code stopped} reports true,
+     * and callers must still {@link DocWatch#stop()} when they finish early.
+     */
+    public static DocWatch watch(DocQuery query, long intervalMs, DocWatch.Stopped stopped,
+                                 Consumer<DocWatch.Delta> listener) {
+        DocWatch w = new DocWatch(query, intervalMs, stopped, listener);
+        if (enabled()) w.start();
+        return w;
+    }
+
     private static FirebaseUser currentUser() {
         try {
             return Fb.auth().getCurrentUser();
