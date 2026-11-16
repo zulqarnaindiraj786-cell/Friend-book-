@@ -5,23 +5,44 @@ runs waited for a 00:00 UTC boundary that never mattered, probed, got ResourceEx
 exited 6 - so the canary could only be run by hand at the right hour. These tests pin the
 reset arithmetic and the refusal classification, because getting either wrong either hangs
 CI for a day or hides a genuine credential failure as "quota".
+
+The build job runs this suite on a bare runner where firebase_admin and requests are not
+installed. Importing the migration script pulls both in, which made the whole build red for
+tests that only need two pure functions, so the module is loaded from source instead.
 """
 
-import importlib.util
+import ast
 import os
-import sys
+import types
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "migrate_firestore_to_d1.py"
 
+WANTED = {"QUOTA_RESET_HOUR_UTC", "QUOTA_WAIT_MINUTES",
+          "seconds_until_quota_reset", "is_quota_refusal"}
+
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("migrate_mod_quota", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    """Load the real definitions under test, without importing firebase_admin or requests."""
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+    pieces = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in WANTED:
+            pieces.append(ast.get_source_segment(source, node))
+        elif isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if any(t in WANTED for t in targets):
+                pieces.append(ast.get_source_segment(source, node))
+    if not pieces:
+        raise AssertionError("nothing to load: the functions under test have been renamed")
+
+    module = types.ModuleType("migrate_quota_under_test")
+    exec("from datetime import datetime, timedelta, timezone\nimport os",
+         module.__dict__)
+    exec("\n\n".join(pieces), module.__dict__)
     return module
 
 
