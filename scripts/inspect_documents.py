@@ -65,6 +65,31 @@ def main() -> int:
         print("::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required")
         return 1
 
+    # How much of the store is in the Firestore wire format rather than the decoded shape the
+    # app reads. A document in wire format has a "fields" object and no direct values, so
+    # Doc.get("authorId") finds nothing and the row renders blank. This is the number that
+    # matters: it is the difference between "migrated" and "visible".
+    for collection in COLLECTIONS:
+        try:
+            row = d1_query(
+                account_id, token,
+                f"""SELECT
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN json_extract(document_json, '$.fields') IS NOT NULL
+                               THEN 1 ELSE 0 END) AS wire_format
+                    FROM friendbook_cf_documents WHERE collection = '{collection}'""",
+            )[0]
+            total, wire = int(row["total"]), int(row["wire_format"] or 0)
+            if wire:
+                print(
+                    f"::error::{collection}: {wire} of {total} documents are in raw Firestore "
+                    f"wire format (fields/stringValue) - the app reads none of these"
+                )
+            else:
+                print(f"::notice::{collection}: 0 of {total} documents are in wire format")
+        except Exception as error:  # noqa: BLE001
+            print(f"::warning::{collection}: wire-format count failed - {error}")
+
     for collection in COLLECTIONS:
         try:
             rows = d1_query(
@@ -97,9 +122,9 @@ def main() -> int:
 
         # Two annotations per collection: the field list, then one whole document. Everything
         # else goes to stdout, because annotations beyond the tenth are discarded.
-        print(f"::notice::{collection} fields: {', '.join(keys)[:620]}")
+        print(f"{collection} fields: {', '.join(keys)[:620]}")
         sample = json.dumps(doc, default=str)[:620]
-        print(f"::notice::{collection} sample: {sample}")
+        print(f"{collection} sample: {sample}")
 
     return 0
 

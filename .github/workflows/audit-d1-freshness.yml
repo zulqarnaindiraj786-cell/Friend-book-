@@ -43,6 +43,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
         run: |
+          pip install --quiet firebase-admin || true
           python3 - <<'PYEOF'
           import json, os, sys
           try:
