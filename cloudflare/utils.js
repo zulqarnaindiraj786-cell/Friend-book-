@@ -2,7 +2,7 @@
  * Utility functions for Cloudflare Workers
  */
 
-const json = (body, status = 200, headers = {}) => Response.json(body, {
+export const json = (body, status = 200, headers = {}) => Response.json(body, {
   status,
   headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers },
 });

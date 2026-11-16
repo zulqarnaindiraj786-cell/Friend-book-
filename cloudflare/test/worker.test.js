@@ -85,3 +85,41 @@ test('realtime presence routes require verified Firebase identity and return fre
   assert.equal((await contact.json()).uid, 'peer-1');
   assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
 });
+
+test('data-api stays dark unless the deployment opts in', async () => {
+  const w = createWorker(async () => 'uid_test');
+  const base = { FIREBASE_PROJECT_ID: 'friendbook-test' };
+
+  // Off by default: an unmigrated deployment must behave exactly as before.
+  const off = await w.fetch(new Request('https://example.com/v1/posts/feed',
+    { headers: { Authorization: 'Bearer test-token' } }), { ...base, DB: {} });
+  assert.equal(off.status, 404);
+
+  // Opted in, but still requires a verified Firebase identity.
+  const noAuth = await w.fetch(new Request('https://example.com/v1/posts/feed'),
+    { ...base, DB: {}, DATA_API_ENABLED: 'true' });
+  assert.equal(noAuth.status, 401);
+
+  const badAuth = await w.fetch(new Request('https://example.com/v1/posts/feed',
+    { headers: { Authorization: 'Bearer ' } }), { ...base, DB: {}, DATA_API_ENABLED: 'true' });
+  assert.equal(badAuth.status, 401);
+});
+
+test('data-api routing never steals the endpoints that already have handlers', async () => {
+  const w = createWorker(async () => 'uid_test');
+  const env = { FIREBASE_PROJECT_ID: 'friendbook-test', DB: null, DATA_API_ENABLED: 'true' };
+
+  // /v1/docs keeps its own handler, so an unsupported collection is that handler's
+  // 400 - not data-api's 404 and not a 503 from a missing DB binding.
+  const docs = await w.fetch(new Request('https://example.com/v1/docs?collection=nope',
+    { headers: { Authorization: 'Bearer test-token' } }), env);
+  assert.equal(docs.status, 503);
+  // app-documents.js owns this path; its own message proves data-api did not intercept it.
+  assert.equal((await docs.json()).error, 'Database unavailable');
+
+  // /v1/me still answers from the profile table, not from data-api.
+  const me = await w.fetch(new Request('https://example.com/v1/me',
+    { headers: { Authorization: 'Bearer test-token' } }), env);
+  assert.equal(me.status, 503);
+  assert.match((await me.json()).error, /existing app data is unchanged/);
+});

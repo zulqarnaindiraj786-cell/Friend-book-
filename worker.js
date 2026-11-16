@@ -4,6 +4,7 @@ import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { viewCounters } from './cloudflare/view-counters.js';
+import { dataApi } from './cloudflare/data-api.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const googleKeys = createRemoteJWKSet(new URL(
@@ -23,6 +24,12 @@ export async function verifyFirebaseToken(token, project, keys = googleKeys) {
   }
   return payload.sub;
 }
+// Prefixes owned by data-api.js. Deliberately excludes /v1/me, /v1/docs, /v1/videos,
+// /v1/photos, /v1/views, /v1/presence, /v1/engagement and /v1/android-release, which
+// have their own handlers.
+const DATA_API_PATHS = ['/v1/users', '/v1/posts', '/v1/chats', '/v1/groups',
+  '/v1/friend-requests', '/v1/notifications', '/v1/stories', '/v1/reels',
+  '/v1/calls', '/v1/settings', '/v1/upload'];
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -50,7 +57,15 @@ export function createWorker(verify = verifyFirebaseToken) {
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views) return json({ error: 'Not found' }, 404);
+      // The full app REST surface (/v1/posts, /v1/chats, /v1/groups, ...) lives in
+      // data-api.js and was never routed, so every one of those endpoints 404'd.
+      // It is gated: it only answers when the deployment explicitly opts in with
+      // DATA_API_ENABLED=true, which keeps the cutover reversible without a code
+      // change and keeps the existing endpoints authoritative until the tenant is
+      // actually migrated.
+      const dataRoute = DATA_API_PATHS.some(p => path === p || path.startsWith(p + '/'));
+      const dataApiOn = dataRoute && env.DATA_API_ENABLED === 'true';
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !dataApiOn) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -86,6 +101,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
+      if (dataApiOn) return dataApi(request, env, { uid, token: bearer[1] });
       try {
         if (request.method === 'PUT') {
           let body = {};
