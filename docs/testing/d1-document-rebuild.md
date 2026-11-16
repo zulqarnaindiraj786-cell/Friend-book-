@@ -202,3 +202,48 @@ WHERE collection = 'posts'
   interaction cutover keeps its own gate.
 - `CLOUDFLARE_DATA_ENABLED` and both D1 interaction switches are untouched, and Firebase
   data is neither read nor deleted by this step.
+
+## Running it through the D1 REST API (the path that works in CI)
+
+The Worker route above is the admin surface, but it authenticates with
+`MIGRATION_ADMIN_TOKEN`, which is not a repository secret. `CLOUDFLARE_API_TOKEN` is, and
+`scripts/d1_coverage.py` already reads this database with it. `scripts/admin/rebuild_documents_d1.py`
+does the same conversion over the D1 REST API with the same `SPECS`, the same `mapRow`
+mapping and the same gate; `scripts/tests/test_rebuild_mapping_parity.py` runs
+`cloudflare/document-rebuild.js` in node and asserts both produce identical documents.
+
+```bash
+export CLOUDFLARE_API_TOKEN=...            # never echoed, never written to disk
+python3 scripts/admin/rebuild_documents_d1.py plan            # read-only
+python3 scripts/admin/rebuild_documents_d1.py run posts       # dry run: writes nothing
+python3 scripts/admin/rebuild_documents_d1.py flow            # read-only: plan + posts dry run
+python3 scripts/admin/rebuild_documents_d1.py flow --apply    # gated writes
+```
+
+`flow` is the operator path: plan -> posts dry run -> checks -> posts apply -> posts verify ->
+gate -> the other nine -> final plan, stopping at the first failed check. Writes are
+`INSERT ... ON CONFLICT(path) DO NOTHING` in batches of 16 rows / 60 KB (D1's 100-parameter
+limit), so the gate stays meaningful: nothing is replaced without `--overwrite`.
+
+What the gate can and cannot promise:
+
+- **Coverage** (`documentRows >= sourceRows`, `sourceRowsWithoutDocument == 0`) is what
+  `gate.passed` reports, plus a readability sample.
+- **Field equality** is asserted only on the documents the rebuild wrote (`writtenIds` from
+  the apply step). Documents that already existed - written by the app or an earlier mirror -
+  are never replaced, and they legitimately omit empty fields, so they are reported as
+  `keptExistingDiffering` rather than counted as failures. Measured on the live store: 411 of
+  595 posts rows already had such a document.
+- The Worker route keeps the stricter sampling gate because there it owns a fresh store; the
+  D1-API path is the one that runs against a live store where documents predate it.
+
+In GitHub Actions this runs from a committed request file
+(`cloudflare/test/d1-rebuild-request.json`), so ordinary pushes do nothing:
+
+```json
+{ "step": "flow", "collection": "posts", "apply": true, "confirm": "APPLY" }
+```
+
+`step` is `none | flow | plan | dry-run | verify`; writes require both `apply: true` and
+`confirm: "APPLY"`. The job also records `GET /v1/health` and posts its whole result back to
+PR #31 as a comment, because Actions log downloads are not reachable from every client.

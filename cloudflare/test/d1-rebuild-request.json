@@ -1,7 +1,7 @@
 {
-  "step": "verify",
+  "step": "flow",
   "collection": "posts",
-  "apply": false,
-  "confirm": "",
-  "note": "Read-only: field-by-field check of 40 existing posts rows against their documents."
+  "apply": true,
+  "confirm": "APPLY",
+  "note": "Apply: posts first, verify, gate, then the remaining nine collections. Additive only - INSERT ... ON CONFLICT DO NOTHING, nothing replaced."
 }

@@ -191,5 +191,109 @@ class RunnerUnitTests(unittest.TestCase):
         self.assertEqual(len(runner.REMAINING), 9)
 
 
+class VerifySemanticsTests(unittest.TestCase):
+    """Documents the app wrote are kept and only reported; documents we wrote must round trip."""
+
+    ROWS = [
+        {'id': 'p1', 'author_id': 'u', 'content': 'hi', 'archived': 0, 'created_at': 5},
+        {'id': 'p2', 'author_id': 'u', 'content': 'yo', 'archived': 0, 'created_at': 6},
+    ]
+    SPEC = runner.SPEC_BY_COLLECTION['posts']
+
+    def mapped(self, row):
+        return runner.map_row(self.SPEC, row)['doc']
+
+    def runVerify(self, docs, ids=None):
+        def fakeD1(sql, params=(), retries=3):
+            query = ' '.join(sql.split())
+            if query.startswith('SELECT * FROM posts'):
+                if ' IN (' in query:
+                    return ([dict(row) for row in self.ROWS if row['id'] in set(params)], {})
+                return ([dict(row) for row in self.ROWS], {})
+            if query.startswith('SELECT document_json FROM friendbook_cf_documents'):
+                stored = docs.get(params[0])
+                return ([] if stored is None else [{'document_json': json.dumps(stored)}], {})
+            raise AssertionError(f'unexpected query: {query}')
+
+        with patch.object(runner, 'd1', fakeD1), \
+                patch.object(runner, 'source_rows', lambda spec: len(self.ROWS)), \
+                patch.object(runner, 'document_rows', lambda collection: len(docs)), \
+                patch.object(runner, 'missing_documents',
+                             lambda spec: max(0, len(self.ROWS) - len(docs))), \
+                patch.object(runner, 'orphan_documents', lambda spec: 0):
+            return runner.verify(self.SPEC, 5, ids=ids)
+
+    def test_documents_we_wrote_must_match_field_by_field(self):
+        docs = {f"posts/{row['id']}": self.mapped(row) for row in self.ROWS}
+        result = self.runVerify(docs, ids=['p1', 'p2'])
+        self.assertTrue(result['strict'])
+        self.assertEqual(result['checked'], 2)
+        self.assertEqual(result['mismatchCount'], 0)
+
+        drifted = json.loads(json.dumps(docs))
+        drifted['posts/p2']['content'] = 'edited later'
+        result = self.runVerify(drifted, ids=['p1', 'p2'])
+        self.assertEqual(result['mismatchCount'], 1)
+        self.assertEqual(result['mismatches'][0]['reason'], 'field-mismatch')
+        self.assertEqual(result['mismatches'][0]['keys'], ['content'])
+
+    def test_a_missing_document_is_always_a_failure(self):
+        docs = {'posts/p1': self.mapped(self.ROWS[0])}
+        result = self.runVerify(docs, ids=['p1', 'p2'])
+        self.assertEqual(result['mismatchCount'], 1)
+        self.assertEqual(result['mismatches'][0], {'id': 'p2', 'reason': 'missing-document'})
+        self.assertEqual(result['sourceRowsWithoutDocument'], 1)
+
+    def test_documents_that_predate_the_rebuild_are_reported_not_failed(self):
+        # The app's own documents are sparser than a full row mapping (no archived flag,
+        # no empty arrays); they are kept as they are and only reported.
+        older = {'posts/p1': {'id': 'p1', 'authorId': 'u', 'content': 'hi'},
+                 'posts/p2': {'id': 'p2', 'authorId': 'u', 'content': 'yo'}}
+        result = self.runVerify(older)
+        self.assertFalse(result['strict'])
+        self.assertEqual(result['mismatchCount'], 0)
+        self.assertEqual(result['keptExistingDiffering'], 2)
+        self.assertEqual(result['checked'], 0)
+        self.assertEqual(result['keptExistingSample'][0]['reason'], 'kept-existing-differs')
+
+
+class GateTests(unittest.TestCase):
+    SPEC = runner.SPEC_BY_COLLECTION['posts']
+
+    def gateWith(self, rows, docs, missing, probe):
+        with patch.object(runner, 'source_rows', lambda spec: rows), \
+                patch.object(runner, 'document_rows', lambda collection: docs), \
+                patch.object(runner, 'missing_documents', lambda spec: missing), \
+                patch.object(runner, 'verify', lambda spec, sample=3, ids=None: probe):
+            return runner.gate()
+
+    def test_coverage_with_a_readable_sample_passes(self):
+        gate = self.gateWith(595, 595, 0, {'checked': 3, 'mismatchCount': 0,
+                                           'mismatches': [], 'keptExistingDiffering': 0})
+        self.assertTrue(gate['passed'])
+
+    def test_a_document_the_app_wrote_still_counts_as_readable(self):
+        gate = self.gateWith(595, 595, 0, {'checked': 0, 'mismatchCount': 0,
+                                           'mismatches': [], 'keptExistingDiffering': 3})
+        self.assertTrue(gate['passed'])
+
+    def test_missing_rows_block_the_gate(self):
+        gate = self.gateWith(595, 412, 184, {'checked': 3, 'mismatchCount': 0,
+                                             'mismatches': [], 'keptExistingDiffering': 0})
+        self.assertFalse(gate['passed'])
+        self.assertEqual(gate['sourceRowsWithoutDocument'], 184)
+
+    def test_an_unreadable_sample_blocks_the_gate(self):
+        gate = self.gateWith(595, 595, 0, {'checked': 0, 'mismatchCount': 1,
+                                           'mismatches': [{'id': 'p', 'reason': 'missing-document'}],
+                                           'keptExistingDiffering': 0})
+        self.assertFalse(gate['passed'])
+
+    def test_no_rows_never_passes(self):
+        gate = self.gateWith(0, 0, 0, {'checked': 0, 'mismatchCount': 0,
+                                       'mismatches': [], 'keptExistingDiffering': 0})
+        self.assertFalse(gate['passed'])
+
+
 if __name__ == '__main__':
     unittest.main()

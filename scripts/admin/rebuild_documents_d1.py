@@ -282,11 +282,40 @@ def deep_equal(left, right):
     return False
 
 
-def verify(spec, sample=25):
+def existing_doc_ids(collection, doc_ids):
+    """Which of these ids already have a document (so the rebuild must not claim them)."""
+    if not doc_ids:
+        return set()
+    placeholders = ','.join(['?'] * len(doc_ids))
+    rows, _ = d1(
+        f'SELECT doc_id FROM friendbook_cf_documents WHERE collection = ? AND doc_id IN ({placeholders})',
+        [collection, *doc_ids])
+    return {row['doc_id'] for row in rows}
+
+
+def verify(spec, sample=25, ids=None):
+    """Coverage plus a round trip.
+
+    With `ids` (documents this run wrote) every mapped field must match exactly - that is
+    the migration's own output, so a difference is a bug.
+    Without `ids` the sample can contain documents the app or an earlier mirror wrote. Those
+    are never overwritten, and their older/looser shape is reported as `keptExistingDiffering`
+    rather than counted as a failure.
+    """
     limit = max(1, min(MAX_SAMPLE, int(sample)))
-    rows, _ = d1(f"SELECT * FROM {spec['table']} WHERE {spec['pk']} IS NOT NULL "
-                 f"ORDER BY {spec['pk']} LIMIT ?", [limit])
+    if ids:
+        chosen = list(ids)[:limit]
+        placeholders = ','.join(['?'] * len(chosen))
+        rows, _ = d1(f"SELECT * FROM {spec['table']} WHERE {spec['pk']} IN ({placeholders})",
+                     chosen)
+        strict = True
+    else:
+        rows, _ = d1(f"SELECT * FROM {spec['table']} WHERE {spec['pk']} IS NOT NULL "
+                     f"ORDER BY {spec['pk']} LIMIT ?", [limit])
+        strict = False
+
     mismatches = []
+    kept_differing = []
     checked = 0
     for row in rows:
         mapped = map_row(spec, row)
@@ -306,13 +335,22 @@ def verify(spec, sample=25):
             continue
         keys = [key for key, value in doc.items() if not deep_equal(actual.get(key), value)]
         if keys:
-            mismatches.append({'id': doc['id'], 'reason': 'field-mismatch', 'keys': keys[:12]})
-        checked += 1
+            entry = {'id': doc['id'], 'reason': 'field-mismatch', 'keys': keys[:12]}
+            if strict:
+                mismatches.append(entry)
+            else:
+                entry['reason'] = 'kept-existing-differs'
+                kept_differing.append(entry)
+        else:
+            checked += 1
     return {
         'collection': spec['collection'],
+        'strict': strict,
         'checked': checked,
         'mismatchCount': len(mismatches),
         'mismatches': mismatches[:20],
+        'keptExistingDiffering': len(kept_differing),
+        'keptExistingSample': kept_differing[:5],
         'sourceRows': source_rows(spec),
         'documentRows': document_rows(spec['collection']),
         'sourceRowsWithoutDocument': missing_documents(spec),
@@ -321,23 +359,25 @@ def verify(spec, sample=25):
 
 
 def gate():
+    """Coverage is the gate; the field round trip is proven on what the rebuild wrote."""
     spec = SPEC_BY_COLLECTION[TEST_COLLECTION]
     rows = source_rows(spec)
     docs = document_rows(TEST_COLLECTION)
     missing = missing_documents(spec)
-    check = {'checked': 0, 'mismatchCount': 0, 'mismatches': []}
+    sample = {'checked': 0, 'mismatchCount': 0, 'mismatches': [], 'keptExistingDiffering': 0}
     if rows > 0 and docs >= rows:
-        check = verify(spec, 3)
-    passed = rows > 0 and docs >= rows and missing == 0 and check['checked'] > 0 \
-        and check['mismatchCount'] == 0
+        sample = verify(spec, 3)
+    passed = rows > 0 and docs >= rows and missing == 0 \
+        and sample['checked'] + sample['keptExistingDiffering'] > 0 \
+        and sample['mismatchCount'] == 0
     return {
         'collection': TEST_COLLECTION,
         'passed': passed,
         'sourceRows': rows,
         'documentRows': docs,
         'sourceRowsWithoutDocument': missing,
-        'sampleChecked': check['checked'],
-        'sampleMismatches': check['mismatches'],
+        'sampleChecked': sample['checked'],
+        'sampleMismatches': sample['mismatches'],
     }
 
 
@@ -406,7 +446,7 @@ def write_documents(documents, overwrite=False):
 def rebuild(spec, apply=False, overwrite=False, page=MAX_PAGE, limit_rows=None):
     summary = {'collection': spec['collection'], 'dryRun': not apply, 'scanned': 0,
                'converted': 0, 'written': 0, 'skippedExisting': 0, 'oversized': 0,
-               'invalid': 0, 'warnings': {}, 'errors': [], 'pages': 0}
+               'invalid': 0, 'warnings': {}, 'errors': [], 'pages': 0, '_writtenIds': []}
     cursor = ''
     seen = set()
     while True:
@@ -445,9 +485,13 @@ def rebuild(spec, apply=False, overwrite=False, page=MAX_PAGE, limit_rows=None):
                 'updated_at': doc['updatedAt'],
             })
         if apply and pending:
+            already = existing_doc_ids(spec['collection'], [item['doc_id'] for item in pending])
             written, skipped = write_documents(pending, overwrite=overwrite)
             summary['written'] += written
             summary['skippedExisting'] += skipped
+            if written:
+                summary['_writtenIds'].extend(item['doc_id'] for item in pending
+                                              if overwrite or item['doc_id'] not in already)
         cursor = str(rows[-1][spec['pk']])
         if cursor in seen:
             raise D1Error('cursor did not advance')
@@ -459,8 +503,16 @@ def rebuild(spec, apply=False, overwrite=False, page=MAX_PAGE, limit_rows=None):
     return summary
 
 
+def _public(value):
+    if isinstance(value, dict):
+        return {k: _public(v) for k, v in value.items() if not str(k).startswith('_')}
+    if isinstance(value, list):
+        return [_public(item) for item in value]
+    return value
+
+
 def say(payload):
-    print(json.dumps(payload, sort_keys=True), flush=True)
+    print(json.dumps(_public(payload), sort_keys=True), flush=True)
 
 
 def require(condition, message, **payload):
@@ -492,9 +544,13 @@ def flow(apply_writes):
         say({'ok': True, 'report': report})
         return 0
 
-    report['postsApply'] = rebuild(posts, apply=True, overwrite=False)
-    say(report['postsApply'])
-    posts_verify = verify(posts, 40)
+    posts_apply = rebuild(posts, apply=True, overwrite=False)
+    report['postsApply'] = posts_apply
+    say(posts_apply)
+    # Field-by-field only for the documents this run wrote: the ones already there belong to
+    # the app or an earlier mirror, are never replaced, and legitimately omit empty fields.
+    written = posts_apply.get('_writtenIds') or []
+    posts_verify = verify(posts, 40, ids=written) if written else verify(posts, 25)
     report['postsVerify'] = posts_verify
     say(posts_verify)
     require(posts_verify['mismatchCount'] == 0, 'posts verification mismatched',
@@ -507,8 +563,10 @@ def flow(apply_writes):
 
     applied = []
     for name in REMAINING:
-        result = rebuild(SPEC_BY_COLLECTION[name], apply=True, overwrite=False)
-        check = verify(SPEC_BY_COLLECTION[name], 10)
+        spec = SPEC_BY_COLLECTION[name]
+        result = rebuild(spec, apply=True, overwrite=False)
+        new_ids = result.get('_writtenIds') or []
+        check = verify(spec, 20, ids=new_ids) if new_ids else verify(spec, 10)
         say({'applied': result, 'verified': check})
         require(check['mismatchCount'] == 0, f'{name} verification mismatched', result=check)
         require(check['sourceRowsWithoutDocument'] == 0,

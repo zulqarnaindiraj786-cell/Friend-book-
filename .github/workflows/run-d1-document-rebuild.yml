@@ -123,6 +123,16 @@ jobs:
           test -f rebuild-error.log && cat rebuild-error.log >&2
           exit 0
 
+      - name: Worker health (read-only HTTP check)
+        if: always() && steps.request.outputs.step != 'none'
+        run: |
+          URL="https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/health"
+          CODE=$(curl -sS -o health-body.json -w '%{http_code}' --max-time 30 "$URL" || echo 000)
+          echo "$CODE" > health-code.txt
+          head -c 600 health-body.json > health-body.txt 2>/dev/null || true
+          echo "GET $URL -> $CODE"
+          cat health-body.txt 2>/dev/null || true
+
       - name: Publish the result
         if: always() && steps.request.outputs.step != 'none'
         env:
@@ -149,6 +159,13 @@ jobs:
             fi
             echo ''
             echo "exit=$(cat rebuild-exit.txt 2>/dev/null || echo missing)"
+            echo ''
+            echo "**GET /v1/health -> $(cat health-code.txt 2>/dev/null || echo missing)**"
+            if [ -s health-body.txt ]; then
+              echo '```json'
+              head -c 600 health-body.txt
+              echo '```'
+            fi
             echo "commit=${{ github.sha }}"
           } > result-comment.md
           cat result-comment.md >> "$GITHUB_STEP_SUMMARY"
