@@ -282,15 +282,23 @@ def deep_equal(left, right):
     return False
 
 
+MAX_LOOKUP_IDS = 90  # D1 rejects a statement with more than 100 bound parameters
+
+
 def existing_doc_ids(collection, doc_ids):
     """Which of these ids already have a document (so the rebuild must not claim them)."""
-    if not doc_ids:
-        return set()
-    placeholders = ','.join(['?'] * len(doc_ids))
-    rows, _ = d1(
-        f'SELECT doc_id FROM friendbook_cf_documents WHERE collection = ? AND doc_id IN ({placeholders})',
-        [collection, *doc_ids])
-    return {row['doc_id'] for row in rows}
+    found = set()
+    wanted = list(doc_ids)
+    for start in range(0, len(wanted), MAX_LOOKUP_IDS):
+        batch = wanted[start:start + MAX_LOOKUP_IDS]
+        if not batch:
+            continue
+        placeholders = ','.join(['?'] * len(batch))
+        rows, _ = d1(
+            f'SELECT doc_id FROM friendbook_cf_documents WHERE collection = ? AND doc_id IN ({placeholders})',
+            [collection, *batch])
+        found.update(row['doc_id'] for row in rows)
+    return found
 
 
 def verify(spec, sample=25, ids=None):
@@ -485,13 +493,15 @@ def rebuild(spec, apply=False, overwrite=False, page=MAX_PAGE, limit_rows=None):
                 'updated_at': doc['updatedAt'],
             })
         if apply and pending:
-            already = existing_doc_ids(spec['collection'], [item['doc_id'] for item in pending])
-            written, skipped = write_documents(pending, overwrite=overwrite)
-            summary['written'] += written
-            summary['skippedExisting'] += skipped
-            if written:
-                summary['_writtenIds'].extend(item['doc_id'] for item in pending
-                                              if overwrite or item['doc_id'] not in already)
+            # One lookup per write chunk: a whole page of ids would exceed D1's parameter limit.
+            for chunk in chunks(pending):
+                already = existing_doc_ids(spec['collection'], [item['doc_id'] for item in chunk])
+                written, skipped = write_documents(chunk, overwrite=overwrite)
+                summary['written'] += written
+                summary['skippedExisting'] += skipped
+                if written:
+                    summary['_writtenIds'].extend(item['doc_id'] for item in chunk
+                                                  if overwrite or item['doc_id'] not in already)
         cursor = str(rows[-1][spec['pk']])
         if cursor in seen:
             raise D1Error('cursor did not advance')

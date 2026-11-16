@@ -1,7 +1,7 @@
 name: Deploy existing Cloudflare Worker (D1 OFF)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/32c742c6-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -25,6 +25,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
       || github.ref == 'refs/heads/arena/f6bf61bd-friend-book'
+      || github.ref == 'refs/heads/arena/32c742c6-friend-book'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

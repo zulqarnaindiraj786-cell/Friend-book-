@@ -71,8 +71,8 @@ export function createWorker(verify = verifyFirebaseToken) {
       // The migration API is authenticated by its own shared secret, not by a Firebase
       // token, so it must be dispatched before token verification below.
       const migration = path === '/v1/admin/migrate' || path.startsWith('/v1/admin/migrate/');
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !dataApiOn && !migration) return json({ error: 'Not found' }, 404);
-      if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/health' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !dataApiOn && !migration) return json({ error: 'Not found' }, 404);
+      if ((path === '/health' || path === '/health/r2' || path === '/v1/health') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
         if (!env.VIDEO_BUCKET || env.VIDEO_R2_ENABLED !== 'true' || env.VIDEO_R2_RETENTION_VERIFIED !== 'true') {
@@ -83,7 +83,9 @@ export function createWorker(verify = verifyFirebaseToken) {
           return json({ ok: true, r2Bound: true, videoR2Enabled: true });
         } catch { return json({ ok: false, r2Bound: true, videoR2Enabled: true }, 503); }
       }
-      if (path === '/health') {
+      // /v1/health is the same probe under the versioned prefix every other endpoint uses,
+      // so a client does not need to know that the unversioned /health exists.
+      if (path === '/health' || path === '/v1/health') {
         if (!env.DB) return json({ ok: false }, 503);
         // Binding flags only - no data, no counts. It proves what a deploy actually shipped:
         // views run on Analytics Engine (+ KV), and D1 is never written by the view path.

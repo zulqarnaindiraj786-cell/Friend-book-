@@ -29,6 +29,18 @@ test('health reports the R2 snapshot fallback when Workers KV is not bound', asy
   assert.deepEqual(await response.json(),
     { ok: true, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
 });
+test('/v1/health answers exactly like /health', async () => {
+  const env = { DB: { prepare(sql) {
+    assert.equal(sql, 'SELECT 1 AS connected'); return { first: async () => ({ connected: 1 }) };
+  } } };
+  const versioned = await call('/v1/health', env);
+  const plain = await call('/health', env);
+  assert.equal(versioned.status, 200);
+  assert.equal(plain.status, 200);
+  assert.deepEqual(await versioned.json(), await plain.json());
+  assert.equal(versioned.headers.get('Cache-Control'), 'no-store');
+  assert.equal((await call('/v1/health', {}, {}, 'POST')).status, 405);
+});
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);
   assert.equal((await call('/health', {}, {}, 'POST')).status, 405);
