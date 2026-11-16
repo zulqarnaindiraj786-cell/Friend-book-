@@ -47,6 +47,30 @@ Iske baghair `/v1/admin/migrate/*` 503 deta hai — jaan bujh kar. Koi default t
 
 ## 3. Data copy (Firestore → D1)
 
+> **Current blocker (verified 2026-11-16 04:12 UTC):** Firestore answers
+> `ResourceExhausted: 429 Quota exceeded` on a single-document read. The Spark
+> plan's 50,000 reads/day are spent, so the copy cannot run until the quota
+> resets at 00:00 UTC. Nothing has been lost: the worker `/verify` endpoint
+> reports every D1 table at 0 and Firestore is untouched.
+
+Run the pipeline: Actions -> **Migrate Firebase to Cloudflare**.
+
+It first proves itself against the live worker, then copies, then verifies:
+
+1. `Apply D1 schema` - `wrangler d1 migrations apply friendbook-db --remote`
+2. `Make sure the worker has a migration token` - uses `MIGRATION_ADMIN_TOKEN`
+   if it is a repository secret, otherwise generates one for the run and
+   installs it on the worker
+3. `Confirm the worker routes are live` - must get HTTP 200 from
+   `/v1/admin/migrate/verify`; 401/403/503 each print a specific cause
+4. `Run Firestore to D1 Migration` - probes Firestore with one read first, so a
+   quota or credential problem is reported as such instead of as "0 documents"
+5. `Verify Migration` - compares counts; this step no longer swallows failures
+
+For a first, cheap copy instead of a full dump, dispatch the workflow with
+`max_docs=100` and `only_collections=users,posts`.
+
+
 Laptop + Firebase service-account key chahiye. GitHub Actions se bhi ho sakta hai:
 
 Actions → **"migrate-to-cloudflare"** workflow → Run workflow. Ye 4 secret maangta hai:
