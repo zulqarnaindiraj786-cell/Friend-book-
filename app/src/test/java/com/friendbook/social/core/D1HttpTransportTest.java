@@ -78,7 +78,14 @@ public class D1HttpTransportTest {
  }
  @Test public void malformedSuccessIsNotAcceptedAsJson()throws Exception{
   response="<html>not an API response</html>";
+  // Reported as an IOException: callers only ever handle IOException, so a bare JSONException
+  // used to escape them and crash the screen instead of showing a retry.
   try{D1HttpTransport.send(url,"GET","synthetic-token",null);fail("Expected JSON rejection");}
-  catch(org.json.JSONException expected){}assertEquals(1,calls.get());
+  catch(IOException expected){}assertEquals(1,calls.get());
+ }
+ @Test public void redirectIsNeverFollowedSoCredentialsStayPut()throws Exception{
+  // OkHttp follows redirects by default, which would resend both the body and the bearer token
+  // to whatever Location names. The transport must refuse instead.
+  assertEquals(false,D1HttpTransport.followsRedirects());
  }
 }

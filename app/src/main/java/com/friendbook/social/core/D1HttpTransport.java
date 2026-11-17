@@ -43,9 +43,18 @@ final class D1HttpTransport {
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            // Never follow a redirect. OkHttp would resend the bearer token and the request body
+            // to whatever host the Location header names, and the old transport refused too.
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build();
 
     private D1HttpTransport() {
+    }
+
+    /** Exposed so a test can assert the redirect rule without a live server. */
+    static boolean followsRedirects() {
+        return CLIENT.followRedirects();
     }
 
     static JSONObject send(URL url, String method, String token, JSONObject body) throws IOException {
