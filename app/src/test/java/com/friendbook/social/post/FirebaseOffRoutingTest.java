@@ -33,20 +33,41 @@ public class FirebaseOffRoutingTest {
    when(auth.getCurrentUser()).thenReturn(null);assertNull(Fb.uid());assertFalse(Fb.signedIn());
   }
  }
- @Test public void offCommentSendCommitsCanonicalMirrorAndParentOnlyToFirestore(){
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
+ @Test public void offCommentSendWritesOnlyToD1AndReportsItsAnswer(){
+  // The old shape of this test asserted that a comment send committed to Firestore. That is the
+  // bug: Firestore was switched off, so the commit was refused, the success callback never ran,
+  // and the user was told the comment was not confirmed even though nothing was wrong with it.
+  // What must be true now is the opposite: the send goes to D1, D1's answer is what the user
+  // hears, and Firestore is never written.
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS);
+      MockedStatic<CloudflareStore> store=mockStatic(CloudflareStore.class)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
-   FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
-   DocumentReference parent=mock(DocumentReference.class),canonical=mock(DocumentReference.class),copy=mock(DocumentReference.class);WriteBatch batch=mock(WriteBatch.class);
-   fb.when(Fb::db).thenReturn(db);when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);
-   when(parent.collection("comments")).thenReturn(comments);when(comments.document("new-id")).thenReturn(canonical);
-   when(db.collection("comments")).thenReturn(mirror);when(mirror.document()).thenReturn(copy);when(copy.getId()).thenReturn("new-id");when(mirror.document("new-id")).thenReturn(copy);
-   when(db.batch()).thenReturn(batch);when(batch.commit()).thenReturn(Tasks.forResult(null));
-   boolean[] ack={false};Models.Comment local=CommentsEngine.sendComment("posts","p1","p1","hello","","",(ok,error)->ack[0]=ok);
-   Shadows.shadowOf(Looper.getMainLooper()).idle();assertNotNull(local);assertEquals("new-id",local.id);assertTrue(ack[0]);
-   verify(batch).set(eq(canonical),ArgumentMatchers.<Map<String,Object>>argThat(map->"hello".equals(map.get("content"))&&"off-user".equals(map.get("authorId"))));
-   verify(batch).set(eq(copy),anyMap());verify(batch).update(eq(parent),ArgumentMatchers.<Map<String,Object>>argThat(map->map.containsKey("lastComment")&&map.containsKey("comments")));verify(batch).commit();noD1(d1);
+   FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference mirror=mock(CollectionReference.class);
+   DocumentReference copy=mock(DocumentReference.class);
+   fb.when(Fb::db).thenReturn(db);when(db.collection("comments")).thenReturn(mirror);
+   when(mirror.document()).thenReturn(copy);when(copy.getId()).thenReturn("new-id");
+
+   // D1 acknowledges every write the send makes: the comment document, the counter increment
+   // and the post's preview.
+   store.when(()->CloudflareStore.put(anyString(),anyString(),anyMap(),any(),any())).thenAnswer(inv->{
+     Runnable ok=inv.getArgument(3);if(ok!=null)ok.run();return null;
+   });
+   store.when(()->CloudflareStore.patch(anyString(),anyString(),any(org.json.JSONArray.class),any(),any())).thenAnswer(inv->{
+     Runnable ok=inv.getArgument(3);if(ok!=null)ok.run();return null;
+   });
+
+   boolean[] ack={false};
+   Models.Comment local=CommentsEngine.sendComment("posts","p1","p1","hello","","",(ok,error)->ack[0]=ok);
+   Shadows.shadowOf(Looper.getMainLooper()).idle();
+
+   assertNotNull(local);assertEquals("new-id",local.id);
+   assertTrue("the comment is confirmed when D1 accepts it",ack[0]);
+   // The comment document itself, and the post's counter, both went to D1.
+   store.verify(()->CloudflareStore.put(eq("comments"),eq("new-id"),
+       ArgumentMatchers.<Map<String,Object>>argThat(map->"hello".equals(map.get("content"))),any(),any()));
+   verify(db,never()).batch();
+   noD1(d1);
   }
  }
  @Test public void offCommentWatchReadsFirebaseOnceAndStopsOnClose(){
