@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.net.Uri;
+import android.os.Build;
 import android.os.CancellationSignal;
 import android.text.InputType;
 import android.util.Log;
@@ -341,17 +345,46 @@ public final class GoogleAuthHelper {
         String low = rawMsg == null ? "" : rawMsg.toLowerCase(Locale.US);
         if (sNativeSha1Missing || low.contains("cert") || low.contains("sha")
                 || low.contains("developer_error") || low.contains("initial state")) {
+            String fingerprint = currentSigningSha1(a);
             new AlertDialog.Builder(a)
-                    .setTitle("🔐 Add SHA-1 in Firebase Console")
-                    .setMessage("To enable instant 1-tap Google Sign-In for package com.friendbook.social, add this SHA-1 fingerprint in:\n\n"
-                            + "Firebase Console → Project Settings → Your apps → com.friendbook.social → Add fingerprint:\n\n"
-                            + RELEASE_SHA1)
-                    .setPositiveButton("📋 Copy SHA-1", (d, w) -> Ui.copy(a, RELEASE_SHA1))
+                    .setTitle("🔐 Add this app's SHA-1 in Firebase Console")
+                    .setMessage("For Google Sign-In, add the SHA-1 for this installed build and package "
+                            + a.getPackageName() + " in Firebase Console → Project Settings → Your apps → Add fingerprint:\n\n"
+                            + fingerprint)
+                    .setPositiveButton("📋 Copy SHA-1", (d, w) -> Ui.copy(a, fingerprint))
                     .setNegativeButton("Close", null)
                     .show();
             return;
         }
         Ui.toast(a, friendlyError(rawMsg));
+    }
+
+    /** SHA-1 of the actual installed APK signer (debug and release builds have different keys). */
+    private static String currentSigningSha1(Context context) {
+        try {
+            int flags = Build.VERSION.SDK_INT >= 28
+                    ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+            PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), flags);
+            Signature[] signatures;
+            if (Build.VERSION.SDK_INT >= 28 && info.signingInfo != null) {
+                signatures = info.signingInfo.getApkContentsSigners();
+            } else {
+                //noinspection deprecation
+                signatures = info.signatures;
+            }
+            if (signatures != null && signatures.length > 0) {
+                byte[] digest = java.security.MessageDigest.getInstance("SHA-1").digest(signatures[0].toByteArray());
+                StringBuilder out = new StringBuilder();
+                for (byte value : digest) {
+                    if (out.length() > 0) out.append(':');
+                    out.append(String.format(Locale.US, "%02X", value & 0xff));
+                }
+                return out.toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not determine installed signing certificate", e);
+        }
+        return RELEASE_SHA1;
     }
 
     /** Ensures a signed-in FirebaseUser has a complete `users/{uid}` Firestore profile before entering MainActivity. */
