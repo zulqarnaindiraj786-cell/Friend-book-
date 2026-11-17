@@ -1,37 +1,77 @@
 package com.friendbook.social.core;
 
 import org.json.JSONObject;
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
 
-/** One bounded HTTP attempt only. Endpoint, auth and account guards stay in D1Client. */
+import java.io.IOException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.ConnectionPool;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
+/**
+ * The one HTTP path to the worker.
+ *
+ * <p><b>Why this is OkHttp now.</b> Every call used {@code HttpURLConnection} and ended in
+ * {@code disconnect()}, which tears the socket down. Nothing was pooled, so each write and each
+ * read paid a fresh DNS resolution and a full TLS handshake to Cloudflare - on a mobile network
+ * that is easily 300-600ms of pure overhead. A like, a comment and a message each make two or
+ * three such calls, which is exactly the "app is very slow" complaint. A shared client with a
+ * keep-alive pool reuses one connection for all of them, so only the first call pays the
+ * handshake.
+ *
+ * <p>The contract is unchanged: one bounded attempt, a JSON body back, and a thrown exception on
+ * anything that is not 2xx. Retrying stays with the caller, because a retried write has to be
+ * idempotent at the document level.
+ */
 final class D1HttpTransport {
-    private D1HttpTransport(){}
-    static JSONObject send(URL url,String method,String token,JSONObject body)throws Exception{
-        byte[] bytes=body==null?null:body.toString().getBytes(StandardCharsets.UTF_8);
-        if(bytes!=null&&bytes.length>32768)throw new IOException("Comment request too large");
-        HttpURLConnection connection=(HttpURLConnection)url.openConnection();
-        try{
-            connection.setConnectTimeout(10000);connection.setReadTimeout(15000);
-            connection.setInstanceFollowRedirects(false);connection.setRequestMethod(method);
-            if(token!=null)connection.setRequestProperty("Authorization","Bearer "+token);
-            connection.setRequestProperty("Accept","application/json");
-            if(bytes!=null){
-                connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);
-                connection.setRequestProperty("Content-Type","application/json");
-                try(OutputStream out=connection.getOutputStream()){out.write(bytes);}
+
+    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+    /** One client for the whole process: this is what makes the connections reusable. */
+    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+            // Keep idle sockets for five minutes so a user moving between screens keeps the
+            // connection; four idle sockets covers the feed plus a chat plus one detail screen.
+            .connectionPool(new ConnectionPool(4, 5, TimeUnit.MINUTES))
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build();
+
+    private D1HttpTransport() {
+    }
+
+    static JSONObject send(URL url, String method, String token, JSONObject body) throws IOException {
+        byte[] bytes = body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8);
+        if (bytes != null && bytes.length > 32768) throw new IOException("Comment request too large");
+
+        RequestBody requestBody = bytes == null ? null : RequestBody.create(bytes, JSON);
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .method(method, "GET".equals(method) ? null : (requestBody == null
+                        ? RequestBody.create(new byte[0], JSON) : requestBody));
+        if (token != null) builder.header("Authorization", "Bearer " + token);
+
+        try (Response response = CLIENT.newCall(builder.build()).execute()) {
+            int status = response.code();
+            ResponseBody payload = response.body();
+            String text = payload == null ? "" : payload.string();
+            if (status < 200 || status >= 300) {
+                throw new IOException("D1 request failed (" + status + "). Retry here; no Firebase write was made.");
             }
-            int status=connection.getResponseCode();
-            if(status<200||status>=300)throw new IOException("D1 request failed ("+status+"). Retry here; no Firebase write was made.");
-            try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
-                byte[] buffer=new byte[4096];int n;
-                while((n=in.read(buffer))!=-1){
-                    if(out.size()+n>1048576)throw new IOException("Response too large");
-                    out.write(buffer,0,n);
-                }
-                return new JSONObject(out.toString("UTF-8"));
-            }
-        }finally{connection.disconnect();}
+            if (text.length() > 1_048_576) throw new IOException("Response too large");
+            if (text.isEmpty()) return new JSONObject();
+            return new JSONObject(text);
+        } catch (org.json.JSONException malformed) {
+            throw new IOException("Malformed D1 response", malformed);
+        }
     }
 }

@@ -328,7 +328,7 @@ public class Fb {
 
     private static String lastCloudflareProfileKey = "";
     private static final java.util.concurrent.ExecutorService CF_PROFILE_IO =
-            java.util.concurrent.Executors.newSingleThreadExecutor();
+            java.util.concurrent.Executors.newFixedThreadPool(2);
 
     private static void syncProfileToCloudflare(Models.User u) {
         if (!com.friendbook.social.BuildConfig.D1_INTERACTIONS_ENABLED || u == null || u.uid == null) return;

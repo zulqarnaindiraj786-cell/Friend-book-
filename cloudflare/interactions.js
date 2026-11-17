@@ -160,6 +160,13 @@ export async function interactions(request, env, identity, match, authorize = au
         comments: Number(combined?.total_comments || 0),
         preview: previewRows.map(row => normalized(row, identity.uid)),
       };
+      // A PUT answers with the new summary, not just an acknowledgement.
+      //
+      // This used to reply {owner} only, so the client could not tell what the post now looked
+      // like and issued a second GET to find out. A like therefore cost two round trips - two
+      // TLS-latency-sized waits on a phone - for one tap. The summary is already computed above
+      // by the same SQL the GET uses, so returning it costs nothing on the server and removes a
+      // whole network round trip from every like, unlike and reaction change.
       rMap.set(cacheKey, { payload, expiresAt: Date.now() + REACTION_CACHE_TTL_MS });
       return json(payload);
     }

@@ -9,10 +9,13 @@ const MIGRATION_0001 = readFileSync(new URL('../migrations/0001_additive_profile
 const MIGRATION_0002 = readFileSync(new URL('../migrations/0002_additive_copy_staging.sql', import.meta.url), 'utf8');
 const MIGRATION_0003 = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
 const MIGRATION_0011 = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
+// 0015 adds the generated sort column the query engine now orders by, so any fixture that
+// runs a real query has to apply it too.
+const MIGRATION_0015 = readFileSync(new URL('../migrations/0015_indexable_sort_keys.sql', import.meta.url), 'utf8');
 
 function createSqliteD1() {
   const sql = new DatabaseSync(':memory:');
-  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011]) {
+  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0015]) {
     sql.exec(m);
   }
   const db = {

@@ -85,7 +85,9 @@ public final class D1Client {
         try{IO.execute(()->{
             try{
                 if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
-                String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
+                // Cached: this path runs on every like, comment and reaction, and the SDK round
+                // trip through the main thread was pure latency on each one.
+                String token=AuthToken.await(user,15_000L);
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
                 JSONObject data=D1HttpTransport.send(url,method,token,body);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});

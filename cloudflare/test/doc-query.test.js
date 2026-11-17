@@ -12,7 +12,17 @@ function db() {
     doc_id TEXT NOT NULL,
     owner_uid TEXT NOT NULL DEFAULT '',
     document_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL DEFAULT 0
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    -- Mirrors migration 0015: the query engine orders by this generated column so the
+    -- plan can use an index instead of scanning and sorting the whole collection.
+    sort_ms INTEGER GENERATED ALWAYS AS (
+      CASE
+        WHEN json_type(document_json, '$.createdAtMs') IN ('integer', 'real')
+          THEN CAST(json_extract(document_json, '$.createdAtMs') AS INTEGER)
+        WHEN json_type(document_json, '$.createdAt') IN ('integer', 'real')
+          THEN CAST(json_extract(document_json, '$.createdAt') AS INTEGER)
+      END
+    ) VIRTUAL
   )`);
   return {
     sql,

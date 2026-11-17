@@ -195,7 +195,16 @@ export function buildQuery({ collection, wheres = [], orderBy = null, limit = DE
   const sortField = orderBy ? orderField(orderBy.field) : 'updatedAt';
   const dir = orderBy ? orderBy.dir.toUpperCase() : 'DESC';
   const sortPath = `$.${sortField}`;
-  const sortExpr = `json_extract(document_json, '${sortPath}')`;
+  // Sorting on json_extract() cannot use an index - SQLite treats a function of a column as
+  // unindexable - so every feed page and every chat window scanned the whole collection and
+  // sorted it in memory. Migration 0015 adds a generated column for the one sort key the app
+  // actually orders by, so ordering on it becomes an indexed range scan.
+  //
+  // Any other field keeps the JSON expression: the result is identical, only the plan differs,
+  // and a collection reopened on an older database still works.
+  const sortExpr = (sortField === 'createdAtMs' || sortField === 'createdAt')
+    ? 'sort_ms'
+    : `json_extract(document_json, '${sortPath}')`;
 
   if (after) {
     const cursor = typeof after === 'string' ? decodeCursor(after) : after;

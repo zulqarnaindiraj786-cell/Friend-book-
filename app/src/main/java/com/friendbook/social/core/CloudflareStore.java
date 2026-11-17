@@ -31,10 +31,36 @@ public final class CloudflareStore {
     private static final String ORIGIN = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
     private static final String BASE = ORIGIN + "/v1/docs";
     private static final long LIST_CACHE_TTL_MS = 5 * 60_000L;
-    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    /**
+     * Several requests at once, not one after another.
+     *
+     * <p>This was a single-thread pool, so every D1 call in the app queued behind every other
+     * one: opening a screen that asks for three lists waited for three sequential round trips,
+     * and a chat send queued behind a feed refresh. Six threads covers the widest screen without
+     * letting a burst of requests turn into a flood of sockets.
+     */
+    private static final ExecutorService IO = Executors.newFixedThreadPool(6);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final android.util.LruCache<String, List<Map<String, Object>>> LIST_CACHE = new android.util.LruCache<>(16);
-    private static final android.util.LruCache<String, Long> LIST_CACHE_AT = new android.util.LruCache<>(16);
+    private static final android.util.LruCache<String, List<Map<String, Object>>> LIST_CACHE = new android.util.LruCache<>(24);
+    private static final android.util.LruCache<String, Long> LIST_CACHE_AT = new android.util.LruCache<>(24);
+
+    /**
+     * Drops only the cached lists that belong to {@code collection}.
+     *
+     * <p>Every write used to call {@code evictAll()}, so sending one chat message threw away the
+     * cached feed, the cached notification list and every other list in the app. The next screen
+     * then had to re-fetch all of it, which is why the app felt slow even when the thing the user
+     * did was cheap. Cache keys are "{@code collection[:...]}", so only the touched collection is
+     * dropped and everything else stays warm.
+     */
+    private static void invalidateLists(String collection) {
+        for (String key : LIST_CACHE.snapshot().keySet()) {
+            if (collection == null || key.equals(collection) || key.startsWith(collection + ":")) {
+                LIST_CACHE.remove(key);
+                LIST_CACHE_AT.remove(key);
+            }
+        }
+    }
 
     public static boolean enabled() {
         // Both flags, not just the interactions one. The master switch is the rollback lever,
@@ -119,9 +145,7 @@ public final class CloudflareStore {
         }
         FirebaseUser user = currentUser();
         if (user == null) { MAIN.post(() -> callback.accept(null)); return; }
-        user.getIdToken(false).addOnSuccessListener(res -> {
-            String token = res != null ? res.getToken() : null;
-            if (token == null || token.isEmpty()) { MAIN.post(() -> callback.accept(null)); return; }
+        AuthToken.with(user, token -> {
             IO.execute(() -> {
                 Map<String, Object> found = null;
                 try {
@@ -135,7 +159,7 @@ public final class CloudflareStore {
                 final Map<String, Object> result = found;
                 MAIN.post(() -> callback.accept(result));
             });
-        }).addOnFailureListener(err -> MAIN.post(() -> callback.accept(null)));
+        });
     }
 
     public static void put(String collection, String docId, Map<String, Object> fields) {
@@ -164,21 +188,17 @@ public final class CloudflareStore {
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
-                IO.execute(() -> {
+            AuthToken.with(user, token -> {                IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
                         D1HttpTransport.send(url, "PUT", token, body);
-                        LIST_CACHE.evictAll();
-                        LIST_CACHE_AT.evictAll();
+                        invalidateLists(collection);
                         if (onSuccess != null) MAIN.post(onSuccess);
                     } catch (Throwable refused) {
                         if (onFailure != null) MAIN.post(onFailure);
                     }
                 });
-            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+            });
         } catch (Throwable refused) {
             if (onFailure != null) MAIN.post(onFailure);
         }
@@ -221,10 +241,7 @@ public final class CloudflareStore {
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
-                IO.execute(() -> {
+            AuthToken.with(user, token -> {                IO.execute(() -> {
                     try {
                         URL url = new URL(query.toCountPath());
                         JSONObject data = D1HttpTransport.send(url, "GET", token, null);
@@ -252,7 +269,7 @@ public final class CloudflareStore {
                         if (onFailure != null) MAIN.post(onFailure);
                     }
                 });
-            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+            });
         } catch (Throwable refused) {
             if (onFailure != null) MAIN.post(onFailure);
         }
@@ -299,21 +316,17 @@ public final class CloudflareStore {
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
-                IO.execute(() -> {
+            AuthToken.with(user, token -> {                IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
                         D1HttpTransport.send(url, "PATCH", token, body);
-                        LIST_CACHE.evictAll();
-                        LIST_CACHE_AT.evictAll();
+                        invalidateLists(collection);
                         if (onSuccess != null) MAIN.post(onSuccess);
                     } catch (Throwable refused) {
                         if (onFailure != null) MAIN.post(onFailure);
                     }
                 });
-            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+            });
         } catch (Throwable refused) {
             if (onFailure != null) MAIN.post(onFailure);
         }
@@ -394,10 +407,7 @@ public final class CloudflareStore {
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
-                IO.execute(() -> {
+            AuthToken.with(user, token -> {                IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + safeLimit);
                         JSONObject data = D1HttpTransport.send(url, "GET", token, null);
@@ -410,7 +420,7 @@ public final class CloudflareStore {
                         if (onFailure != null) MAIN.post(onFailure);
                     }
                 });
-            }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+            });
         } catch (Throwable refused) {
             if (onFailure != null) MAIN.post(onFailure);
         }
@@ -460,13 +470,7 @@ public final class CloudflareStore {
             refuse(callback, onFailure, emptyPage());
             return;
         }
-        user.getIdToken(false).addOnSuccessListener(res -> {
-            String token = res != null ? res.getToken() : null;
-            if (token == null || token.isEmpty()) {
-                refuse(callback, onFailure, emptyPage());
-                return;
-            }
-            IO.execute(() -> {
+        AuthToken.with(user, token -> {            IO.execute(() -> {
                 Page page;
                 try {
                     URL url = new URL(ORIGIN + query.toPath());
@@ -483,7 +487,7 @@ public final class CloudflareStore {
                 final Page result = page;
                 MAIN.post(() -> callback.accept(result));
             });
-        }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        });
     }
 
     /**
@@ -513,21 +517,17 @@ public final class CloudflareStore {
         }
         FirebaseUser user = currentUser();
         if (user == null) { if (onFailure != null) MAIN.post(onFailure); return; }
-        user.getIdToken(false).addOnSuccessListener(res -> {
-            String token = res != null ? res.getToken() : null;
-            if (token == null || token.isEmpty()) { if (onFailure != null) MAIN.post(onFailure); return; }
-            IO.execute(() -> {
+        AuthToken.with(user, token -> {            IO.execute(() -> {
                 try {
                     URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
                     D1HttpTransport.send(url, "DELETE", token, null);
-                    LIST_CACHE.evictAll();
-                    LIST_CACHE_AT.evictAll();
+                    invalidateLists(collection);
                     if (onSuccess != null) MAIN.post(onSuccess);
                 } catch (Throwable refused) {
                     if (onFailure != null) MAIN.post(onFailure);
                 }
             });
-        }).addOnFailureListener(err -> { if (onFailure != null) MAIN.post(onFailure); });
+        });
     }
 
     private static FirebaseUser currentUser() {

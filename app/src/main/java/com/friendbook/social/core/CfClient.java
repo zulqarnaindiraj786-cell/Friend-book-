@@ -44,7 +44,8 @@ import java.util.concurrent.Executors;
 public final class CfClient {
     private static final String TAG = "CfClient";
     private static final String BASE_URL = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1";
-    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    /** Pooled so unrelated worker calls do not serialize behind each other. */
+    private static final ExecutorService IO = Executors.newFixedThreadPool(4);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final long REQUEST_TIMEOUT_MS = 30000;
     private static final long UPLOAD_TIMEOUT_MS = 300000;

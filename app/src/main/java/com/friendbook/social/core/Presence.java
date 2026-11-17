@@ -247,7 +247,7 @@ public class Presence {
 
     // ---------- PRESENCE WATCHING (Cloudflare HTTP + Firestore) ----------
 
-    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newFixedThreadPool(2);
     private static final android.util.LruCache<String, Long> CF_PRESENCE_FETCH_AT = new android.util.LruCache<>(256);
 
     /**
