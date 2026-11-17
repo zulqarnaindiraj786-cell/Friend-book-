@@ -312,6 +312,16 @@ jobs:
             const auth = await signup.json();
             if (!signup.ok || !auth.localId || !auth.idToken) fail(`Firebase Auth signup failed: ${auth.error?.message || signup.status}`);
             const uid = auth.localId;
+            const claims = JSON.parse(Buffer.from(auth.idToken.split('.')[1], 'base64url').toString('utf8'));
+            console.log('Firebase Auth token claims:', JSON.stringify({aud:claims.aud, iss:claims.iss, sub:claims.sub, auth_time:claims.auth_time, iat:claims.iat, exp:claims.exp}));
+            const lookup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_API_KEY}`, {
+              method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({idToken:auth.idToken})
+            });
+            console.log('Firebase ID-token lookup status:', lookup.status);
+            const authCheck = await fetch(new URL('/v1/me', process.env.WORKER_URL), {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const authCheckBody = await authCheck.text();
+            console.log('Worker Firebase identity check:', authCheck.status, authCheckBody.slice(0,500));
+            if (!authCheck.ok) fail('Worker rejected a fresh Firebase Auth token before the D1 write.');
             const docPath = `users/${uid}`;
             const workerUrl = new URL('/v1/firestore/document', process.env.WORKER_URL);
             workerUrl.searchParams.set('path', docPath);
