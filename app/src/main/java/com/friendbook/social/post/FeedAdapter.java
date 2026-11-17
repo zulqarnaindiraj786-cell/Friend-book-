@@ -31,10 +31,10 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.story.StoriesAdapter;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.QuerySnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.QuerySnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -1486,7 +1486,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         s.put("caption", "📌 " + p.authorName + (cap.isEmpty() ? "" : ": " + cap));
         s.put("sharedPostId", p.id);
         s.put("viewedBy", new ArrayList<String>());
-        s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+        s.put("createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
         s.put("expiresAt", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
         Fb.db().collection("stories").add(s)
@@ -1595,7 +1595,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 boolean unpin = t.contains("Unpin");
                 java.util.Map<String, Object> upd = new HashMap<>();
                 upd.put("pinnedPostId", unpin
-                        ? com.google.firebase.firestore.FieldValue.delete() : p.id);
+                        ? com.friendbook.social.d1.documents.FieldValue.delete() : p.id);
                 Fb.db().collection("users").document(Fb.uid()).update(upd)
                         .addOnSuccessListener(x -> Ui.toast(activity,
                                 unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
@@ -1620,7 +1620,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     Ui.confirm(activity, "🛡 Ban " + p.authorName + "?",
                             "This user will be banned from using friendbook.",
                             "Ban User", () -> Fb.db().collection("users").document(p.authorId)
-                                    .set(Fb.map("banned", true), com.google.firebase.firestore.SetOptions.merge())
+                                    .set(Fb.map("banned", true), com.friendbook.social.d1.documents.SetOptions.merge())
                                     .addOnSuccessListener(x -> {
                                         Notify.sendOfficialTeamMessage(p.authorId, "ban",
                                                 "Your account was suspended by a friendbook Moderator.", false);

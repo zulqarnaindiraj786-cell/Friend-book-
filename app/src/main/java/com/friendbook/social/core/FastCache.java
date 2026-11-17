@@ -17,8 +17,8 @@ import android.widget.TextView;
 import com.bumptech.glide.Glide;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.story.StoriesAdapter;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.Query;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

@@ -35,10 +35,10 @@ import com.friendbook.social.post.FeedAdapter;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
 import com.friendbook.social.story.StoriesAdapter;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;

@@ -28,8 +28,8 @@ import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -140,7 +140,7 @@ public class NotificationsFragment extends Fragment {
         Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .limit(450).get().addOnSuccessListener(snap -> {
                     if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
-                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+                    com.friendbook.social.d1.documents.WriteBatch batch = Fb.db().batch();
                     for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
                     batch.commit().addOnSuccessListener(v -> {
                         if (!me.equals(Fb.uid())) return;
@@ -178,7 +178,7 @@ public class NotificationsFragment extends Fragment {
         if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
         loadedActor = me;
         initialLoaded = true;
-        com.google.firebase.firestore.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
+        com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;

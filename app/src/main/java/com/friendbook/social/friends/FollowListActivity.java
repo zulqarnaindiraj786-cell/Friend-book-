@@ -17,7 +17,7 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.List;

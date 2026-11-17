@@ -24,9 +24,9 @@ import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.UsersAdapter;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.List;

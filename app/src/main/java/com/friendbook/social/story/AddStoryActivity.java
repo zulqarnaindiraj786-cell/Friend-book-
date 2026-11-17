@@ -19,7 +19,7 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.util.ArrayList;
 import java.util.Date;

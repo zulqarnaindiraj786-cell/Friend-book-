@@ -2,11 +2,11 @@ package com.friendbook.social.post;
 
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,7 +58,7 @@ public class CommentsEngine {
         private final List<ListenerRegistration> regs=new ArrayList<>();
         private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
         private final List<Models.Comment> legacy=new ArrayList<>();
-        private com.google.firebase.firestore.Query query;
+        private com.friendbook.social.d1.documents.Query query;
         private DocumentSnapshot cursor;
         private Listener listener;
         private String pinned="", actor=Fb.uid();
@@ -125,7 +125,7 @@ public class CommentsEngine {
             D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);return handle;
         }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
-        handle.query=parent.collection("comments").orderBy("createdAt",com.google.firebase.firestore.Query.Direction.DESCENDING);
+        handle.query=parent.collection("comments").orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
         // Compatibility only: one parent read. Never rebuild or expand its old commentsMap.
         parent.get().addOnSuccessListener(doc -> {
             if(!handle.active() || !doc.exists()) return;
@@ -137,8 +137,8 @@ public class CommentsEngine {
             if(!handle.active()) return;
             if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
-            for(com.google.firebase.firestore.DocumentChange change:page.getDocumentChanges()) {
-                if(change.getType()==com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+            for(com.friendbook.social.d1.documents.DocumentChange change:page.getDocumentChanges()) {
+                if(change.getType()==com.friendbook.social.d1.documents.DocumentChange.Type.REMOVED) {
                     final String id=change.getDocument().getId();
                     change.getDocument().getReference().get().addOnSuccessListener(current -> {
                         if(!handle.active()) return;
@@ -243,7 +243,7 @@ public class CommentsEngine {
 
         // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
         // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
-        com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+        com.friendbook.social.d1.documents.WriteBatch batch=Fb.db().batch();
         batch.set(parentRef.collection("comments").document(newId),commentMap);
         local.canonicalStored=true;
         batch.set(Fb.db().collection("comments").document(newId),commentMap);
@@ -295,7 +295,7 @@ public class CommentsEngine {
         DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
         DocumentReference mirror=Fb.db().collection("comments").document(c.id);
         if(c.canonicalStored) {
-            com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+            com.friendbook.social.d1.documents.WriteBatch batch=Fb.db().batch();
             batch.set(canonical,patch,SetOptions.merge()); batch.set(mirror,patch,SetOptions.merge()); batch.commit();
         } else {
             Fb.db().runTransaction(tx -> {

@@ -21,8 +21,8 @@ import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.List;
 

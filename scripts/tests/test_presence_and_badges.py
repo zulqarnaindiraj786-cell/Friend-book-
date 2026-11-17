@@ -31,11 +31,12 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertIn('CloudPresenceSocket', source)
         self.assertIn('foreground(activeStatusVisible)', source)
         self.assertIn('cloudSocket.background()', source)
-        # Firestore heartbeat (persisted, survives app kill)
+        # D1-backed document heartbeat persists profile presence.
         self.assertIn('FIRESTORE_HEARTBEAT', source)
         self.assertIn('writeFirestore(uid, true)', source)
-        # RTDB kept ONLY for serverTimeOffset (call signaling sync) and activeCall
-        self.assertIn('.info/serverTimeOffset', source)
+        # Call signaling is also stored in the D1-backed chat document; RTDB is absent.
+        self.assertNotIn('.info/serverTimeOffset', source)
+        self.assertIn('D1-backed chats document', source)
         self.assertIn('startCallSignal', source)
         self.assertIn('setCallSignal', source)
         # Old RTDB presence patterns REMOVED

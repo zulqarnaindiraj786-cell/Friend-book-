@@ -6,7 +6,7 @@ import android.os.Looper;
 
 import com.friendbook.social.BuildConfig;
 import com.google.firebase.auth.FirebaseUser;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import org.json.JSONArray;
 import org.json.JSONException;

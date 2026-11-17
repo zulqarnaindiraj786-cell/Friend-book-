@@ -11,14 +11,10 @@ import androidx.annotation.Nullable;
 import com.friendbook.social.BuildConfig;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
-import com.google.firebase.database.DataSnapshot;
-import com.google.firebase.database.DatabaseError;
-import com.google.firebase.database.DatabaseReference;
-import com.google.firebase.database.ValueEventListener;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import org.json.JSONObject;
 
@@ -53,9 +49,6 @@ public class Presence {
     private static boolean foregroundActive, activeStatusVisible;
     private static String installId;
     private static long generation, serverOffset;
-    private static ValueEventListener offsetListener;
-    private static DatabaseReference typingRef;
-    private static ValueEventListener typingListener;
 
     // OkHttp for typing HTTP calls
     private static final OkHttpClient CF_CLIENT = new OkHttpClient.Builder()
@@ -87,7 +80,7 @@ public class Presence {
         return cloudSocket;
     }
 
-    /** Initialize presence: connect to Cloudflare WebSocket, start Firestore heartbeat. */
+    /** Initialize presence: connect to Cloudflare WebSocket, start D1 heartbeat. */
     public static void init() {
         String uid = Fb.uid();
         if (uid == null) { goOffline(); return; }
@@ -106,21 +99,12 @@ public class Presence {
         // Cloudflare WebSocket connection
         try { ensureCloudSocket().foreground(activeStatusVisible); } catch (Throwable ignored) { }
 
-        // Firestore heartbeat (persisted, survives app kill)
+        // D1-backed profile heartbeat (persisted, survives app kill)
         writeFirestore(uid, true);
         H.removeCallbacks(FIRESTORE_HEARTBEAT);
         H.postDelayed(FIRESTORE_HEARTBEAT, HEARTBEAT_INTERVAL_MS);
 
-        // RTDB server time offset (for now() sync) - keep for call signaling
-        if (Fb.rtdb() != null && offsetListener == null) {
-            offsetListener = new ValueEventListener() {
-                public void onDataChange(@NonNull DataSnapshot data) {
-                    Long offset = data.getValue(Long.class); if (offset != null) serverOffset = offset;
-                }
-                public void onCancelled(@NonNull DatabaseError e) {}
-            };
-            Fb.rtdb().getReference(".info/serverTimeOffset").addValueEventListener(offsetListener);
-        }
+
     }
 
     private static final Runnable FIRESTORE_HEARTBEAT = new Runnable() {
@@ -134,7 +118,7 @@ public class Presence {
         }
     };
 
-    /** Go offline: close Cloudflare WS, write offline to Firestore. */
+    /** Go offline: close Cloudflare WS, write offline to D1. */
     public static void goOffline() {
         foregroundActive = false;
         H.removeCallbacks(FIRESTORE_HEARTBEAT);
@@ -142,10 +126,6 @@ public class Presence {
             try { cloudSocket.background(); } catch (Throwable ignored) { }
         }
         String uid = boundUid != null ? boundUid : Fb.uid();
-        if (Fb.rtdb() != null && typingListener != null && typingRef != null) {
-            try { typingRef.removeEventListener(typingListener); } catch (Throwable ignored) { }
-            typingListener = null; typingRef = null;
-        }
         if (uid != null) writeOfflineInternal(uid);
         boundUid = null;
     }
@@ -262,7 +242,7 @@ public class Presence {
 
         // Firestore snapshot listener (authoritative for privacy flags)
         h.fsL = Fb.db().collection("users").document(uid)
-                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (d, err) -> {
+                .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (d, err) -> {
                     if (h.closed) return;
                     if (d == null || !d.exists()) {
                         fsSeen[0] = false; fsOnline[0] = false; fsLastSeen[0] = 0L; emit.run(); return;
@@ -460,31 +440,18 @@ public class Presence {
         } catch (Throwable ignored) { }
     }
 
-    // ---------- RTDB: ONLY for activeCall (call signaling) ----------
-
-    /** Start listening for activeCall on RTDB (call signaling). */
+    // Call signaling is persisted in the D1-backed chats document, never RTDB.
     public static void startCallSignal(String chatId, String myUid, java.util.function.Consumer<Boolean> cb) {
-        if (Fb.rtdb() == null) return;
-        try {
-            DatabaseReference ref = Fb.rtdb().getReference("chats").child(chatId).child("activeCall");
-            ValueEventListener listener = new ValueEventListener() {
-                @Override public void onDataChange(@NonNull DataSnapshot s) {
-                    boolean hasCall = s.exists() && s.getValue() != null;
-                    cb.accept(hasCall);
-                }
-                @Override public void onCancelled(@NonNull DatabaseError e) { }
-            };
-            ref.addValueEventListener(listener);
-        } catch (Throwable ignored) { }
+        if (chatId == null || chatId.isEmpty() || cb == null) return;
+        Fb.db().collection("chats").document(chatId).addSnapshotListener((snap, error) -> {
+            if (error == null && snap != null) cb.accept(snap.exists() && snap.get("activeCall") != null);
+        });
     }
 
-    /** Set activeCall on RTDB (call signaling). */
     public static void setCallSignal(String chatId, boolean active, Map<String, Object> callData) {
-        if (Fb.rtdb() == null) return;
-        try {
-            DatabaseReference ref = Fb.rtdb().getReference("chats").child(chatId).child("activeCall");
-            if (active) ref.setValue(callData);
-            else ref.removeValue();
-        } catch (Throwable ignored) { }
+        if (chatId == null || chatId.isEmpty()) return;
+        if (active && callData != null) Fb.db().collection("chats").document(chatId)
+                .update("activeCall", callData);
+        else Fb.db().collection("chats").document(chatId).update("activeCall", FieldValue.delete());
     }
 }

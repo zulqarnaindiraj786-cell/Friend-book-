@@ -22,9 +22,9 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.util.ArrayList;
 import java.util.Collections;

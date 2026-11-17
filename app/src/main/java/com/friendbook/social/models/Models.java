@@ -1,7 +1,7 @@
 package com.friendbook.social.models;
 
 import com.friendbook.social.core.Format;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.HashMap;

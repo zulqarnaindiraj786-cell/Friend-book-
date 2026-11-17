@@ -14,8 +14,8 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 /**
  * ⭐ Creator Hub & Community Milestones (100% Free — Google Play Compliant):

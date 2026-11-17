@@ -24,8 +24,8 @@ public final class PushTrace {
     }
     public static void stage(String stage, String fields) { Log.d("FriendBookPush", stage + " " + fields); }
     public static void failure(String stage, Exception error) {
-        String code = error instanceof com.google.firebase.firestore.FirebaseFirestoreException
-                ? ((com.google.firebase.firestore.FirebaseFirestoreException) error).getCode().name()
+        String code = error instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                ? ((com.friendbook.social.d1.documents.D1DocumentStoreException) error).getCode().name()
                 : error.getClass().getSimpleName();
         Log.w("FriendBookPush", stage + " code=" + label(code));
     }

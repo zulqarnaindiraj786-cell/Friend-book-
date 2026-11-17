@@ -17,11 +17,12 @@ public final class PushGateway {
         Response(int s, JSONObject d) { status = s; data = d; }
         public boolean retryable() { return status == 409 || status == 429 || status >= 500; }
     }
+    private static final String CLOUDFLARE_API = BuildConfig.CLOUDFLARE_API_URL;
     public static Response call(JSONObject body, String bearer) throws Exception {
         String endpoint = "bulk_mention".equals(body.optString("action")) ? "/functions/v1/bulk-mentions" : "/functions/v1/send-fcm-notification";
-        HttpURLConnection c = (HttpURLConnection) new URL(BuildConfig.SUPABASE_URL + endpoint).openConnection();
+        HttpURLConnection c = (HttpURLConnection) new URL(CLOUDFLARE_API + endpoint).openConnection();
         try {
-            PushTrace.stage("http_start", "host=" + new URL(BuildConfig.SUPABASE_URL).getHost()
+            PushTrace.stage("http_start", "host=" + new URL(CLOUDFLARE_API).getHost()
                     + " path=" + endpoint + " " + PushTrace.request(body));
             c.setRequestMethod("POST"); c.setDoOutput(true); c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(10000); c.setReadTimeout(endpoint.endsWith("bulk-mentions") ? 60000 : 25000);

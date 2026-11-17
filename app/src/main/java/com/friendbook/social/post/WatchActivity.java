@@ -19,9 +19,9 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Source;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Source;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -245,7 +245,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
             return;
         }
         loading=true; final int request=generation; final String actor=Fb.uid();
-        com.google.firebase.firestore.Query query=Fb.db().collection("posts").whereEqualTo("mediaType","video");
+        com.friendbook.social.d1.documents.Query query=Fb.db().collection("posts").whereEqualTo("mediaType","video");
         boolean first=cursor==null; if(cursor!=null) query=query.startAfter(cursor);
         query.limit(10).get().addOnSuccessListener(page -> {
             if(request!=generation || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;

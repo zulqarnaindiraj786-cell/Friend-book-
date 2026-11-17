@@ -16,7 +16,7 @@ import com.friendbook.social.core.AdsConfig;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 /**
  * 📢 Real Production AdMob Native Ads Dashboard (`com.friendbook.social`):

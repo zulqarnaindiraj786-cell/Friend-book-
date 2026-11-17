@@ -32,8 +32,8 @@ import com.friendbook.social.settings.ArchiveTrashActivity;
 import com.friendbook.social.settings.SettingsActivity;
 import com.friendbook.social.settings.TimeSpentActivity;
 import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.Calendar;
 import java.util.HashMap;

@@ -38,11 +38,11 @@ import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.live.LiveStreamEngine;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -191,9 +191,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     private DocumentReference remoteMediaRef;
     private ListenerRegistration signalReg;
     private ListenerRegistration remoteMediaReg;
-    private com.google.firebase.database.DatabaseReference myRtdbMediaRef;
-    private com.google.firebase.database.DatabaseReference remoteRtdbMediaRef;
-    private com.google.firebase.database.ValueEventListener remoteRtdbListener;
+    private com.friendbook.social.d1.realtime.DatabaseReference myRtdbMediaRef;
+    private com.friendbook.social.d1.realtime.DatabaseReference remoteRtdbMediaRef;
+    private com.friendbook.social.d1.realtime.ValueEventListener remoteRtdbListener;
 
     private final AtomicLong localVideoSeq = new AtomicLong(0);
     private final AtomicLong localAudioSeq = new AtomicLong(0);
@@ -773,40 +773,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void attachRemoteMediaListener() {
         if (remoteMediaReg != null || remoteMediaRef == null) return;
-        try {
-            com.google.firebase.database.FirebaseDatabase rtdb = Fb.rtdb();
-            if (rtdb != null && callId != null && !callId.isEmpty()) {
-                String mySide = isCaller ? "a" : "b";
-                String remSide = isCaller ? "b" : "a";
-                myRtdbMediaRef = rtdb.getReference("call_streams").child(callId).child(mySide);
-                remoteRtdbMediaRef = rtdb.getReference("call_streams").child(callId).child(remSide);
-                remoteRtdbListener = new com.google.firebase.database.ValueEventListener() {
-                    @Override
-                    public void onDataChange(@NonNull com.google.firebase.database.DataSnapshot snap) {
-                        if (ended || isFinishing() || !snap.exists() || engine == null) return;
-                        Long aSeq = snap.child("audioSeq").getValue(Long.class);
-                        String aChunk = snap.child("audioChunk").getValue(String.class);
-                        if (aChunk != null && !aChunk.isEmpty()) {
-                            engine.enqueueRemoteAudio(aChunk, aSeq != null ? aSeq : 0L, false);
-                        }
-                        Boolean remCamOff = snap.child("camOff").getValue(Boolean.class);
-                        if (Boolean.TRUE.equals(remCamOff)) {
-                            remoteVideoView.setVisibility(View.GONE);
-                            centerProfileBox.setVisibility(View.VISIBLE);
-                        } else {
-                            Long vSeq = snap.child("videoSeq").getValue(Long.class);
-                            String vFrame = snap.child("videoFrame").getValue(String.class);
-                            if (vFrame != null && !vFrame.isEmpty()) {
-                                engine.decodeRemoteFrame(vFrame, vSeq != null ? vSeq : 0L, false);
-                            }
-                        }
-                    }
-                    @Override
-                    public void onCancelled(@NonNull com.google.firebase.database.DatabaseError error) { }
-                };
-                remoteRtdbMediaRef.addValueEventListener(remoteRtdbListener);
-            }
-        } catch (Throwable ignored) { }
+
 
         remoteMediaReg = remoteMediaRef.addSnapshotListener((snap, err) -> {
             if (ended || isFinishing() || snap == null || !snap.exists() || engine == null) return;

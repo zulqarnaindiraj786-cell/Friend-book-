@@ -5,9 +5,9 @@ import android.content.SharedPreferences;
 import android.util.Log;
 
 import com.google.android.gms.ads.AdValue;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.io.BufferedReader;
 import java.io.InputStream;

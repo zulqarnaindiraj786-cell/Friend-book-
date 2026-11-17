@@ -10,7 +10,7 @@ import android.text.style.ForegroundColorSpan;
 import android.view.View;
 import android.widget.*;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 import java.util.*;
 
 /** Selected identities, not guessed names: persist UID + exact UTF-16 range and label. */

@@ -28,10 +28,10 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -80,7 +80,7 @@ public class ConversationsActivity extends Activity {
         h.time.setVisibility(!online && seen > 0 ? View.GONE : View.VISIBLE);
     }
 
-    private com.google.firebase.firestore.DocumentSnapshot inboxCursor;
+    private com.friendbook.social.d1.documents.DocumentSnapshot inboxCursor;
     private boolean inboxLoading, inboxMore=true;
     private String inboxActor;
     private int inboxGeneration;
@@ -277,9 +277,9 @@ public class ConversationsActivity extends Activity {
     private void loadInboxPage(boolean reset) {
         if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) return;
         inboxLoading=true;inboxSpinner.setVisibility(View.VISIBLE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
-        com.google.firebase.firestore.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
+        com.friendbook.social.d1.documents.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
         if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
-        java.util.function.Consumer<com.google.firebase.firestore.QuerySnapshot> apply=snap -> {
+        java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply=snap -> {
             if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
             inboxLoading=false;inboxSpinner.setVisibility(View.GONE);
             if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
@@ -331,8 +331,8 @@ public class ConversationsActivity extends Activity {
         };
         if(reset){
             if(reg!=null)reg.remove();
-            reg=query.limit(10).addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});
-        }else query.limit(10).get(com.google.firebase.firestore.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+            reg=query.limit(10).addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});
+        }else query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
     }
 
     private void renderActiveNow() {

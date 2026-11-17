@@ -9,14 +9,13 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.TaskCompletionSource;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.database.FirebaseDatabase;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.FirebaseFirestoreSettings;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.PersistentCacheSettings;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.Source;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.D1DocumentStore;
+import com.friendbook.social.d1.documents.D1DocumentStoreSettings;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.PersistentCacheSettings;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.Source;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -28,10 +27,6 @@ import java.util.Map;
  */
 public class Fb {
 
-    public static final String RTDB_URL = "https://friendbook-17551-default-rtdb.firebaseio.com";
-
-    private static FirebaseDatabase rtdb;
-    private static boolean rtdbTried;
     private static boolean firestoreConfigured;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
@@ -42,12 +37,12 @@ public class Fb {
         if (!firestoreConfigured) {
             firestoreConfigured = true;
             try {
-                FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
+                D1DocumentStoreSettings settings = new D1DocumentStoreSettings.Builder()
                         .setLocalCacheSettings(PersistentCacheSettings.newBuilder()
                                 .setSizeBytes(100L * 1024L * 1024L) // 100 MB offline disk cache
                                 .build())
                         .build();
-                FirebaseFirestore.getInstance().setFirestoreSettings(settings);
+                D1DocumentStore.getInstance().setFirestoreSettings(settings);
             } catch (Throwable ignored) { }
         }
         // Instant 0ms cold-start hydration of signed-in user from local snapshot
@@ -60,25 +55,9 @@ public class Fb {
 
     public static FirebaseAuth auth() { return FirebaseAuth.getInstance(); }
 
-    public static FirebaseFirestore db() { return FirebaseFirestore.getInstance(); }
+    public static D1DocumentStore db() { return D1DocumentStore.getInstance(); }
 
-    /** Realtime Database (presence + typing). Returns null if the instance does not exist yet. */
-    @Nullable
-    public static FirebaseDatabase rtdb() {
-        if (rtdb != null) return rtdb;
-        if (rtdbTried) return null;
-        rtdbTried = true;
-        try {
-            rtdb = FirebaseDatabase.getInstance(RTDB_URL);
-            rtdb.setPersistenceEnabled(true);
-            rtdb.getReference(".info/connected");
-        } catch (Throwable t) {
-            rtdb = null;
-        }
-        return rtdb;
-    }
 
-    @Nullable
     public static String uid() {
         return auth().getCurrentUser() != null ? auth().getCurrentUser().getUid() : null;
     }
@@ -115,7 +94,7 @@ public class Fb {
                                         ? fu.getPhotoUrl().toString().replace("=s96-c", "=s400-c") : "";
                                 db().collection("users").document(uid).set(
                                         com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph),
-                                        com.google.firebase.firestore.SetOptions.merge());
+                                        com.friendbook.social.d1.documents.SetOptions.merge());
                             }
                         }
                         return;

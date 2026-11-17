@@ -5,7 +5,7 @@ import androidx.annotation.NonNull;
 import androidx.work.*;
 import com.friendbook.social.core.*;
 import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -84,8 +84,8 @@ public final class OfficialBroadcastWorker extends Worker {
             com.friendbook.social.push.PushTrace.failure("official_broadcast_failed", e);
             Throwable cause = e;
             while (cause.getCause() != null) cause = cause.getCause();
-            boolean denied = cause instanceof FirebaseFirestoreException
-                    && ((FirebaseFirestoreException) cause).getCode() == FirebaseFirestoreException.Code.PERMISSION_DENIED;
+            boolean denied = cause instanceof D1DocumentStoreException
+                    && ((D1DocumentStoreException) cause).getCode() == D1DocumentStoreException.Code.PERMISSION_DENIED;
             try { Tasks.await(job.update("status", denied ? "permission_denied" : "retrying"), 10, TimeUnit.SECONDS); }
             catch (Exception ignored) {}
             return denied ? Result.failure() : Result.retry();

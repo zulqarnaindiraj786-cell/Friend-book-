@@ -19,10 +19,10 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -216,12 +216,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
             List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(20).get();
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(20).get();
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(20).get();
+            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(20).get();
+            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(20).get();
+            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(20).get();
             com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
                 if(!current(token,me))return;checkingUsers.removeAll(ids);
-                com.google.firebase.firestore.QuerySnapshot a=(com.google.firebase.firestore.QuerySnapshot)results.get(0),b=(com.google.firebase.firestore.QuerySnapshot)results.get(1),c=(com.google.firebase.firestore.QuerySnapshot)results.get(2);
+                com.friendbook.social.d1.documents.QuerySnapshot a=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(0),b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
                 // Saturated legacy duplicate data is not evidence that other candidates have no relationship.
                 if(a.getMetadata().isFromCache() || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || a.size()==20 || b.size()==20 || c.size()==20){failedCandidates.addAll(ids);requestRender();return;}
                 for(DocumentSnapshot doc:a)for(String other:Models.ChatRoom.fromDoc(doc).participants)if(!other.equals(me))candidateFriends.add(other);
@@ -387,7 +387,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         WriteBatch batch = Fb.db().batch();
         batch.update(Fb.db().collection("friend_requests").document(rid),
                 "status", "accepted");
-        com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
+        com.friendbook.social.d1.documents.DocumentReference friendDocRef = Fb.db().collection("friends").document();
         Map<String, Object> friendDoc = Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
                 "createdAt", FieldValue.serverTimestamp());

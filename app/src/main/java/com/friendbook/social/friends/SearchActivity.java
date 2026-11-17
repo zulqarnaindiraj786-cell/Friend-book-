@@ -23,8 +23,8 @@ import com.friendbook.social.post.FeedAdapter;
 import com.friendbook.social.post.CreatePostActivity;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

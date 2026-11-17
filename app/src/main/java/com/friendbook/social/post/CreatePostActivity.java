@@ -24,7 +24,7 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -901,7 +901,7 @@ public class CreatePostActivity extends Activity {
         m.put("createdAt", FieldValue.serverTimestamp());
 
         // ⚡ 0.0ms Optimistic Publish: write to local persistence + prepend to FastCache immediately!
-        com.google.firebase.firestore.DocumentReference docRef = Fb.db().collection("posts").document();
+        com.friendbook.social.d1.documents.DocumentReference docRef = Fb.db().collection("posts").document();
         com.friendbook.social.models.Models.Post optimistic = new com.friendbook.social.models.Models.Post();
         optimistic.id = docRef.getId();
         optimistic.authorId = myUid;

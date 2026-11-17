@@ -7,7 +7,7 @@ class CirclePaging(unittest.TestCase):
         for token in ['storyAllowed(story)','renderLoadedStories()','snapshot.size()==10','pymkLoaded','pymkLoading']:
             self.assertIn(token,s)
         s=(JAVA/'story/StoryViewerActivity.java').read_text()
-        for token in ['allowedStory(story)','StoryAudience.visible','count().get(com.google.firebase.firestore.AggregateSource.SERVER)']:
+        for token in ['allowedStory(story)','StoryAudience.visible','count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER)']:
             self.assertIn(token,s)
     def test_local_settings_pages_preserve_search(self):
         s=(JAVA/'settings/SettingsActivity.java').read_text()

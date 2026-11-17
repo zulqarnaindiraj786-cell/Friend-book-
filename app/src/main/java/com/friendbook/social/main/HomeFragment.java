@@ -35,11 +35,11 @@ import com.friendbook.social.story.AddStoryActivity;
 import com.friendbook.social.story.StoriesAdapter;
 import com.friendbook.social.story.StoryViewerActivity;
 import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.QueryDocumentSnapshot;
-import com.google.firebase.firestore.Source;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.QueryDocumentSnapshot;
+import com.friendbook.social.d1.documents.Source;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -674,7 +674,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         Query query=Fb.db().collection("posts");
         // Same ordering/cursor is retained for subsequent pages, including the fallback.
         query=ordered?query.orderBy("createdAt",Query.Direction.DESCENDING)
-                :query.orderBy(com.google.firebase.firestore.FieldPath.documentId());
+                :query.orderBy(com.friendbook.social.d1.documents.FieldPath.documentId());
         feedQuery=query;
         final Query first=query.limit(PAGE);
         if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {

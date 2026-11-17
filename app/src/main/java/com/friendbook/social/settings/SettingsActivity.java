@@ -29,8 +29,8 @@ import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.SavedPostsActivity;
 import com.friendbook.social.profile.EditProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Date;
@@ -436,7 +436,7 @@ public class SettingsActivity extends Activity {
                                                 "category", "csae",
                                                 "reason", txt,
                                                 "reportedBy", Fb.uid(),
-                                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp()));
+                                                "createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp()));
                                         Ui.info(this, "Priority Report Submitted",
                                                 "Thank you. Our safety team prioritizes child safety reports immediately.");
                                     })
@@ -1225,7 +1225,7 @@ public class SettingsActivity extends Activity {
                     m.put("name", Fb.myName());
                     m.put("text", txt);
                     m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
-                    m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                    m.put("createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
                     Fb.db().collection("feedback").add(m);
                     Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
                 })

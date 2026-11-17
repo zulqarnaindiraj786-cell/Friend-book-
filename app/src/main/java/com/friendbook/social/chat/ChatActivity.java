@@ -25,12 +25,12 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -572,7 +572,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(40)
-                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
+                .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     boolean bridged=false;
                     if(!snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()){
@@ -586,7 +586,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==40;}
                         lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
                     }
-                    if(snap.getDocumentChanges(com.google.firebase.firestore.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
+                    if(snap.getDocumentChanges(com.friendbook.social.d1.documents.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
                         boolean cached=snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites(),playSound=false;
                         boolean eligible=soundGate.begin(cached);Set<String> hidden=hiddenMsgs();
                         for(DocumentSnapshot doc:snap){Models.Message m=messageSnapshots.get(doc.getId());
@@ -607,9 +607,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     List<Models.Message> list = new ArrayList<>();
                     Set<String> hidden = hiddenMsgs();
                     String me = Fb.uid();
-                    for (com.google.firebase.firestore.DocumentChange change : snap.getDocumentChanges()) {
+                    for (com.friendbook.social.d1.documents.DocumentChange change : snap.getDocumentChanges()) {
                         String id = change.getDocument().getId();
-                        if (change.getType() == com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+                        if (change.getType() == com.friendbook.social.d1.documents.DocumentChange.Type.REMOVED) {
                             Models.Message evicted=messageSnapshots.remove(id);
                             if(evicted!=null) historyMessages.put(id,evicted);
                         } else {
@@ -651,7 +651,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(40).get(com.google.firebase.firestore.Source.SERVER)
+        older.limit(40).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
                     historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==40;
@@ -689,7 +689,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
-        batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
+        batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
     }
 
@@ -820,7 +820,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.friendbook.social.d1.documents.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         Map<String, Object> msg = Fb.map(
                 "senderId", me,
@@ -912,7 +912,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.friendbook.social.d1.documents.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         Models.Message opt = new Models.Message();
         opt.id = msgRef.getId();
@@ -973,7 +973,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
         typingSent = false;
 
-        com.google.firebase.firestore.DocumentReference msgRef =
+        com.friendbook.social.d1.documents.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();
         Models.Message opt = new Models.Message();
         opt.id = msgRef.getId();
@@ -1181,7 +1181,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
             if (isTeamChat || Ui.TEAM_USER_ID.equals(m.senderId)) {
                 String sharedDocId = m.sharedTeamReactionDocId();
-                com.google.firebase.firestore.DocumentReference sharedRef =
+                com.friendbook.social.d1.documents.DocumentReference sharedRef =
                         Fb.db().collection("chats").document("team_shared_reactions")
                                 .collection("messages").document(sharedDocId);
                 if (w == emoj.length - 1) {

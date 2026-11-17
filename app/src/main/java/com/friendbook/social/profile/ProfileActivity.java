@@ -50,11 +50,11 @@ import com.friendbook.social.settings.ArchiveTrashActivity;
 import com.friendbook.social.social.PokesActivity;
 import com.friendbook.social.story.AddStoryActivity;
 import com.friendbook.social.story.StoryViewerActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.text.DateFormatSymbols;
 import java.util.ArrayList;

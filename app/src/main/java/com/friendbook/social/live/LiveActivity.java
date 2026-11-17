@@ -47,17 +47,17 @@ import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.database.DataSnapshot;
-import com.google.firebase.database.DatabaseError;
-import com.google.firebase.database.DatabaseReference;
-import com.google.firebase.database.FirebaseDatabase;
-import com.google.firebase.database.ValueEventListener;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.realtime.DataSnapshot;
+import com.friendbook.social.d1.realtime.DatabaseError;
+import com.friendbook.social.d1.realtime.DatabaseReference;
+import com.friendbook.social.d1.realtime.D1RealtimeDatabase;
+import com.friendbook.social.d1.realtime.ValueEventListener;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1446,60 +1446,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     // ==================== DUAL-LANE STREAMING (RTDB FAST LANE + FIRESTORE GUARANTEED LANE) ====================
 
-    private void setupRtdbFastLane() {
-        if (liveId == null) return;
-        try {
-            FirebaseDatabase rtdb = Fb.rtdb();
-            if (rtdb == null) return;
-            rtdbStreamRef = rtdb.getReference("live_streams").child(liveId);
-            rtdbStreamListener = new ValueEventListener() {
-                @Override
-                public void onDataChange(@NonNull DataSnapshot snapshot) {
-                    if (isFinishing() || isEnded || !snapshot.exists()) return;
-                    if (!isHost && !pkBattleActive) {
-                        Boolean hCamOff = snapshot.child("camOff").getValue(Boolean.class);
-                        if (Boolean.TRUE.equals(hCamOff)) {
-                            remoteVideoView.setVisibility(View.GONE);
-                            fallbackStage.setVisibility(View.VISIBLE);
-                            stageStatusTv.setText(hostNameStr + " paused camera · Live voice active");
-                        } else {
-                            String vB64 = snapshot.child("v").getValue(String.class);
-                            Long vSeq = snapshot.child("vs").getValue(Long.class);
-                            if (vB64 != null && !vB64.isEmpty()) {
-                                engine.decodeRemoteFrame(vB64, vSeq == null ? 0L : vSeq, false);
-                            }
-                        }
-                        String aB64 = snapshot.child("a").getValue(String.class);
-                        Long aSeq = snapshot.child("as").getValue(Long.class);
-                        if (aB64 != null && !aB64.isEmpty()) {
-                            engine.enqueueRemoteAudio(aB64, aSeq == null ? 0L : aSeq, false);
-                        }
-                    }
-                    // Co-Host ultra-low-latency fast lane (received by Host and Viewers!)
-                    if (!isMeActiveCoHost && !activeCoHostUid.isEmpty()) {
-                        Boolean cCamOff = snapshot.child("cCamOff").getValue(Boolean.class);
-                        if (Boolean.TRUE.equals(cCamOff)) {
-                            coHostRemoteImage.setVisibility(View.GONE);
-                        } else {
-                            String cvB64 = snapshot.child("cv").getValue(String.class);
-                            Long cvSeq = snapshot.child("cvs").getValue(Long.class);
-                            if (cvB64 != null && !cvB64.isEmpty()) {
-                                engine.decodeRemoteFrame(cvB64, cvSeq == null ? 0L : cvSeq, true);
-                            }
-                        }
-                        String caB64 = snapshot.child("ca").getValue(String.class);
-                        Long caSeq = snapshot.child("cas").getValue(Long.class);
-                        if (caB64 != null && !caB64.isEmpty()) {
-                            engine.enqueueRemoteAudio(caB64, caSeq == null ? 0L : caSeq, true);
-                        }
-                    }
-                }
-                @Override
-                public void onCancelled(@NonNull DatabaseError error) { }
-            };
-            rtdbStreamRef.addValueEventListener(rtdbStreamListener);
-        } catch (Throwable ignored) { }
-    }
+    // Low-latency media signaling now uses the D1-backed snapshot lane below.
+    private void setupRtdbFastLane() { /* D1 snapshot listeners are installed by the reliable lane. */ }
 
     @Override
     public void onEncodedVideoFrame(String base64Webp, int width, int height) {
@@ -1641,7 +1589,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         chatColReg = Fb.db().collection("lives").document(liveId).collection("chat")
                 .orderBy("createdAtMs", Query.Direction.ASCENDING)
                 .limitToLast(100)
-                .addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE, (snap, err) -> {
+                .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (isFinishing() || snap == null) return;
                     onChatSnapshot(snap.getDocuments(), snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites());
                 });
@@ -3389,59 +3337,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkBattleId = targetPkId;
         engine.resetCoHostSequences();
 
-        try {
-            FirebaseDatabase rtdb = Fb.rtdb();
-            if (rtdb != null) {
-                pkRtdbARef = rtdb.getReference("pk_streams").child(targetPkId).child("a");
-                pkRtdbBRef = rtdb.getReference("pk_streams").child(targetPkId).child("b");
 
-                pkRtdbAListener = new ValueEventListener() {
-                    @Override
-                    public void onDataChange(@NonNull DataSnapshot snap) {
-                        if (isFinishing() || isEnded || !pkBattleActive || !snap.exists()) return;
-                        if ("A".equals(pkRole)) return;
-                        Boolean camOff = snap.child("camOff").getValue(Boolean.class);
-                        if (Boolean.TRUE.equals(camOff)) {
-                            pkLeftRemoteImg.setVisibility(View.GONE);
-                            pkLeftFallbackBox.setVisibility(View.VISIBLE);
-                        } else {
-                            String v = snap.child("v").getValue(String.class);
-                            Long vs = snap.child("vs").getValue(Long.class);
-                            if (v != null && !v.isEmpty()) engine.decodeRemoteFrame(v, vs == null ? 0L : vs, false);
-                        }
-                        String a = snap.child("a").getValue(String.class);
-                        Long as = snap.child("as").getValue(Long.class);
-                        if (a != null && !a.isEmpty()) engine.enqueueRemoteAudio(a, as == null ? 0L : as, false);
-                    }
-                    @Override
-                    public void onCancelled(@NonNull DatabaseError error) { }
-                };
-                pkRtdbARef.addValueEventListener(pkRtdbAListener);
-
-                pkRtdbBListener = new ValueEventListener() {
-                    @Override
-                    public void onDataChange(@NonNull DataSnapshot snap) {
-                        if (isFinishing() || isEnded || !pkBattleActive || !snap.exists()) return;
-                        if ("B".equals(pkRole)) return;
-                        Boolean camOff = snap.child("camOff").getValue(Boolean.class);
-                        if (Boolean.TRUE.equals(camOff)) {
-                            pkRightRemoteImg.setVisibility(View.GONE);
-                            pkRightFallbackBox.setVisibility(View.VISIBLE);
-                        } else {
-                            String v = snap.child("v").getValue(String.class);
-                            Long vs = snap.child("vs").getValue(Long.class);
-                            if (v != null && !v.isEmpty()) engine.decodeRemoteFrame(v, vs == null ? 0L : vs, true);
-                        }
-                        String a = snap.child("a").getValue(String.class);
-                        Long as = snap.child("as").getValue(Long.class);
-                        if (a != null && !a.isEmpty()) engine.enqueueRemoteAudio(a, as == null ? 0L : as, true);
-                    }
-                    @Override
-                    public void onCancelled(@NonNull DatabaseError error) { }
-                };
-                pkRtdbBRef.addValueEventListener(pkRtdbBListener);
-            }
-        } catch (Throwable ignored) { }
 
         pkBattleReg = Fb.db().collection("chats").document("pkbattle_" + targetPkId)
                 .addSnapshotListener((snap, err) -> {

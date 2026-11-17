@@ -49,11 +49,11 @@ import com.friendbook.social.models.Models;
 import com.friendbook.social.post.FullscreenMediaActivity;
 import com.friendbook.social.post.Reactions;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -611,7 +611,7 @@ public class ReelsFragment extends Fragment {
         // 3. Also check local Firestore disk cache (Source.CACHE) for 0ms offline/slow-network render
         final int cacheGen = videoGeneration;
         Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(5)
-                .get(com.google.firebase.firestore.Source.CACHE)
+                .get(com.friendbook.social.d1.documents.Source.CACHE)
                 .addOnSuccessListener(snap -> {
                     if (cacheGen != videoGeneration || !isAdded() || snap == null || snap.isEmpty()) return;
                     boolean added = false;
@@ -2520,9 +2520,9 @@ public class ReelsFragment extends Fragment {
                     com.friendbook.social.core.FastCache.setReactionTypes(reel.id, activeTypes);
                     com.friendbook.social.core.FastCache.setReactionState(ctx, reel.id, nextType, reel.likes, true);
 
-                    com.google.firebase.firestore.DocumentReference postRef =
+                    com.friendbook.social.d1.documents.DocumentReference postRef =
                             Fb.db().collection("posts").document(reel.id);
-                    com.google.firebase.firestore.DocumentReference subRef =
+                    com.friendbook.social.d1.documents.DocumentReference subRef =
                             postRef.collection("reactions").document(me);
 
                     if (nextType == null) {
@@ -2566,7 +2566,7 @@ public class ReelsFragment extends Fragment {
                     }
                 } else {
                     // Native Reel in reels/{id}: atomic per-userId dot-path update with FieldValue.delete() merge fallback
-                    com.google.firebase.firestore.DocumentReference reelRef =
+                    com.friendbook.social.d1.documents.DocumentReference reelRef =
                             Fb.db().collection("reels").document(reel.id);
                     Map<String, Object> dot = new HashMap<>();
                     dot.put("reactions." + me, nextType == null ? FieldValue.delete() : nextType);

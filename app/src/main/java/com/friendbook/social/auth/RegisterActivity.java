@@ -18,7 +18,7 @@ import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.util.ArrayList;
 import java.util.HashMap;

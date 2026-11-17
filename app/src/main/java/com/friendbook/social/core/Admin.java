@@ -3,8 +3,8 @@ package com.friendbook.social.core;
 import android.content.Context;
 
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 /** Admin gating + tick/boost management. Owner: zulqarnaindiraj786@gmail.com */
 public class Admin {
@@ -151,7 +151,7 @@ public class Admin {
         final String name = (target.displayName != null && !target.displayName.isEmpty()) ? target.displayName : "User";
         Fb.db().collection("users").document(target.uid)
                 .set(Fb.map("suspendedUntil", until, "suspendedLifetime", lifetime),
-                        com.google.firebase.firestore.SetOptions.merge())
+                        com.friendbook.social.d1.documents.SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     target.suspendedUntil = until;
                     target.suspendedLifetime = lifetime;
@@ -174,7 +174,7 @@ public class Admin {
     public static void setGlobalModerator(Context c, String uid, String displayName, boolean makeMod) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
         Fb.db().collection("users").document(uid)
-                .set(Fb.map("isModerator", makeMod), com.google.firebase.firestore.SetOptions.merge())
+                .set(Fb.map("isModerator", makeMod), com.friendbook.social.d1.documents.SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     Notify.sendOfficialTeamMessage(uid, "team",
                             makeMod
@@ -199,7 +199,7 @@ public class Admin {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
         Fb.db().collection("users").document(uid)
                 .set(Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0),
-                        com.google.firebase.firestore.SetOptions.merge())
+                        com.friendbook.social.d1.documents.SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     TickCache.put(uid, level);
                     syncAuthorVerified(uid, Icons.tickRank(level) > 0);
@@ -243,9 +243,9 @@ public class Admin {
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
                         WriteBatch b = Fb.db().batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
                             b.set(d.getReference(), Fb.map("authorVerified", value),
-                                    com.google.firebase.firestore.SetOptions.merge());
+                                    com.friendbook.social.d1.documents.SetOptions.merge());
                         b.commit();
                     });
         }
@@ -259,10 +259,10 @@ public class Admin {
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
                         WriteBatch b = Fb.db().batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
                             b.set(d.getReference(), Fb.map("authorTickLevel", level,
                                             "authorVerified", Icons.tickRank(level) > 0),
-                                    com.google.firebase.firestore.SetOptions.merge());
+                                    com.friendbook.social.d1.documents.SetOptions.merge());
                         b.commit();
                     });
         }
@@ -284,7 +284,7 @@ public class Admin {
         if (currentRank >= Icons.tickRank(level)) return; // already this good or better
         Fb.db().collection("users").document(uid)
                 .set(Fb.map("tickLevel", level, "isVerified", true),
-                        com.google.firebase.firestore.SetOptions.merge())
+                        com.friendbook.social.d1.documents.SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", uid,

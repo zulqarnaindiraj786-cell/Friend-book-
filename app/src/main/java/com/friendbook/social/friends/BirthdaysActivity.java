@@ -19,8 +19,8 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -224,7 +224,7 @@ public class BirthdaysActivity extends Activity {
                                 "likes", 0,
                                 "comments", 0,
                                 "shares", 0,
-                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                                "createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
                         Fb.db().collection("posts").document().set(post);
                         com.friendbook.social.core.Notify.send(r.user.uid, "birthday",
                                 "wished you a Happy Birthday 🎂🎉", "");

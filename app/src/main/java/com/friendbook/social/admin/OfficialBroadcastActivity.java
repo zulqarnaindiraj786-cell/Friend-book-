@@ -8,7 +8,7 @@ import android.database.Cursor;
 import android.provider.OpenableColumns;
 import android.widget.*;
 import com.friendbook.social.core.*;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 
 /** Admin-only composer: one shared upload, image/video + linked text in official Team chats. */

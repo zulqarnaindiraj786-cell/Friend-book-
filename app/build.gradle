@@ -16,7 +16,7 @@ android {
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
         // D1, no KV. Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
-        buildConfigField 'String', 'SUPABASE_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
+        buildConfigField 'String', 'CLOUDFLARE_API_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
         versionCode 121

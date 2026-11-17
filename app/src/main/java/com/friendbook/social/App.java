@@ -164,7 +164,7 @@ public class App extends Application implements SensorEventListener {
                 c.put("appVersion", com.friendbook.social.core.Ui.appVersionCode(this));
                 c.put("appVersionName", com.friendbook.social.core.Ui.appVersionName(this));
                 c.put("createdAt",
-                        com.google.firebase.firestore.FieldValue.serverTimestamp());
+                        com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
                 Fb.db().collection("crashReports").add(c);
                 Thread.sleep(500);
             } catch (Throwable ignored) { }

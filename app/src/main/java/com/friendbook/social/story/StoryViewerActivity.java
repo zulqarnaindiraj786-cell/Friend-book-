@@ -28,11 +28,11 @@ import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
 import com.friendbook.social.settings.ArchiveTrashActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -242,7 +242,7 @@ public class StoryViewerActivity extends Activity {
         if(actor==null){finish();return;}
         if(actor.equals(authorId)){viewerFriend=true;loadStoryPages(request);return;}
         Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(actor,authorId),java.util.Arrays.asList(authorId,actor)))
-                .count().get(com.google.firebase.firestore.AggregateSource.SERVER).addOnSuccessListener(count->{
+                .count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER).addOnSuccessListener(count->{
                     if(request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
                     viewerFriend=count.getCount()>0;
                     if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else finish();

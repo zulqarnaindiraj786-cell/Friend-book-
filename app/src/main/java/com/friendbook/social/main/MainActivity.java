@@ -34,8 +34,8 @@ import com.friendbook.social.profile.CreatorDashboardDialog;
 import com.friendbook.social.reels.AddReelActivity;
 import com.friendbook.social.social.PagesActivity;
 import com.friendbook.social.story.AddStoryActivity;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -226,9 +226,9 @@ public class MainActivity extends Activity {
                     () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
                     2000L);
             try {
-                com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
-                        com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
-                rc.setConfigSettingsAsync(new com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings.Builder()
+                com.friendbook.social.d1.config.D1RemoteConfig rc =
+                        com.friendbook.social.d1.config.D1RemoteConfig.getInstance();
+                rc.setConfigSettingsAsync(new com.friendbook.social.d1.config.D1RemoteConfigSettings.Builder()
                         .setMinimumFetchIntervalInSeconds(3600).build());
                 rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled_v3", true))
                         .addOnCompleteListener(dt -> rc.fetchAndActivate().addOnCompleteListener(t -> {
@@ -564,7 +564,7 @@ public class MainActivity extends Activity {
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 currentUnreadNotifIds.add(d.getId());
                             }
                         }
@@ -583,7 +583,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.notifBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts > clearedAt) {
                                 unseen++;
@@ -603,7 +603,7 @@ public class MainActivity extends Activity {
                         currentUnreadChatIds.clear();
                     }
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             // 📞 Detect incoming Voice / Video Calls anywhere in friendbook!
                             com.friendbook.social.chat.CallActivity.maybeHandleIncomingFromRoomDoc(this, d);
 
@@ -638,7 +638,7 @@ public class MainActivity extends Activity {
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 currentPendingReqIds.add(d.getId());
                             }
                         }
@@ -652,7 +652,7 @@ public class MainActivity extends Activity {
                         if (snap != null && !snap.isEmpty()) {
                             java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
                             boolean hasUnseen = false;
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 if (!seenIds.contains(d.getId())) {
                                     hasUnseen = true;
                                     break;
@@ -666,7 +666,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.friendRequestsClearedAt(this, me);
                     int count = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             if (seenIds.contains(d.getId())) continue;
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt > 0L && ts > 0L && ts <= clearedAt) continue;
@@ -678,7 +678,7 @@ public class MainActivity extends Activity {
 
         // Video / Reels badge (capped at 15+ via Ui.setBadge)
         Fb.db().collection("reels")
-                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(16)
                 .get()
                 .addOnSuccessListener(snap -> {
@@ -689,7 +689,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
                                 unseen++;

@@ -18,9 +18,9 @@ import com.friendbook.social.models.Models;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.story.StoryViewerActivity;
 import com.google.firebase.Timestamp;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;

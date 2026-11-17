@@ -2,10 +2,10 @@ package com.friendbook.social.core;
 
 import androidx.annotation.Nullable;
 
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -146,9 +146,9 @@ public class Notify {
         if (Prefs.notifComments(c)) send(toUid, "comment", "commented on your post", postId);
     }
 
-    public static void markAllRead(java.util.List<com.google.firebase.firestore.DocumentSnapshot> docs) {
+    public static void markAllRead(java.util.List<com.friendbook.social.d1.documents.DocumentSnapshot> docs) {
         WriteBatch b = Fb.db().batch();
-        for (com.google.firebase.firestore.DocumentSnapshot d : docs)
+        for (com.friendbook.social.d1.documents.DocumentSnapshot d : docs)
             b.update(d.getReference(), "isRead", true);
         b.commit();
     }

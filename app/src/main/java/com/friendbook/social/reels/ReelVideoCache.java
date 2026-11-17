@@ -8,8 +8,8 @@ import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.Query;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;

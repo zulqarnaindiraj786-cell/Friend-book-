@@ -27,9 +27,9 @@ import com.friendbook.social.post.CreatePostActivity;
 import com.friendbook.social.post.FeedAdapter;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;

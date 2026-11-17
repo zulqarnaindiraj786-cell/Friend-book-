@@ -1,7 +1,7 @@
 package com.friendbook.social.core;
 
 import android.util.LruCache;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 
 /** Account-scoped, bounded one-shot pages. Never advances the cursor on failed reads. */

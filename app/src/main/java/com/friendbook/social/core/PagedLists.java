@@ -3,7 +3,7 @@ package com.friendbook.social.core;
 import android.app.Activity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 
 /** Explicit refresh/more controls for legacy list screens. No silent truncation or background draining. */

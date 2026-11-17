@@ -13,9 +13,9 @@ import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -38,7 +38,7 @@ public class PokesActivity extends Activity {
                     if(recent){Ui.toast(a,"You already poked "+toName+" — wait a bit");return;}
                     // A deterministic per-pair document prevents concurrent taps bypassing the 24h gate.
                     String pair=java.util.UUID.nameUUIDFromBytes((me+"|"+toUid).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-                    com.google.firebase.firestore.DocumentReference ref=Fb.db().collection("pokes").document("pair_"+pair);
+                    com.friendbook.social.d1.documents.DocumentReference ref=Fb.db().collection("pokes").document("pair_"+pair);
                     Fb.db().runTransaction(tx->{
                         DocumentSnapshot current=tx.get(ref);
                         if(current.exists() && System.currentTimeMillis()-Format.ts(current.get("at"))<24L*3600_000L)return false;

@@ -2,7 +2,7 @@ package com.friendbook.social.core;
 import android.app.*;
 import android.widget.*;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 import java.util.function.Consumer;
 /** Paged friend choices. Existing selections outside the loaded page are never discarded. */
