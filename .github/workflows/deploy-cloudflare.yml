@@ -353,8 +353,16 @@ jobs:
             const oauthBody = await oauth.json();
             if (!oauth.ok || !oauthBody.access_token) fail(`Firebase Admin read-token request failed: ${oauthBody.error || oauth.status}`);
             const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${docPath}`;
-            const firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${oauthBody.access_token}`}});
-            const firestoreText = await firestore.text();
+            let firestore;
+            let firestoreText = '';
+            for (let attempt = 0; attempt < 6; attempt++) {
+              firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${oauthBody.access_token}`}});
+              firestoreText = await firestore.text();
+              if (firestore.status !== 429) break;
+              const waitMs = Math.min(60000, 10000 * (attempt + 1));
+              console.log(`Firestore read quota returned HTTP 429; retry ${attempt + 1}/5 after ${waitMs}ms.`);
+              await new Promise(resolve => setTimeout(resolve, waitMs));
+            }
             if (firestore.status !== 404) fail(`Expected no Firebase Firestore profile (404); got HTTP ${firestore.status}: ${firestoreText.slice(0,500)}`);
 
             const report = {result:'PASS', firebaseAuthUserCreated:true, uid, email, workerPath:docPath,
