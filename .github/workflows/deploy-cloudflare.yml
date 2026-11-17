@@ -10,6 +10,8 @@ on:
       - 'docs/**'
       - '.github/workflows/deploy-cloudflare.yml'
       - 'scripts/admin/configure_video_r2.py'
+      - 'scripts/admin/migrate_firestore_to_d1.py'
+      - 'scripts/tests/test_firestore_migration.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +27,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -285,6 +287,15 @@ jobs:
           test "$vcode" = 401
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
           echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Copy Firebase Firestore to D1 with per-collection checkpoints
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: |
+          python3 -m pip install 'google-auth==2.40.3' 'requests==2.32.5'
+          python3 scripts/admin/migrate_firestore_to_d1.py --execute --quota-reviewed
+
       - name: Create one-time Firebase Auth user and prove D1-only profile storage
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
         env:
