@@ -13,9 +13,12 @@ CREATE INDEX IF NOT EXISTS idx_friendbook_cf_fcm_devices_user
 
 CREATE TABLE IF NOT EXISTS friendbook_cf_push_claims (
     event_key TEXT PRIMARY KEY NOT NULL,
-    actor TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- Some existing D1 databases already contain this table from the earlier push-claim path,
+-- without the actor column. CREATE TABLE IF NOT EXISTS does not update its schema.
+ALTER TABLE friendbook_cf_push_claims ADD COLUMN actor TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_friendbook_cf_push_claims_actor
     ON friendbook_cf_push_claims(actor, created_at DESC);
