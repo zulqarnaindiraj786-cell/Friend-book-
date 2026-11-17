@@ -162,6 +162,26 @@ class D1:
         return self.query(f'''SELECT * FROM {PROGRESS_TABLE} WHERE status!='complete'
           ORDER BY priority, collection_path LIMIT 1''')
 
+    def normalize_legacy_child_paths(self):
+        # Repair resumable task rows created by the earlier relative-path bug.
+        rows = self.query(f'''SELECT collection_path FROM {PROGRESS_TABLE}
+          WHERE collection_path NOT LIKE ?''', (PREFIX + '/%',))
+        fixed = 0
+        for row in rows:
+            old = row['collection_path']
+            if not old or old.startswith('/') or '..' in old.split('/'):
+                raise CopyError('Invalid persisted collection checkpoint; refusing to alter it')
+            corrected = PREFIX + '/' + old
+            parent, collection = corrected.rsplit('/', 1)
+            collision = self.query(f'SELECT collection_path FROM {PROGRESS_TABLE} WHERE collection_path=?', (corrected,))
+            if collision:
+                raise CopyError('Conflicting normalized checkpoint exists; no checkpoint changed')
+            self.query(f'''UPDATE {PROGRESS_TABLE} SET collection_path=?,parent_path=?,collection_id=?,updated_at=?
+              WHERE collection_path=?''', (corrected, parent, collection, int(time.time() * 1000), old))
+            fixed += 1
+        if fixed:
+            print(json.dumps({'resumed_checkpoint_paths_repaired': fixed}), flush=True)
+
 
 def root_priority(path):
     return ROOT_PRIORITY.get(path[len(PREFIX) + 1:].split('/', 1)[0], 3)
@@ -191,7 +211,7 @@ def persist_page(d1, task, records, next_token, read_total):
     # INSERT idempotently discovered child collections before advancing the parent cursor.
     for r in records:
         for child in r.pop('child_collections', []):
-            path = r['path'] + '/' + child
+            path = PREFIX + '/' + r['path'] + '/' + child
             d1.add_task(path, task['priority'])
     old_read, old_written = task['documents_read'], task['documents_written']
     status = 'finalizing' if next_token is None else 'pending'
@@ -235,7 +255,7 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
             else:
                 # showMissing entries have no parent row but may carry descendants.
                 for child in child_collections:
-                    d1.add_task(source_path + '/' + child, task['priority'])
+                    d1.add_task(PREFIX + '/' + source_path + '/' + child, task['priority'])
         persist_page(d1, task, records, next_token, page_count)
         read_count += page_count
         written_count += len(records)
@@ -311,6 +331,7 @@ def main():
         with requests.Session() as d1_session:
             d1_session.headers['Authorization'] = 'Bearer ' + cf_token
             d1 = D1(d1_session)
+            d1.normalize_legacy_child_paths()
             # Process root collections one at a time in priority order; the D1 task queue
             # resumes incomplete roots and their subcollections from the saved cursor.
             source_credentials = service_account.Credentials.from_service_account_info(
