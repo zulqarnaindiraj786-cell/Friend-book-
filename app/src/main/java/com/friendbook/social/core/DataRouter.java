@@ -88,6 +88,17 @@ public final class DataRouter {
     }
 
     /**
+     * A batch that commits to D1 and reports D1's answer.
+     *
+     * <p>This is what a write call site should use instead of {@code Fb.db().batch()} plus a
+     * {@code mirrorPut}. The Firestore batch reported the outcome of a write to a store that is
+     * switched off, so a successful D1 write was surfaced to the user as a failure.
+     */
+    public static D1Batch batch() {
+        return new D1Batch();
+    }
+
+    /**
      * Mirrors a write into D1, leaving the caller's Firestore write exactly as it was.
      *
      * <p>With Firestore's network disabled that call queues locally and spends no quota, so

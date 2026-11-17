@@ -26,9 +26,27 @@ public final class D1Client {
      */
     private static final Set<String> D1_UNAVAILABLE = Collections.synchronizedSet(new HashSet<>());
 
+    /**
+     * Collections the D1 data plane serves.
+     *
+     * <p>This was {@code posts} and {@code reels} only. Everything else - comments, chats,
+     * messages, friend requests, notifications - therefore took the Firestore branch, and with
+     * Firestore switched off those writes failed. A new account could create nothing: no like,
+     * no comment, no message, no friend request. The list is the worker's own allowlist
+     * (cloudflare/app-documents.js), so the app only asks for what the server serves.
+     */
+    private static final Set<String> D1_COLLECTIONS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    "users", "posts", "reels", "stories", "chats", "messages",
+                    "friends", "friend_requests", "follows", "groups", "pages",
+                    "notifications", "official_broadcasts", "lives", "pokes",
+                    "live_chat", "comments", "subscriptions")));
+
     /** True when this collection is eligible for D1 at all (build flag + supported collection). */
     public static boolean enabled(String collection){
-        return BuildConfig.D1_INTERACTIONS_ENABLED && ("posts".equals(collection)||"reels".equals(collection));
+        return BuildConfig.D1_INTERACTIONS_ENABLED
+                && collection != null
+                && D1_COLLECTIONS.contains(collection);
     }
 
     /** True when this specific document should be served by D1 (eligible and not rejected yet). */
@@ -69,12 +87,11 @@ public final class D1Client {
                 URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
                 JSONObject data=D1HttpTransport.send(url,method,token,body);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
             }catch(Exception error){
-                // "Resource migration not verified" (503) means this document's interactions were
-                // never imported into D1. Route it back to Firestore for the rest of this process
-                // instead of showing the user an empty counter, and let callers fall back cleanly.
-                String message = error.getMessage() == null ? "" : error.getMessage();
-                if (message.contains("not verified") || message.contains("503")) markUnavailable(collection, id);
-                MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));
+                // A 503 used to send this document back to Firestore for the rest of the process.
+                // That is no longer a fallback: Firestore is switched off, so the write that
+                // followed failed too and the user lost the action twice over. A refusal is now
+                // reported as a refusal, and the client keeps retrying D1.
+                MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry.")));
             }
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
