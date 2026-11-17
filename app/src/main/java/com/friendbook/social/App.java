@@ -77,6 +77,9 @@ public class App extends Application implements SensorEventListener {
         Looper.myQueue().addIdleHandler(() -> {
             Presence.init();
             Fb.startMeListener();
+            // A session whose profile row is missing from D1 - a lost signup write, or a build
+            // installed over one that failed - would otherwise act as a user nobody can look up.
+            com.friendbook.social.core.CloudflareStore.ensureOwnProfile();
             return false;
         });
 

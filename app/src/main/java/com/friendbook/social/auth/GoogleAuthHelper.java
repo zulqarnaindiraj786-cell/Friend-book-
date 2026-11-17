@@ -415,20 +415,25 @@ public final class GoogleAuthHelper {
                                                String displayName, String googlePhoto,
                                                String referralInput, View btnView, TextView labelTv) {
         Map<String, Object> u = buildDefaultGoogleUserMap(uid, email, displayName, googlePhoto);
-        com.friendbook.social.core.DataRouter.mirrorPut("users", uid, u);
-        Fb.db().collection("users").document(uid).set(u, SetOptions.merge())
-                .addOnSuccessListener(x -> {
+
+        // Created in D1, and the sign-in finishes on D1's answer. This was Firestore's success
+        // listener, so a brand-new Google account was refused and landed back on the login
+        // screen - the first thing a new user hit, before any like or message could work.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("users", uid, u)
+                .commit((success, error) -> {
+                    if (!success) {
+                        sAuthInFlight = false;
+                        setBusy(btnView, labelTv, false);
+                        Ui.toast(a, "Couldn't finish signing in. Check your connection and try again.");
+                        return;
+                    }
                     sAuthInFlight = false;
                     recordReferralIfPresent(a, uid, displayName, googlePhoto, referralInput);
                     Prefs.saveAccount(a, uid, email, displayName, googlePhoto);
                     Prefs.setUnlockedSession(a, true);
                     SessionsActivity.record();
                     openMain(a);
-                })
-                .addOnFailureListener(err -> {
-                    sAuthInFlight = false;
-                    setBusy(btnView, labelTv, false);
-                    Ui.toast(a, friendlyError(err != null ? err.getMessage() : null));
                 });
     }
 
@@ -525,8 +530,9 @@ public final class GoogleAuthHelper {
             existingPhoto = googlePhoto;
         }
         if (!patch.isEmpty()) {
-            com.friendbook.social.core.DataRouter.mirrorPut("users", uid, patch);
-            Fb.db().collection("users").document(uid).set(patch, SetOptions.merge());
+            // Returning sign-in keeps its profile patch in D1 too, so a login never turns into a
+            // write against a store that is switched off.
+            com.friendbook.social.core.DataRouter.batch().set("users", uid, patch).commit();
         }
         if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
             Notify.send(uid, "security", "logged in with Google on " + android.os.Build.MODEL, "");
@@ -604,6 +610,7 @@ public final class GoogleAuthHelper {
     private static void openMain(Activity a) {
         Fb.startMeListener();
         Presence.init();
+        com.friendbook.social.core.CloudflareStore.ensureOwnProfile();
         a.startActivity(new Intent(a, MainActivity.class));
         a.finishAffinity();
     }

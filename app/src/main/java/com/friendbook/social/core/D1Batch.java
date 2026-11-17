@@ -54,6 +54,22 @@ public final class D1Batch {
 
     private final List<Op> queued = new ArrayList<>();
 
+    /**
+     * Runs when D1 refuses the batch.
+     *
+     * <p>D1 is the only store the app writes to now, so a refusal is a real failure and the
+     * caller must hear about it. The hook exists so the caller can retry through its existing
+     * Firestore code path if one is still worth trying, without this class knowing about
+     * Firestore at all.
+     */
+    private Runnable onRefused;
+
+    /** Installs the refusal hook; it runs once, on the main thread, after D1 says no. */
+    public D1Batch orElse(Runnable refused) {
+        this.onRefused = refused;
+        return this;
+    }
+
     /** Queues a full document write. */
     public D1Batch set(String collection, String docId, Map<String, Object> fields) {
         if (collection != null && docId != null && !docId.isEmpty() && fields != null) {
@@ -145,8 +161,17 @@ public final class D1Batch {
             Runnable finish = () -> {
                 synchronized (remaining) {
                     remaining[0]--;
-                    if (remaining[0] == 0 && callback != null) {
-                        callback.done(!failed[0], error[0]);
+                    if (remaining[0] == 0) {
+                        if (failed[0] && onRefused != null) {
+                            // Reported to the caller as a failure first, so a caller that only
+                            // understands the boolean still sees the truth.
+                            if (callback != null) callback.done(false, error[0]);
+                            Runnable retry = onRefused;
+                            android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+                            main.post(retry);
+                            return;
+                        }
+                        if (callback != null) callback.done(!failed[0], error[0]);
                     }
                 }
             };
@@ -202,19 +227,33 @@ public final class D1Batch {
          * object's JSON shape and the field would read back as a map instead of a number or an
          * array. The app builds its atomic operations explicitly - {@link
          * CloudflareStore#increment}, {@link CloudflareStore#arrayUnion}, {@link
-         * CloudflareStore#arrayRemove} - and those go through {@link #ops}, so a sentinel
+         * CloudflareStore#arrayRemove} - and those go through {@link #ops}, so an array sentinel
          * arriving here is a caller that was not converted. Dropping it leaves the field alone,
          * which is recoverable; storing a sentinel is not.
+         *
+         * <p>{@code serverTimestamp()} is the exception. There is no server to ask, the value is
+         * always "now", and dropping it meant a post or a message was written with no creation
+         * time at all - which sorts it to the bottom of every list and shows it as 1970. So a
+         * timestamp sentinel becomes the current millisecond value, decided once per batch so
+         * every field in one write agrees.
          */
         static Route of(Map<String, Object> fields) {
             Map<String, Object> plain = new HashMap<>();
             JSONArray stray = new JSONArray();
+            long now = System.currentTimeMillis();
             for (Map.Entry<String, Object> entry : fields.entrySet()) {
                 String name = entry.getKey();
                 Object value = entry.getValue();
                 if (name == null || value == null) continue;
                 if (value instanceof FieldValue) {
-                    stray.put(name);
+                    // A time-shaped field keeps a real time; anything else is an unconverted
+                    // atomic operation and must not be guessed at.
+                    String lower = name.toLowerCase();
+                    if (lower.contains("at") || lower.contains("time")) {
+                        plain.put(name, now);
+                    } else {
+                        stray.put(name);
+                    }
                     continue;
                 }
                 plain.put(name, value);
@@ -223,7 +262,7 @@ public final class D1Batch {
                 android.util.Log.w("D1Batch",
                         "ignored FieldValue sentinels (use ops instead): " + stray);
             }
-            return new Route(plain, stray.length() == 0 ? new JSONArray() : new JSONArray());
+            return new Route(plain, new JSONArray());
         }
     }
 }

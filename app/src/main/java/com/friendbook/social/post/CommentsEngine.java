@@ -239,35 +239,32 @@ public class CommentsEngine {
             return local;
         }
         final Map<String, Object> commentMap = toMap(local, local.postId);
-        final DocumentReference parentRef = Fb.db().collection(collection).document(docId);
 
-        // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
-        // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
-        com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
-        batch.set(parentRef.collection("comments").document(newId),commentMap);
-        local.canonicalStored=true;
-        batch.set(Fb.db().collection("comments").document(newId),commentMap);
-        // The canonical row is the one D1 keeps; the nested Firestore copy is the legacy
-        // shape. Only the flat document is mirrored.
-        com.friendbook.social.core.DataRouter.mirrorPut("comments", newId, commentMap);
-        Map<String,Object> patch=new HashMap<>();
-        patch.put("lastComment",commentMap); patch.put("comments",FieldValue.increment(1));
-        patch.put("commentsStorageVersion",2);
-        batch.update(parentRef,patch);
-        // The counter is an increment, and lastComment is a whole object - so the counter goes
-        // through an atomic op and the preview through a plain put rather than both through one.
-        com.friendbook.social.core.DataRouter.mirrorOps(collection, parentRef.getId(),
+        // The comment and the post's counter go to D1 together. Committing to Firestore here was
+        // what failed for a new account: the batch was refused, so onComplete(false) fired and
+        // the user was told the comment was not confirmed, even though nothing was wrong with it.
+        //
+        // The counter is an increment and lastComment is a whole object, so the counter is an
+        // atomic op and the preview a plain put - one document, two writes, in order.
+        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+        local.canonicalStored = true;
+        batch.set("comments", newId, commentMap);
+        batch.ops(collection, docId,
                 com.friendbook.social.core.CloudflareStore.increment("comments", 1));
-        com.friendbook.social.core.DataRouter.mirrorPut(collection, parentRef.getId(),
+        batch.set(collection, docId,
                 Fb.map("lastComment", commentMap, "commentsStorageVersion", 2));
-        batch.commit().addOnSuccessListener(v -> {
-            // The parent doc's `comments` counter was incremented on the server, but the Post/Reel
-            // object the UI already holds is a stale snapshot — so the feed kept showing the old
-            // count until a full reload. Bump the in-memory copy so the UI is correct immediately.
+        batch.commit((success, error) -> {
+            if (!success) { if (cb != null) cb.onComplete(false, error); return; }
+            // The counter was incremented on the server, but the Post/Reel object the UI already
+            // holds is a stale snapshot - so the feed kept showing the old count until a full
+            // reload. Bump the in-memory copy so the UI is correct immediately.
             bumpLocalCommentCount(collection, docId, 1);
-            if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-            if(cb!=null) cb.onComplete(true,null);
-        }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
+            if (me.equals(Fb.uid()) && "posts".equals(collection)
+                    && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) {
+                com.friendbook.social.push.FCMPush.bulkMention(docId, newId);
+            }
+            if (cb != null) cb.onComplete(true, null);
+        });
 
         return local;
     }
@@ -319,20 +316,18 @@ public class CommentsEngine {
     }
 
     private static void mutateComment(String collection,String docId,Models.Comment c,Map<String,Object> patch) {
-        DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
-        DocumentReference mirror=Fb.db().collection("comments").document(c.id);
-        if(c.canonicalStored) {
-            com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
-            batch.set(canonical,patch,SetOptions.merge()); batch.set(mirror,patch,SetOptions.merge()); batch.commit();
-            // Editing or deleting a comment patches the flat document; the nested canonical copy
-            // is Firestore-only.
-            com.friendbook.social.core.DataRouter.mirrorPut("comments", c.id, patch);
-        } else {
-            Fb.db().runTransaction(tx -> {
-                if(!tx.get(canonical).exists()) tx.set(canonical,toMap(c,c.postId));
-                tx.set(canonical,patch,SetOptions.merge()); tx.set(mirror,patch,SetOptions.merge()); return null;
-            }).addOnSuccessListener(v -> c.canonicalStored=true);
-        }
+        // The flat document in D1 is the canonical comment; there is no nested copy to keep in
+        // step. Committing to Firestore here left the edit or delete unapplied, so the comment
+        // came back unchanged on the next load.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("comments", c.id, patch)
+                .commit((success, error) -> {
+                    if (success) {
+                        c.canonicalStored = true;
+                    } else {
+                        android.util.Log.w("FriendBookComments", "Comment write failed on D1: " + error);
+                    }
+                });
     }
 
     /** Pins/unpins a comment on a post (Post Author feature!). */

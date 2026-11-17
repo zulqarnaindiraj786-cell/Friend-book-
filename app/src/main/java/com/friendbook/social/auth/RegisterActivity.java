@@ -221,10 +221,24 @@ public class RegisterActivity extends Activity {
                     u.put("followers", new ArrayList<String>());
                     u.put("following", new ArrayList<String>());
                     u.put("blockedUsers", new ArrayList<String>());
-                    u.put("createdAt", FieldValue.serverTimestamp());
-                    com.friendbook.social.core.DataRouter.mirrorPut("users", uid, u);
-                    Fb.db().collection("users").document(uid).set(u)
-                            .addOnSuccessListener(x -> {
+                    u.put("createdAt", System.currentTimeMillis());
+
+                    // The profile is created in D1, and the signup finishes on D1's answer.
+                    // Before this, the user's document was written to Firestore first and the
+                    // whole signup was chained to its success listener: Firestore refusing the
+                    // write meant a brand-new account was told "sign up failed" and never
+                    // reached the app at all - which is exactly why a new user could not like,
+                    // comment, message or send a friend request. Nothing downstream of that
+                    // failure ever existed.
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("users", uid, u)
+                            .commit((success, error) -> {
+                                if (!success) {
+                                    btn.setText("Sign Up");
+                                    btn.setEnabled(true);
+                                    Ui.toast(this, "Couldn't create your account. Check your connection and try again.");
+                                    return;
+                                }
                                 GoogleAuthHelper.recordReferralIfPresent(this, uid, n, "",
                                         refCode != null ? refCode.getText().toString() : null);
                                 Prefs.saveAccount(this, uid, e, n, "");
@@ -232,13 +246,9 @@ public class RegisterActivity extends Activity {
                                 SessionsActivity.record();
                                 Fb.startMeListener();
                                 Presence.init();
+                                com.friendbook.social.core.CloudflareStore.ensureOwnProfile();
                                 startActivity(new Intent(this, MainActivity.class));
                                 finishAffinity();
-                            })
-                            .addOnFailureListener(err -> {
-                                btn.setText("Sign Up");
-                                btn.setEnabled(true);
-                                Ui.toast(this, err.getMessage());
                             });
                 })
                 .addOnFailureListener(err -> {

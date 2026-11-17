@@ -899,7 +899,9 @@ public class CreatePostActivity extends Activity {
         m.put("comments", 0);
         m.put("shares", 0);
         m.put("savedBy", new ArrayList<String>());
-        m.put("createdAt", FieldValue.serverTimestamp());
+        // A concrete millisecond value, not a server sentinel: D1 stores documents as JSON, and
+        // a sentinel serialised into a document is a field the app can never read back.
+        m.put("createdAt", System.currentTimeMillis());
 
         // ⚡ 0.0ms Optimistic Publish: write to local persistence + prepend to FastCache immediately!
         com.google.firebase.firestore.DocumentReference docRef = Fb.db().collection("posts").document();
@@ -943,12 +945,10 @@ public class CreatePostActivity extends Activity {
                     && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());
         };
-        if (com.friendbook.social.core.CloudflareStore.enabled()) {
-            com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
-        } else {
-            docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
-                    android.util.Log.e("CreatePost", "Background sync failed: " + e));
-        }
+        // Always D1. The Firestore branch was the only path that actually created anything when
+        // CloudflareStore was off, so a post made under a refused quota simply did not exist
+        // while the app still said "Posted ✓" and cleared the draft.
+        com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
         Prefs.setPostDraft(this, "");
         if (groupId != null && groupNeedsApproval) {
             Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");

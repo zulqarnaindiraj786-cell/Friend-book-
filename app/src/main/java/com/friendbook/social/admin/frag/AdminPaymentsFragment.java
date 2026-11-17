@@ -183,41 +183,35 @@ public class AdminPaymentsFragment extends Fragment {
         String type = Format.str(m, "type");
         String uid = Format.str(m, "userId");
         // The row came from D1, which has no document reference: name the collection and id.
-        WriteBatch batch = Fb.db().batch();
-        batch.update(Fb.db().collection("payments").document(d.getId()), "status", "approved",
-                "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
-        // serverTimestamp is a sentinel; D1 additionally stamps updatedAt on its own, so the
-        // approval time is recorded either way.
-        com.friendbook.social.core.DataRouter.mirrorPut("payments", d.getId(),
-                "status", "approved", "approvedBy", Fb.uid());
+        // Approval is written straight to D1 now; as a Firestore commit it could be refused and
+        // the payment stayed pending with an error toast.
+        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+        batch.set("payments", d.getId(), Fb.map(
+                "status", "approved", "approvedBy", Fb.uid(),
+                "approvedAt", System.currentTimeMillis()));
 
         if (type != null && type.startsWith("tick_")) {
             String level = type.substring(5);
-            batch.set(Fb.db().collection("users").document(uid),
-                    Fb.map("tickLevel", level, "isVerified", true), SetOptions.merge());
-            com.friendbook.social.core.DataRouter.mirrorPut("users", uid,
-                    Fb.map("tickLevel", level, "isVerified", true));
+            batch.set("users", uid, Fb.map("tickLevel", level, "isVerified", true));
         } else if ("subscription".equals(type)) {
             String subId = Format.str(m, "subscriptionId");
             if (!subId.isEmpty()) {
-                DocumentReference su = Fb.db().collection("subscriptions").document(subId);
-                batch.update(su, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
-                                new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
-                // The expiry is computed here rather than by the server, so D1 gets the same
-                // instant instead of a client-side clock read at a different moment.
-                com.friendbook.social.core.DataRouter.mirrorPut("subscriptions", subId,
-                        Fb.map("status", "active", "expiry", System.currentTimeMillis() + 30L * 24 * 3600 * 1000));
+                // The expiry is computed here rather than by a server sentinel, so the value is
+                // the same instant no matter which store reads it.
+                batch.set("subscriptions", subId, Fb.map(
+                        "status", "active",
+                        "expiry", System.currentTimeMillis() + 30L * 24 * 3600 * 1000));
             }
         }
-        batch.commit().addOnSuccessListener(x -> {
+        batch.commit((success, error) -> {
             if (a == null) return;
+            if (!success) { Ui.toast(a, "Error: " + error); return; }
             if (type != null && type.startsWith("tick_")) {
                 Admin.syncAuthorTickLevel(uid, type.substring(5));
             }
             notifyUser(uid, type);
             Ui.toast(a, "Approved ✓ — activated");
-        }).addOnFailureListener(e -> { if (a != null) Ui.toast(a, "Error: " + e.getMessage()); });
+        });
     }
 
     private void notifyUser(String uid, String type) {
@@ -233,7 +227,9 @@ public class AdminPaymentsFragment extends Fragment {
                 "type", "payment",
                 "text", text,
                 "isRead", false,
-                "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+                "createdAt", System.currentTimeMillis());
+        com.friendbook.social.core.DataRouter.batch()
+                .set("notifications", Fb.db().collection("notifications").document().getId(), n)
+                .commit();
     }
 }

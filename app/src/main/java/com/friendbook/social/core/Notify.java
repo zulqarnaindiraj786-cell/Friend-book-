@@ -22,23 +22,23 @@ public class Notify {
     public static void follow(String toUid, boolean following) {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
-        WriteBatch batch = Fb.db().batch();
-        batch.set(Fb.db().collection("users").document(toUid),
-                Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
-        batch.set(Fb.db().collection("users").document(me),
-                Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
-        // The two halves are one batch in Firestore. D1 has no cross-document transaction, so
-        // they are two atomic patches: each is correct on its own, and a failure between them
-        // leaves one side updated rather than both wrong.
-        DataRouter.mirrorOps("users", toUid, following
-                ? CloudflareStore.arrayUnion("followers", me)
-                : CloudflareStore.arrayRemove("followers", me));
-        DataRouter.mirrorOps("users", me, following
-                ? CloudflareStore.arrayUnion("following", toUid)
-                : CloudflareStore.arrayRemove("following", toUid));
-        batch.commit().addOnSuccessListener(v -> {
-            if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
-        }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
+        // Written to D1 - the only store the app writes to. Committing to Firestore here was
+        // what made a new account unable to follow anyone: the batch was refused on the spent
+        // quota, so the success callback never ran and no notification was ever sent.
+        DataRouter.batch()
+                .ops("users", toUid, following
+                        ? CloudflareStore.arrayUnion("followers", me)
+                        : CloudflareStore.arrayRemove("followers", me))
+                .ops("users", me, following
+                        ? CloudflareStore.arrayUnion("following", toUid)
+                        : CloudflareStore.arrayRemove("following", toUid))
+                .commit((success, error) -> {
+                    if (success && following && me.equals(Fb.uid())) {
+                        send(toUid, "follow", "started following you");
+                    } else if (!success) {
+                        android.util.Log.w("FriendBookPush", "Follow write failed on D1: " + error);
+                    }
+                });
     }
 
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
@@ -65,12 +65,24 @@ public class Notify {
         n.put("text", text);
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
-        n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
-            com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
-                    + com.friendbook.social.push.PushTrace.id(ref.getId()));
-            if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
-        }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
+        n.put("createdAt", System.currentTimeMillis());
+        // The notification is written to D1. As a Firestore add() it was refused on the spent
+        // quota, so a like, comment or friend request reached nobody - silently, because the
+        // failure only went to a trace log.
+        final String notificationId = Fb.db().collection("notifications").document().getId();
+        com.friendbook.social.core.DataRouter.batch()
+                .set("notifications", notificationId, n)
+                .commit((success, error) -> {
+                    if (!success) {
+                        com.friendbook.social.push.PushTrace.failure("notification_write_failed", error);
+                        return;
+                    }
+                    com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
+                            + com.friendbook.social.push.PushTrace.id(notificationId));
+                    if (me.equals(Fb.uid())) {
+                        com.friendbook.social.push.FCMPush.notification(notificationId, n);
+                    }
+                });
     }
 
     /**
@@ -88,9 +100,15 @@ public class Notify {
         n.put("type", type == null ? "team" : type);
         n.put("text", text);
         n.put("isRead", false);
-        n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
+        n.put("createdAt", System.currentTimeMillis());
+        final String teamNotificationId = Fb.db().collection("notifications").document().getId();
+        com.friendbook.social.core.DataRouter.batch()
+                .set("notifications", teamNotificationId, n)
+                .commit((success, error) -> {
+                    if (success) {
+                        com.friendbook.social.push.FCMPush.notification(teamNotificationId, n);
+                    }
+                });
 
         if (!alsoInChat) return;
         String chatId = "team_" + toUid;
@@ -141,9 +159,15 @@ public class Notify {
         n.put("groupId", groupId);
         n.put("text", "invited you to join group \"" + groupName + "\" 👥");
         n.put("isRead", false);
-        n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref ->
-                com.friendbook.social.push.FCMPush.notification(ref.getId(), n));
+        n.put("createdAt", System.currentTimeMillis());
+        final String teamNotificationId = Fb.db().collection("notifications").document().getId();
+        com.friendbook.social.core.DataRouter.batch()
+                .set("notifications", teamNotificationId, n)
+                .commit((success, error) -> {
+                    if (success) {
+                        com.friendbook.social.push.FCMPush.notification(teamNotificationId, n);
+                    }
+                });
     }
 
     /** Like/love/etc. on a post (respects local preference of the sender device). */
@@ -156,9 +180,13 @@ public class Notify {
     }
 
     public static void markAllRead(java.util.List<com.google.firebase.firestore.DocumentSnapshot> docs) {
-        WriteBatch b = Fb.db().batch();
+        // Written to D1. A Firestore commit here was refused on the spent quota, so the unread
+        // badge came back the next time the list loaded.
+        com.friendbook.social.core.D1Batch b = com.friendbook.social.core.DataRouter.batch();
         for (com.google.firebase.firestore.DocumentSnapshot d : docs)
-            b.update(d.getReference(), "isRead", true);
-        b.commit();
+            b.update("notifications", d.getId(), Fb.map("isRead", true));
+        b.commit((success, error) -> {
+            if (!success) android.util.Log.w("FriendBook", "markAllRead failed on D1: " + error);
+        });
     }
 }

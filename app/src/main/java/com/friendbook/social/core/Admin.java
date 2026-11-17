@@ -242,11 +242,14 @@ public class Admin {
             Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
-                        WriteBatch b = Fb.db().batch();
+                        // D1 is the only store the app writes to; a Firestore commit here left
+                        // the badge off the author's content.
+                        com.friendbook.social.core.D1Batch b = com.friendbook.social.core.DataRouter.batch();
                         for (com.google.firebase.firestore.DocumentSnapshot d : snap)
-                            b.set(d.getReference(), Fb.map("authorVerified", value),
-                                    com.google.firebase.firestore.SetOptions.merge());
-                        b.commit();
+                            b.set(col, d.getId(), Fb.map("authorVerified", value));
+                        b.commit((success, error) -> {
+                            if (!success) android.util.Log.w("FriendBook", "tick sync failed: " + error);
+                        });
                     });
         }
     }
@@ -258,12 +261,13 @@ public class Admin {
             Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
-                        WriteBatch b = Fb.db().batch();
+                        com.friendbook.social.core.D1Batch b = com.friendbook.social.core.DataRouter.batch();
                         for (com.google.firebase.firestore.DocumentSnapshot d : snap)
-                            b.set(d.getReference(), Fb.map("authorTickLevel", level,
-                                            "authorVerified", Icons.tickRank(level) > 0),
-                                    com.google.firebase.firestore.SetOptions.merge());
-                        b.commit();
+                            b.set(col, d.getId(), Fb.map("authorTickLevel", level,
+                                    "authorVerified", Icons.tickRank(level) > 0));
+                        b.commit((success, error) -> {
+                            if (!success) android.util.Log.w("FriendBook", "tick level sync failed: " + error);
+                        });
                     });
         }
     }

@@ -405,26 +405,19 @@ public class MarketplaceActivity extends Activity {
                 "isSeen", false, "isDelivered", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        WriteBatch batch = Fb.db().batch();
-        // document() with no id asks Firestore for an auto-id, so the first message id is read
-        // back and reused for D1. Generating a second id here would file the message under a
-        // different key in each store.
-        com.google.firebase.firestore.DocumentReference firstMsgRef =
-                Fb.db().collection("chats").document(chatId).collection("messages").document();
-        batch.set(firstMsgRef, msg);
+        // The first message and the room summary go to D1 together. As a Firestore commit this
+        // could be refused, and the buyer was left on the listing with no chat opened.
+        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+        String firstMsgId = Fb.db().collection("chats").document(chatId)
+                .collection("messages").document().getId();
+        batch.set("messages", chatId + "_" + firstMsgId, msg);
         Map<String, Object> chatMeta = Fb.map(
                 "participants", Arrays.asList(me, p.authorId),
                 "lastMessage", text,
-                "lastMessageTimeMs", now,
-                "lastMessageTime", FieldValue.serverTimestamp());
-        batch.set(Fb.db().collection("chats").document(chatId), chatMeta, SetOptions.merge());
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "messages", chatId + "_" + firstMsgRef.getId(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
-                "participants", Arrays.asList(me, p.authorId),
-                "lastMessage", text,
-                "lastMessageTimeMs", now));
-        batch.commit().addOnSuccessListener(x -> {
+                "lastMessageTimeMs", now);
+        batch.set("chats", chatId, chatMeta);
+        batch.commit((success, error) -> {
+            if (!success) { Ui.toast(this, "Couldn't start the chat. Try again."); return; }
             Intent i = new Intent(this, ChatActivity.class);
             i.putExtra("uid", p.authorId);
             i.putExtra("name", p.authorName);

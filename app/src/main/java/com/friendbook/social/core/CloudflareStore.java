@@ -43,6 +43,31 @@ public final class CloudflareStore {
         return BuildConfig.D1_INTERACTIONS_ENABLED && BuildConfig.CLOUDFLARE_DATA_ENABLED;
     }
 
+    /**
+     * Writes this user's own profile document before anything else is written.
+     *
+     * <p>Every write path needs the reader's own record to exist: a notification names its sender,
+     * a message names its author, and the feed resolves names from {@code users}. On a brand-new
+     * account that row was created as part of signup, but if that one write was lost the account
+     * could still sign in and every subsequent action referenced a user nobody could look up.
+     * This makes the first write of a session self-healing: cheap (one merge, only when absent)
+     * and it cannot overwrite an existing profile.
+     */
+    public static void ensureOwnProfile() {
+        String uid = Fb.uid();
+        if (!enabled() || uid == null || uid.isEmpty()) return;
+        get("users", uid, existing -> {
+            if (existing != null) return;
+            if (!uid.equals(Fb.uid())) return;
+            java.util.Map<String, Object> me = new java.util.HashMap<>();
+            me.put("uid", uid);
+            me.put("displayName", Fb.myName());
+            me.put("photoUrl", Fb.myPhoto());
+            me.put("createdAt", System.currentTimeMillis());
+            put("users", uid, me);
+        });
+    }
+
     public static JSONObject toJson(Map<String, Object> map) {
         JSONObject out = new JSONObject();
         if (map == null) return out;

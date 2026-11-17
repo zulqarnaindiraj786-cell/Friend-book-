@@ -99,6 +99,41 @@ public final class DataRouter {
     }
 
     /**
+     * Writes one new document straight to D1 and reports D1's answer.
+     *
+     * <p>This replaces {@code Fb.db().collection(c).add(map)} followed by a {@code mirrorPut}.
+     * The add() was the actual write, so when Firestore was switched off a new post, report or
+     * message was never created - and the success listener that opened the next screen never
+     * ran. The id is generated here because D1 needs a key up front, and the caller is given the
+     * same id so a later reference to the document matches what was stored.
+     */
+    public static void add(String collection, java.util.Map<String, Object> fields,
+                           AddCallback callback) {
+        if (collection == null || fields == null) {
+            if (callback != null) callback.done(null, "Nothing to write");
+            return;
+        }
+        String id;
+        try {
+            id = Fb.db().collection(collection).document().getId();
+        } catch (Throwable unavailable) {
+            // Firestore's client cannot mint an id when it was never initialised; any unique
+            // string does, so the write still lands.
+            id = collection + "_" + System.currentTimeMillis() + "_"
+                    + Integer.toHexString(new java.util.Random().nextInt(0x10000));
+        }
+        final String newId = id;
+        CloudflareStore.put(collection, newId, fields,
+                () -> { if (callback != null) callback.done(newId, null); },
+                () -> { if (callback != null) callback.done(null, "D1 refused " + collection); });
+    }
+
+    /** Outcome of an {@link #add}. */
+    public interface AddCallback {
+        void done(String id, String error);
+    }
+
+    /**
      * Mirrors a write into D1, leaving the caller's Firestore write exactly as it was.
      *
      * <p>With Firestore's network disabled that call queues locally and spends no quota, so

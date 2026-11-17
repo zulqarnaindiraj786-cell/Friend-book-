@@ -402,31 +402,29 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         removedFriendIds.remove(from);candidateFriends.add(from);
         if (!friendIds.contains(from)) friendIds.add(from);
 
-        WriteBatch batch = Fb.db().batch();
-        batch.update(Fb.db().collection("friend_requests").document(rid),
-                "status", "accepted");
-        com.google.firebase.firestore.DocumentReference friendDocRef = Fb.db().collection("friends").document();
-        Map<String, Object> friendDoc = Fb.map(
+        // Accepted in D1, which is the only store the app writes to. The batch used to commit to
+        // Firestore, so on a refused commit the request stayed pending forever and the toast said
+        // "Couldn't confirm" - the friend request never completed.
+        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+        batch.set("friend_requests", rid, Fb.map("status", "accepted"));
+        String friendId = Fb.db().collection("friends").document().getId();
+        batch.set("friends", friendId, Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
-                "createdAt", FieldValue.serverTimestamp());
-        com.friendbook.social.core.CloudflareStore.put("friends", friendDocRef.getId(), friendDoc);
-        batch.set(friendDocRef, friendDoc);
-        batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
-        batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
-        // The request, the friendship and both counters are one batch in Firestore. D1 gets
-        // them as separate atomic writes: the counters use increment so two accepances at the
-        // same moment both count, and the friendship doc is already mirrored above.
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "friend_requests", rid, "status", "accepted");
-        com.friendbook.social.core.DataRouter.mirrorOps(
-                "users", me, com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
-        com.friendbook.social.core.DataRouter.mirrorOps(
-                "users", from, com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
-        batch.commit().addOnSuccessListener(x -> {
-            if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                "createdAt", System.currentTimeMillis()));
+        // Counters are increments, so two accepts at the same moment both count.
+        batch.ops("users", me, com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
+        batch.ops("users", from, com.friendbook.social.core.CloudflareStore.increment("friendsCount", 1));
+        batch.commit((success, error) -> {
+            if (!me.equals(Fb.uid()) || getActivity() == null) return;
+            if (!success) {
+                dismissedReqIds.remove(rid); friendIds.remove(from); candidateFriends.remove(from);
+                Ui.toast(getActivity(), "Couldn't confirm. Try again.");
+                startSection();
+                return;
+            }
             Notify.send(from, "friend_accept", "accepted your friend request");
             Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
-        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
+        });
     }
 
     private void unfriend(Models.User user) {
@@ -445,23 +443,21 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     if(parts instanceof java.util.List && ((java.util.List<?>)parts).contains(user.uid)) page.add(doc);
                 }
                 if(page.isEmpty()){removedFriendIds.add(user.uid);friendIds.remove(user.uid);render();return;}
-                WriteBatch batch=Fb.db().batch();
+                com.friendbook.social.core.D1Batch batch=com.friendbook.social.core.DataRouter.batch();
                 for(Map<String,Object> doc:page){
-                    String fid = Format.str(doc,"id");
-                    batch.delete(Fb.db().collection("friends").document(fid));
-                    com.friendbook.social.core.DataRouter.mirrorDelete("friends", fid);
+                    batch.delete("friends", Format.str(doc,"id"));
                 }
-                batch.update(Fb.db().collection("users").document(me),"friendsCount",FieldValue.increment(-page.size()));
-                batch.update(Fb.db().collection("users").document(user.uid),"friendsCount",FieldValue.increment(-page.size()));
-                // The decrement is by the size of the page actually deleted, so it stays correct
-                // even when the relationship had duplicates.
-                com.friendbook.social.core.DataRouter.mirrorOps("users", me,
+                // Decremented by the size of the page actually deleted, so it stays correct even
+                // when the relationship had duplicates.
+                batch.ops("users", me,
                         com.friendbook.social.core.CloudflareStore.increment("friendsCount", -page.size()));
-                com.friendbook.social.core.DataRouter.mirrorOps("users", user.uid,
+                batch.ops("users", user.uid,
                         com.friendbook.social.core.CloudflareStore.increment("friendsCount", -page.size()));
-                batch.commit().addOnSuccessListener(v->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                batch.commit((success, error) -> {
+                    if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                    if(!success){Ui.toast(getActivity(),"Couldn't unfriend. Try again.");return;}
                     removedFriendIds.add(user.uid);friendIds.remove(user.uid);candidateFriends.remove(user.uid);render();Ui.toast(getActivity(),"Unfriended");
-                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't unfriend. Try again.");});
+                });
             }, () -> {if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't check relationship. Try again.");});
         });
     }

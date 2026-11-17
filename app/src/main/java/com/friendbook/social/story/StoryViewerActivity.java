@@ -606,24 +606,18 @@ public class StoryViewerActivity extends Activity {
                 "isDelivered", false,
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
-        WriteBatch batch = Fb.db().batch();
-        // document() with no id asks Firestore for an auto-id; that same id is reused for D1 so
-        // the message is filed under one key instead of two.
-        com.google.firebase.firestore.DocumentReference firstMsgRef =
-                Fb.db().collection("chats").document(chatId).collection("messages").document();
-        batch.set(firstMsgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), Fb.map(
-                "participants", Arrays.asList(me, s.authorId),
-                "lastMessage", "📖 " + text,
-                "lastMessageTimeMs", now,
-                "lastMessageTime", FieldValue.serverTimestamp()), SetOptions.merge());
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "messages", chatId + "_" + firstMsgRef.getId(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
+        // Written to D1. The Firestore commit could be refused, and the reply then vanished
+        // while the field had already been cleared on screen.
+        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+        String firstMsgId = Fb.db().collection("chats").document(chatId)
+                .collection("messages").document().getId();
+        batch.set("messages", chatId + "_" + firstMsgId, msg);
+        batch.set("chats", chatId, Fb.map(
                 "participants", Arrays.asList(me, s.authorId),
                 "lastMessage", "📖 " + text,
                 "lastMessageTimeMs", now));
-        batch.commit().addOnSuccessListener(x -> {
+        batch.commit((success, error) -> {
+            if (!success) { Ui.toast(this, "Couldn't send the reply. Try again."); return; }
             replyInput.setText("");
             Ui.hideKeyboard(this);
             Ui.toast(this, "Reply sent 💬");

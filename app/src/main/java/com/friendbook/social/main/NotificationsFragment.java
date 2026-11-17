@@ -141,17 +141,19 @@ public class NotificationsFragment extends Fragment {
         Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .limit(450).get().addOnSuccessListener(snap -> {
                     if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
-                    com.google.firebase.firestore.WriteBatch batch = Fb.db().batch();
+                    com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
                     for (DocumentSnapshot d : snap) {
-                        batch.update(d.getReference(), "isRead", true);
-                        // Marking read is per-document, and this walk already has each
-                        // reference in hand - mirroring the batch as a whole would lose 449 of
-                        // the 450 documents.
-                        com.friendbook.social.core.DataRouter.mirrorPutPath(
-                                d.getReference().getPath(), "isRead", true);
+                        // Marked read in D1, which is the only store the app writes to. The
+                        // batch used to commit to Firestore, so a refused commit left the
+                        // badge showing unread notifications that were already opened.
+                        batch.update("notifications", d.getId(), Fb.map("isRead", true));
                     }
-                    batch.commit().addOnSuccessListener(v -> {
+                    batch.commit((success, error) -> {
                         if (!me.equals(Fb.uid())) return;
+                        if (!success) {
+                            android.util.Log.w("FriendBook", "Mark-all-read failed on D1: " + error);
+                            return;
+                        }
                         markAllReadOptimisticNow();
                         MainActivity.clearNotificationsBadgeNow();
                         if (snap.size() == 450) markAllReadReal();

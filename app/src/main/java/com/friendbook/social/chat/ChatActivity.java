@@ -809,8 +809,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         List<Models.Message> adapterData = adapter.getData(); // Need to add this method to adapter
         if (adapterData == null || adapterData.isEmpty()) return;
         
-        WriteBatch batch=Fb.db().batch();List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
-        
+        com.friendbook.social.core.D1Batch batch=com.friendbook.social.core.DataRouter.batch();
+        List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+
         // Only mark messages that are VISIBLE on screen
         for (int pos = firstVisible; pos <= lastVisible && pos < adapterData.size(); pos++) {
             Models.Message m = adapterData.get(pos);
@@ -818,23 +819,21 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
             if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
             Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
-            batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
             // Messages live in one D1 collection keyed by "chatId_messageId", which is the same
-            // shape the send path already writes. The nested Firestore path cannot be flattened
-            // to that, so the id is built here.
-            com.friendbook.social.core.DataRouter.mirrorPut("messages", chatId + "_" + m.id, patch);
+            // shape the send path writes.
+            batch.update("messages", chatId + "_" + m.id, patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
-        
+
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
-        batch.update(Fb.db().collection("chats").document(chatId),com.google.firebase.firestore.FieldPath.of("unreadCount",me),0);
-        // FieldPath targets unreadCount.<me>, a per-member counter. Writing the whole
-        // unreadCount map from D1 would need the other members' values, so only this member's
-        // key is set.
-        com.friendbook.social.core.DataRouter.mirrorOps("chats", chatId,
+        // Only this member's key is set: the rest of the unreadCount map belongs to other people.
+        batch.ops("chats", chatId,
                 com.friendbook.social.core.CloudflareStore.set("unreadCount", Fb.map(me, 0)));
-        batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
+        batch.commit((success,error)->{
+            receiptInFlight.removeAll(claimed);
+            if(!success)receiptFailed.addAll(claimed);
+        });
     }
 
     private boolean typingOn = false;
@@ -1006,22 +1005,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.scrollToPosition(adapter.getItemCount() - 1);
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
         forceScrollBottom = true;
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        // The message is addressed by its reference, so its D1 id comes from the same id the
-        // Firestore document gets - a different id here would make the two stores disagree
-        // about which message a reply belongs to.
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "messages", chatId + "_" + msgRef.getId(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
-        com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-            // The peer's push cannot confirm our own message; re-read locally so it appears.
-            if (chatPushAction != null) chatPushAction.run();
-        })
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+        // Sent to D1, which is the only store the app writes to. The batch used to commit to
+        // Firestore, so on a refused commit the note was never delivered and the toast said
+        // "Couldn't send voice note".
+        com.friendbook.social.core.DataRouter.batch()
+                .set("messages", chatId + "_" + msgRef.getId(), msg)
+                .set("chats", chatId, chatDoc)
+                .commit((success, error) -> {
+                    if (!success) { Ui.toast(this, "Couldn't send voice note"); return; }
+                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
+                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                    // The peer's push cannot confirm our own message; re-read locally so it
+                    // appears.
+                    if (chatPushAction != null) chatPushAction.run();
+                });
     }
 
     // ---------- chat theme ----------
@@ -1113,22 +1110,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "✨ " + emoji + " sticker");
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        // The message is addressed by its reference, so its D1 id comes from the same id the
-        // Firestore document gets - a different id here would make the two stores disagree
-        // about which message a reply belongs to.
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "messages", chatId + "_" + msgRef.getId(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
-        com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-            // The peer's push cannot confirm our own message; re-read locally so it appears.
-            if (chatPushAction != null) chatPushAction.run();
-        })
-                .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
+        com.friendbook.social.core.DataRouter.batch()
+                .set("messages", chatId + "_" + msgRef.getId(), msg)
+                .set("chats", chatId, chatDoc)
+                .commit((success, error) -> {
+                    if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
+                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
+                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                    // The peer's push cannot confirm our own message; re-read locally so it
+                    // appears.
+                    if (chatPushAction != null) chatPushAction.run();
+                });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
@@ -1204,25 +1196,22 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
 
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "image".equals(type) ? "📷 Photo" : finalText);
-        com.friendbook.social.core.CloudflareStore.put("chats", chatId, chatDoc);
-        com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_" + msgRef.getId(), msg);
 
-        WriteBatch batch = Fb.db().batch();
-        batch.set(msgRef, msg);
-        batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
-        // The message is addressed by its reference, so its D1 id comes from the same id the
-        // Firestore document gets - a different id here would make the two stores disagree
-        // about which message a reply belongs to.
-        com.friendbook.social.core.DataRouter.mirrorPut(
-                "messages", chatId + "_" + msgRef.getId(), msg);
-        com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, chatDoc);
-        com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-            // The peer's push cannot confirm our own message; re-read locally so it appears.
-            if (chatPushAction != null) chatPushAction.run();
-        }).addOnFailureListener(e ->
-                Ui.toast(this, "Queued offline — will sync automatically"));
+        // The message and the room summary are written to D1 together. The batch used to commit
+        // to Firestore, so a refused commit meant the message never reached the other side and
+        // the app said "Queued offline" forever. CloudflareStore.put at this point was a second,
+        // unwaited copy of the same write - now there is one.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("messages", chatId + "_" + msgRef.getId(), msg)
+                .set("chats", chatId, chatDoc)
+                .commit((success, error) -> {
+                    if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
+                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
+                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                    // The peer's push cannot confirm our own message; re-read locally so it
+                    // appears.
+                    if (chatPushAction != null) chatPushAction.run();
+                });
     }
 
     @Override
