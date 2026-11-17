@@ -149,10 +149,10 @@ public class Admin {
         final boolean suspending = lifetime || durationMs > 0L;
         final long until = lifetime ? 9_999_999_999_999L : (suspending ? (System.currentTimeMillis() + durationMs) : 0L);
         final String name = (target.displayName != null && !target.displayName.isEmpty()) ? target.displayName : "User";
-        Fb.db().collection("users").document(target.uid)
-                .set(Fb.map("suspendedUntil", until, "suspendedLifetime", lifetime),
-                        com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> {
+        // Admin enforcement writes to D1. These were Firestore merges, so a suspended or
+        // unbanned user kept the old state and the moderator's action looked ignored.
+        com.friendbook.social.core.CloudflareStore.put("users", target.uid,
+                Fb.map("suspendedUntil", until, "suspendedLifetime", lifetime), () -> {
                     target.suspendedUntil = until;
                     target.suspendedLifetime = lifetime;
                     if (onDone != null) onDone.run();
@@ -173,9 +173,8 @@ public class Admin {
     /** Appoint or remove a Global App Moderator (Full Admin only). */
     public static void setGlobalModerator(Context c, String uid, String displayName, boolean makeMod) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("isModerator", makeMod), com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> {
+        com.friendbook.social.core.CloudflareStore.put("users", uid,
+                Fb.map("isModerator", makeMod), () -> {
                     Notify.sendOfficialTeamMessage(uid, "team",
                             makeMod
                                     ? "🛡 You have been appointed as a friendbook Moderator! You can remove rule-breaking posts and ban abusive accounts."
@@ -197,10 +196,8 @@ public class Admin {
      */
     public static void setTickLevel(Context c, String uid, String displayName, String level) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0),
-                        com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> {
+        com.friendbook.social.core.CloudflareStore.put("users", uid,
+                Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0), () -> {
                     TickCache.put(uid, level);
                     syncAuthorVerified(uid, Icons.tickRank(level) > 0);
                     java.util.Map<String, Object> n = Fb.map(
@@ -239,14 +236,17 @@ public class Admin {
         String level = value ? null : "none"; // unknown level here; callers use syncAuthorTickLevel for the exact one
         String[] cols = {"posts", "comments", "reels", "stories"};
         for (String col : cols) {
-            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap.isEmpty()) return;
-                        // D1 is the only store the app writes to; a Firestore commit here left
-                        // the badge off the author's content.
+            // The author's content is read from D1 as well as written there: the read was a
+            // Firestore query, so a granted tick never reached a single existing post.
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of(col)
+                            .whereEqualTo("authorId", uid).limit(50).build(), snap -> {
+                        if (snap == null || snap.documents.isEmpty()) return;
                         com.friendbook.social.core.D1Batch b = com.friendbook.social.core.DataRouter.batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
-                            b.set(col, d.getId(), Fb.map("authorVerified", value));
+                        for (java.util.Map<String, Object> d : snap.documents) {
+                            String id = d.get("id") == null ? "" : String.valueOf(d.get("id"));
+                            if (!id.isEmpty()) b.set(col, id, Fb.map("authorVerified", value));
+                        }
                         b.commit((success, error) -> {
                             if (!success) android.util.Log.w("FriendBook", "tick sync failed: " + error);
                         });
@@ -258,13 +258,16 @@ public class Admin {
     public static void syncAuthorTickLevel(String uid, String level) {
         String[] cols = {"posts", "comments", "reels", "stories"};
         for (String col : cols) {
-            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap.isEmpty()) return;
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of(col)
+                            .whereEqualTo("authorId", uid).limit(50).build(), snap -> {
+                        if (snap == null || snap.documents.isEmpty()) return;
                         com.friendbook.social.core.D1Batch b = com.friendbook.social.core.DataRouter.batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
-                            b.set(col, d.getId(), Fb.map("authorTickLevel", level,
+                        for (java.util.Map<String, Object> d : snap.documents) {
+                            String id = d.get("id") == null ? "" : String.valueOf(d.get("id"));
+                            if (!id.isEmpty()) b.set(col, id, Fb.map("authorTickLevel", level,
                                     "authorVerified", Icons.tickRank(level) > 0));
+                        }
                         b.commit((success, error) -> {
                             if (!success) android.util.Log.w("FriendBook", "tick level sync failed: " + error);
                         });
@@ -286,10 +289,8 @@ public class Admin {
         Models.User me = Fb.me;
         int currentRank = me != null ? me.tickRank() : 0;
         if (currentRank >= Icons.tickRank(level)) return; // already this good or better
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("tickLevel", level, "isVerified", true),
-                        com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> {
+        com.friendbook.social.core.CloudflareStore.put("users", uid,
+                Fb.map("tickLevel", level, "isVerified", true), () -> {
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", uid,
                             "fromUserId", uid,
@@ -301,7 +302,7 @@ public class Admin {
                             "createdAt", FieldValue.serverTimestamp());
                     com.friendbook.social.core.DataRouter.add("notifications", n, null);
                     Ui.toast(c, "🎉 You earned the " + tickLabel(level) + "!");
-                });
+                }, null);
     }
 
     /** Referral invite link for a user (official Google Play Store URL). */

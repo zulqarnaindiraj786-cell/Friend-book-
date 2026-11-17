@@ -135,7 +135,7 @@ public final class CreatorDashboardDialog {
             Map<String, Object> up = new HashMap<>();
             up.put("professionalMode", checked);
             com.friendbook.social.core.DataRouter.mirrorPut("users", me, up);
-            Fb.db().collection("users").document(me).set(up, SetOptions.merge());
+            com.friendbook.social.core.DataRouter.batch().set("users", me, up).commit();
             if (onUpdated != null) onUpdated.run();
         });
         proRow.addView(proSw);

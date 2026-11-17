@@ -55,6 +55,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
     private LinearLayout ownerRow;
     private FeedAdapter adapter;
     private ListenerRegistration pageReg, postsReg;
+    private com.friendbook.social.core.DocPager pagePager;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -228,20 +229,26 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     ownerRow.setVisibility(mine ? View.VISIBLE : View.GONE);
                 });
 
-        postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("posts").whereEqualTo("pageId",pageId),15,"page-posts:"+pageId,(snap,err)-> {
+        // A page's posts come from D1; the Firestore query answered nothing, so every Page
+        // looked like it had never posted.
+        pagePager=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("pageId",pageId)
+                        .orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).build(),15,
+                (docs,more,busy,err)-> {
+                    if(busy)return;
                     List<Models.Post> list = new ArrayList<>();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Post p = Models.Post.fromDoc(d);
-                            if (p.archived || p.trashedAt > 0) continue;
-                            list.add(p);
-                        }
+                    for (java.util.Map<String,Object> row : docs) {
+                        String rowId = row.get("id")==null?"":String.valueOf(row.get("id"));
+                        Models.Post p = Models.Post.fromMap(rowId, row);
+                        if (p.archived || p.trashedAt > 0) continue;
+                        list.add(p);
                     }
                     Collections.sort(list, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
                     adapter.setPosts(list);
                     emptyTv.setVisibility(list.isEmpty() ? View.VISIBLE : View.GONE);
                 });
+        pagePager.start();
     }
 
     @Override
@@ -249,14 +256,15 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         super.onStop();
         if (pageReg != null) pageReg.remove();
         if (postsReg != null) postsReg.remove();
+        if (pagePager != null) { pagePager.close(); pagePager = null; }
     }
 
     private void toggleFollow() {
         String me = Fb.uid();
         if (me == null) return;
         com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, "followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-        Fb.db().collection("pages").document(pageId).update("followers",
-                following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+        com.friendbook.social.core.DataRouter.batch().set("pages", pageId, Fb.map("followers",
+                following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))).commit();
     }
 
     private void editPageDialog() {
@@ -288,12 +296,12 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     upd.put("website", wIn.getText().toString().trim());
                     upd.put("about", aIn.getText().toString().trim());
                     com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, upd);
-                    Fb.db().collection("pages").document(pageId).update(upd)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓"));
+                    com.friendbook.social.core.DataRouter.batch().set("pages", pageId, upd)
+                            .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓")).commit();
                 })
                 .setNeutralButton("🗑 Delete Page", (d, w) -> Ui.confirm(this, "Delete Page?",
                         "This removes the Page permanently.", "Delete", () -> {
-                            Fb.db().collection("pages").document(pageId).delete();
+                            com.friendbook.social.core.DataRouter.batch().delete("pages", pageId).commit();
                             finish();
                         }))
                 .setNegativeButton("Cancel", null)

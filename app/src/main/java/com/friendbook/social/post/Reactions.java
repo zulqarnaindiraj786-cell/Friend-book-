@@ -379,7 +379,7 @@ public class Reactions {
                         Map<String, Object> heal = new HashMap<>();
                         heal.put("likes", realCount);
                         com.friendbook.social.core.DataRouter.mirrorPut("posts", postId, heal);
-                        Fb.db().collection("posts").document(postId).set(heal, SetOptions.merge());
+                        com.friendbook.social.core.DataRouter.batch().set("posts", postId, heal).commit();
                     }
                     FastCache.setReactionState(c, postId, myType, bestTotal, true);
                 });

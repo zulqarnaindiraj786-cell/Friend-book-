@@ -318,9 +318,12 @@ public class EditProfileActivity extends Activity {
         m.put("contactPrivacy", ep);
         m.put("contactInfoPrivacy", ep);
 
-        com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), m);
-        Fb.db().collection("users").document(Fb.uid()).set(m, SetOptions.merge())
-                .addOnSuccessListener(x -> {
+        // Written to D1 and confirmed by D1. The Firestore set() was the real write, so on a
+        // refused quota an edited profile simply did not change.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("users", Fb.uid(), m)
+                .commit((ok, error) -> {
+                    if (!ok) { Ui.toast(this, "Couldn't update your profile. Try again."); return; }
                     Ui.toast(this, "Profile & Intro updated ✓");
                     finish();
                 })

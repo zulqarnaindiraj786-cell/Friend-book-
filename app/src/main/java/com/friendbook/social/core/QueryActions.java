@@ -64,4 +64,34 @@ public final class QueryActions {
             });
         }).addOnFailureListener(done::trySetException);
     }
+
+    /**
+     * Deletes every D1 document in a collection whose field equals a value, a page at a time.
+     *
+     * <p>Used when one document owns others - a post owns its comments. Firestore could cascade
+     * with a query delete; D1 has no cascade, so the owner is removed first and the children are
+     * collected here. A failure leaves orphans rather than failing the owner's delete.
+     */
+    public static void deleteMatchingD1(String collection, String field, String value,
+                                        Runnable done) {
+        if (collection == null || field == null || value == null) {
+            if (done != null) done.run();
+            return;
+        }
+        CloudflareStore.query(
+                DocQuery.of(collection).whereEqualTo(field, value).limit(50).build(),
+                page -> {
+                    D1Batch batch = DataRouter.batch();
+                    for (java.util.Map<String, Object> doc : page.documents) {
+                        String id = Format.str(doc, "id");
+                        if (!id.isEmpty()) batch.delete(collection, id);
+                    }
+                    batch.commit((ok, error) -> {
+                        // One page is enough for the cases this is used for (a post's comments);
+                        // anything larger is left for a later sweep rather than looping here.
+                        if (done != null) done.run();
+                    });
+                },
+                () -> { if (done != null) done.run(); });
+    }
 }

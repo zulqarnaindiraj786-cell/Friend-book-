@@ -410,19 +410,25 @@ public class GroupsActivity extends Activity {
                 if (in) {
                     openGroup(g.id);
                 } else if (pending) {
-                    Fb.db().collection("groups").document(g.id)
-                            .update("pendingMemberIds", FieldValue.arrayRemove(me));
+                    // Join requests are D1 array ops. Both branches were Firestore updates, so
+                    // "Join" and "Cancel request" did nothing visible to anyone.
+                    com.friendbook.social.core.CloudflareStore.patch("groups", g.id,
+                            new org.json.JSONArray().put(
+                                    com.friendbook.social.core.CloudflareStore.arrayRemove("pendingMemberIds", me)),
+                            null, null);
                     Ui.toast(GroupsActivity.this, "Join request cancelled");
                 } else if (!invited && ("Private".equalsIgnoreCase(g.privacy) || g.requireJoinApproval)) {
-                    Fb.db().collection("groups").document(g.id)
-                            .update("pendingMemberIds", FieldValue.arrayUnion(me));
+                    com.friendbook.social.core.CloudflareStore.patch("groups", g.id,
+                            new org.json.JSONArray().put(
+                                    com.friendbook.social.core.CloudflareStore.arrayUnion("pendingMemberIds", me)),
+                            null, null);
                     Ui.toast(GroupsActivity.this, "⏳ Join request sent to Group Admins");
                 } else {
                     Map<String, Object> up = new HashMap<>();
                     up.put("members", FieldValue.arrayUnion(me));
                     up.put("invitedUids", FieldValue.arrayRemove(me));
                     com.friendbook.social.core.DataRouter.mirrorPut("groups", g.id, up);
-                    Fb.db().collection("groups").document(g.id).update(up);
+                    com.friendbook.social.core.DataRouter.batch().set("groups", g.id, up).commit();
                     Ui.toast(GroupsActivity.this, "Joined " + g.name + " 🎉");
                 }
             });

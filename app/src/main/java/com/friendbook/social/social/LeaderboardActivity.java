@@ -52,13 +52,17 @@ public class LeaderboardActivity extends Activity {
     }
 
     private void load() {
-        Fb.db().collection("users").orderBy("stars", Query.Direction.DESCENDING).limit(20).get()
-                .addOnSuccessListener(snap -> {
+        // The board is a D1 read; it was a Firestore orderBy, so it showed "No one on the board".
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("users")
+                        .orderBy("stars", com.friendbook.social.core.DocQuery.DESC).limit(20).build(),
+                snap -> {
                     list.removeAllViews();
                     int rank = 0;
                     String me = Fb.uid();
-                    for (DocumentSnapshot d : snap) {
-                        Models.User u = Models.User.fromDoc(d);
+                    for (java.util.Map<String, Object> row : snap.documents) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.User u = Models.User.fromMap(rowId, row);
                         rank++;
                         list.addView(row(rank, u, u.uid.equals(me)));
                     }
@@ -67,10 +71,9 @@ public class LeaderboardActivity extends Activity {
                         Ui.pad(e, 0, 24, 0, 0);
                         list.addView(e);
                     }
-                })
-                .addOnFailureListener(e -> {
+                }, () -> {
                     list.removeAllViews();
-                    TextView t = Ui.tv(this, "Couldn't load leaderboard: " + e.getMessage(), 13, Ui.sub(this));
+                    TextView t = Ui.tv(this, "Couldn't load leaderboard. Try again.", 13, Ui.sub(this));
                     Ui.pad(t, 0, 24, 0, 0);
                     list.addView(t);
                 });

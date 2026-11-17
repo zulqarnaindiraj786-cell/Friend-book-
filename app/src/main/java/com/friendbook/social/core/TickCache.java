@@ -38,27 +38,26 @@ public final class TickCache {
         }
         iv.setTag(uid);
         Icons.setTickBadge(iv, "none", false);
-        Fb.db().collection("users").document(uid).get(Source.CACHE)
-                .addOnSuccessListener(d -> {
-                    if (d != null && d.exists()) {
-                        String lvl = d.getString("tickLevel");
-                        CACHE.put(uid, lvl == null ? "none" : lvl);
-                        if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
-                    } else {
-                        fetchRemote(iv, uid);
-                    }
-                })
-                .addOnFailureListener(e -> fetchRemote(iv, uid));
+        // One D1 read of the user's tick level. This went to the Firestore disk cache first, which
+        // held nothing once Firestore was off, so verified badges disappeared from the feed.
+        com.friendbook.social.core.CloudflareStore.get("users", uid, d -> {
+            String lvl = d == null ? null : Format.str(d, "tickLevel");
+            if (lvl == null || lvl.isEmpty()) {
+                fetchRemote(iv, uid);
+                return;
+            }
+            CACHE.put(uid, lvl);
+            if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
+        });
     }
 
     private static void fetchRemote(ImageView iv, String uid) {
-        Fb.db().collection("users").document(uid).get()
-                .addOnSuccessListener(d -> {
-                    String lvl = d != null && d.exists() ? d.getString("tickLevel") : null;
-                    CACHE.put(uid, lvl == null ? "none" : lvl);
-                    if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
-                })
-                .addOnFailureListener(e -> CACHE.put(uid, "none"));
+        com.friendbook.social.core.CloudflareStore.get("users", uid, d -> {
+            String lvl = d == null ? null : Format.str(d, "tickLevel");
+            if (lvl == null || lvl.isEmpty()) lvl = "none";
+            CACHE.put(uid, lvl);
+            if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
+        });
     }
 
     public static void put(String uid, String level) {

@@ -148,7 +148,7 @@ public class GroupChatInfoActivity extends Activity {
         onlyAdminsSwitch.setOnCheckedChangeListener((btn, checked) -> {
             if (updatingSwitch || room == null || !room.isGroupAdmin(Fb.uid())) return;
             com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "onlyAdminsCanSend", checked);
-            Fb.db().collection("chats").document(chatId).update("onlyAdminsCanSend", checked);
+            com.friendbook.social.core.DataRouter.batch().set("chats", chatId, Fb.map("onlyAdminsCanSend", checked)).commit();
             postSystemMessage(checked
                     ? "🔒 " + Fb.myName() + " set group to Only Admins Can Send Messages"
                     : "🔓 " + Fb.myName() + " allowed all members to send messages");
@@ -194,8 +194,9 @@ public class GroupChatInfoActivity extends Activity {
         dlp.topMargin = Ui.dp(this, 8);
         deleteGroupBtn.setOnClickListener(v -> Ui.confirm(this, "Delete Group?",
                 "Permanently delete this group chat for everyone?", "Delete", () ->
-                        Fb.db().collection("chats").document(chatId).delete()
-                                .addOnSuccessListener(x -> {
+                        com.friendbook.social.core.DataRouter.batch().delete("chats", chatId)
+                                .commit((ok, error) -> {
+                                    if (!ok) return;
                                     Ui.toast(this, "Group deleted");
                                     finish();
                                 })));
@@ -351,9 +352,12 @@ public class GroupChatInfoActivity extends Activity {
                 startActivity(chat);
             } else if (id == 3) {
                 com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "adminIds", targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid));
-                Fb.db().collection("chats").document(chatId).update("adminIds",
-                        targetIsAdmin ? FieldValue.arrayRemove(memberUid) : FieldValue.arrayUnion(memberUid))
-                        .addOnSuccessListener(x -> {
+                com.friendbook.social.core.DataRouter.batch()
+                        .ops("chats", chatId, targetIsAdmin
+                                ? com.friendbook.social.core.CloudflareStore.arrayRemove("adminIds", memberUid)
+                                : com.friendbook.social.core.CloudflareStore.arrayUnion("adminIds", memberUid))
+                        .commit((ok, error) -> {
+                            if (!ok) { Ui.toast(this, "Couldn't update admins. Try again."); return; }
                             postSystemMessage(targetIsAdmin
                                     ? "➖ " + Fb.myName() + " dismissed " + memberName + " as admin"
                                     : "🛡 " + Fb.myName() + " made " + memberName + " a Group Admin");
@@ -366,9 +370,10 @@ public class GroupChatInfoActivity extends Activity {
                             Map<String, Object> up = new HashMap<>();
                             up.put("participants", FieldValue.arrayRemove(memberUid));
                             up.put("adminIds", FieldValue.arrayRemove(memberUid));
-                            com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, up);
-                            Fb.db().collection("chats").document(chatId).update(up)
-                                    .addOnSuccessListener(x -> {
+                            com.friendbook.social.core.DataRouter.batch()
+                                    .set("chats", chatId, up)
+                                    .commit((ok, error) -> {
+                                        if (!ok) { Ui.toast(this, "Couldn't remove. Try again."); return; }
                                         postSystemMessage("🚫 " + Fb.myName() + " removed " + memberName);
                                         Ui.toast(this, "Removed " + memberName);
                                     });
@@ -393,7 +398,7 @@ public class GroupChatInfoActivity extends Activity {
                     String n = in.getText().toString().trim();
                     if (n.isEmpty()) return;
                     com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "groupName", n);
-                    Fb.db().collection("chats").document(chatId).update("groupName", n);
+                    com.friendbook.social.core.DataRouter.batch().set("chats", chatId, Fb.map("groupName", n)).commit();
                     postSystemMessage("✏️ " + Fb.myName() + " changed group name to \"" + n + "\"");
                 })
                 .setNegativeButton("Cancel", null)
@@ -408,10 +413,14 @@ public class GroupChatInfoActivity extends Activity {
         sv.addView(list);
         final Set<Models.User> picked = new LinkedHashSet<>();
 
-        Fb.db().collection("users").limit(1000).get().addOnSuccessListener(snap -> {
+        // The add-members list reads D1. A 1000-row Firestore read answered nothing, so a group
+        // admin could never add a second member.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("users").limit(100).build(), snap -> {
             if (snap == null || isFinishing()) return;
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
+            for (java.util.Map<String, Object> row : snap.documents) {
+                String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                Models.User u = Models.User.fromMap(rowId, row);
                 if (room.participants.contains(u.uid) || u.banned) continue;
                 LinearLayout row = Ui.row(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
@@ -456,9 +465,10 @@ public class GroupChatInfoActivity extends Activity {
                     patch.put("participants", FieldValue.arrayUnion(newUids.toArray()));
                     patch.put("participantNames", names);
                     patch.put("participantPhotos", photos);
-                    com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, patch);
-                    Fb.db().collection("chats").document(chatId).set(patch, SetOptions.merge())
-                            .addOnSuccessListener(x -> {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("chats", chatId, patch)
+                            .commit((ok, error) -> {
+                                if (!ok) { Ui.toast(this, "Couldn't add members. Try again."); return; }
                                 postSystemMessage("➕ " + Fb.myName() + " added " + sb);
                                 Ui.toast(this, "Added " + newUids.size() + " member(s) ✓");
                             });
@@ -486,9 +496,10 @@ public class GroupChatInfoActivity extends Activity {
                         }
                     }
                     postSystemMessage("🚪 " + Fb.myName() + " left the group");
-                    com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, up);
-                    Fb.db().collection("chats").document(chatId).update(up)
-                            .addOnSuccessListener(x -> {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("chats", chatId, up)
+                            .commit((ok, error) -> {
+                                if (!ok) { Ui.toast(this, "Couldn't leave the group. Try again."); return; }
                                 Ui.toast(this, "You left the group");
                                 finish();
                             });
@@ -505,7 +516,7 @@ public class GroupChatInfoActivity extends Activity {
             Cloudinary.uploadOrFirebase(this, path, uri)
                     .addOnSuccessListener(url -> {
                         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "groupPhoto", url.toString());
-                        Fb.db().collection("chats").document(chatId).update("groupPhoto", url.toString());
+                        com.friendbook.social.core.DataRouter.batch().set("chats", chatId, Fb.map("groupPhoto", url.toString())).commit();
                         postSystemMessage("📷 " + Fb.myName() + " updated the group photo");
                     })
                     .addOnFailureListener(e -> Ui.toast(this, "Photo upload failed"));
@@ -528,9 +539,9 @@ public class GroupChatInfoActivity extends Activity {
                 "lastMessage", text,
                 "lastMessageTime", FieldValue.serverTimestamp(),
                 "lastMessageTimeMs", now));
-        Fb.db().collection("chats").document(chatId).set(Fb.map(
+        com.friendbook.social.core.DataRouter.batch().set("chats", chatId, Fb.map(
                 "lastMessage", text,
                 "lastMessageTime", FieldValue.serverTimestamp(),
-                "lastMessageTimeMs", now), SetOptions.merge());
+                "lastMessageTimeMs", now)).commit();
     }
 }

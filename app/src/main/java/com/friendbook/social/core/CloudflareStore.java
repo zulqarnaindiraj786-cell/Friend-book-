@@ -78,9 +78,12 @@ public final class CloudflareStore {
             if (k == null || v == null) continue;
             try {
                 if (v instanceof FieldValue) {
-                    if (k.toLowerCase().contains("at") || k.toLowerCase().contains("time") || k.toLowerCase().contains("seen")) {
-                        out.put(k, now);
-                    }
+                    // A FieldValue sentinel has no JSON form. It used to be written only when the
+                    // field name happened to contain "at", "time" or "seen", so every other
+                    // timestamp - createdAt on a post, a message, a review request - was dropped
+                    // silently and the row arrived with no time on it. D1 stores millis, so the
+                    // honest translation of "now on the server" is the current millis.
+                    out.put(k, now);
                 } else if (v instanceof List) {
                     JSONArray arr = new JSONArray();
                     for (Object item : (List<?>) v) {

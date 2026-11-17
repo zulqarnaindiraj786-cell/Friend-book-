@@ -17,9 +17,18 @@ public final class FriendPicker {
         AlertDialog.Builder builder=new AlertDialog.Builder(a).setTitle(title).setView(root).setNegativeButton("Cancel",null);
         if(selected!=null)builder.setPositiveButton("Done",(d,w)->multi.accept(new LinkedHashMap<>(selected)));
         AlertDialog dialog=builder.create();dialog.show();final int[] generation={0};
-        ListenerRegistration reg=PagedLists.attach(a,controls,Fb.db().collection("friends").whereArrayContains("participants",actor),20,"friend-picker",(page,error)->{
+        // D1 rows: this picker was a Firestore paged query, so tagging a friend or picking
+        // recipients showed "No friends on this page." for everyone.
+        final com.friendbook.social.core.DocPager pager=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants",actor).build(),20,
+                (docs,more,loading,error)->{
+            if(loading)return;
             int request=++generation[0];rows.removeAllViews();Set<String> ids=new LinkedHashSet<>();
-            for(DocumentSnapshot doc:page)for(String uid:Models.ChatRoom.fromDoc(doc).participants)if(!actor.equals(uid))ids.add(uid);
+            for(java.util.Map<String,Object> row:docs){
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                for(String uid:Models.ChatRoom.fromMap(rowId,row).participants)if(!actor.equals(uid))ids.add(uid);
+            }
             if(ids.isEmpty())rows.addView(Ui.tv(a,"No friends on this page.",14,Ui.sub(a)));
             for(String uid:ids){TextView row=selected==null?Ui.tv(a,"Loading…",15,Ui.txt(a)):new CheckBox(a);Ui.pad(row,12,8,12,8);rows.addView(row);
                 Fb.getUser(uid).addOnSuccessListener(user->{
@@ -29,6 +38,7 @@ public final class FriendPicker {
                     else {CheckBox check=(CheckBox)row;check.setChecked(selected.containsKey(uid));check.setOnCheckedChangeListener((button,on)->{if(on)selected.put(uid,user.displayName);else selected.remove(uid);});}
                 });
             }
-        });dialog.setOnDismissListener(d->{generation[0]++;reg.remove();});
+        });pager.start();
+        dialog.setOnDismissListener(d->{generation[0]++;pager.close();});
     }
 }

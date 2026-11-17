@@ -366,19 +366,19 @@ public class MarketplaceActivity extends Activity {
         if (p.authorId.equals(Fb.uid())) {
             ab.setPositiveButton(p.marketSold ? "Mark Available" : "✓ Mark as Sold", (dlg, w) -> {
                 com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "marketSold", !p.marketSold);
-                Fb.db().collection("posts").document(p.id).update("marketSold", !p.marketSold);
+                com.friendbook.social.core.DataRouter.batch().set("posts", p.id, Fb.map("marketSold", !p.marketSold)).commit();
                 Ui.toast(this, !p.marketSold ? "Marked as SOLD" : "Marked available again");
             });
             ab.setNeutralButton("🗑 Delete", (dlg, w) ->
-                    Fb.db().collection("posts").document(p.id).delete());
+                    com.friendbook.social.core.DataRouter.batch().delete("posts", p.id).commit());
         } else {
             ab.setPositiveButton("💬 Ask: Still available?", (dlg, w) -> messageSeller(p));
             boolean saved = Fb.uid() != null && p.savedBy.contains(Fb.uid());
             ab.setNeutralButton(saved ? "Saved ✓" : "🔖 Save item", (dlg, w) -> {
                 if (Fb.uid() == null) return;
                 com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "savedBy", saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
-                Fb.db().collection("posts").document(p.id).update("savedBy",
-                        saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                com.friendbook.social.core.DataRouter.batch().set("posts", p.id, Fb.map("savedBy",
+                        saved ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()))).commit();
                 Ui.toast(this, saved ? "Removed from Saved" : "Saved ✓");
             });
         }
@@ -407,8 +407,10 @@ public class MarketplaceActivity extends Activity {
         // The first message and the room summary go to D1 together. As a Firestore commit this
         // could be refused, and the buyer was left on the listing with no chat opened.
         com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
-        String firstMsgId = Fb.db().collection("chats").document(chatId)
-                .collection("messages").document().getId();
+        // A local id, not a Firestore minted one: Firestore is off, and asking it for an id threw
+        // here, which left the buyer on the listing with no chat opened.
+        String firstMsgId = "m_" + now + "_"
+                + Integer.toHexString(new java.util.Random().nextInt(0x100000));
         batch.set("messages", chatId + "_" + firstMsgId, msg);
         Map<String, Object> chatMeta = Fb.map(
                 "participants", Arrays.asList(me, p.authorId),

@@ -171,22 +171,24 @@ public class AdminUsersFragment extends Fragment {
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
             else if (sel.contains("Make FULL Admin")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "isAdmin", true);
-                Fb.db().collection("users").document(u.uid).update("isAdmin", true);
+                com.friendbook.social.core.DataRouter.batch().set("users", u.uid, Fb.map("isAdmin", true)).commit();
             }
             else if (sel.contains("Remove FULL Admin")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "isAdmin", false);
-                Fb.db().collection("users").document(u.uid).update("isAdmin", false);
+                com.friendbook.social.core.DataRouter.batch().set("users", u.uid, Fb.map("isAdmin", false)).commit();
             }
             else if (sel.contains("Unban")) {
                 com.friendbook.social.core.DataRouter.mirrorPut("users", u.uid, "banned", false);
-                Fb.db().collection("users").document(u.uid).update("banned", false);
+                com.friendbook.social.core.DataRouter.batch().set("users", u.uid, Fb.map("banned", false)).commit();
             }
             else if (sel.contains("Ban user"))
                 Ui.confirm(a, "Ban " + u.displayName + "?", "They'll be signed out and blocked.",
-                        "Ban", () -> Fb.db().collection("users").document(u.uid).update("banned", true));
+                        "Ban", () -> com.friendbook.social.core.DataRouter.batch()
+                                .set("users", u.uid, Fb.map("banned", true)).commit());
             else if (sel.contains("Delete user data"))
                 Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
-                        "Delete", () -> Fb.db().collection("users").document(u.uid).delete());
+                        "Delete", () -> com.friendbook.social.core.DataRouter.batch()
+                                .delete("users", u.uid).commit());
         });
     }
 }

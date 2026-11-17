@@ -857,7 +857,7 @@ public class AdsConfig {
                             seed.put("comments", 0);
                             seed.put("shares", 0);
                             com.friendbook.social.core.DataRouter.mirrorPut("posts", docId, seed);
-                            Fb.db().collection("posts").document(docId).set(seed, SetOptions.merge());
+                            com.friendbook.social.core.DataRouter.batch().set("posts", docId, seed).commit();
                         }
                         if (onHydrated != null) onHydrated.run();
                     })
@@ -930,7 +930,7 @@ public class AdsConfig {
             Map<String, Object> up = new HashMap<>();
             up.put("shares", FieldValue.increment(1));
             com.friendbook.social.core.DataRouter.mirrorPut("posts", adPost.id, up);
-            Fb.db().collection("posts").document(adPost.id).set(up, SetOptions.merge());
+            com.friendbook.social.core.DataRouter.batch().set("posts", adPost.id, up).commit();
         } catch (Throwable ignored) { }
         String h = headline != null && headline.length() > 0 ? headline.toString() : adPost.authorName;
         String b = body != null && body.length() > 0 ? ("\n" + body) : "";

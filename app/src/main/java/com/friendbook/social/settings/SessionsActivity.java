@@ -37,9 +37,13 @@ public class SessionsActivity extends Activity {
             Map<String, Object> s = new HashMap<>();
             s.put("device", (Build.MANUFACTURER + " " + Build.MODEL).trim());
             s.put("model", "Android " + Build.VERSION.RELEASE);
-            s.put("at", FieldValue.serverTimestamp());
+            s.put("at", System.currentTimeMillis());
             s.put("app", "friendbook");
-            Fb.db().collection("users").document(uid).collection("sessions").add(s);
+            // Flat "sessions" row owned by uid - the same shape the list below reads. This was a
+            // Firestore subcollection write while the read had already moved to D1, so the screen
+            // could only ever say "No sessions recorded yet".
+            s.put("uid", uid);
+            com.friendbook.social.core.DataRouter.add("sessions", s, null);
         } catch (Throwable ignored) { }
     }
 

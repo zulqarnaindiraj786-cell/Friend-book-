@@ -42,6 +42,7 @@ public class ArchiveTrashActivity extends Activity {
     private final TextView[] tabViews = new TextView[3];
     private LinearLayout listCol;
     private TextView bannerTv, emptyAllBtn;
+    private com.friendbook.social.core.DocPager postsPager, storiesPager;
     private ListenerRegistration postsReg, storiesReg;
     private final List<Models.Post> myPosts = new ArrayList<>();
     private final List<Models.Story> myStories = new ArrayList<>();
@@ -122,32 +123,48 @@ public class ArchiveTrashActivity extends Activity {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
 
-        storiesReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("stories").whereEqualTo("authorId",me),20,"archive-stories",(snap,err)-> {
+        // Both lists come from D1. They were Firestore queries, so with Firestore off the archive
+        // and the recycle bin were always empty - "my posts are gone".
+        storiesPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("stories")
+                        .whereEqualTo("authorId", me)
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(20).build(),
+                20, (docs, more, loading, error) -> {
+                    if (loading) return;
                     myStories.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) myStories.add(Models.Story.fromDoc(d));
-                        Collections.sort(myStories, (x, y) -> Long.compare(y.createdAt, x.createdAt));
+                    for (java.util.Map<String, Object> doc : docs) {
+                        myStories.add(Models.Story.fromMap(Format.str(doc, "id"), doc));
                     }
+                    Collections.sort(myStories, (x, y) -> Long.compare(y.createdAt, x.createdAt));
                     render();
                 });
+        storiesPager.start();
 
-        postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("posts").whereEqualTo("authorId",me),15,"archive-posts",(snap,err)-> {
+        postsPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("authorId", me)
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(15).build(),
+                15, (docs, more, loading, error) -> {
+                    if (loading) return;
                     myPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) myPosts.add(Models.Post.fromDoc(d));
-                        Collections.sort(myPosts, (x, y) -> Long.compare(y.createdAt, x.createdAt));
+                    for (java.util.Map<String, Object> doc : docs) {
+                        myPosts.add(Models.Post.fromMap(Format.str(doc, "id"), doc));
                     }
+                    Collections.sort(myPosts, (x, y) -> Long.compare(y.createdAt, x.createdAt));
                     render();
                 });
+        postsPager.start();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        if (storiesReg != null) storiesReg.remove();
-        if (postsReg != null) postsReg.remove();
+        if (storiesPager != null) { storiesPager.close(); storiesPager = null; }
+        if (postsPager != null) { postsPager.close(); postsPager = null; }
+        if (storiesReg != null) { storiesReg.remove(); storiesReg = null; }
+        if (postsReg != null) { postsReg.remove(); postsReg = null; }
     }
 
     private void render() {
@@ -220,7 +237,12 @@ public class ArchiveTrashActivity extends Activity {
             del.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 4), 0);
             del.setOnClickListener(v -> Ui.confirm(this, "Delete story?",
                     "This removes the story permanently from your archive.", "Delete",
-                    () -> Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(x->{myStories.remove(s);render();})));
+                    () -> com.friendbook.social.core.DataRouter.batch()
+                            .delete("stories", s.id)
+                            .commit((ok, error) -> {
+                                if (!ok) return;
+                                myStories.remove(s); render();
+                            })));
             btns.addView(del);
 
             info.addView(btns);
@@ -238,11 +260,15 @@ public class ArchiveTrashActivity extends Activity {
     private void toggleHighlight(Models.Story s, boolean currentlyHighlighted) {
         String me = Fb.uid();
         if (me == null) return;
-        com.friendbook.social.core.DataRouter.mirrorPut("users", me, "highlightStoryIds", currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id));
-        Fb.db().collection("users").document(me).update("highlightStoryIds",
-                currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id))
-                .addOnSuccessListener(x -> Ui.toast(this, currentlyHighlighted
-                        ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨"));
+        com.friendbook.social.core.DataRouter.batch()
+                .ops("users", me, currentlyHighlighted
+                        ? com.friendbook.social.core.CloudflareStore.arrayRemove("highlightStoryIds", s.id)
+                        : com.friendbook.social.core.CloudflareStore.arrayUnion("highlightStoryIds", s.id))
+                .commit((ok, error) -> {
+                    if (!ok) { Ui.toast(this, "Couldn't update highlights. Try again."); return; }
+                    Ui.toast(this, currentlyHighlighted
+                            ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨");
+                });
     }
 
     private void reshareStory(Models.Story s) {
@@ -314,9 +340,13 @@ public class ArchiveTrashActivity extends Activity {
             Map<String, Object> upd = new HashMap<>();
             upd.put("archived", false);
             upd.put("trashedAt", 0L);
-            com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, upd);
-            Fb.db().collection("posts").document(p.id).update(upd)
-                    .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");});
+            com.friendbook.social.core.DataRouter.batch()
+                    .set("posts", p.id, upd)
+                    .commit((ok, error) -> {
+                        if (!ok) { Ui.toast(this, "Couldn't restore. Try again."); return; }
+                        p.archived = false; p.trashedAt = 0; render();
+                        Ui.toast(this, "Restored to your profile ✓");
+                    });
         });
         btns.addView(restore);
 
@@ -326,12 +356,21 @@ public class ArchiveTrashActivity extends Activity {
         second.setOnClickListener(v -> {
             if (isTrash) {
                 Ui.confirm(this, "Delete forever?", "This post cannot be recovered.", "Delete",
-                        () -> Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");}));
+                        () -> com.friendbook.social.core.DataRouter.batch()
+                                .delete("posts", p.id)
+                                .commit((ok, error) -> {
+                                    if (!ok) { Ui.toast(this, "Couldn't delete. Try again."); return; }
+                                    myPosts.remove(p); render(); Ui.toast(this, "Deleted permanently");
+                                }));
             } else {
-                Fb.db().collection("posts").document(p.id)
-                        .update("archived", false, "trashedAt", System.currentTimeMillis())
-                        .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=System.currentTimeMillis();render();Ui.toast(this, "Moved to Recycle Bin 🗑");});
+                long now = System.currentTimeMillis();
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("posts", p.id, Fb.map("archived", false, "trashedAt", now))
+                        .commit((ok, error) -> {
+                            if (!ok) { Ui.toast(this, "Couldn't move to Recycle Bin. Try again."); return; }
+                            p.archived = false; p.trashedAt = now; render();
+                            Ui.toast(this, "Moved to Recycle Bin 🗑");
+                        });
             }
         });
         btns.addView(second, sp);
@@ -350,7 +389,7 @@ public class ArchiveTrashActivity extends Activity {
                 "Only the loaded Recycle Bin items will be permanently deleted. Load more first to include more items. This cannot be undone.",
                 "Delete loaded items", () -> {
                     for (Models.Post p : new ArrayList<>(myPosts)) {
-                        if (p.trashedAt > 0) Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(x->{myPosts.remove(p);render();});
+                        if (p.trashedAt > 0) com.friendbook.social.core.DataRouter.batch().delete("posts", p.id).commit((ok, error) -> { if (ok) { myPosts.remove(p); render(); } });
                     }
                     Ui.toast(this, "Loaded trash items deleted");
                 });

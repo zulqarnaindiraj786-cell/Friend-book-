@@ -78,9 +78,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private static final int REQ_PICK_AVATAR = 801;
     private static final int REQ_PICK_COVER = 802;
 
-    private com.friendbook.social.core.CursorPager postPager,videoPager;
+    private com.friendbook.social.core.DocPager postPager,videoPager;
     private TextView moreProfileVideos,moreProfileFriends;
-    private com.friendbook.social.core.CursorPager friendPager;
+    private com.friendbook.social.core.DocPager friendPager;
     private String uid;
     private boolean mine;
     private boolean viewAsPublic = false;
@@ -898,22 +898,37 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 ("Friends".equalsIgnoreCase(user.friendsListPrivacy) && !"friends".equals(friendState)))))return;
         if(friendPager!=null)friendPager.close();
         if(moreProfileFriends==null){moreProfileFriends=Ui.tvBold(this,"Load 20 more friends",14,Ui.BLUE);friendsBox.addView(moreProfileFriends);}
-        friendPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("friends").whereArrayContains("participants",uid),20,"profile-friends:"+uid,(docs,more,busy,error)->{
+        friendPager=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants",uid).build(),20,
+                (docs,more,busy,error)->{
             if(busy){moreProfileFriends.setText("Loading…");moreProfileFriends.setEnabled(false);return;}
-            ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
-                if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
+            // D1 rows, not Firestore snapshots: this list was a Firestore query, so every profile
+            // showed an empty Friends tab.
+            ownerFriendIds.clear();
+            for(java.util.Map<String,Object> m:docs){
+                String rowId=m.get("id")==null?"":String.valueOf(m.get("id"));
+                for(String other:Models.ChatRoom.fromMap(rowId,m).participants)
+                    if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
+            }
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
         });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
     }
 
     private void startPostsWatcher() {
         if(postPager!=null) postPager.close();
-        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+        postPager=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("authorId",uid)
+                        .orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC)
+                        .build(),7,
+                (docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
                     allLoadedPosts.clear();
                     if (docs != null) {
-                        for (DocumentSnapshot d : docs) {
-                            Models.Post p = Models.Post.fromMap(d.getId(), d.getData());
+                        for (java.util.Map<String,Object> d : docs) {
+                            String rowId = d.get("id")==null?"":String.valueOf(d.get("id"));
+                            Models.Post p = Models.Post.fromMap(rowId, d);
                             allLoadedPosts.add(p);
                         }
                     }
@@ -979,10 +994,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void startReelsWatcher() {
         if(videoPager!=null)videoPager.close();
-        videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
+        videoPager=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("reels")
+                        .whereEqualTo("authorId",uid)
+                        .orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC)
+                        .build(),10,
+                (docs,more,loading,error)-> {
             if(isFinishing())return;
             if(loading){if(moreProfileVideos!=null){moreProfileVideos.setText("Loading…");moreProfileVideos.setEnabled(false);}return;}
-            List<Models.Reel> list=new ArrayList<>();for(DocumentSnapshot doc:docs)list.add(Models.Reel.fromDoc(doc));
+            List<Models.Reel> list=new ArrayList<>();
+            for(java.util.Map<String,Object> d:docs){
+                String rowId = d.get("id")==null?"":String.valueOf(d.get("id"));
+                list.add(Models.Reel.fromMap(rowId,d));
+            }
             list.sort((a,b)->Long.compare(b.createdAt,a.createdAt));
             reelsAdapter.reels.clear();reelsAdapter.reels.addAll(list);reelsAdapter.notifyDataSetChanged();
             if(moreProfileVideos!=null){moreProfileVideos.setText(loading?"Loading…":!error.isEmpty()?"Retry videos":more?"Load 10 more videos":"All videos loaded");moreProfileVideos.setEnabled(!loading && more);}
@@ -1322,9 +1346,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         sub.put("createdAt", FieldValue.serverTimestamp());
         sub.put("expiry", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L)));
-        com.friendbook.social.core.DataRouter.mirrorPut("subscriptions", uid + "_" + me, sub);
-        Fb.db().collection("subscriptions").document(uid + "_" + me).set(sub)
-                .addOnSuccessListener(x -> {
+        com.friendbook.social.core.DataRouter.batch()
+                .set("subscriptions", uid + "_" + me, sub)
+                .commit((ok, error) -> {
+                    if (!ok) { Ui.toast(this, "Couldn't subscribe. Try again."); return; }
                     subscribedActive = true;
                     updateSubscribeButton();
                     Ui.toast(this, "Joined " + user.displayName + "'s VIP Fan Club ⭐");
@@ -1388,10 +1413,32 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             case "outgoing":
-                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () ->
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
-                                .whereEqualTo("fromUid",Fb.uid()).whereEqualTo("toUid",uid))
-                                .addOnFailureListener(e->Ui.toast(this,"Couldn't cancel. Please retry.")));
+                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () -> {
+                    // The pending request is a D1 row. Deleting it through a Firestore query did
+                    // nothing with Firestore off, so "Cancel request" left the request standing.
+                    com.friendbook.social.core.CloudflareStore.query(
+                            com.friendbook.social.core.DocQuery.of("friend_requests")
+                                    .whereEqualTo("fromUid", Fb.uid()).limit(50).build(),
+                            page -> {
+                                com.friendbook.social.core.D1Batch batch =
+                                        com.friendbook.social.core.DataRouter.batch();
+                                boolean any = false;
+                                for (java.util.Map<String, Object> row : page.documents) {
+                                    String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                                    if (rowId.isEmpty() || !uid.equals(row.get("toUid"))) continue;
+                                    batch.delete("friend_requests", rowId);
+                                    any = true;
+                                }
+                                if (!any) { Ui.toast(this, "Request already cancelled"); return; }
+                                batch.commit((ok, error) -> {
+                                    if (!ok) { Ui.toast(this, "Couldn't cancel. Please retry."); return; }
+                                    friendState = "none";
+                                    hasOut = false;
+                                    refreshButtons();
+                                    Ui.toast(this, "Request cancelled");
+                                });
+                            });
+                });
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1419,7 +1466,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             Ui.toast(this, "You're now friends 🎉");
                         });
                     } else {
-                        Fb.db().collection("friend_requests").document(incomingRequestId).delete();
+                        com.friendbook.social.core.DataRouter.batch().delete("friend_requests", incomingRequestId).commit();
                     }
                 });
                 break;
@@ -1464,20 +1511,30 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void unfriend() {
         Ui.confirm(this, "Unfriend " + user.displayName + "?", "", "Unfriend", () -> {
-            String me = Fb.uid();
-            Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
-                    .limit(1).get().addOnSuccessListener(snap -> {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                            if (parts.contains(uid)) {
-                                d.getReference().delete();
-                                com.friendbook.social.core.DataRouter.mirrorDelete("friends", d.getId());
-                                com.friendbook.social.core.DataRouter.mirrorPut("users", me, "friendsCount", FieldValue.increment(-1));
-                                Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
-                                com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "friendsCount", FieldValue.increment(-1));
-                                Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1));
-                            }
+            final String me = Fb.uid();
+            if (me == null) return;
+            // The friendship row lives in D1 and so does the counter. This was a Firestore whereIn
+            // query, so Unfriend did nothing at all once Firestore was off, and the two users kept
+            // seeing each other as friends.
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of("friends")
+                            .whereArrayContains("participants", me).limit(50).build(),
+                    page -> {
+                        if (page == null || page.documents.isEmpty()) return;
+                        java.util.List<String> removed = new java.util.ArrayList<>();
+                        for (java.util.Map<String, Object> row : page.documents) {
+                            String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                            java.util.List<String> parts = Models.ChatRoom.fromMap(rowId, row).participants;
+                            if (rowId.isEmpty() || parts == null || !parts.contains(uid)) continue;
+                            removed.add(rowId);
                         }
+                        if (removed.isEmpty()) return;
+                        com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+                        for (String rowId : removed) batch.delete("friends", rowId);
+                        org.json.JSONArray down = new org.json.JSONArray()
+                                .put(com.friendbook.social.core.CloudflareStore.increment("friendsCount", -1));
+                        batch.ops("users", me, down).ops("users", uid, down);
+                        batch.commit();
                     });
         });
     }

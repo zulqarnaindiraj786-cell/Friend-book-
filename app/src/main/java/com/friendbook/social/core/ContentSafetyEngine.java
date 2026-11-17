@@ -496,12 +496,12 @@ public final class ContentSafetyEngine {
             Map<String, Object> flag = new HashMap<>();
             flag.put("safetyFlagged", true);
             flag.put("safetyCategory", category == null ? "policy_violation" : category);
-            Fb.db().collection(collection).document(docId)
-                    .set(flag, SetOptions.merge())
-                    .addOnSuccessListener(x ->
-                            Fb.db().collection(collection).document(docId).delete())
-                    .addOnFailureListener(e ->
-                            Fb.db().collection(collection).document(docId).delete());
+            // The flagged document is removed from D1 either way. This used to write a flag to
+            // Firestore and then delete there too, which - with Firestore off - left the unsafe
+            // content exactly where it was.
+            com.friendbook.social.core.DataRouter.batch()
+                    .delete(collection, docId)
+                    .commit();
 
             // 2. Log automated safety action for Admin transparency
             Map<String, Object> audit = new HashMap<>();

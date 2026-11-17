@@ -28,7 +28,7 @@ public class FollowListActivity extends Activity {
     private final List<String> ids = new ArrayList<>();
     private UsersAdapter adapter;
     private TextView empty;
-    private com.friendbook.social.core.CursorPager followPager;
+    private com.friendbook.social.core.DocPager followPager;
     private TextView moreButton;
 
     @Override
@@ -63,13 +63,18 @@ public class FollowListActivity extends Activity {
         moreButton=Ui.tvBold(this,"Load 20 more",14,Ui.BLUE);root.addView(moreButton);
         setContentView(root);
 
-        com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(
-            Fb.db().collection("users").whereArrayContains(followers?"following":"followers",uid),20,"follow:"+uid+":"+followers,
+        // Followers / following are D1 rows. The Firestore query answered nothing, so every
+        // profile's follower list and follow list looked empty.
+        com.friendbook.social.core.DocPager pager=new com.friendbook.social.core.DocPager(
+            com.friendbook.social.core.DocQuery.of("users")
+                    .whereArrayContains(followers?"following":"followers",uid).build(),20,
             (docs,more,loading,error)-> {
                 if(isFinishing())return;
                 if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
                 List<UsersAdapter.Row> rows=followers?followersRows:followingRows;rows.clear();
-                for(DocumentSnapshot doc:docs){Models.User u=Models.User.fromDoc(doc);if(u.deactivated)continue;
+                for(java.util.Map<String,Object> row:docs){
+                    String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                    Models.User u=Models.User.fromMap(rowId,row);if(u.deactivated)continue;
                     com.friendbook.social.core.FastCache.putUser(u);UsersAdapter.Row row=new UsersAdapter.Row();row.user=u;row.subtitle=u.bio;rows.add(row);}
                 render();moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry":more?"Load 20 more":"All loaded");
                 moreButton.setEnabled(!loading && more);

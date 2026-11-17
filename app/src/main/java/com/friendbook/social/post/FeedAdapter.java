@@ -1445,9 +1445,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (p.pollVotes == null) p.pollVotes = new HashMap<>();
             p.pollVotes.put(me, (long) idx);
         }
-        com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, upd);
-        Fb.db().collection("posts").document(p.id).update(upd)
-                .addOnFailureListener(e -> Ui.toast(activity, "Vote failed: " + e.getMessage()));
+        // The vote goes to D1 and its answer is what the user hears. The Firestore update was
+        // the write that counted, so on a refused quota the vote was simply lost.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("posts", p.id, upd)
+                .commit((ok, error) -> {
+                    if (!ok) Ui.toast(activity, "Vote failed: " + error);
+                });
         notifyDataSetChanged();
     }
 
@@ -1592,22 +1596,26 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             else if (t.contains("Unsave")) toggleSave(p, true);
             else if (t.contains("notifications for this post")) {
                 if (Fb.uid() != null) {
-                    com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "subscribedBy", subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
-                    Fb.db().collection("posts").document(p.id).update("subscribedBy",
-                            subscribed ? FieldValue.arrayRemove(Fb.uid()) : FieldValue.arrayUnion(Fb.uid()));
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops("posts", p.id, subscribed
+                                    ? com.friendbook.social.core.CloudflareStore.arrayRemove("subscribedBy", Fb.uid())
+                                    : com.friendbook.social.core.CloudflareStore.arrayUnion("subscribedBy", Fb.uid()))
+                            .commit();
                     Ui.toast(activity, subscribed ? "Post notifications OFF" : "Post notifications ON 🔔");
                 }
             }
             else if (t.contains("Move to Archive")) {
-                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "archived", true);
-                Fb.db().collection("posts").document(p.id).update("archived", true);
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("posts", p.id, Fb.map("archived", true))
+                        .commit();
                 posts.remove(p);
                 notifyDataSetChanged();
                 Ui.toast(activity, "Moved to Archive 📦 (Settings → Archive & Trash)");
             }
             else if (t.contains("Move to Recycle Bin")) {
-                com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "trashedAt", System.currentTimeMillis());
-                Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis());
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("posts", p.id, Fb.map("trashedAt", System.currentTimeMillis()))
+                        .commit();
                 posts.remove(p);
                 notifyDataSetChanged();
                 Ui.toast(activity, "Moved to Recycle Bin for 30 days 🗑");
@@ -1619,11 +1627,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 java.util.Map<String, Object> upd = new HashMap<>();
                 upd.put("pinnedPostId", unpin
                         ? com.google.firebase.firestore.FieldValue.delete() : p.id);
-                com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), upd);
-                Fb.db().collection("users").document(Fb.uid()).update(upd)
-                        .addOnSuccessListener(x -> Ui.toast(activity,
-                                unpin ? "Unpinned 📌" : "Post pinned to your profile 📌"))
-                        .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
+                upd.remove("pinnedPostId");
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("users", Fb.uid(), unpin
+                                ? Fb.map("pinnedPostId", "")
+                                : Fb.map("pinnedPostId", p.id))
+                        .commit((ok, error) -> Ui.toast(activity, !ok ? String.valueOf(error)
+                                : (unpin ? "Unpinned 📌" : "Post pinned to your profile 📌")));
             }
             else if (t.contains("Save post")) toggleSave(p, false);
             else if (t.contains("Delete post (moderator)")) {
@@ -1699,8 +1709,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
         String[] vals = {"Public", "Friends", "Only me"};
         Ui.choose(activity, "Who can see this post?", opts, w -> {
-            com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "privacy", vals[w]);
-            Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
+            com.friendbook.social.core.DataRouter.batch()
+                    .set("posts", p.id, Fb.map("privacy", vals[w]))
+                    .commit();
             p.privacy = vals[w];
             notifyDataSetChanged();
             Ui.toast(activity, "Privacy updated: " + vals[w]);
@@ -1710,19 +1721,27 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void toggleSave(Models.Post p, boolean unsave) {
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("posts").document(p.id)
-                .update("savedBy", unsave ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))
-                .addOnSuccessListener(x -> Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓"));
+        com.friendbook.social.core.DataRouter.batch()
+                .ops("posts", p.id, unsave
+                        ? com.friendbook.social.core.CloudflareStore.arrayRemove("savedBy", me)
+                        : com.friendbook.social.core.CloudflareStore.arrayUnion("savedBy", me))
+                .commit((ok, error) -> {
+                    if (ok) Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓");
+                    else Ui.toast(activity, "Couldn't update Saved. Try again.");
+                });
     }
 
     private void deletePost(Models.Post p) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
-            Fb.db().collection("posts").document(p.id).delete();
-            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",p.id))
-                    .addOnFailureListener(e->Ui.toast(activity,"Post removed; some old comments could not be cleaned up."));
-            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("posts").document(p.id).collection("reactions"))
-                    .addOnFailureListener(e->Ui.toast(activity,"Some reactions could not be cleaned up."));
-            Ui.toast(activity, "Post deleted");
+            // The post itself goes to D1, which is where the feed reads it from. Its comments are
+            // a D1 collection keyed by postId, so they go too rather than being left orphaned.
+            com.friendbook.social.core.DataRouter.batch()
+                    .delete("posts", p.id)
+                    .commit((ok, error) -> {
+                        if (!ok) { Ui.toast(activity, "Couldn't delete the post. Try again."); return; }
+                        com.friendbook.social.core.QueryActions.deleteMatchingD1("comments", "postId", p.id, null);
+                        Ui.toast(activity, "Post deleted");
+                    });
         });
     }
 
@@ -1743,8 +1762,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 "Block", () -> {
                     String me = Fb.uid();
                     if (me == null) return;
-                    Fb.db().collection("users").document(me)
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(uid)), SetOptions.merge());
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops("users", me,
+                                    com.friendbook.social.core.CloudflareStore.arrayUnion("blockedUsers", uid))
+                            .commit();
                     Ui.toast(activity, "Blocked");
                 });
     }
@@ -1830,7 +1851,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "createdAt", FieldValue.serverTimestamp());
                     com.friendbook.social.core.DataRouter.add("posts", m, null);
                     com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "shares", FieldValue.increment(1));
-                    Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops("posts", p.id,
+                                    com.friendbook.social.core.CloudflareStore.increment("shares", 1))
+                            .commit();
                     Notify.send(p.authorId, "share", "shared your post", p.id);
                     Ui.toast(c, "Shared to your feed ✓");
                 })

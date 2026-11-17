@@ -69,7 +69,7 @@ public class Notify {
         // The notification is written to D1. As a Firestore add() it was refused on the spent
         // quota, so a like, comment or friend request reached nobody - silently, because the
         // failure only went to a trace log.
-        final String notificationId = Fb.db().collection("notifications").document().getId();
+        final String notificationId = newId("notifications");
         com.friendbook.social.core.DataRouter.batch()
                 .set("notifications", notificationId, n)
                 .commit((success, error) -> {
@@ -104,7 +104,7 @@ public class Notify {
         n.put("text", text);
         n.put("isRead", false);
         n.put("createdAt", System.currentTimeMillis());
-        final String teamNotificationId = Fb.db().collection("notifications").document().getId();
+        final String teamNotificationId = newId("notifications");
         com.friendbook.social.core.DataRouter.batch()
                 .set("notifications", teamNotificationId, n)
                 .commit((success, error) -> {
@@ -116,24 +116,30 @@ public class Notify {
         if (!alsoInChat) return;
         String chatId = "team_" + toUid;
         long now = System.currentTimeMillis();
-        DocumentReference chatRef = Fb.db().collection("chats").document(chatId);
 
         Map<String, String> names = new HashMap<>();
         names.put(Ui.TEAM_USER_ID, "friendbook Team");
         Map<String, String> photos = new HashMap<>();
         photos.put(Ui.TEAM_USER_ID, Ui.TEAM_AVATAR_TOKEN);
-        Map<String, Object> unread = new HashMap<>();
-        unread.put(toUid, FieldValue.increment(1));
 
         Map<String, Object> room = new HashMap<>();
         room.put("participants", Arrays.asList(Ui.TEAM_USER_ID, toUid));
         room.put("participantNames", names);
         room.put("participantPhotos", photos);
         room.put("lastMessage", text);
-        room.put("lastMessageTime", FieldValue.serverTimestamp());
+        room.put("lastMessageTime", now);
         room.put("lastMessageTimeMs", now);
-        room.put("unreadCount", unread);
-        chatRef.set(room, SetOptions.merge());
+        // The room and the message both go to D1. This was a Firestore merge plus a Firestore
+        // subcollection add(), so an official team message appeared in the notification list and
+        // nowhere else - the chat thread stayed empty.
+        com.friendbook.social.core.CloudflareStore.put("chats", chatId, room, null, null);
+        // The badge is raised by the server. A FieldValue.increment inside the merged map is not
+        // serialisable, so it used to arrive as no change at all and the team chat never showed
+        // an unread message.
+        com.friendbook.social.core.CloudflareStore.patch("chats", chatId,
+                new org.json.JSONArray().put(
+                        com.friendbook.social.core.CloudflareStore.increment("unreadCount." + toUid, 1)),
+                null, null);
 
         Map<String, Object> msg = new HashMap<>();
         msg.put("senderId", Ui.TEAM_USER_ID);
@@ -144,9 +150,10 @@ public class Notify {
         msg.put("type", "text");
         msg.put("isDelivered", true);
         msg.put("isSeen", false);
-        msg.put("createdAt", FieldValue.serverTimestamp());
+        msg.put("createdAt", now);
         msg.put("createdAtMs", now);
-        chatRef.collection("messages").add(msg);
+        msg.put("chatId", chatId);
+        com.friendbook.social.core.DataRouter.add("messages", msg, null);
     }
 
     /** Sends a Group invitation notification opening directly into GroupDetailActivity. */
@@ -163,7 +170,7 @@ public class Notify {
         n.put("text", "invited you to join group \"" + groupName + "\" 👥");
         n.put("isRead", false);
         n.put("createdAt", System.currentTimeMillis());
-        final String teamNotificationId = Fb.db().collection("notifications").document().getId();
+        final String teamNotificationId = newId("notifications");
         com.friendbook.social.core.DataRouter.batch()
                 .set("notifications", teamNotificationId, n)
                 .commit((success, error) -> {
@@ -191,5 +198,17 @@ public class Notify {
         b.commit((success, error) -> {
             if (!success) android.util.Log.w("FriendBook", "markAllRead failed on D1: " + error);
         });
+    }
+
+    /**
+     * A fresh notification id.
+     *
+     * <p>Firestore used to mint this. With Firestore off it threw, which killed the whole send
+     * before the D1 write - so every like, comment and friend request notified nobody. Any unique
+     * string is enough here; the id only has to be the document's key.
+     */
+    private static String newId(String collection) {
+        return collection + "_" + System.currentTimeMillis() + "_"
+                + Integer.toHexString(new java.util.Random().nextInt(0x100000));
     }
 }

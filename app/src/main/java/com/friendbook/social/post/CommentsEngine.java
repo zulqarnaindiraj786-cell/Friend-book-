@@ -334,24 +334,27 @@ public class CommentsEngine {
     public static void pinComment(String collection, String docId, String commentId, boolean pin) {
         if (docId == null || docId.isEmpty()) return;
         if(d1(collection,docId)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","pin","id",commentId,"pin",pin));return;}
-        Map<String, Object> dot = new HashMap<>();
-        dot.put("pinnedCommentId", pin ? commentId : "");
-        Fb.db().collection(collection).document(docId).update(dot);
+        com.friendbook.social.core.DataRouter.batch()
+                .set(collection, docId, Fb.map("pinnedCommentId", pin ? commentId : ""))
+                .commit();
     }
 
     /** Deletes a comment across parent doc `commentsMap`, subcollection, and root `comments`. */
     public static void deleteComment(String collection, String docId, Models.Comment c) {
         if (c == null || c.id == null) return;
         if(d1(collection,docId)){d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","remove","id",c.id));return;}
+        // The comment and the post's counter, in one D1 batch. The Firestore pair was the write
+        // that counted, so a refused delete left the comment on screen for everyone.
         if (docId != null && !docId.isEmpty()) {
-            Map<String, Object> dot = new HashMap<>();
-            dot.put("commentsMap." + c.id, FieldValue.delete());
-            dot.put("comments", FieldValue.increment(-1));
-            dot.put("lastComment", FieldValue.delete());
-            Fb.db().collection(collection).document(docId).update(dot)
-                    .addOnSuccessListener(v -> bumpLocalCommentCount(collection, docId, -1));
-            Fb.db().collection(collection).document(docId).collection("comments").document(c.id).delete();
+            com.friendbook.social.core.DataRouter.batch()
+                    .delete("comments", c.id)
+                    .ops(collection, docId,
+                            com.friendbook.social.core.CloudflareStore.increment("comments", -1))
+                    .commit((ok, error) -> {
+                        if (ok) bumpLocalCommentCount(collection, docId, -1);
+                    });
+        } else {
+            com.friendbook.social.core.DataRouter.batch().delete("comments", c.id).commit();
         }
-        Fb.db().collection("comments").document(c.id).delete();
     }
 }

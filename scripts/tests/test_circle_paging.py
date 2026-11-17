@@ -4,7 +4,7 @@ JAVA=Path('app/src/main/java/com/friendbook/social')
 class CirclePaging(unittest.TestCase):
     def test_story_cache_and_live_results_apply_same_policy(self):
         s=(JAVA/'main/HomeFragment.java').read_text()
-        for token in ['storyAllowed(story)','renderLoadedStories()','snapshot.size()==10','pymkLoaded','pymkLoading']:
+        for token in ['storyAllowed(story)','renderLoadedStories()','moreStories=page!=null && page.hasMore','pymkLoaded','pymkLoading']:
             self.assertIn(token,s)
         s=(JAVA/'story/StoryViewerActivity.java').read_text()
         # The viewer used a Firestore server-side count to decide friend visibility. With the

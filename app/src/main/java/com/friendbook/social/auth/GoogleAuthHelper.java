@@ -380,20 +380,17 @@ public final class GoogleAuthHelper {
         final String googlePhoto = pUri != null
                 ? pUri.toString().replace("=s96-c", "=s400-c") : "";
 
-        Fb.db().collection("users").document(uid).get()
-                .addOnSuccessListener(d -> {
-                    if (d != null && d.exists()) {
-                        finishExistingGoogleUser(a, uid, email, displayName, googlePhoto, d, btnView, labelTv);
-                    } else {
-                        provisionNewGoogleUser(a, uid, email, displayName, googlePhoto, referralInput, btnView, labelTv);
-                    }
-                })
-                .addOnFailureListener(err -> {
-                    sAuthInFlight = false;
-                    Prefs.saveAccount(a, uid, email, displayName, googlePhoto);
-                    Prefs.setUnlockedSession(a, true);
-                    openMain(a);
-                });
+        // Whether this Gmail is new is decided by D1. This was a Firestore read, so with
+        // Firestore off the lookup never answered and a brand-new account was never provisioned -
+        // it landed in MainActivity with no profile row at all, which is the "new Gmail fails"
+        // defect. An unanswered read now provisions rather than dead-ends.
+        com.friendbook.social.core.CloudflareStore.get("users", uid, d -> {
+            if (d != null) {
+                finishExistingGoogleUser(a, uid, email, displayName, googlePhoto, d, btnView, labelTv);
+            } else {
+                provisionNewGoogleUser(a, uid, email, displayName, googlePhoto, referralInput, btnView, labelTv);
+            }
+        });
     }
 
     public static String resolveGoogleEmail(FirebaseUser fu) {
@@ -466,8 +463,8 @@ public final class GoogleAuthHelper {
 
     private static void finishExistingGoogleUser(Activity a, String uid, String email,
                                                  String fallbackName, String googlePhoto,
-                                                 DocumentSnapshot d, View btnView, TextView labelTv) {
-        boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
+                                                 Map<String, Object> d, View btnView, TextView labelTv) {
+        boolean banned = Boolean.parseBoolean(String.valueOf(d.get("banned")));
         if (banned && !Admin.isOwnerEmail(email)) {
             sAuthInFlight = false;
             com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
@@ -479,7 +476,7 @@ public final class GoogleAuthHelper {
                             + Admin.OWNER_EMAIL + " if you think this is a mistake.");
             return;
         }
-        String twoFa = d.getString("twoFactorPin");
+        String twoFa = Format.str(d, "twoFactorPin");
         if (twoFa != null && !twoFa.isEmpty()) {
             EditText code = Ui.input(a, "Enter Two-Step Security PIN");
             code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
@@ -518,13 +515,13 @@ public final class GoogleAuthHelper {
 
     private static void completeExistingSignIn(Activity a, String uid, String email,
                                                String fallbackName, String googlePhoto,
-                                               DocumentSnapshot d) {
+                                               Map<String, Object> d) {
         Map<String, Object> patch = new HashMap<>();
-        if (Boolean.TRUE.equals(d.getBoolean("deactivated"))) {
+        if (Boolean.parseBoolean(String.valueOf(d.get("deactivated")))) {
             patch.put("deactivated", false);
             Ui.toast(a, "Welcome back! Your account has been reactivated 👋");
         }
-        String existingPhoto = d.getString("photoUrl");
+        String existingPhoto = Format.str(d, "photoUrl");
         if ((existingPhoto == null || existingPhoto.isEmpty()) && !googlePhoto.isEmpty()) {
             patch.put("photoUrl", googlePhoto);
             existingPhoto = googlePhoto;
@@ -534,10 +531,10 @@ public final class GoogleAuthHelper {
             // write against a store that is switched off.
             com.friendbook.social.core.DataRouter.batch().set("users", uid, patch).commit();
         }
-        if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
+        if (Boolean.parseBoolean(String.valueOf(d.get("loginAlerts")))) {
             Notify.send(uid, "security", "logged in with Google on " + android.os.Build.MODEL, "");
         }
-        String name = d.getString("displayName");
+        String name = Format.str(d, "displayName");
         if (name == null || name.isEmpty()) name = fallbackName;
         if (existingPhoto == null) existingPhoto = "";
         Prefs.saveAccount(a, uid, email, name, existingPhoto);
@@ -555,16 +552,19 @@ public final class GoogleAuthHelper {
         if (code == null || code.isEmpty() || code.equals(newUid)) return;
         final String refBy = code;
         Prefs.setPendingReferral(a, "");
-        Fb.db().collection("users").document(refBy).get().addOnSuccessListener(d -> {
-            if (!d.exists()) return;
+        // The referrer is checked in D1; without this read a referral code never credited anyone.
+        com.friendbook.social.core.CloudflareStore.get("users", refBy, d -> {
+            if (d == null) return;
             Map<String, Object> r = new HashMap<>();
             r.put("refBy", refBy);
             r.put("refTo", newUid);
             r.put("status", "completed");
-            r.put("date", FieldValue.serverTimestamp());
-            r.put("createdAt", FieldValue.serverTimestamp());
+            // Millis, not FieldValue.serverTimestamp(): a sentinel is dropped during D1
+            // serialisation, so the referral row would have had no date on it.
+            r.put("date", System.currentTimeMillis());
+            r.put("createdAt", System.currentTimeMillis());
             com.friendbook.social.core.DataRouter.mirrorPut("referrals", refBy + "_" + newUid, r);
-            Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r);
+            com.friendbook.social.core.DataRouter.batch().set("referrals", refBy + "_" + newUid, r).commit();
 
             Map<String, Object> n = new HashMap<>();
             n.put("toUserId", refBy);
@@ -574,7 +574,7 @@ public final class GoogleAuthHelper {
             n.put("type", "referral");
             n.put("text", "joined friendbook via your invite 🎉 (referral credit +1)");
             n.put("isRead", false);
-            n.put("createdAt", FieldValue.serverTimestamp());
+            n.put("createdAt", System.currentTimeMillis());
             com.friendbook.social.core.DataRouter.add("notifications", n, null);
         });
     }

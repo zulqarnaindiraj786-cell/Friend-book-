@@ -168,9 +168,12 @@ public class App extends Application implements SensorEventListener {
                         + " · Android " + android.os.Build.VERSION.RELEASE);
                 c.put("appVersion", com.friendbook.social.core.Ui.appVersionCode(this));
                 c.put("appVersionName", com.friendbook.social.core.Ui.appVersionName(this));
-                c.put("createdAt",
-                        com.google.firebase.firestore.FieldValue.serverTimestamp());
-                Fb.db().collection("crashReports").add(c);
+                // Java millis, and D1: a crash report sent to a switched-off store is a crash
+                // nobody can diagnose. The handler still runs synchronously before the process
+                // dies, so the write is started here rather than deferred.
+                c.put("createdAt", System.currentTimeMillis());
+                com.friendbook.social.core.CloudflareStore.put("crash_reports",
+                        "crash_" + System.currentTimeMillis(), c);
                 Thread.sleep(500);
             } catch (Throwable ignored) { }
             if (sys != null) sys.uncaughtException(thread, ex);

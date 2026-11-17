@@ -31,7 +31,7 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private ListenerRegistration reg;
-    private DocumentSnapshot cursor;
+    private String cursor;
     private boolean loading, more=true;
     private int generation;
     private SwipeRefreshLayout swipe;
@@ -96,13 +96,14 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         }
         if (!rawVideos.isEmpty()) applyFilter();
 
-        Fb.db().collection("posts").whereEqualTo("mediaType", "video").limit(10)
-                .get(Source.CACHE)
-                .addOnSuccessListener(snap -> {
-                    if (snap != null && !snap.isEmpty() && rawVideos.isEmpty()) {
-                        consume(snap.getDocuments());
-                    }
-                });
+        // A D1 read fills the video list when the cache has nothing. This was a Firestore
+        // Source.CACHE read, which is empty once Firestore is off, so Watch opened blank.
+        if (rawVideos.isEmpty()) {
+            com.friendbook.social.core.D1Snap.read(
+                    com.friendbook.social.core.DocQuery.of("posts")
+                            .whereEqualTo("mediaType", "video").limit(10).build(),
+                    snap -> { if (snap != null && !snap.isEmpty() && rawVideos.isEmpty()) consume(snap.getDocuments()); });
+        }
     }
 
     private void renderChips() {
@@ -245,21 +246,25 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
             return;
         }
         loading=true; final int request=generation; final String actor=Fb.uid();
-        com.google.firebase.firestore.Query query=Fb.db().collection("posts").whereEqualTo("mediaType","video");
-        boolean first=cursor==null; if(cursor!=null) query=query.startAfter(cursor);
-        query.limit(10).get().addOnSuccessListener(page -> {
+        // Paging on D1: the Firestore query returned nothing, so "Load more" never added a video.
+        com.friendbook.social.core.DocQuery.Builder vq=com.friendbook.social.core.DocQuery.of("posts")
+                .whereEqualTo("mediaType","video")
+                .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC).limit(10);
+        boolean first=cursor==null; if(!first) vq.startAfter(cursor);
+        com.friendbook.social.core.CloudflareStore.query(vq.build(), page -> {
             if(request!=generation || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
-            loading=false; more=page.size()==10;
+            loading=false; more=page.hasMore;
             if(first) rawVideos.clear();
-            if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
+            cursor=page.documents.isEmpty()?null:page.nextCursor;
             java.util.Set<String> ids=new java.util.HashSet<>(); for(Models.Post item:rawVideos) ids.add(item.id);
-            for(DocumentSnapshot doc:page) {
-                Models.Post post=Models.Post.fromDoc(doc);
-                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged")) || (Fb.me!=null && Fb.me.blocked.contains(post.authorId)) || Prefs.isSnoozed(this,post.authorId)) continue;
+            for(java.util.Map<String,Object> row:page.documents) {
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                Models.Post post=Models.Post.fromMap(rowId,row);
+                if(Boolean.parseBoolean(String.valueOf(row.get("safetyFlagged"))) || (Fb.me!=null && Fb.me.blocked.contains(post.authorId)) || Prefs.isSnoozed(this,post.authorId)) continue;
                 if(ids.add(post.id)) rawVideos.add(post);
             }
             applyFilter();
-        }).addOnFailureListener(error -> { if(request==generation) { loading=false; Ui.toast(this,"Couldn't load videos. Tap Load more to retry"); } });
+        }, () -> { if(request==generation) { loading=false; Ui.toast(this,"Couldn't load videos. Tap Load more to retry"); } });
     }
     @Override public boolean hasMore() { return more; }
 }

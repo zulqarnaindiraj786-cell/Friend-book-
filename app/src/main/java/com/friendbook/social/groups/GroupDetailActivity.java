@@ -504,7 +504,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                         up.put("adminIds", FieldValue.arrayRemove(me));
                         up.put("moderatorIds", FieldValue.arrayRemove(me));
                         com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-                        Fb.db().collection("groups").document(id).update(up);
+                        com.friendbook.social.core.DataRouter.batch().set("groups", id, up).commit();
                         Ui.toast(this, "You left " + group.name);
                     });
         } else if (isPending) {
@@ -520,7 +520,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             up.put("members", FieldValue.arrayUnion(me));
             up.put("invitedUids", FieldValue.arrayRemove(me));
             com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-            Fb.db().collection("groups").document(id).update(up);
+            com.friendbook.social.core.DataRouter.batch().set("groups", id, up).commit();
             Ui.toast(this, "Joined " + group.name + " 🎉");
         }
     }
@@ -664,8 +664,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             else if (sel.startsWith("🗑")) {
                 Ui.confirm(this, "Delete \"" + group.name + "\"?",
                         "This permanently deletes the group.", "Delete Group", () ->
-                                Fb.db().collection("groups").document(id).delete()
-                                        .addOnSuccessListener(x -> {
+                                com.friendbook.social.core.DataRouter.batch().delete("groups", id)
+                                        .commit((ok, error) -> {
+                                            if (!ok) { Ui.toast(this, "Couldn't delete the group. Try again."); return; }
                                             Ui.toast(this, "Group deleted");
                                             finish();
                                         }));
@@ -708,7 +709,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             Ui.pad(appr, 12, 6, 12, 6);
             appr.setOnClickListener(v -> {
                 com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "groupApprovalStatus", "approved");
-                Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved");
+                com.friendbook.social.core.DataRouter.batch().set("posts", p.id, Fb.map("groupApprovalStatus", "approved")).commit();
                 Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Post approved ✓");
@@ -718,7 +719,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             decl.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
+                com.friendbook.social.core.DataRouter.batch().delete("posts", p.id).commit();
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Post declined & removed");
             });
@@ -763,7 +764,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("pendingMemberIds", FieldValue.arrayRemove(reqUid));
                 up.put("members", FieldValue.arrayUnion(reqUid));
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-                Fb.db().collection("groups").document(id).update(up);
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, up).commit();
                 Notify.sendGroupInvite(reqUid, id, group.name);
                 row.setVisibility(View.GONE);
                 Ui.toast(this, "Approved ✓");
@@ -828,7 +829,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             Ui.pad(pinB, 10, 5, 10, 5);
             pinB.setOnClickListener(v -> {
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "pinnedPostId", pinned ? "" : p.id);
-                Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id);
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, Fb.map("pinnedPostId", pinned ? "" : p.id)).commit();
                 dlg.dismiss();
                 Ui.toast(this, pinned ? "Unpinned" : "Pinned to Featured 📌");
             });
@@ -838,7 +839,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             delB.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
+                com.friendbook.social.core.DataRouter.batch().delete("posts", p.id).commit();
                 card.setVisibility(View.GONE);
                 Ui.toast(this, "Removed from group 🗑");
             });
@@ -945,8 +946,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                     up.put("requirePostApproval", swPostAppr.isChecked());
                     up.put("requireJoinApproval", swJoinAppr.isChecked());
                     com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-                    Fb.db().collection("groups").document(id).set(up, SetOptions.merge())
-                            .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓"));
+                    com.friendbook.social.core.DataRouter.batch().set("groups", id, up)
+                            .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓")).commit();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1083,13 +1084,13 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", targetUid));
             } else if (act == 2) {
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "adminIds", targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
-                Fb.db().collection("groups").document(id).update("adminIds",
-                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, Fb.map("adminIds",
+                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid))).commit();
                 Ui.toast(this, targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
             } else if (act == 3) {
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, "moderatorIds", targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
-                Fb.db().collection("groups").document(id).update("moderatorIds",
-                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, Fb.map("moderatorIds",
+                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid))).commit();
                 Ui.toast(this, targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");
             } else if (act == 4) {
                 Map<String, Object> up = new HashMap<>();
@@ -1097,7 +1098,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-                Fb.db().collection("groups").document(id).update(up);
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, up).commit();
                 Ui.toast(this, "Removed " + targetName);
             } else if (act == 5) {
                 Map<String, Object> up = new HashMap<>();
@@ -1106,7 +1107,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
                 up.put("bannedMemberIds", FieldValue.arrayUnion(targetUid));
                 com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
-                Fb.db().collection("groups").document(id).update(up);
+                com.friendbook.social.core.DataRouter.batch().set("groups", id, up).commit();
                 Ui.toast(this, "Banned " + targetName + " from group 🚫");
             }
             return true;

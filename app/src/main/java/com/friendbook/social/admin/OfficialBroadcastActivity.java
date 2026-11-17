@@ -135,13 +135,15 @@ public final class OfficialBroadcastActivity extends Activity {
         else if (mediaUrl.startsWith("https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/videos/")) {
             spec.put("mediaProvider", "r2"); spec.put("mediaRetention", "forever");
         }
-        spec.put("createdAt", FieldValue.serverTimestamp()); spec.put("status", "queued"); spec.put("processed", 0);
-        Fb.db().runTransaction(tx -> { if (!tx.get(ref).exists()) tx.set(ref, spec); return null; })
-                .addOnSuccessListener(v -> {
+        spec.put("createdAt", System.currentTimeMillis()); spec.put("status", "queued"); spec.put("processed", 0);
+        // Queued in D1. This was a Firestore transaction, so with Firestore off the broadcast was
+        // never queued and the admin was told to "check deployed Firestore rules".
+        com.friendbook.social.core.DataRouter.batch()
+                .set("official_broadcasts", jobId, spec)
+                .commit((ok, error) -> {
+                    if (!ok) { if (!isDestroyed()) fail("Could not queue broadcast. Try again."); return; }
                     OfficialBroadcastWorker.enqueue(getApplicationContext(), jobId, uid);
                     if (!isDestroyed()) status.setText("Queued. Background sending will continue while this admin account is signed in.");
-                }).addOnFailureListener(e -> {
-                    if (!isDestroyed()) fail("Could not queue broadcast. Check deployed Firestore rules and connection.");
                 });
     }
     private void fail(String reason) { busy = false; send.setEnabled(true); message.setEnabled(true); status.setText(reason); }

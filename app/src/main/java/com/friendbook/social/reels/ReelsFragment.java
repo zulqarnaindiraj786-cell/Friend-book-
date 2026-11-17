@@ -2804,8 +2804,11 @@ public class ReelsFragment extends Fragment {
                                 return;
                             }
                             Ui.confirm(a, "Delete Reel?", "Remove this reel permanently?", "Delete", () ->
-                                    Fb.db().collection(reel.collectionName()).document(reel.id).delete()
-                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted")));
+                                    com.friendbook.social.core.DataRouter.batch()
+                                            .delete(reel.collectionName(), reel.id)
+                                            .commit((ok, error) -> {
+                                                if (ok) Ui.toast(a, "Reel deleted");
+                                            }));
                         });
                         return true;
                     }

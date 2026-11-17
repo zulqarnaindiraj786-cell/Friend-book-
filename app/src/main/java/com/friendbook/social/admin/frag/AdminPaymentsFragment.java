@@ -145,8 +145,8 @@ public class AdminPaymentsFragment extends Fragment {
             TextView reject = Ui.btnGrey(a, "✕ Reject");
             reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
                     () -> {
-                        Fb.db().collection("payments").document(d.getId()).update("status", "rejected",
-                                "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp());
+                        com.friendbook.social.core.DataRouter.batch().set("payments", d.getId(), Fb.map("status", "rejected",
+                                "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())).commit();
                         com.friendbook.social.core.DataRouter.mirrorPut("payments", d.getId(),
                                 "status", "rejected", "rejectedBy", Fb.uid());
                     }));
@@ -228,8 +228,8 @@ public class AdminPaymentsFragment extends Fragment {
                 "text", text,
                 "isRead", false,
                 "createdAt", System.currentTimeMillis());
-        com.friendbook.social.core.DataRouter.batch()
-                .set("notifications", Fb.db().collection("notifications").document().getId(), n)
-                .commit();
+        // A payment notice the user never receives is worse than no notice: the id comes from
+        // the D1 writer, which is the only store the app writes to now.
+        com.friendbook.social.core.DataRouter.add("notifications", n, null);
     }
 }

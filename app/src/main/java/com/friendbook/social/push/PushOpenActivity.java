@@ -43,7 +43,7 @@ public class PushOpenActivity extends Activity {
             target.putExtra("uid", getIntent().getStringExtra("fromUserId"));
         }
         String nid = getIntent().getStringExtra("notificationId");
-        if (nid != null && !nid.isEmpty()) Fb.db().collection("notifications").document(nid).update("isRead", true);
+        if (nid != null && !nid.isEmpty()) com.friendbook.social.core.DataRouter.batch().set("notifications", nid, Fb.map("isRead", true)).commit();
         startActivities(new Intent[]{new Intent(this, MainActivity.class), target});
         finish();
     }

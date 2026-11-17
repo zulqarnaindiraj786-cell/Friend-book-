@@ -128,10 +128,13 @@ public class ActivityLogActivity extends Activity {
         allEntries.clear();
         pending = 3;
 
-        Fb.db().collection("posts").whereEqualTo("authorId", me).limit(80).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Post p = Models.Post.fromDoc(d);
+        // Activity history reads D1; these were Firestore queries, so the log was always empty.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("authorId", me).limit(50).build(), page -> {
+                    if (page != null) for (java.util.Map<String, Object> row : page.documents) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.Post p = Models.Post.fromMap(rowId, row);
                         Entry e = new Entry();
                         e.kind = "post";
                         e.text = p.content == null || p.content.isEmpty()
@@ -142,12 +145,15 @@ public class ActivityLogActivity extends Activity {
                         allEntries.add(e);
                     }
                     done();
-                }).addOnFailureListener(e -> done());
+                });
 
-        Fb.db().collection("comments").whereEqualTo("authorId", me).limit(80).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Comment c = Models.Comment.fromDoc(d);
+        // Activity history reads D1; these were Firestore queries, so the log was always empty.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("comments")
+                        .whereEqualTo("authorId", me).limit(50).build(), page -> {
+                    if (page != null) for (java.util.Map<String, Object> row : page.documents) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.Comment c = Models.Comment.fromMap(rowId, row);
                         Entry e = new Entry();
                         e.kind = "comment";
                         e.text = c.content;
@@ -156,12 +162,15 @@ public class ActivityLogActivity extends Activity {
                         allEntries.add(e);
                     }
                     done();
-                }).addOnFailureListener(e -> done());
+                });
 
-        Fb.db().collection("stories").whereEqualTo("authorId", me).limit(50).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Story s = Models.Story.fromDoc(d);
+        // Activity history reads D1; these were Firestore queries, so the log was always empty.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("stories")
+                        .whereEqualTo("authorId", me).limit(50).build(), page -> {
+                    if (page != null) for (java.util.Map<String, Object> row : page.documents) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.Story s = Models.Story.fromMap(rowId, row);
                         Entry e = new Entry();
                         e.kind = "story";
                         e.text = s.caption == null || s.caption.isEmpty()
@@ -172,7 +181,7 @@ public class ActivityLogActivity extends Activity {
                         allEntries.add(e);
                     }
                     done();
-                }).addOnFailureListener(e -> done());
+                });
     }
 
     private void done() {

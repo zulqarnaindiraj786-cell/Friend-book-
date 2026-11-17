@@ -265,8 +265,8 @@ public class EventsActivity extends Activity {
                 String me = Fb.uid();
                 if (me == null) return;
                 com.friendbook.social.core.DataRouter.mirrorPut("events", e.id, "interested", going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                Fb.db().collection("events").document(e.id).update("interested",
-                        going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                com.friendbook.social.core.DataRouter.batch().set("events", e.id, Fb.map("interested",
+                        going ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))).commit();
             });
 
             h.calBtn.setOnClickListener(v -> {

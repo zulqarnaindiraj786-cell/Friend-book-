@@ -73,14 +73,19 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
     private void load() {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        Fb.db().collection("posts").whereEqualTo("authorId", me)
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(300)
-                .get().addOnSuccessListener(snap -> {
+        // Own posts read from D1 newest-first; a 300-document Firestore read was the old path.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereEqualTo("authorId", me)
+                        .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                        .limit(100).build(), snap -> {
                     memories.clear();
                     Calendar today = Calendar.getInstance();
                     int m = today.get(Calendar.MONTH), d = today.get(Calendar.DAY_OF_MONTH), y = today.get(Calendar.YEAR);
-                    for (DocumentSnapshot doc : snap) {
-                        Models.Post p = Models.Post.fromDoc(doc);
+                    if (snap == null) return;
+                    for (java.util.Map<String, Object> row : snap.documents) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.Post p = Models.Post.fromMap(rowId, row);
                         if (p.createdAt == 0) continue;
                         Calendar c = Calendar.getInstance();
                         c.setTimeInMillis(p.createdAt);

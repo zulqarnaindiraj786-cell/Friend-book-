@@ -16,7 +16,10 @@ class LinksBroadcastTest(unittest.TestCase):
             ET.parse(path)
     def test_broadcast_is_paginated_and_transactionally_replay_safe(self):
         worker = (JAVA/'admin/OfficialBroadcastWorker.java').read_text()
-        for token in ['limit(100)', 'startAfter(cursor)', 'runTransaction', 'tx.get(note).exists()', 'tx.get(message).exists()', 'uid.equals(Fb.uid())', 'Result.retry()']:
+        # The fan-out writes to D1, which has no multi-row transaction; replay safety comes from
+        # the job-derived document ids instead. The guard pins those ids and the cursor.
+        for token in ['limit(100)', 'startAfter(cursor)', 'uid.equals(Fb.uid())', 'Result.retry()',
+                      '"broadcast_" + id + "_" + to', 'chatId + "_broadcast_" + id']:
             self.assertIn(token,worker)
         self.assertNotIn('limit(400)', (JAVA/'admin/AdminPanelActivity.java').read_text())
     def test_media_model_and_recycling_key_include_video(self):

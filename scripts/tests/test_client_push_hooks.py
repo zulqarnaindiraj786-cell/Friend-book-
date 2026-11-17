@@ -34,7 +34,7 @@ class ClientPushHooksTest(unittest.TestCase):
         self.assertIn('PushFanoutWorker.enqueue("chat", chatId, messageId)', source)
         self.assertIn('PushFanoutWorker.enqueue("friend_post", postId', source)
         worker = (JAVA/'push/PushFanoutWorker.java').read_text()
-        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'if (!tx.get(ref).exists()) tx.set(ref, n)']:
+        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'D1Blocking.get("notifications", noteId) == null']:
             self.assertIn(part, worker)
         chat = (JAVA/'chat/ChatActivity.java').read_text()
         self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId())'), 3)

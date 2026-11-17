@@ -204,9 +204,11 @@ public class LoginActivity extends Activity {
                     String uid = Fb.auth().getCurrentUser() != null
                             ? Fb.auth().getCurrentUser().getUid() : null;
                     if (uid == null) { openMain(); return; }
-                    Fb.db().collection("users").document(uid).get()
-                            .addOnSuccessListener(d -> verifyAndFinishLogin(uid, e, d, btn))
-                            .addOnFailureListener(err -> openMain());
+                    // Banned / 2FA / reactivate state comes from D1. This was a Firestore read,
+                    // so with Firestore off an existing user skipped the ban check entirely and
+                    // a deactivated account was never reactivated.
+                    com.friendbook.social.core.CloudflareStore.get("users", uid, viewed ->
+                            verifyAndFinishLogin(uid, e, viewed, btn));
                 })
                 .addOnFailureListener(err -> {
                     btn.setText("Log In");
@@ -215,8 +217,9 @@ public class LoginActivity extends Activity {
                 });
     }
 
-    private void verifyAndFinishLogin(String uid, String em, DocumentSnapshot d, TextView btn) {
-        boolean banned = Boolean.TRUE.equals(d.getBoolean("banned"));
+    private void verifyAndFinishLogin(String uid, String em, Map<String, Object> d, TextView btn) {
+        // A missing D1 row is a new session, not a banned one: only an explicit true blocks.
+        boolean banned = d != null && Boolean.parseBoolean(String.valueOf(d.get("banned")));
         if (banned && !Admin.isOwnerEmail(em)) {
             com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                     Fb.auth().signOut();
@@ -227,7 +230,7 @@ public class LoginActivity extends Activity {
                             + " Contact " + Admin.OWNER_EMAIL + " if you think this is a mistake.");
             return;
         }
-        String twoFa = d.getString("twoFactorPin");
+        String twoFa = d == null ? "" : Format.str(d, "twoFactorPin");
         if (twoFa != null && !twoFa.isEmpty()) {
             EditText code = Ui.input(this, "Enter Two-Step Security PIN");
             code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
@@ -262,17 +265,18 @@ public class LoginActivity extends Activity {
         completePostLogin(uid, em, d);
     }
 
-    private void completePostLogin(String uid, String em, DocumentSnapshot d) {
-        if (Boolean.TRUE.equals(d.getBoolean("deactivated"))) {
-            Fb.db().collection("users").document(uid)
-                    .set(Fb.map("deactivated", false), SetOptions.merge());
+    private void completePostLogin(String uid, String em, Map<String, Object> d) {
+        boolean deactivated = d != null && Boolean.parseBoolean(String.valueOf(d.get("deactivated")));
+        if (deactivated) {
+            com.friendbook.social.core.CloudflareStore.put("users", uid,
+                    Fb.map("deactivated", false), null, null);
             Ui.toast(this, "Welcome back! Your account has been reactivated 👋");
         }
-        if (Boolean.TRUE.equals(d.getBoolean("loginAlerts"))) {
+        if (d != null && Boolean.parseBoolean(String.valueOf(d.get("loginAlerts")))) {
             Notify.send(uid, "security", "logged in on " + android.os.Build.MODEL, "");
         }
-        String name = d.getString("displayName");
-        String photo = d.getString("photoUrl");
+        String name = d == null ? "" : Format.str(d, "displayName");
+        String photo = d == null ? "" : Format.str(d, "photoUrl");
         Prefs.saveAccount(this, uid, em, name == null ? em : name, photo == null ? "" : photo);
         Prefs.setUnlockedSession(this, true);
         SessionsActivity.record();

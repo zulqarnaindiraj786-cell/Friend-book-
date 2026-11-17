@@ -21,7 +21,9 @@ class PresenceBadgeTest(unittest.TestCase):
         source=(JAVA/'main/NotificationsFragment.java').read_text()
         for name in ['public void onStart()', 'public void onHiddenChanged(boolean hidden)']:
             self.assertNotIn('markAllReadOptimisticNow', method(source,name))
-        self.assertIn('document(n.id).update("isRead", true)', source)
+        # Mark-all must still exist and still be an explicit action. The write is a D1 batch now
+        # (the Firestore update was refused with Firestore off, which is why the badge came back).
+        self.assertIn('batch.update("notifications", d.getId(), Fb.map("isRead", true))', source)
         self.assertIn('markAll.setOnClickListener(v -> markAllReadReal())', source)
         self.assertNotIn('markFriendRequestsSeen', (JAVA/'friends/FriendsFragment.java').read_text())
     def test_cloudflare_websocket_presence_replaces_rtdb(self):

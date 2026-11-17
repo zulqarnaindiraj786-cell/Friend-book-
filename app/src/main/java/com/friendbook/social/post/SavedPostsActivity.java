@@ -103,14 +103,19 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         if(pages!=null)pages.close();
-        pages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereArrayContains("savedBy",me),15,"saved-posts",(docs,more,busy,error)-> {
+        // Saved posts read D1. This was a Firestore query on savedBy, so the Saved screen was
+        // empty even for posts the user had just saved.
+        pages=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .whereArrayContains("savedBy",me).build(),15,
+                (docs,more,busy,error)-> {
                     if(busy && docs.isEmpty())return;
                     if(!error.isEmpty()){Ui.toast(this,error);return;}
-                    List<DocumentSnapshot> snap=docs;
                     allSaved.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.Post p = Models.Post.fromDoc(d);
+                    {
+                        for (java.util.Map<String,Object> row : docs) {
+                            String rowId = row.get("id")==null?"":String.valueOf(row.get("id"));
+                            Models.Post p = Models.Post.fromMap(rowId, row);
                             if (p.trashedAt > 0) continue;
                             if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
                             allSaved.add(p);

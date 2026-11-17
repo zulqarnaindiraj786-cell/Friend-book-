@@ -1039,7 +1039,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (me == null || chatId == null) return;
         // Use update() rather than set() so opening an empty chat never creates an incomplete room doc
         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, "unreadCount." + me, 0);
-        Fb.db().collection("chats").document(chatId).update("unreadCount." + me, 0);
+        com.friendbook.social.core.DataRouter.batch().set("chats", chatId, Fb.map("unreadCount." + me, 0)).commit();
     }
 
     /** ✨ Sticker pack — big emoji stickers, friendbook Messenger style. */
@@ -1287,9 +1287,17 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 Ui.toast(this, "Copied");
             } else if (sel.contains("everyone")) {
                 Ui.confirm(this, "Delete for everyone?", "Everyone will see that this message was removed.",
-                        "Delete", () -> Fb.db().collection("chats").document(chatId)
-                                .collection("messages").document(m.id)
-                                .update("isDeleted", true, "text", "", "imageUrl", null));
+                        // A D1 row keyed <chatId>_<messageId>, so "delete for everyone" actually
+                        // removes the text instead of leaving it on every device.
+                        "Delete", () -> {
+                            Map<String, Object> wipe = new HashMap<>();
+                            wipe.put("isDeleted", true);
+                            wipe.put("text", "");
+                            wipe.put("imageUrl", "");
+                            com.friendbook.social.core.DataRouter.batch()
+                                    .set("messages", chatId + "_" + m.id, wipe)
+                                    .commit();
+                        });
             } else if (sel.contains("for me")) {
                 Set<String> hidden = new HashSet<>(hiddenMsgs());
                 hidden.add(m.id);
@@ -1315,12 +1323,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         for (final Models.Message m : messages) {
             if (m == null || m.id == null || !hydratedTeamMsgIds.add(m.id)) continue;
             final String sharedDocId = m.sharedTeamReactionDocId();
-            Fb.db().collection("chats").document("team_shared_reactions")
-                    .collection("messages").document(sharedDocId)
-                    .get()
-                    .addOnSuccessListener(doc -> {
-                        if (isFinishing() || doc == null || !doc.exists()) return;
-                        Models.Message shared = Models.Message.fromDoc(doc);
+            // One flat "shared_reactions" row per message. With Firestore off this read never
+            // answered, so team-chat reactions never appeared.
+            com.friendbook.social.core.CloudflareStore.get("shared_reactions", sharedDocId, row -> {
+                        if (isFinishing() || row == null) return;
+                        Models.Message shared = Models.Message.fromMap(sharedDocId, row);
                         if (shared.reactions == null || shared.reactions.isEmpty()) return;
                         if (m.reactions == null) m.reactions = new HashMap<>();
                         if (m.reactorNames == null) m.reactorNames = new HashMap<>();
@@ -1361,30 +1368,29 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 if (myPhoto != null && !myPhoto.isEmpty()) m.reactorPhotos.put(me, myPhoto);
             }
             adapter.notifyDataSetChanged();
-            Fb.db().collection("chats").document(chatId)
-                    .collection("messages").document(m.id)
-                    .update(upd)
-                    .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
+            // The reaction lands in D1, both on the message row and (for team chat) on the
+            // shared row every device reads. Both were Firestore writes, so a reaction showed
+            // for a moment from local state and then vanished.
+            com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_" + m.id, upd,
+                    null, () -> Ui.toast(this, "Reaction failed"));
             if (isTeamChat || Ui.TEAM_USER_ID.equals(m.senderId)) {
                 String sharedDocId = m.sharedTeamReactionDocId();
-                com.google.firebase.firestore.DocumentReference sharedRef =
-                        Fb.db().collection("chats").document("team_shared_reactions")
-                                .collection("messages").document(sharedDocId);
+                Map<String, Object> mergeDoc = new HashMap<>();
                 if (w == emoj.length - 1) {
-                    sharedRef.update(upd);
+                    mergeDoc.put("reactions", Collections.<String, Object>singletonMap(me, ""));
                 } else {
                     String e = emoj[w].split(" ")[0];
-                    Map<String, Object> rx = java.util.Collections.singletonMap(me, e);
-                    Map<String, Object> mergeDoc = new HashMap<>();
-                    mergeDoc.put("reactions", rx);
+                    if (e.isEmpty()) e = emoj[w];
+                    mergeDoc.put("reactions", java.util.Collections.singletonMap(me, e));
                     if (myName != null && !myName.isEmpty()) {
                         mergeDoc.put("reactorNames", java.util.Collections.singletonMap(me, myName));
                     }
                     if (myPhoto != null && !myPhoto.isEmpty()) {
                         mergeDoc.put("reactorPhotos", java.util.Collections.singletonMap(me, myPhoto));
                     }
-                    sharedRef.set(mergeDoc, SetOptions.merge());
                 }
+                com.friendbook.social.core.CloudflareStore.put("shared_reactions", sharedDocId,
+                        mergeDoc, null, null);
             }
         });
     }
@@ -1411,8 +1417,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void blockPeer() {
         Ui.confirm(this, "Block " + peerName + "?", "They won't be able to message or find you.",
                 "Block", () -> {
-                    Fb.db().collection("users").document(Fb.uid())
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(peerId)), SetOptions.merge());
+                    // D1 array op: blocking someone used to be a Firestore merge, so a blocked
+                    // user could keep messaging.
+                    com.friendbook.social.core.CloudflareStore.put("users", Fb.uid(),
+                            Fb.map("blockedUsers", com.friendbook.social.core.CloudflareStore.arrayUnion(peerId)),
+                            null, () -> Ui.toast(this, "Block saved offline — retry later"));
                     Ui.toast(this, "Blocked");
                     finish();
                 });

@@ -35,6 +35,7 @@ public class BirthdaysActivity extends Activity {
     private final List<RowItem> rows = new ArrayList<>();
     private Adapter adapter;
     private ListenerRegistration friendsReg;
+    private com.friendbook.social.core.DocPager friendsPager;
     private TextView empty;
     private final List<String> friendIds = new ArrayList<>();
     private int pendingUsers = 0;
@@ -81,22 +82,29 @@ public class BirthdaysActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
+        // Friends come from D1; the Firestore query meant the birthday list was always empty.
+        if (friendsPager != null) friendsPager.close();
+        friendsPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants",me).build(),20,
+                (docs,more,busy,err) -> {
+                    if (busy) return;
                     friendIds.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap)
-                            for (String p : Models.ChatRoom.fromDoc(d).participants)
-                                if (!p.equals(me)) friendIds.add(p);
+                    for (java.util.Map<String,Object> row : docs) {
+                        String rowId = row.get("id")==null?"":String.valueOf(row.get("id"));
+                        for (String p : Models.ChatRoom.fromMap(rowId,row).participants)
+                            if (!p.equals(me)) friendIds.add(p);
                     }
                     loadUsers();
                 });
+        friendsPager.start();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         if (friendsReg != null) friendsReg.remove();
+        if (friendsPager != null) { friendsPager.close(); friendsPager = null; }
     }
 
     private void loadUsers() {
@@ -224,8 +232,8 @@ public class BirthdaysActivity extends Activity {
                                 "likes", 0,
                                 "comments", 0,
                                 "shares", 0,
-                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").document().set(post);
+                                "createdAt", System.currentTimeMillis());
+                        com.friendbook.social.core.DataRouter.add("posts", post, null);
                         com.friendbook.social.core.Notify.send(r.user.uid, "birthday",
                                 "wished you a Happy Birthday 🎂🎉", "");
                         Ui.toast(BirthdaysActivity.this, "🎂 Birthday wish posted!");

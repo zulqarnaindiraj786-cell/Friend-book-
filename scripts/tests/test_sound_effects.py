@@ -29,7 +29,7 @@ class SoundEffectsTest(unittest.TestCase):
         self.assertEqual(chat.count('SoundManager.action(this, "sent", me);'),3)
         # Every send commits to D1 and reports D1's answer; Firestore's commit() was the write
         # that could be refused while the message had already sounded and the draft was cleared.
-        self.assertEqual(chat.count('.commit('),4)
+        self.assertEqual(chat.count('.commit('),6)
         self.assertNotIn('batch.commit()',chat)
         self.assertIn('SoundManager.playNewMessage(this)',chat)
         # A new-message sound must fire only for messages that are genuinely new to this

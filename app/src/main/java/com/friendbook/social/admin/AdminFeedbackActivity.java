@@ -102,7 +102,7 @@ public class AdminFeedbackActivity extends Activity {
             h.del.setOnClickListener(v -> {
                 // A Doc has no Firestore reference, so the collection and id are named here -
                 // which is also what lets the delete be mirrored into D1.
-                Fb.db().collection("feedback").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.batch().delete("feedback", d.getId()).commit();
                 com.friendbook.social.core.DataRouter.mirrorDelete("feedback", d.getId());
                 Ui.toast(AdminFeedbackActivity.this, "Archived");
             });

@@ -6,7 +6,11 @@ class RemainingPaging(unittest.TestCase):
     def test_remaining_screen_controls_and_cache_adapter(self):
         # Groups reads D1 now, so it keeps its own DocPager; the rest still page Firestore.
         for name in ['social/PageDetailActivity.java','social/PokesActivity.java','settings/ArchiveTrashActivity.java','chat/NewChatActivity.java','friends/BirthdaysActivity.java']:
-            source=(JAVA/name).read_text();self.assertIn('PagedLists.attach',source);self.assertIn('pageControls',source)
+            source=(JAVA/name).read_text()
+            # Paging is bounded either way; Archive & Trash moved to a D1 DocPager so its two
+            # lists are not Firestore queries that answer nothing.
+            self.assertTrue('PagedLists.attach' in source or 'DocPager' in source, name)
+            self.assertIn('pageControls',source)
         # Feed preferences needs friend ids, not an endless list, so it reads one D1 page.
         prefs=(JAVA/'settings/FeedPreferencesActivity.java').read_text()
         self.assertIn('D1Snap.read(',prefs)
@@ -43,7 +47,7 @@ class RemainingPaging(unittest.TestCase):
     def test_tagging_preserves_selected_ids_outside_loaded_page(self):
         source=(JAVA/'core/FriendPicker.java').read_text()
         self.assertIn('new LinkedHashMap<>(initial)',source);self.assertIn('if(on)selected.put(uid,user.displayName);else selected.remove(uid)',source)
-        self.assertIn('reg.remove()',source);self.assertIn('request!=generation[0]',source)
+        self.assertIn('pager.close()',source);self.assertIn('request!=generation[0]',source)
     def test_story_links_and_next_ten(self):
         source=(JAVA/'story/StoryViewerActivity.java').read_text()
         # The viewer reads D1 now, so its pages come from DocPager, not a Firestore CursorPager

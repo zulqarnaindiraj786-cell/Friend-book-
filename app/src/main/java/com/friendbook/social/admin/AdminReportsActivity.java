@@ -91,30 +91,30 @@ public class AdminReportsActivity extends Activity {
                 String postId = Format.str(m, "postId");
                 String commentId = Format.str(m, "commentId");
                 if (!postId.isEmpty() && !postId.startsWith("reel_")) {
-                    Fb.db().collection("posts").document(postId).delete();
+                    com.friendbook.social.core.DataRouter.batch().delete("posts", postId).commit();
                 } else if (postId.startsWith("reel_")) {
-                    Fb.db().collection("reels").document(postId.substring(5)).delete();
+                    com.friendbook.social.core.DataRouter.batch().delete("reels", postId.substring(5)).commit();
                 }
-                if (!commentId.isEmpty()) Fb.db().collection("comments").document(commentId).delete();
+                if (!commentId.isEmpty()) com.friendbook.social.core.DataRouter.batch().delete("comments", commentId).commit();
                 String uid = Format.str(m, "uid");
                 String type = Format.str(m, "type");
                 if (!uid.isEmpty() && "profile".equals(type)) {
                     com.friendbook.social.core.DataRouter.mirrorPut("users", uid, "banned", true);
-                    Fb.db().collection("users").document(uid).update("banned", true);
+                    com.friendbook.social.core.DataRouter.batch().set("users", uid, Fb.map("banned", true)).commit();
                 }
-                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.batch().delete("reports", d.getId()).commit();
                 com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Content deleted ✓");
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
                 com.friendbook.social.core.DataRouter.mirrorPut("users", author, "banned", true);
-                Fb.db().collection("users").document(author).update("banned", true);
-                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.batch().set("users", author, Fb.map("banned", true)).commit();
+                com.friendbook.social.core.DataRouter.batch().delete("reports", d.getId()).commit();
                 com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Author banned ✓");
             } else {
-                Fb.db().collection("reports").document(d.getId()).delete();
+                com.friendbook.social.core.DataRouter.batch().delete("reports", d.getId()).commit();
                 com.friendbook.social.core.DataRouter.mirrorDelete("reports", d.getId());
                 Ui.toast(this, "Report dismissed");
             }

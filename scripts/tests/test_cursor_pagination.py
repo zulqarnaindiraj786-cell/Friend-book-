@@ -8,7 +8,12 @@ class CursorContracts(unittest.TestCase):
             self.assertIn(token,code)
         self.assertNotIn('cursor=',code.split('.addOnFailureListener',1)[1])
     def test_requested_list_pages_and_controls(self):
-        for path,token in [('friends/FollowListActivity.java',',20,"follow:'),('profile/ProfileActivity.java',',7,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',30,"post-reactions:')]:
+        # These lists page on D1 now, so the page size is an argument to DocPager rather than part
+        # of a Firestore CursorPager key. The sizes themselves are unchanged.
+        for path,token in [('friends/FollowListActivity.java','.build(),20,'),
+                           ('profile/ProfileActivity.java','.build(),7,'),
+                           ('profile/ProfileActivity.java','.build(),10,'),
+                           ('post/Reactions.java',',30,"post-reactions:')]:
             self.assertIn(token,(ROOT/path).read_text())
         # Notifications moved to D1, so it pages with DocPager rather than CursorPager.
         notifications=(ROOT/'main/NotificationsFragment.java').read_text()

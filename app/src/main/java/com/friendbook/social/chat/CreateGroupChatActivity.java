@@ -137,11 +137,15 @@ public class CreateGroupChatActivity extends Activity {
 
     private void loadPeople() {
         String me = Fb.uid();
-        Fb.db().collection("users").limit(1000).get().addOnSuccessListener(snap -> {
+        // The picker lists D1 users. This was a 1000-row Firestore read, which answered nothing
+        // with Firestore off - so "New group" showed an empty list of people.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("users").limit(100).build(), page -> {
             allUsers.clear();
-            if (snap != null) {
-                for (DocumentSnapshot d : snap.getDocuments()) {
-                    Models.User u = Models.User.fromDoc(d);
+            if (page != null) {
+                for (Map<String, Object> row : page.documents) {
+                    String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                    Models.User u = Models.User.fromMap(rowId, row);
                     if (me != null && me.equals(u.uid)) continue;
                     if (u.banned) continue;
                     FastCache.putUser(u);
@@ -248,7 +252,11 @@ public class CreateGroupChatActivity extends Activity {
     }
 
     private void saveGroupDoc(String me, String gName, String photoUrl) {
-        DocumentReference chatRef = Fb.db().collection("chats").document();
+        // The group id is minted here rather than by Firestore: the old code took the id from a
+        // Firestore reference and then wrote the group with a Firestore set, so with Firestore off
+        // the group was never created and the screen sat on "Create Group Chat".
+        final String chatId = "g_" + System.currentTimeMillis() + "_"
+                + Integer.toHexString(new java.util.Random().nextInt(0x10000));
         List<String> parts = new ArrayList<>();
         parts.add(me);
         parts.addAll(selectedUids);
@@ -282,11 +290,18 @@ public class CreateGroupChatActivity extends Activity {
         doc.put("participantNames", names);
         doc.put("participantPhotos", photos);
         doc.put("lastMessage", sysMsg);
-        doc.put("lastMessageTime", FieldValue.serverTimestamp());
+        doc.put("lastMessageTime", now);
         doc.put("lastMessageTimeMs", now);
         doc.put("unreadCount", unread);
 
-        chatRef.set(doc).addOnSuccessListener(x -> {
+        com.friendbook.social.core.DataRouter.batch().set("chats", chatId, doc)
+                .commit((ok, error) -> {
+            if (!ok) {
+                creating = false;
+                createBtn.setText("Create Group Chat");
+                Ui.toast(this, "Couldn't create the group. Try again.");
+                return;
+            }
             Map<String, Object> m = new HashMap<>();
             m.put("senderId", me);
             m.put("senderName", Fb.myName());
@@ -296,20 +311,17 @@ public class CreateGroupChatActivity extends Activity {
             m.put("isDelivered", true);
             m.put("isSeen", true);
             m.put("createdAtMs", now);
-            m.put("createdAt", FieldValue.serverTimestamp());
+            m.put("createdAt", now);
+            m.put("chatId", chatId);
             com.friendbook.social.core.DataRouter.add("messages", m, null);
 
             Ui.toast(this, "Group \"" + gName + "\" created! 🎉");
             Intent open = new Intent(this, ChatActivity.class);
-            open.putExtra("chat_id", chatRef.getId());
+            open.putExtra("chat_id", chatId);
             open.putExtra("is_group", true);
             open.putExtra("name", gName);
             startActivity(open);
             finish();
-        }).addOnFailureListener(e -> {
-            creating = false;
-            createBtn.setText("Create Group Chat");
-            Ui.toast(this, "Failed: " + e.getMessage());
         });
     }
 }

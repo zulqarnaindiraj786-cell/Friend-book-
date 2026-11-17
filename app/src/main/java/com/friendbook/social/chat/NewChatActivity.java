@@ -40,6 +40,7 @@ public class NewChatActivity extends Activity {
     private RecyclerView rv;
     private com.friendbook.social.friends.UsersAdapter adapter;
     private ListenerRegistration friendsReg, usersReg;
+    private com.friendbook.social.core.DocPager friendsPager, usersPager;
     private final Set<String> friendIds = new HashSet<>();
     private final Map<String, Models.User> allUsers = new LinkedHashMap<>();
     private String filter = "";
@@ -121,32 +122,42 @@ public class NewChatActivity extends Activity {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
 
-        friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
+        // Both lists read D1. They were Firestore paged queries, so "New chat" opened to an
+        // empty screen - and a new user's very first message had nowhere to start from.
+        if (friendsPager != null) friendsPager.close();
+        friendsPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("friends")
+                        .whereArrayContains("participants", me).build(), 20,
+                (docs, more, busy, error) -> {
                     friendIds.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            for (String p : Models.ChatRoom.fromDoc(d).participants) {
-                                if (p != null && !p.equals(me)) friendIds.add(p);
-                            }
+                    for (Map<String, Object> row : docs) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        for (String p : Models.ChatRoom.fromMap(rowId, row).participants) {
+                            if (p != null && !p.equals(me)) friendIds.add(p);
                         }
                     }
                     render();
                 });
+        friendsPager.start();
 
-        usersReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("users"),20,"new-chat-people",(snap,err)-> {
+        if (usersPager != null) usersPager.close();
+        usersPager = new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("users")
+                        .orderBy("displayName", com.friendbook.social.core.DocQuery.ASC).build(), 20,
+                (docs, more, busy, error) -> {
+                    if (busy) return;
                     allUsers.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Models.User u = Models.User.fromDoc(d);
-                            if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
-                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                            FastCache.putUser(u);
-                            allUsers.put(u.uid, u);
-                        }
+                    for (Map<String, Object> row : docs) {
+                        String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
+                        Models.User u = Models.User.fromMap(rowId, row);
+                        if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
+                        if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
+                        FastCache.putUser(u);
+                        allUsers.put(u.uid, u);
                     }
                     render();
                 });
+        usersPager.start();
     }
 
     @Override
@@ -154,6 +165,8 @@ public class NewChatActivity extends Activity {
         super.onStop();
         if (friendsReg != null) friendsReg.remove();
         if (usersReg != null) usersReg.remove();
+        if (friendsPager != null) { friendsPager.close(); friendsPager = null; }
+        if (usersPager != null) { usersPager.close(); usersPager = null; }
     }
 
     private void render() {

@@ -361,7 +361,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 hb.put("peakViewers", peakViewers);
                 hb.put("likesCount", totalLikes);
                 com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, hb);
-                Fb.db().collection("lives").document(liveId).update(hb);
+                com.friendbook.social.core.DataRouter.batch().set("lives", liveId, hb).commit();
                 uiHandler.postDelayed(this, 8000L);
             }
         }
@@ -1536,7 +1536,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("cameraPaused", false);
             upd.put("filterIndex", currentFilterIdx);
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
 
             // Also publish to shared 2-User PK Battle Media Channel when PK is active!
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
@@ -1552,7 +1552,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     try { pkRef.updateChildren(pkV); } catch (Throwable ignored) { }
                 }
                 com.friendbook.social.core.DataRouter.mirrorPut("chats", mediaDocId, pkV);
-                Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge());
+                com.friendbook.social.core.DataRouter.batch().set("chats", mediaDocId, pkV).commit();
             }
         }
     }
@@ -1573,7 +1573,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("audioSeq", seq);
             upd.put("audioLevel", voiceLevel);
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
 
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
                 String sideKey = "B".equals(pkRole) ? "b" : "a";
@@ -1586,7 +1586,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     try { pkRef.updateChildren(pkA); } catch (Throwable ignored) { }
                 }
                 com.friendbook.social.core.DataRouter.mirrorPut("chats", mediaDocId, pkA);
-                Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge());
+                com.friendbook.social.core.DataRouter.batch().set("chats", mediaDocId, pkA).commit();
             }
         }
     }
@@ -2016,7 +2016,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         lu.put("pkActive", false);
                         lu.put("pkBattleId", "");
                         com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, lu);
-                        Fb.db().collection("lives").document(liveId).update(lu);
+                        com.friendbook.social.core.DataRouter.batch().set("lives", liveId, lu).commit();
                     }
                     if (pkBattleActive) {
                         teardownPkStageUi();
@@ -2034,7 +2034,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     cu.put("coHostFrameB64", "");
                     cu.put("coHostAudioB64", "");
                     com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, cu);
-                    Fb.db().collection("lives").document(liveId).update(cu);
+                    com.friendbook.social.core.DataRouter.batch().set("lives", liveId, cu).commit();
                     if (rtdbStreamRef != null) {
                         try {
                             Map<String, Object> rClear = new HashMap<>();
@@ -2087,7 +2087,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         }
                         if (!relay.isEmpty()) {
                             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, relay);
-                            Fb.db().collection("lives").document(liveId).update(relay);
+                            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, relay).commit();
                         }
                     }
                 }
@@ -2256,14 +2256,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 upd.put("coHostUid", req.uid);
                 upd.put("coHostName", req.name);
                 com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-                Fb.db().collection("lives").document(liveId).update(upd);
+                com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
                 postSystemChat(req.name + " joined as Co-Host!");
             });
         }
         labels.add(coHostAllowed ? "Turn OFF Co-Host Requests" : "Turn ON Co-Host Requests");
         actions.add(() -> {
             coHostAllowed = !coHostAllowed;
-            if (liveId != null) Fb.db().collection("lives").document(liveId).update("coHostAllowed", coHostAllowed);
+            if (liveId != null) com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("coHostAllowed", coHostAllowed)).commit();
             Ui.toast(this, coHostAllowed ? "Co-Host requests enabled" : "Co-Host requests disabled");
         });
 
@@ -2279,7 +2279,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("coHostFrameB64", "");
             upd.put("coHostAudioB64", "");
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
             if (rtdbStreamRef != null) {
                 try {
                     Map<String, Object> rClear = new HashMap<>();
@@ -2356,7 +2356,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("pollQuestion", q);
             upd.put("pollOptions", opts);
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
             postSystemChat("Host started a Live Poll: " + q);
         });
         if (!activePollId.isEmpty()) {
@@ -2365,7 +2365,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 upd.put("pollId", "");
                 upd.put("pollQuestion", "");
                 com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-                Fb.db().collection("lives").document(liveId).update(upd);
+                com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
             });
         }
         b.setNegativeButton("Cancel", null);
@@ -2391,7 +2391,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 upd.put("pollId", "");
                 upd.put("pollQuestion", "");
                 com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-                Fb.db().collection("lives").document(liveId).update(upd);
+                com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
             });
             head.addView(endP);
         }
@@ -2490,13 +2490,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         ChatItem picked = qaItems.get(which);
                         String banner = "Q&A · @" + picked.name + ": " + picked.text;
                         com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "spotlightQa", banner);
-                        Fb.db().collection("lives").document(liveId).update("spotlightQa", banner);
+                        com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("spotlightQa", banner)).commit();
                     }
                 });
     }
 
     private void clearSpotlightQa() {
-        if (liveId != null) Fb.db().collection("lives").document(liveId).update("spotlightQa", "");
+        if (liveId != null) com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("spotlightQa", "")).commit();
     }
 
     // ==================== CHAT, REACTIONS, STAR GIFTS & MODERATION ====================
@@ -2783,7 +2783,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     upd.put("coHostUid", item.uid);
                     upd.put("coHostName", item.name);
                     com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, upd);
-                    Fb.db().collection("lives").document(liveId).update(upd);
+                    com.friendbook.social.core.DataRouter.batch().set("lives", liveId, upd).commit();
                     if (Fb.uid() != null) {
                         LivePkAndGiftsUi.sendDirectLiveInviteToUser(
                                 Fb.uid(), item.uid,
@@ -2812,7 +2812,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     modUpd.put("mutedUserIds", new ArrayList<>(mutedUserIds));
                     modUpd.put("kickedUserIds", new ArrayList<>(kickedUserIds));
                     com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, modUpd);
-                    Fb.db().collection("lives").document(liveId).update(modUpd);
+                    com.friendbook.social.core.DataRouter.batch().set("lives", liveId, modUpd).commit();
                 }
             }));
         }
@@ -2824,7 +2824,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (liveId == null) return;
         if (isHost) {
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "pinnedComment", text);
-            Fb.db().collection("lives").document(liveId).update("pinnedComment", text);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("pinnedComment", text)).commit();
         } else {
             postSystemChat("Moderator pinned: " + text);
         }
@@ -2931,7 +2931,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         if (liveId != null && isLiveStarted) {
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "cameraPaused", nextPaused);
-            Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("cameraPaused", nextPaused)).commit();
         }
         if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
             String sideKey = "B".equals(pkRole) ? "b" : "a";
@@ -2986,7 +2986,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         applyLiveVisualGrade();
         if (isHost && isLiveStarted && liveId != null) {
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "filterIndex", currentFilterIdx);
-            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("filterIndex", currentFilterIdx)).commit();
         }
         Ui.toast(this, "Filter: " + FILTER_NAMES[currentFilterIdx]);
     }
@@ -3028,7 +3028,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                         applyLiveVisualGrade();
                         if (isHost && isLiveStarted && liveId != null) {
                             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "filterIndex", currentFilterIdx);
-                            Fb.db().collection("lives").document(liveId).update("filterIndex", currentFilterIdx);
+                            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("filterIndex", currentFilterIdx)).commit();
                         }
                     }
                     @Override
@@ -3138,7 +3138,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void syncHostSetting(String field, Object value) {
         if (isHost && isLiveStarted && liveId != null) {
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, field);
-            Fb.db().collection("lives").document(liveId).update(field, value);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map(field, value)).commit();
         }
         Ui.toast(this, "Updated " + field);
     }
@@ -3159,7 +3159,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     titleInput.setText(t);
                     if (isLiveStarted && liveId != null) {
                         com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, "title", t);
-                        Fb.db().collection("lives").document(liveId).update("title", t);
+                        com.friendbook.social.core.DataRouter.batch().set("lives", liveId, Fb.map("title", t)).commit();
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -3399,7 +3399,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkDoc.put("createdAtMs", System.currentTimeMillis());
 
         com.friendbook.social.core.DataRouter.mirrorPut("chats", "pkbattle_" + newPkId, pkDoc);
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        com.friendbook.social.core.DataRouter.batch().set("chats", "pkbattle_" + newPkId, pkDoc).commit();
         subscribeToPkBattle(newPkId);
 
         Map<String, Object> inv = new HashMap<>();
@@ -3447,7 +3447,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkDoc.put("createdAtMs", System.currentTimeMillis());
 
         com.friendbook.social.core.DataRouter.mirrorPut("chats", "pkbattle_" + newPkId, pkDoc);
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
+        com.friendbook.social.core.DataRouter.batch().set("chats", "pkbattle_" + newPkId, pkDoc).commit();
         subscribeToPkBattle(newPkId);
 
         Map<String, Object> inv = new HashMap<>();
@@ -3501,7 +3501,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             upd.put("liveIdB", liveId);
         }
         com.friendbook.social.core.DataRouter.mirrorPut("chats", "pkbattle_" + incomingPkId, upd);
-        Fb.db().collection("chats").document("pkbattle_" + incomingPkId).set(upd, SetOptions.merge());
+        com.friendbook.social.core.DataRouter.batch().set("chats", "pkbattle_" + incomingPkId, upd).commit();
         subscribeToPkBattle(incomingPkId);
 
         if (isHost && liveId != null) {
@@ -3509,7 +3509,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             liveUpd.put("pkActive", true);
             liveUpd.put("pkBattleId", incomingPkId);
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, liveUpd);
-            Fb.db().collection("lives").document(liveId).update(liveUpd);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, liveUpd).commit();
         }
     }
 
@@ -3601,7 +3601,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 lu.put("pkActive", false);
                 lu.put("pkBattleId", "");
                 com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, lu);
-                Fb.db().collection("lives").document(liveId).update(lu);
+                com.friendbook.social.core.DataRouter.batch().set("lives", liveId, lu).commit();
             }
             teardownPkStageUi();
             return;
@@ -3646,7 +3646,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             lu.put("pkActive", true);
             lu.put("pkBattleId", pkBattleId);
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, lu);
-            Fb.db().collection("lives").document(liveId).update(lu);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, lu).commit();
             engine.startSpeakerPlayback();
             postSystemChat("PK BATTLE STARTED: " + pkHostAName + " VS " + pkHostBName + "!");
         }
@@ -3820,7 +3820,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         reset.put("startedAtMs", now);
         reset.put("endsAtMs", now + pkDurationSec * 1000L);
         com.friendbook.social.core.DataRouter.mirrorPut("chats", "pkbattle_" + pkBattleId, reset);
-        Fb.db().collection("chats").document("pkbattle_" + pkBattleId).set(reset, SetOptions.merge());
+        com.friendbook.social.core.DataRouter.batch().set("chats", "pkbattle_" + pkBattleId, reset).commit();
         postSystemChat("PK REMATCH STARTED!");
     }
 
@@ -3848,7 +3848,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             lu.put("pkActive", false);
             lu.put("pkBattleId", "");
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, lu);
-            Fb.db().collection("lives").document(liveId).update(lu);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, lu).commit();
         }
         Map<String, Object> leavePkt = new HashMap<>();
         leavePkt.put("type", "pk_leave");
@@ -3940,7 +3940,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             pkt.put("as", seq);
         }
         com.friendbook.social.core.DataRouter.mirrorPut("chats", "pkmedia_" + pkBattleId + "_b", pkt);
-        Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b").set(pkt, SetOptions.merge());
+        com.friendbook.social.core.DataRouter.batch().set("chats", "pkmedia_" + pkBattleId + "_b", pkt).commit();
     }
 
     private void stopLocalPkGuestStreaming() {
@@ -4031,7 +4031,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, endMap);
-            Fb.db().collection("lives").document(liveId).update(endMap);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, endMap).commit();
             if (rtdbStreamRef != null) {
                 try { rtdbStreamRef.removeValue(); } catch (Throwable ignored) { }
             }
@@ -4145,7 +4145,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
             com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId, endMap);
-            Fb.db().collection("lives").document(liveId).update(endMap);
+            com.friendbook.social.core.DataRouter.batch().set("lives", liveId, endMap).commit();
         } else if (!isHost && viewerCountJoined && liveId != null) {
             viewerCountJoined = false;
             Fb.db().collection("lives").document(liveId)

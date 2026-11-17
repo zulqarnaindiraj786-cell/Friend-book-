@@ -534,7 +534,7 @@ public class SettingsActivity extends Activity {
         String uid = Fb.uid();
         if (uid == null) return;
         com.friendbook.social.core.DataRouter.mirrorPut("users", uid, Fb.map(key, val));
-        Fb.db().collection("users").document(uid).set(Fb.map(key, val), SetOptions.merge());
+        com.friendbook.social.core.DataRouter.batch().set("users", uid, Fb.map(key, val)).commit();
     }
 
     // ---------- UI builders ----------
@@ -634,9 +634,10 @@ public class SettingsActivity extends Activity {
                     upd.put("nameLower", n.toLowerCase(Locale.ROOT));
                     upd.put("pronouns", pronIn.getText().toString().trim());
                     upd.put("phone", phoneIn.getText().toString().trim());
-                    com.friendbook.social.core.DataRouter.mirrorPut("users", Fb.uid(), upd);
-                    Fb.db().collection("users").document(Fb.uid()).set(upd, SetOptions.merge())
-                            .addOnSuccessListener(x -> {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("users", Fb.uid(), upd)
+                            .commit((ok, error) -> {
+                                if (!ok) { Ui.toast(this, "Couldn't update your details. Try again."); return; }
                                 Ui.toast(this, "Personal info updated ✓");
                                 recreate();
                             });
@@ -1341,7 +1342,7 @@ public class SettingsActivity extends Activity {
                                         for (DocumentSnapshot d : snap) d.getReference().delete();
                                     });
                         }
-                        Fb.db().collection("users").document(uid).delete();
+                        com.friendbook.social.core.DataRouter.batch().delete("users", uid).commit();
                     }
                     Fb.auth().getCurrentUser().delete()
                             .addOnSuccessListener(x -> {

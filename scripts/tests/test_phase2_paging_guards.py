@@ -5,7 +5,8 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class PagingGuards(unittest.TestCase):
     def test_watch_can_reach_next_page(self):
         source=(JAVA/'post/WatchActivity.java').read_text()
-        for token in ['adapter.showFooter = true','onScrolled','query.limit(10).get()','query.startAfter(cursor)']:
+        # Watch pages on D1; the same three guarantees are pinned against the D1 query builder.
+        for token in ['adapter.showFooter = true','onScrolled','.limit(10)','vq.startAfter(cursor)']:
             self.assertIn(token,source)
         self.assertNotIn('.addSnapshotListener',source)
     def test_open_chat_window_and_lifecycle(self):

@@ -42,7 +42,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     private LinearLayout historyBox;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable pending;
-    private com.friendbook.social.core.CursorPager peopleA,peopleB,postPages;
+    private com.friendbook.social.core.DocPager peopleA,peopleB,postPages;
     private TextView morePeople,morePosts;
     private void closePages(){if(peopleA!=null)peopleA.close();if(peopleB!=null)peopleB.close();if(postPages!=null)postPages.close();}
     @Override protected void onDestroy(){closePages();if(pending!=null)handler.removeCallbacks(pending);super.onDestroy();}
@@ -214,21 +214,46 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         };
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
         boolean same=cap.equals(q);
-        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
+        // Search reads D1. All three of these were Firestore range queries, so searching for a
+        // friend returned "No results" for every name in the app.
+        peopleA=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("users")
+                        .whereGreaterThanOrEqualTo("displayName",q)
+                        .whereLessThanOrEqualTo("displayName",q+"\uf8ff").build(), same?20:10,
+                (docs,more,loading,error)->{
             if(loading)return;
-            firstSpelling.clear();for(DocumentSnapshot doc:docs)firstSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
+            firstSpelling.clear();
+            for(java.util.Map<String,Object> row:docs){
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                firstSpelling.put(rowId,Models.User.fromMap(rowId,row));
+            }
+            mergePeople.run();finishPeople.run();
             morePeople.setText(!error.isEmpty()?"Retry people":"More people");
         });
-        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
+        peopleB=same?null:new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("users")
+                        .whereGreaterThanOrEqualTo("displayName",cap)
+                        .whereLessThanOrEqualTo("displayName",cap+"\uf8ff").build(),10,
+                (docs,more,loading,error)->{
             if(loading)return;
-            secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
+            secondSpelling.clear();
+            for(java.util.Map<String,Object> row:docs){
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                secondSpelling.put(rowId,Models.User.fromMap(rowId,row));
+            }
+            mergePeople.run();finishPeople.run();
         });
         peopleA.start();if(peopleB!=null)peopleB.start();
         // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.
-        postPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING),20,"search-posts:"+q,(docs,more,loading,error)->{
+        postPages=new com.friendbook.social.core.DocPager(
+                com.friendbook.social.core.DocQuery.of("posts")
+                        .orderBy("createdAt",com.friendbook.social.core.DocQuery.DESC).build(),20,
+                (docs,more,loading,error)->{
             if(loading){morePosts.setText("Loading…");morePosts.setEnabled(false);return;}
             List<Models.Post> list=new ArrayList<>();String needle=q.toLowerCase(Locale.ROOT);
-            for(DocumentSnapshot doc:docs){Models.Post p=Models.Post.fromDoc(doc);
+            for(java.util.Map<String,Object> row:docs){
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                Models.Post p=Models.Post.fromMap(rowId,row);
                 if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;
                 String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(hay.contains(needle))list.add(p);
             }

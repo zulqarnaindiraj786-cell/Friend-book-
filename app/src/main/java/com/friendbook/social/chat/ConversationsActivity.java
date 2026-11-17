@@ -804,8 +804,10 @@ public class ConversationsActivity extends Activity {
             } else if (w == 3) {
                 Map<String, Object> inner = new HashMap<>();
                 inner.put(Fb.uid(), 0);
-                Fb.db().collection("chats").document(r.room.id)
-                        .set(Fb.map("unreadCount", inner), SetOptions.merge());
+                // Clearing the badge is a D1 write; it was a Firestore merge, so the unread dot
+                // came straight back on the next open.
+                com.friendbook.social.core.CloudflareStore.put("chats", r.room.id,
+                        Fb.map("unreadCount", inner), null, null);
             } else if (w == 4) {
                 Ui.confirm(this, "Delete this conversation?", "It will be hidden from your chat list.", "Delete", () -> {
                     Set<String> hidden = getSharedPreferences("fb_prefs", MODE_PRIVATE)
@@ -818,8 +820,9 @@ public class ConversationsActivity extends Activity {
                 });
             } else if (w == 5 && !r.room.isGroup) {
                 Ui.confirm(this, "Block " + r.other + "?", "They won't be able to message or find you.", "Block", () -> {
-                    Fb.db().collection("users").document(Fb.uid())
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(r.other)), SetOptions.merge());
+                    com.friendbook.social.core.CloudflareStore.put("users", Fb.uid(),
+                            Fb.map("blockedUsers", com.friendbook.social.core.CloudflareStore.arrayUnion(r.other)),
+                            null, null);
                     Ui.toast(this, "Blocked 🚫");
                     applyFilterAndSort();
                 });

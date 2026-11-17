@@ -871,7 +871,7 @@ public class CreatePostActivity extends Activity {
                 com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
             } else {
                 com.friendbook.social.core.DataRouter.mirrorPut("posts", editId, m);
-                Fb.db().collection("posts").document(editId).update(m);
+                com.friendbook.social.core.DataRouter.batch().set("posts", editId, m).commit();
             }
             Ui.toast(this, "Post updated ✓");
             finish();

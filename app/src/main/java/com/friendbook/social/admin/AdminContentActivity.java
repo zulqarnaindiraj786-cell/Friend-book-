@@ -147,7 +147,7 @@ public class AdminContentActivity extends Activity {
     private void deleteItem(Item it) {
         Ui.confirm(this, "Delete this " + tab.substring(0, tab.length() - 1) + "?",
                 it.title + "\n" + it.sub, "Delete", () -> {
-                    Fb.db().collection(tab).document(it.id).delete();
+                    com.friendbook.social.core.DataRouter.batch().delete(tab, it.id).commit();
                     if ("posts".equals(tab)) {
                         com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
                                 .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));

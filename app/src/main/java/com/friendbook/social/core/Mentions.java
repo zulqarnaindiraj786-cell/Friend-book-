@@ -132,16 +132,25 @@ public final class Mentions {
                 for(Identity span:editable.getSpans(at,caret,Identity.class)) if(editable.getSpanStart(span)==at) return;
                 String query=prefix.substring(at+1); if(query.length()>40 || query.contains("\n") || query.contains("@")) return;
                 pending=() -> {
-                    Map<String,DocumentSnapshot> found=new LinkedHashMap<>(); int[] done={0};
+                    Map<String,Map<String,Object>> found=new LinkedHashMap<>(); int[] done={0};
                     String cap=query.isEmpty()?query:Character.toUpperCase(query.charAt(0))+query.substring(1);
                     Set<String> terms=new LinkedHashSet<>(Arrays.asList(query,cap,query.toLowerCase(Locale.ROOT),query.toUpperCase(Locale.ROOT)));
                     for(String term:terms) {
-                        Fb.db().collection("users").orderBy("displayName").startAt(term).endAt(term+"\uf8ff").limit(10).get().addOnCompleteListener(task -> {
+                        // D1 name prefix search. This was four Firestore range queries per
+                        // keystroke, so "@" never suggested anyone - mentions were impossible.
+                        com.friendbook.social.core.CloudflareStore.query(
+                                com.friendbook.social.core.DocQuery.of("users")
+                                        .whereGreaterThanOrEqualTo("displayName",term)
+                                        .whereLessThanOrEqualTo("displayName",term+"\uf8ff")
+                                        .limit(10).build(), page -> {
                             if(request!=generation || !input.isAttachedToWindow()) return;
-                            if(task.isSuccessful() && task.getResult()!=null) for(DocumentSnapshot d:task.getResult()) found.put(d.getId(),d);
+                            if(page!=null) for(Map<String,Object> row:page.documents){
+                                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                                if(!rowId.isEmpty()) found.put(rowId,row);
+                            }
                             if(++done[0]<terms.size()) return;
-                            List<DocumentSnapshot> users=new ArrayList<>(found.values()); List<String> names=new ArrayList<>();
-                            for(DocumentSnapshot d:users) names.add(d.getString("displayName")==null?"User":d.getString("displayName"));
+                            List<Map<String,Object>> users=new ArrayList<>(found.values()); List<String> names=new ArrayList<>();
+                            for(Map<String,Object> d:users) names.add(Format.str(d,"displayName").isEmpty()?"User":Format.str(d,"displayName"));
                             List<String> bulk=new ArrayList<>();
                             for(String tag:Arrays.asList("followers","highlight")) if(tag.startsWith(query.toLowerCase(Locale.ROOT))) bulk.add(tag);
                             List<String> rows=new ArrayList<>(); for(String tag:bulk) rows.add("@"+tag); rows.addAll(names);
@@ -154,14 +163,14 @@ public final class Mentions {
                                     ImageView avatar=new ImageView(input.getContext());
                                     row.addView(avatar,new LinearLayout.LayoutParams(Ui.dp(input.getContext(),44),Ui.dp(input.getContext(),44)));
                                     if(isBulk) avatar.setImageResource(android.R.drawable.ic_menu_myplaces);
-                                    else Ui.avatar(input.getContext(),avatar,users.get(userIndex).getString("photoUrl"));
+                                    else Ui.avatar(input.getContext(),avatar,Format.str(users.get(userIndex),"photoUrl"));
                                     LinearLayout details=Ui.col(input.getContext()); Ui.pad(details,12,0,0,0);
-                                    boolean owner=!isBulk && users.get(userIndex).getId().equals(creator.get());
+                                    boolean owner=!isBulk && Format.str(users.get(userIndex),"id").equals(creator.get());
                                     String title=isBulk?"@"+bulk.get(position):names.get(userIndex)+(owner?"  ◆ Creator":"");
                                     TextView label=Ui.tvBold(input.getContext(),title,16,owner?BLUE:Ui.txt(input.getContext()));
                                     LinearLayout titleRow=Ui.row(input.getContext()); titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
                                     titleRow.addView(label);
-                                    if(!isBulk && Boolean.TRUE.equals(users.get(userIndex).get("isVerified"))) {
+                                    if(!isBulk && Boolean.parseBoolean(String.valueOf(users.get(userIndex).get("isVerified")))) {
                                         ImageView tick=new ImageView(input.getContext()); tick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
                                         LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(Ui.dp(input.getContext(),15),Ui.dp(input.getContext(),15)); size.leftMargin=Ui.dp(input.getContext(),4); titleRow.addView(tick,size);
                                     }
@@ -175,7 +184,7 @@ public final class Mentions {
                                 if(request!=generation) return;
                                 boolean isBulk=position<bulk.size(); int userIndex=position-bulk.size();
                                 String label=isBulk?"@"+bulk.get(position):"@"+names.get(userIndex); Editable value=input.getText();
-                                String selectedUid=isBulk?"bulk:"+bulk.get(position):users.get(userIndex).getId();
+                                String selectedUid=isBulk?"bulk:"+bulk.get(position):Format.str(users.get(userIndex),"id");
                                 SpannableString selected=new SpannableString(label);
                                 selected.setSpan(new Identity(selectedUid,label),0,label.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                                 value.replace(at,caret,selected); value.insert(at+label.length()," ");

@@ -270,8 +270,8 @@ public class PagesActivity extends Activity {
                 String me = Fb.uid();
                 if (me == null) return;
                 com.friendbook.social.core.DataRouter.mirrorPut("pages", p.id, "followers", following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                Fb.db().collection("pages").document(p.id).update("followers",
-                        following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
+                com.friendbook.social.core.DataRouter.batch().set("pages", p.id, Fb.map("followers",
+                        following ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))).commit();
             });
             h.itemView.setOnClickListener(v -> {
                 Intent open = new Intent(PagesActivity.this, PageDetailActivity.class);

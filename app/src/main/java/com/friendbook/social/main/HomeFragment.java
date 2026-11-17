@@ -76,14 +76,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private long pymkFetchedAt;
     private final List<Models.User> pymkCandidates=new ArrayList<>();
     private final List<Models.Reel> featuredReels=new ArrayList<>();
-    private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
+    private final Map<String,Map<String,Object>> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
     private long lastFeedFetch;
     private String feedAccount;
     /** Story strip still pages with Firestore; the feed pages with a D1 DocQuery. */
-    private Query storyQuery;
     private com.friendbook.social.core.DocQuery feedQuery;
-    private DocumentSnapshot storyCursor;
+    /** Server cursor from the previous stories page; null means "start from the top". */
+    private String storyCursor;
+    private boolean storyQueryReady;
     private boolean loadingStories, moreStories;
     private long lastStoryFetch;
     private String storiesActor,friendGraphActor;
@@ -618,12 +619,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // list must not compete with the main feed for a spent quota.
         if(com.friendbook.social.core.QuotaGuard.shouldSuppressNetworkWork()){renderPymk();return;}
         pymkLoading=true;
-        Fb.db().collection("users").limit(10).get().addOnSuccessListener(snap->{
+        // "People you may know" reads D1. It was a Firestore get, so the suggestion rail under the
+        // feed was empty - which for a new account is the only place friends come from.
+        com.friendbook.social.core.CloudflareStore.query(
+                com.friendbook.social.core.DocQuery.of("users").limit(10).build(), page -> {
             if(!java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
             pymkLoading=false;pymkLoaded=true;pymkFetchedAt=android.os.SystemClock.elapsedRealtime();pymkCandidates.clear();
-            for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);FastCache.putUser(u);pymkCandidates.add(u);}
+            if(page!=null) for(java.util.Map<String,Object> row:page.documents){
+                String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+                Models.User u=Models.User.fromMap(rowId,row);FastCache.putUser(u);pymkCandidates.add(u);
+            }
             renderPymk();
-        }).addOnFailureListener(error->{if(java.util.Objects.equals(me,Fb.uid()))pymkLoading=false;});
+        }, () -> {if(java.util.Objects.equals(me,Fb.uid()))pymkLoading=false;});
     }
     private void renderPymk(){
         List<Models.User> rows=new ArrayList<>();for(Models.User u:pymkCandidates)
@@ -922,44 +929,48 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startStoriesListener(){startStoriesListener(false);}
     private void startStoriesListener(boolean force) {
         String actor=Fb.uid();
-        if(!force && java.util.Objects.equals(storiesActor,actor) && storyQuery!=null && android.os.SystemClock.elapsedRealtime()-lastStoryFetch<120_000L){renderLoadedStories();return;}
+        if(!force && java.util.Objects.equals(storiesActor,actor) && storyQueryReady && android.os.SystemClock.elapsedRealtime()-lastStoryFetch<120_000L){renderLoadedStories();return;}
         storiesActor=actor;
         if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
-        storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
-        storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",Timestamp.now())
-                .orderBy("expiresAt",Query.Direction.ASCENDING);
+        storyGeneration++; loadingStories=false; moreStories=true; storyQueryReady=true;
+        storyCursor=null;
         loadMoreStories();
     }
 
     @Override public boolean hasMoreStories() { return moreStories; }
     @Override public void loadMoreStories() {
-        if(loadingStories || !moreStories || storyQuery==null) return;
+        if(loadingStories || !moreStories || !storyQueryReady) return;
         loadingStories=true; final int generation=storyGeneration; final String actor=Fb.uid();
         final boolean first=storyCursor==null;
-        Query page=first?storyQuery:storyQuery.startAfter(storyCursor);
-        page.limit(10).get().addOnSuccessListener(snapshot -> {
+        // Stories come from D1, newest-expiring first. This was a Firestore range query on
+        // expiresAt, so the story bar at the top of the feed was empty for everyone.
+        com.friendbook.social.core.DocQuery.Builder qb=com.friendbook.social.core.DocQuery.of("stories")
+                .whereGreaterThan("expiresAt", System.currentTimeMillis())
+                .orderBy("expiresAt", com.friendbook.social.core.DocQuery.ASC).limit(10);
+        if(!first) qb.startAfter(storyCursor);
+        com.friendbook.social.core.CloudflareStore.query(qb.build(), page -> {
             if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==10;
+            loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime();
+            moreStories=page!=null && page.hasMore;
             if(first)loadedStoryDocs.clear();
-            if(!snapshot.isEmpty())storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
-            for(DocumentSnapshot doc:snapshot)loadedStoryDocs.put(doc.getId(),doc);
+            if(page!=null && !page.documents.isEmpty()) storyCursor=page.nextCursor;
+            if(page!=null) for(java.util.Map<String,Object> row:page.documents){
+                String id=row.get("id")==null?"":String.valueOf(row.get("id"));
+                if(!id.isEmpty()) loadedStoryDocs.put(id,row);
+            }
             renderLoadedStories();
-        }).addOnFailureListener(error -> {
+        }, () -> {
             if(generation!=storyGeneration) return;
             loadingStories=false;
             if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load stories — tap More stories to retry");
         });
     }
 
-    private boolean storyAllowed(Models.Story story){
-        return !story.expired() && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,
-                java.util.Objects.equals(friendGraphActor,Fb.uid()) && friendIds.contains(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
-                Fb.me!=null && Fb.me.blocked.contains(story.authorId),getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),story.authorId));
-    }
     private void renderLoadedStories(){
         if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;storyGroups.clear();storyIds.clear();
-        for(DocumentSnapshot doc:loadedStoryDocs.values()){
-            Models.Story story=Models.Story.fromDoc(doc);if(!storyAllowed(story))continue;storyIds.add(story.id);
+        for(java.util.Map<String,Object> row:loadedStoryDocs.values()){
+            String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
+            Models.Story story=Models.Story.fromMap(rowId,row);if(!storyAllowed(story))continue;storyIds.add(story.id);
             StoriesAdapter.Group group=storyGroups.get(story.authorId);
             if(group==null){group=new StoriesAdapter.Group();group.authorId=story.authorId;group.authorName=story.authorName;group.authorPhoto=story.authorPhoto;storyGroups.put(story.authorId,group);}
             group.stories.add(story);if(!story.authorId.equals(Fb.uid()) && !story.viewedBy.contains(Fb.uid()))group.unseen=true;

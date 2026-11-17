@@ -564,7 +564,8 @@ public class StoryViewerActivity extends Activity {
         if (stories.isEmpty()) return;
         Models.Story s = stories.get(index);
         Ui.confirm(this, "Delete this story?", "", "Delete", () -> {
-            Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(v->{
+            com.friendbook.social.core.DataRouter.batch().delete("stories", s.id).commit((ok, error)->{
+                if(!ok)return;
                 if(storyPages!=null)storyPages.forget(s.id);stories.remove(s);
                 Ui.toast(this,"Story deleted");if(stories.isEmpty()){finish();return;}index=Math.min(index,stories.size()-1);show();
             });

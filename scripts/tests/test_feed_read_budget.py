@@ -30,7 +30,10 @@ class FeedReadBudgetTest(unittest.TestCase):
     def test_stories_have_cursor_pages_and_discoverable_more_control(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         stories=source.split('private void startStoriesListener()',1)[1].split('// ---------- Host ----------',1)[0]
-        for token in ['page.limit(10).get()','storyQuery.startAfter(storyCursor)','if(loadingStories','generation!=storyGeneration','storyIds.add','moreStories=snapshot.size()==10']:
+        # The story strip pages on a D1 DocQuery with the server's own cursor now; the tokens pin
+        # the same contract (a bounded page, a resumable cursor, generation guarding, more-detection)
+        # against the query object that carries it.
+        for token in ['limit(10)','qb.startAfter(storyCursor)','if(loadingStories','generation!=storyGeneration','storyIds.add','moreStories=page!=null && page.hasMore']:
             self.assertIn(token,stories)
         self.assertNotIn('addSnapshotListener',stories)
         self.assertIn('More stories ›',(JAVA/'post/FeedAdapter.java').read_text())

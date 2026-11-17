@@ -215,9 +215,9 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(delBtn, 10, 6, 10, 6);
         delBtn.setOnClickListener(v -> Ui.confirm(this, "Delete post by " + p.authorName + "?",
                 "This permanently deletes the violating post.", "Delete", () ->
-                        Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> Ui.toast(this, "Post deleted 🗑"))
-                                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()))));
+                        com.friendbook.social.core.DataRouter.batch().delete("posts", p.id)
+                                .commit((ok, error) -> Ui.toast(this,
+                                        ok ? "Post deleted 🗑" : String.valueOf(error)))));
         head.addView(delBtn);
         card.addView(head);
 

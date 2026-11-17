@@ -5,8 +5,7 @@ import androidx.annotation.NonNull;
 import androidx.work.*;
 import com.friendbook.social.App;
 import com.friendbook.social.core.Fb;
-import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.core.Format;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
@@ -37,8 +36,10 @@ public final class PushFanoutWorker extends Worker {
         String id = getInputData().getString("document");
         try {
             if ("chat".equals(getInputData().getString("kind"))) {
-                DocumentSnapshot chat = Tasks.await(Fb.db().collection("chats").document(id)
-                        .get(Source.SERVER), 20, TimeUnit.SECONDS);
+                // The room is read from D1, the store the message was written to. Reading it from
+                // Firestore returned nothing, so a sent message produced no push at all.
+                Map<String, Object> chat = com.friendbook.social.core.D1Blocking.get("chats", id);
+                if (chat == null) return Result.failure();
                 Object members = chat.get("participants");
                 if (!(members instanceof List) || !((List<?>) members).contains(uid)) return Result.failure();
                 for (Object member : (List<?>) members) {
@@ -49,34 +50,42 @@ public final class PushFanoutWorker extends Worker {
                     FCMPush.invoke((String) member, Fb.myName(), "New message", data);
                 }
             } else if ("friend_post".equals(getInputData().getString("kind"))) {
-                DocumentSnapshot post = Tasks.await(Fb.db().collection("posts").document(id)
-                        .get(Source.SERVER), 20, TimeUnit.SECONDS);
-                if (!post.exists() || !uid.equals(post.getString("authorId"))) return Result.failure();
-                QuerySnapshot friends = Tasks.await(Fb.db().collection("friends")
-                        .whereArrayContains("participants", uid).get(Source.SERVER), 20, TimeUnit.SECONDS);
+                Map<String, Object> post = com.friendbook.social.core.D1Blocking.get("posts", id);
+                if (post == null || !uid.equals(Format.str(post, "authorId"))) return Result.failure();
                 Set<String> recipients = new HashSet<>();
-                for (DocumentSnapshot friend : friends) {
-                    Object members = friend.get("participants");
-                    if (members instanceof List) for (Object m : (List<?>) members)
-                        if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
+                String cursor = null;
+                while (true) {
+                    com.friendbook.social.core.DocQuery.Builder q =
+                            com.friendbook.social.core.DocQuery.of("friends")
+                                    .whereArrayContains("participants", uid).limit(100);
+                    if (cursor != null && !cursor.isEmpty()) q.startAfter(cursor);
+                    com.friendbook.social.core.CloudflareStore.Page page =
+                            com.friendbook.social.core.D1Blocking.query(q.build());
+                    if (page == null || page.documents.isEmpty()) break;
+                    for (Map<String, Object> friend : page.documents) {
+                        Object partners = friend.get("participants");
+                        if (partners instanceof List) for (Object m : (List<?>) partners)
+                            if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
+                    }
+                    if (!page.hasMore || page.nextCursor == null || page.nextCursor.isEmpty()) break;
+                    cursor = page.nextCursor;
                 }
                 for (String to : recipients) {
                     if (!uid.equals(Fb.uid())) return Result.success();
-                    // Stable document/event ID makes replay safe if a partial fan-out is retried.
-                    DocumentReference ref = Fb.db().collection("notifications")
-                            .document("friend_post_" + id + "_" + to);
+                    // Stable document id makes replay safe if a partial fan-out is retried: the
+                    // row is rewritten rather than duplicated, and the user is not notified twice.
+                    String noteId = "friend_post_" + id + "_" + to;
                     Map<String, Object> n = new HashMap<>();
                     n.put("toUserId", to); n.put("fromUserId", uid); n.put("fromUserName", Fb.myName());
                     n.put("fromUserPhotoUrl", Fb.myPhoto()); n.put("type", "friend_post");
                     n.put("text", "shared a new post"); n.put("postId", id);
-                    n.put("isRead", false); n.put("createdAt", FieldValue.serverTimestamp());
-                    // Transaction preserves read state and original timestamp when replaying a partial batch.
-                    Tasks.await(Fb.db().runTransaction(tx -> {
-                        if (!tx.get(ref).exists()) tx.set(ref, n);
-                        return null;
-                    }), 20, TimeUnit.SECONDS);
+                    n.put("isRead", false); n.put("createdAt", System.currentTimeMillis());
+                    boolean first = com.friendbook.social.core.D1Blocking.get("notifications", noteId) == null;
+                    com.friendbook.social.core.D1Blocking.put("notifications", noteId, n);
                     if (!uid.equals(Fb.uid())) return Result.success();
-                    FCMPush.notification(ref.getId(), n);
+                    // A push for a row that already existed would buzz the same user twice for
+                    // one post, which is exactly what the transaction was guarding against.
+                    if (first) FCMPush.notification(noteId, n);
                 }
             } else return Result.failure();
             return Result.success();
