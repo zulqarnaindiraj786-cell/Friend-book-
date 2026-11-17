@@ -26,6 +26,9 @@ public class D1DocumentStore {
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, DocumentSnapshot> docCache = new ConcurrentHashMap<>();
+    // Warm in-process cache for revisited screens. Query keys include the authenticated UID to
+    // prevent one account's cached results being shown after an account switch.
+    private final Map<String, String> queryCache = new ConcurrentHashMap<>();
     private final Map<String, CopyOnWriteArrayList<DocListenerEntry>> docListeners = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<QueryListenerEntry> queryListeners = new CopyOnWriteArrayList<>();
 
@@ -99,21 +102,30 @@ public class D1DocumentStore {
         return tcs.getTask();
     }
 
+    private static String authenticatedUid() {
+        com.google.firebase.auth.FirebaseUser user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
+        return user == null ? "signed-out" : user.getUid();
+    }
+
+    private static String scopedCacheKey(String uid, String path) { return uid + "|" + path; }
+
     void cacheDoc(String path, DocumentSnapshot snap) {
-        if (path != null && snap != null) docCache.put(path, snap);
+        if (path != null && snap != null) docCache.put(scopedCacheKey(authenticatedUid(), path), snap);
     }
 
     DocumentSnapshot getCachedDoc(String path) {
-        return path == null ? null : docCache.get(path);
+        return path == null ? null : docCache.get(scopedCacheKey(authenticatedUid(), path));
     }
 
     void invalidateDoc(String path) {
-        if (path != null) docCache.remove(path);
+        if (path != null) docCache.remove(scopedCacheKey(authenticatedUid(), path));
     }
 
     ListenerRegistration registerDocListener(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
         DocListenerEntry entry = new DocListenerEntry(ref, listener);
         docListeners.computeIfAbsent(ref.getPath(), k -> new CopyOnWriteArrayList<>()).add(entry);
+        DocumentSnapshot cached = getCachedDoc(ref.getPath());
+        if (cached != null) mainHandler.post(() -> { if (entry.active) listener.onEvent(cached, null); });
         executor.execute(() -> deliverDoc(entry));
         return () -> {
             entry.active = false;
@@ -125,6 +137,15 @@ public class D1DocumentStore {
     ListenerRegistration registerQueryListener(Query query, EventListener<QuerySnapshot> listener) {
         QueryListenerEntry entry = new QueryListenerEntry(query, listener);
         queryListeners.add(entry);
+        String cachedJson = queryCache.get(queryCacheKey(query));
+        if (cachedJson != null) {
+            try {
+                org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
+                entry.lastFingerprint = cached.toString();
+                QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
+                mainHandler.post(() -> { if (entry.active) listener.onEvent(snapshot, null); });
+            } catch (Exception ignored) { }
+        }
         executor.execute(() -> deliverQuery(entry));
         return () -> {
             entry.active = false;
@@ -189,6 +210,11 @@ public class D1DocumentStore {
         try {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
             String fp = arr.toString();
+            queryCache.put(queryCacheKey(entry.query), fp);
+            if (queryCache.size() > 96) {
+                String oldestApprox = queryCache.keySet().iterator().next();
+                queryCache.remove(oldestApprox);
+            }
             if (fp.equals(entry.lastFingerprint)) return;
             entry.lastFingerprint = fp;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
@@ -203,6 +229,10 @@ public class D1DocumentStore {
                 if (entry.active) entry.listener.onEvent(null, ffe);
             });
         }
+    }
+
+    private static String queryCacheKey(Query q) {
+        return authenticatedUid() + "|" + toQueryJson(q).toString();
     }
 
     private static org.json.JSONObject toQueryJson(Query q) {

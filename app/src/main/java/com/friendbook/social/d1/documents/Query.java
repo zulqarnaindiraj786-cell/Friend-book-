@@ -201,8 +201,12 @@ public class Query {
     }
 
     QuerySnapshot parseQuerySnapshot(JSONArray arr) {
+        return parseQuerySnapshot(arr, false);
+    }
+
+    QuerySnapshot parseQuerySnapshot(JSONArray arr, boolean fromCache) {
         List<QueryDocumentSnapshot> docs = new ArrayList<>();
-        SnapshotMetadata meta = new SnapshotMetadata(false, false);
+        SnapshotMetadata meta = new SnapshotMetadata(fromCache, false);
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject item = arr.optJSONObject(i);
