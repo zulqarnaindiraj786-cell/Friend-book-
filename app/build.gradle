@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId 'com.friendbook.social'
-        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
+        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'true'
         buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
         // Real view counters live in Cloudflare Analytics Engine (one event per view, uniq(uid) = one
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no

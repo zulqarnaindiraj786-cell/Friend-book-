@@ -100,9 +100,13 @@ public final class CloudflareStore {
     }
 
     public static void list(String collection, int limit, Consumer<List<Map<String, Object>>> callback) {
-        if (!enabled() || collection == null || callback == null) return;
+        if (callback == null) return;
+        if (!enabled() || collection == null) {
+            MAIN.post(() -> callback.accept(new ArrayList<>()));
+            return;
+        }
         final int safeLimit = Math.max(1, Math.min(50, limit));
-        final String cacheKey = collection + ":" + safeLimit;
+        final String cacheKey = String.valueOf(Fb.uid()) + ":" + collection + ":" + safeLimit;
         long now = android.os.SystemClock.elapsedRealtime();
         List<Map<String, Object>> cached = LIST_CACHE.get(cacheKey);
         Long cachedAt = LIST_CACHE_AT.get(cacheKey);
@@ -112,10 +116,10 @@ public final class CloudflareStore {
         }
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
+            if (user == null) { MAIN.post(() -> callback.accept(new ArrayList<>())); return; }
             user.getIdToken(false).addOnSuccessListener(res -> {
                 String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
+                if (token == null || token.isEmpty()) { MAIN.post(() -> callback.accept(new ArrayList<>())); return; }
                 IO.execute(() -> {
                     try {
                         URL url = new URL(BASE + "?collection=" + Uri.encode(collection) + "&limit=" + safeLimit);
@@ -125,9 +129,13 @@ public final class CloudflareStore {
                         LIST_CACHE.put(cacheKey, docs);
                         LIST_CACHE_AT.put(cacheKey, android.os.SystemClock.elapsedRealtime());
                         MAIN.post(() -> callback.accept(docs));
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable ignored) {
+                        MAIN.post(() -> callback.accept(new ArrayList<>()));
+                    }
                 });
-            });
-        } catch (Throwable ignored) { }
+            }).addOnFailureListener(error -> MAIN.post(() -> callback.accept(new ArrayList<>())));
+        } catch (Throwable ignored) {
+            MAIN.post(() -> callback.accept(new ArrayList<>()));
+        }
     }
 }
