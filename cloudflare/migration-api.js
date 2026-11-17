@@ -6,6 +6,7 @@
 
 import { timingSafeEqual } from './utils.js';
 import { documentRebuildAction } from './document-rebuild.js';
+import { promotePage, promoteStatus } from './interaction-verify.js';
 
 /** Collections this endpoint will answer questions about. */
 const MIGRATABLE_COLLECTIONS = new Set([
@@ -168,6 +169,34 @@ export async function migrationApi(request, env) {
 
     if (path === '/v1/admin/migrate/existing' && request.method === 'POST') {
       return await listExisting(env, await request.json());
+    }
+
+    // Promote D1 documents to 'verified' so the engagement API can serve their reactions and
+    // comments. Without this every like and comment sheet answered 503.
+    if (path.startsWith('/v1/admin/migrate/interactions')) {
+      const collection = url.searchParams.get('collection') || 'posts';
+      if (path.endsWith('/status')) {
+        return cors(200, await promoteStatus(env.DB));
+      }
+      if (path.endsWith('/promote')) {
+        const pages = Math.min(Number(url.searchParams.get('pages') || '1') || 1, 10);
+        const out = [];
+        let remaining = null;
+        for (let i = 0; i < pages; i += 1) {
+          const result = await promotePage(env.DB, collection);
+          if (result.error) return cors(400, result);
+          out.push(result);
+          remaining = result.remaining;
+          if (!result.promoted) break;
+        }
+        return cors(200, {
+          collection,
+          promoted: out.reduce((sum, r) => sum + r.promoted, 0),
+          remaining,
+          pages: out.length,
+        });
+      }
+      return cors(404, { error: 'Not found' });
     }
 
     // Convert normalised rows into the document store the app reads (/v1/admin/migrate/documents/*).

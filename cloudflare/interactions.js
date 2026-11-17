@@ -1,4 +1,5 @@
 import { commentsAPI, reactorsAPI, commentSelect, normalized } from './comment-api.js';
+import { promoteResource } from './interaction-verify.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -69,17 +70,28 @@ export async function interactions(request, env, identity, match, authorize = au
     const vSet = getVerifiedSet(env.DB);
     if (!vSet.has(resource)) {
       const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
-      if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
-      if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
-      // A resource is ONLY served from D1 after its source rows were imported and the import was
-      // verified (the migration writes state='verified'). This endpoint must never promote a
-      // resource by itself: doing so would silently serve an empty counters row for a post whose
-      // real likes/comments still live in Firestore, i.e. every existing like and comment would
-      // appear to vanish. An unknown resource is refused so the client keeps reading Firestore.
-      if (!ready) return json({ error: 'Resource migration not verified' }, 503);
-      vSet.add(resource);
-    } else if (!await authorize(identity, collection, id, undefined, context)) {
-      return json({ error: 'Forbidden' }, 403);
+      if (ready && ready.state !== 'verified') {
+        // Explicitly staged for import: refuse without reading the source. Unchanged.
+        return json({ error: 'Resource migration not verified' }, 503);
+      }
+      if (!ready) {
+        if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
+        // The resource was never marked 'verified' - the old migration that was supposed to do
+        // that never finished, so this was true for every post on production and every reaction
+        // and comment request answered 503. The app showed that as an empty sheet reading
+        // "Retry reactions" even though the post said "1 reaction".
+        //
+        // It is now repaired here, from the document D1 already holds, before serving. The
+        // condition is unchanged - a resource needs a D1 copy to be served - but proving it no
+        // longer depends on an operator having run a separate command. A post with no D1
+        // document is still refused, because serving it would drop its real likes.
+        if (!await promoteResource(env.DB, collection, id)) {
+          return json({ error: 'Resource migration not verified' }, 503);
+        }
+        vSet.add(resource);
+      } else if (!await authorize(identity, collection, id, undefined, context)) {
+        return json({ error: 'Forbidden' }, 403);
+      }
     }
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }
   let data;
