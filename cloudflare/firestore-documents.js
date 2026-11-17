@@ -11,7 +11,7 @@ const json = (body, status = 200) => Response.json(body, {
 
 function validSegment(v) {
   return typeof v === 'string' && v.length > 0 && v.length <= 512
-    && !/[\\/\\x00-\\x1f]/.test(v) && !['.', '..'].includes(v);
+    && !/[\\/\x00-\x1f]/.test(v) && !['.', '..'].includes(v);
 }
 function splitPath(path) {
   if (typeof path !== 'string' || !path) return null;
