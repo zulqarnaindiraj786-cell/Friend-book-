@@ -3,6 +3,8 @@ import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
+import { firestoreDocuments } from './cloudflare/firestore-documents.js';
+import { fcmGateway } from './cloudflare/fcm-push.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
@@ -31,7 +33,8 @@ export function createWorker(verify = verifyFirebaseToken) {
     async fetch(request, env, ctx) {
       const path = new URL(request.url).pathname;
       // API namespaces must never fall through to HTML, even for unknown endpoints.
-      const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/');
+      const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/')
+        || path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
       if (!api) {
         if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
         if (!env.ASSETS) return json({ error: 'Frontend unavailable' }, 503);
@@ -43,6 +46,9 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
+      const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query'
+        || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count';
+      const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
@@ -50,7 +56,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !firestore && !fcm) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -80,6 +86,8 @@ export function createWorker(verify = verifyFirebaseToken) {
       catch { return json({ error: 'Unauthorized' }, 401); }
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
+      if (firestore) return firestoreDocuments(request, env, { uid, token: bearer[1] });
+      if (fcm) return fcmGateway(request, env, { uid, token: bearer[1] });
       if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
       // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
       // KV aggregate write happen after the response is already sent.

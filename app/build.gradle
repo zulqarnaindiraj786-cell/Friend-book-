@@ -16,7 +16,7 @@ android {
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
         // D1, no KV. Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
-        buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
+        buildConfigField 'String', 'SUPABASE_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
         versionCode 121
@@ -73,14 +73,10 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     testImplementation 'org.robolectric:robolectric:4.14.1'
+    // Firebase: ONLY Auth + FCM (all app data lives in Cloudflare D1 + R2)
     implementation platform('com.google.firebase:firebase-bom:33.5.1')
     implementation 'com.google.firebase:firebase-auth'
-    implementation 'com.google.firebase:firebase-firestore'
-    implementation 'com.google.firebase:firebase-database'
-    implementation 'com.google.firebase:firebase-config'
     implementation 'com.google.firebase:firebase-messaging'
-    // 🔐 App Check with Play Integrity (production) — MONITOR mode first, then ENFORCE
-    implementation 'com.google.firebase:firebase-appcheck-playintegrity'
     implementation 'androidx.work:work-runtime:2.10.0'
     implementation 'com.google.guava:guava:33.3.1-android'
 
