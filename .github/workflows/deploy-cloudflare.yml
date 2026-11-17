@@ -285,6 +285,91 @@ jobs:
           test "$vcode" = 401
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
           echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Create one-time Firebase Auth user and prove D1-only profile storage
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          FIREBASE_PROJECT_ID: 'friendbook-17551'
+          WORKER_URL: 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
+        run: |
+          set -euo pipefail
+          mkdir -p live-d1-proof
+          export FIREBASE_API_KEY="$(python3 -c 'import json; print(json.load(open("app/google-services.json"))["client"][1]["api_key"][0]["current_key"])')"
+          node 2>&1 <<'NODE' | tee live-d1-proof/run.log
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const {spawnSync} = require('node:child_process');
+          const fail = (m) => { console.error(m); process.exit(1); };
+          (async () => {
+            const suffix = crypto.randomUUID().replaceAll('-', '');
+            const email = `cf-d1-proof-${suffix}@example.com`;
+            const password = crypto.randomBytes(24).toString('base64url');
+            const signup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${process.env.FIREBASE_API_KEY}`, {
+              method: 'POST', headers: {'content-type':'application/json'},
+              body: JSON.stringify({email, password, returnSecureToken: true})
+            });
+            const auth = await signup.json();
+            if (!signup.ok || !auth.localId || !auth.idToken) fail(`Firebase Auth signup failed: ${auth.error?.message || signup.status}`);
+            const uid = auth.localId;
+            const docPath = `users/${uid}`;
+            const workerUrl = new URL('/v1/firestore/document', process.env.WORKER_URL);
+            workerUrl.searchParams.set('path', docPath);
+            const payload = {data: {uid, email, displayName: 'Cloudflare D1 migration proof', proofMarker: 'd1-only', createdAt: new Date().toISOString()}};
+            const put = await fetch(workerUrl, {
+              method: 'PUT', headers: {'authorization': `Bearer ${auth.idToken}`, 'content-type':'application/json'},
+              body: JSON.stringify(payload)
+            });
+            const putBody = await put.json().catch(() => ({}));
+            if (!put.ok || putBody.path !== docPath || putBody.data?.proofMarker !== 'd1-only') fail(`Worker D1 write failed: HTTP ${put.status} ${JSON.stringify(putBody)}`);
+
+            const sql = `SELECT path, owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = '${docPath}'`;
+            const d1 = spawnSync('npx', ['wrangler','d1','execute','friendbook-db','--remote','--command',sql,'--json'], {encoding:'utf8'});
+            if (d1.status !== 0) fail(`Remote D1 read failed: ${d1.stderr || d1.stdout}`);
+            fs.writeFileSync('live-d1-proof/d1-query.json', d1.stdout);
+            const query = JSON.parse(d1.stdout);
+            const row = query.flatMap(x => x.results || []).find(r => r.path === docPath && r.owner_uid === uid);
+            if (!row || !row.document_json.includes('d1-only') || !row.document_json.includes(email)) fail('Expected test profile row missing from Cloudflare D1.');
+
+            const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${docPath}`;
+            const firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const firestoreText = await firestore.text();
+            if (firestore.status !== 404) fail(`Expected no Firebase Firestore profile (404); got HTTP ${firestore.status}: ${firestoreText.slice(0,500)}`);
+
+            const report = {result:'PASS', firebaseAuthUserCreated:true, uid, email, workerPath:docPath,
+              cloudflareD1Row:{path:row.path, owner_uid:row.owner_uid, document:JSON.parse(row.document_json)},
+              firebaseFirestoreProfile:{httpStatus:firestore.status, exists:false}};
+            fs.writeFileSync('live-d1-proof/report.json', JSON.stringify(report, null, 2));
+            console.log(JSON.stringify(report, null, 2));
+          })().catch(e => fail(`Live D1 proof failed: ${e.message}`));
+          NODE
+
+      - name: Upload live D1 proof
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-cloudflare-d1-proof-${{ github.run_id }}
+          path: live-d1-proof/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish live D1 proof result to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        uses: actions/github-script@v7
+        env:
+          PROOF_LOG: live-d1-proof/run.log
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
+            if (!prs.data.length) return core.warning('No PR found to publish the proof summary.');
+            const log = fs.existsSync(process.env.PROOF_LOG) ? fs.readFileSync(process.env.PROOF_LOG, 'utf8') : 'Proof step did not produce a log.';
+            const body = 'Live D1 proof for workflow run ' + context.runId + ':\\n\\n' + log.slice(-10000);
+            await github.rest.issues.createComment({owner, repo, issue_number: prs.data[0].number, body});
+
       - name: Verify public Android-only release metadata
         run: |
           node --input-type=module <<'JS'
