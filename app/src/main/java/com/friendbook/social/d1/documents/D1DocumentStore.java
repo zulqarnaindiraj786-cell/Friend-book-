@@ -137,7 +137,8 @@ public class D1DocumentStore {
     ListenerRegistration registerQueryListener(Query query, EventListener<QuerySnapshot> listener) {
         QueryListenerEntry entry = new QueryListenerEntry(query, listener);
         queryListeners.add(entry);
-        String cachedJson = queryCache.get(queryCacheKey(query));
+        String key = queryCacheKey(query);
+        String cachedJson = getCachedQuery(key);
         if (cachedJson != null) {
             try {
                 org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
@@ -210,11 +211,7 @@ public class D1DocumentStore {
         try {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
             String fp = arr.toString();
-            queryCache.put(queryCacheKey(entry.query), fp);
-            if (queryCache.size() > 96) {
-                String oldestApprox = queryCache.keySet().iterator().next();
-                queryCache.remove(oldestApprox);
-            }
+            cacheQuery(queryCacheKey(entry.query), fp);
             if (fp.equals(entry.lastFingerprint)) return;
             entry.lastFingerprint = fp;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
@@ -229,6 +226,53 @@ public class D1DocumentStore {
                 if (entry.active) entry.listener.onEvent(null, ffe);
             });
         }
+    }
+
+    private String getCachedQuery(String key) {
+        String cached = queryCache.get(key);
+        if (cached != null) return cached;
+        com.friendbook.social.App app = com.friendbook.social.App.instance;
+        if (app == null) return null;
+        String prefKey = "q_" + cacheHash(key);
+        cached = app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE).getString(prefKey, null);
+        if (cached != null) queryCache.put(key, cached);
+        return cached;
+    }
+
+    private void cacheQuery(String key, String json) {
+        queryCache.put(key, json);
+        while (queryCache.size() > 32) {
+            String evict = queryCache.keySet().iterator().next();
+            queryCache.remove(evict);
+            com.friendbook.social.App app = com.friendbook.social.App.instance;
+            if (app != null) app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE)
+                    .edit().remove("q_" + cacheHash(evict)).apply();
+        }
+        // Avoid putting exceptionally large result pages into preferences.
+        if (json.length() <= 256 * 1024) {
+            com.friendbook.social.App app = com.friendbook.social.App.instance;
+            if (app != null) {
+                android.content.SharedPreferences prefs = app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE);
+                String prefKey = "q_" + cacheHash(key);
+                java.util.Set<String> keys = new java.util.HashSet<>(prefs.getStringSet("keys", java.util.Collections.emptySet()));
+                keys.add(prefKey);
+                android.content.SharedPreferences.Editor editor = prefs.edit().putString(prefKey, json);
+                while (keys.size() > 32) {
+                    String evict = keys.iterator().next(); keys.remove(evict); editor.remove(evict);
+                }
+                editor.putStringSet("keys", keys).apply();
+            }
+        }
+    }
+
+    private static String cacheHash(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) hex.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
+            return hex.toString();
+        } catch (Exception impossible) { return Integer.toHexString(value.hashCode()); }
     }
 
     private static String queryCacheKey(Query q) {
