@@ -164,11 +164,12 @@ class D1:
 
     def normalize_legacy_child_paths(self):
         # Repair resumable task rows created by the earlier relative-path bug.
-        rows = self.query(f'''SELECT collection_path FROM {PROGRESS_TABLE}
-          WHERE collection_path NOT LIKE ?''', (PREFIX + '/%',))
+        rows = self.query(f'SELECT collection_path FROM {PROGRESS_TABLE}')
         fixed = 0
         for row in rows:
             old = row['collection_path']
+            if old.startswith(PREFIX + '/'):
+                continue
             if not old or old.startswith('/') or '..' in old.split('/'):
                 raise CopyError('Invalid persisted collection checkpoint; refusing to alter it')
             corrected = PREFIX + '/' + old
