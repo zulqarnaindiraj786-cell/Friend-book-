@@ -5,7 +5,7 @@ import com.friendbook.social.core.*;
 import com.friendbook.social.models.Models;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.*;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -37,7 +37,7 @@ public class FirebaseOffRoutingTest {
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-user");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
-   FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
+   D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class),mirror=mock(CollectionReference.class);
    DocumentReference parent=mock(DocumentReference.class),canonical=mock(DocumentReference.class),copy=mock(DocumentReference.class);WriteBatch batch=mock(WriteBatch.class);
    fb.when(Fb::db).thenReturn(db);when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);
    when(parent.collection("comments")).thenReturn(comments);when(comments.document("new-id")).thenReturn(canonical);
@@ -52,14 +52,14 @@ public class FirebaseOffRoutingTest {
  @Test public void offCommentWatchUsesFirebaseListenerAndRemovesItOnClose(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
-   fb.when(Fb::uid).thenReturn("off-user");FirebaseFirestore db=mock(FirebaseFirestore.class);fb.when(Fb::db).thenReturn(db);
+   fb.when(Fb::uid).thenReturn("off-user");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
    CollectionReference posts=mock(CollectionReference.class),comments=mock(CollectionReference.class);DocumentReference parent=mock(DocumentReference.class),child=mock(DocumentReference.class);
    Query query=mock(Query.class);DocumentSnapshot parentData=mock(DocumentSnapshot.class),doc=mock(DocumentSnapshot.class);QuerySnapshot page=mock(QuerySnapshot.class);SnapshotMetadata metadata=mock(SnapshotMetadata.class);
    when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);when(parent.collection("comments")).thenReturn(comments);
    when(parent.get()).thenReturn(Tasks.forResult(parentData));when(parentData.exists()).thenReturn(false);
    when(comments.orderBy("createdAt",Query.Direction.DESCENDING)).thenReturn(query);when(query.limit(50)).thenReturn(query);
    ListenerRegistration registration=mock(ListenerRegistration.class);
-   ArgumentCaptor<com.google.firebase.firestore.EventListener<QuerySnapshot>> callback=ArgumentCaptor.forClass(com.google.firebase.firestore.EventListener.class);
+   ArgumentCaptor<com.friendbook.social.d1.documents.EventListener<QuerySnapshot>> callback=ArgumentCaptor.forClass(com.friendbook.social.d1.documents.EventListener.class);
    when(query.addSnapshotListener(callback.capture())).thenReturn(registration);
    when(page.getDocuments()).thenReturn(Collections.singletonList(doc));when(page.getDocumentChanges()).thenReturn(Collections.emptyList());when(page.getMetadata()).thenReturn(metadata);when(page.size()).thenReturn(1);
    when(page.iterator()).thenAnswer(inv->Collections.singletonList(doc).iterator());
@@ -74,7 +74,7 @@ public class FirebaseOffRoutingTest {
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
    fb.when(Fb::uid).thenReturn("off-owner");fb.when(Fb::myName).thenReturn("Owner");fb.when(Fb::myPhoto).thenReturn("");
-   FirebaseFirestore db=mock(FirebaseFirestore.class);CollectionReference posts=mock(CollectionReference.class),reactions=mock(CollectionReference.class);
+   D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference posts=mock(CollectionReference.class),reactions=mock(CollectionReference.class);
    DocumentReference parent=mock(DocumentReference.class),reaction=mock(DocumentReference.class);
    fb.when(Fb::db).thenReturn(db);when(db.collection("posts")).thenReturn(posts);when(posts.document("off-p2")).thenReturn(parent);
    when(parent.collection("reactions")).thenReturn(reactions);when(reactions.document("off-owner")).thenReturn(reaction);
