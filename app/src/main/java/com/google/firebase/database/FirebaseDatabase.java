@@ -6,6 +6,7 @@ public class FirebaseDatabase {
 
     public static FirebaseDatabase getInstance() { return INSTANCE; }
     public static FirebaseDatabase getInstance(String url) { return INSTANCE; }
+    public void setPersistenceEnabled(boolean isEnabled) { }
     public DatabaseReference getReference() { return new DatabaseReference(""); }
     public DatabaseReference getReference(String path) { return new DatabaseReference(path); }
 }

@@ -9,6 +9,7 @@ public class FirebaseRemoteConfig {
 
     public static FirebaseRemoteConfig getInstance() { return INSTANCE; }
     public Task<Void> setConfigSettingsAsync(FirebaseRemoteConfigSettings settings) { return Tasks.forResult(null); }
+    public Task<Void> setDefaultsAsync(java.util.Map<String, ?> defaults) { return Tasks.forResult(null); }
     public Task<Boolean> fetchAndActivate() { return Tasks.forResult(false); }
     public String getString(String key) { return ""; }
     public boolean getBoolean(String key) { return false; }

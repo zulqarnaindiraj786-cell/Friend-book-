@@ -30,6 +30,11 @@ public class CollectionReference extends Query {
 
     public String getPath() { return parentPath; }
 
+    public DocumentReference getParent() {
+        int idx = parentPath.lastIndexOf('/');
+        return idx > 0 ? new DocumentReference(firestore, parentPath.substring(0, idx)) : null;
+    }
+
     public DocumentReference document() {
         String autoId = UUID.randomUUID().toString().replace("-", "").substring(0, 20);
         return document(autoId);
