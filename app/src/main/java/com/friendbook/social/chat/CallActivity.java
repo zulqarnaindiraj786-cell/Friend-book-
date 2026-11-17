@@ -187,9 +187,11 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     private long connectedAtMs = 0L;
 
     private LiveStreamEngine engine;
-    private DocumentReference chatDocRef;
-    private DocumentReference myMediaRef;
-    private DocumentReference remoteMediaRef;
+    // The call used to hold three Firestore DocumentReferences. Both sides now signal through
+    // D1 documents keyed by the same ids, so the fields are the plain keys.
+    private String chatDocRef;
+    private String myMediaRef;
+    private String remoteMediaRef;
     private ListenerRegistration signalReg;
     private String signalChatId, remoteMediaId;
     /**
@@ -324,12 +326,12 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
 
         signalChatId = chatId;
-        chatDocRef = Fb.db().collection("chats").document(chatId);
+        chatDocRef = chatId;
         String mySuffix = isCaller ? "_a" : "_b";
         String remSuffix = isCaller ? "_b" : "_a";
-        myMediaRef = Fb.db().collection("chats").document("callmedia_" + callId + mySuffix);
+        myMediaRef = "callmedia_" + callId + mySuffix;
         remoteMediaId = "callmedia_" + callId + remSuffix;
-        remoteMediaRef = Fb.db().collection("chats").document(remoteMediaId);
+        remoteMediaRef = remoteMediaId;
 
         engine = new LiveStreamEngine(this, this);
         engine.setStreamQuality(LiveStreamEngine.QUALITY_DATA_SAVER);
@@ -649,7 +651,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         if (!isGroup && peerId != null && !peerId.isEmpty()) {
             roomPatch.put("participants", Arrays.asList(me, peerId));
         }
-        chatDocRef.set(roomPatch, SetOptions.merge());
+        // The ringing signal is a D1 document. As a Firestore set it was refused, so the callee
+        // never saw an incoming call and the caller rang until the timeout.
+        com.friendbook.social.core.CloudflareStore.put("chats", chatDocRef, roomPatch, null, null);
     }
 
     /** Receives one signalling document; the body is the old listener body. */
@@ -722,15 +726,13 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         Map<String, Object> patch = new HashMap<>();
         patch.put("activeCall.status", "connected");
         patch.put("activeCall.connectedAt", now);
-        chatDocRef.update(patch).addOnFailureListener(e -> {
-            Map<String, Object> ac = new HashMap<>();
-            ac.put("callId", callId);
-            ac.put("status", "connected");
-            ac.put("connectedAt", now);
-            Map<String, Object> wrap = new HashMap<>();
-            wrap.put("activeCall", ac);
-            chatDocRef.set(wrap, SetOptions.merge());
-        });
+        Map<String, Object> ac = new HashMap<>();
+        ac.put("callId", callId);
+        ac.put("status", "connected");
+        ac.put("connectedAt", now);
+        Map<String, Object> wrap = new HashMap<>();
+        wrap.put("activeCall", ac);
+        com.friendbook.social.core.CloudflareStore.put("chats", chatDocRef, wrap, null, null);
         onCallConnected(now);
     }
 
@@ -899,7 +901,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         if (myRtdbMediaRef != null) {
             try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
         }
-        myMediaRef.set(m, SetOptions.merge());
+        com.friendbook.social.core.CloudflareStore.put("chats", myMediaRef, m, null, null);
     }
 
     @Override
@@ -917,7 +919,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         if (myRtdbMediaRef != null) {
             try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
         }
-        myMediaRef.set(m, SetOptions.merge());
+        com.friendbook.social.core.CloudflareStore.put("chats", myMediaRef, m, null, null);
     }
 
     @Override
@@ -981,7 +983,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             if (myMediaRef != null) {
                 Map<String, Object> m = new HashMap<>();
                 m.put("camOff", false);
-                myMediaRef.set(m, SetOptions.merge());
+                com.friendbook.social.core.CloudflareStore.put("chats", myMediaRef, m, null, null);
             }
         } else {
             localPipCard.setVisibility(View.GONE);
@@ -995,7 +997,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             if (myMediaRef != null) {
                 Map<String, Object> m = new HashMap<>();
                 m.put("camOff", true);
-                myMediaRef.set(m, SetOptions.merge());
+                com.friendbook.social.core.CloudflareStore.put("chats", myMediaRef, m, null, null);
             }
         }
         updateControlVisuals();
@@ -1056,20 +1058,25 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             Map<String, Object> patch = new HashMap<>();
             patch.put("activeCall.status", serverStatus);
             patch.put("activeCall.endedAt", System.currentTimeMillis());
-            chatDocRef.update(patch).addOnFailureListener(e -> {
-                Map<String, Object> ac = new HashMap<>();
-                ac.put("callId", callId);
-                ac.put("status", serverStatus);
-                Map<String, Object> w = new HashMap<>();
-                w.put("activeCall", ac);
-                chatDocRef.set(w, SetOptions.merge());
-            });
+            Map<String, Object> ac = new HashMap<>();
+            ac.put("callId", callId);
+            ac.put("status", serverStatus);
+            ac.put("endedAt", System.currentTimeMillis());
+            Map<String, Object> w = new HashMap<>();
+            w.put("activeCall", ac);
+            com.friendbook.social.core.CloudflareStore.put("chats", chatDocRef, w, null, null);
             writeDeterministicCallLogMessage(reason, durSec);
         }
 
         // Delete ephemeral media stream docs so Firestore stays ultra-lean
-        if (myMediaRef != null) myMediaRef.delete();
-        if (remoteMediaRef != null && updateServer) remoteMediaRef.delete();
+        // The frame documents are dropped at the end of the call so a finished call leaves no
+        // stale video or audio behind. A D1 delete, not a Firestore one.
+        if (myMediaRef != null) {
+            com.friendbook.social.core.CloudflareStore.delete("chats", myMediaRef, null);
+        }
+        if (remoteMediaRef != null && updateServer) {
+            com.friendbook.social.core.CloudflareStore.delete("chats", remoteMediaRef, null);
+        }
 
         releaseResources();
         finish();
@@ -1109,16 +1116,20 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         msg.put("callDurationSec", durSec);
         msg.put("isDelivered", true);
         msg.put("isSeen", connected);
-        msg.put("createdAt", FieldValue.serverTimestamp());
+        msg.put("createdAt", System.currentTimeMillis());
         msg.put("createdAtMs", System.currentTimeMillis());
+        msg.put("chatId", chatId);
 
-        chatDocRef.collection("messages").document("call_" + callId).set(msg, SetOptions.merge());
+        // One deterministic row per call, so a redial after a process death rewrites the same
+        // entry instead of adding a duplicate "Missed call" line to the thread.
+        com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_call_" + callId, msg,
+                null, null);
 
         Map<String, Object> roomMeta = new HashMap<>();
         roomMeta.put("lastMessage", summaryText);
-        roomMeta.put("lastMessageTime", FieldValue.serverTimestamp());
+        roomMeta.put("lastMessageTime", System.currentTimeMillis());
         roomMeta.put("lastMessageTimeMs", System.currentTimeMillis());
-        chatDocRef.set(roomMeta, SetOptions.merge());
+        com.friendbook.social.core.CloudflareStore.put("chats", chatDocRef, roomMeta, null, null);
     }
 
     private static String formatDuration(long sec) {

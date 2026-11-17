@@ -1531,9 +1531,12 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         if (removed.isEmpty()) return;
                         com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
                         for (String rowId : removed) batch.delete("friends", rowId);
-                        org.json.JSONArray down = new org.json.JSONArray()
-                                .put(com.friendbook.social.core.CloudflareStore.increment("friendsCount", -1));
-                        batch.ops("users", me, down).ops("users", uid, down);
+                        // ops() takes individual operations; passing a JSONArray queued nothing, so
+                        // the friend counters were left unchanged after an unfriend.
+                        batch.ops("users", me,
+                                        com.friendbook.social.core.CloudflareStore.increment("friendsCount", -1))
+                                .ops("users", uid,
+                                        com.friendbook.social.core.CloudflareStore.increment("friendsCount", -1));
                         batch.commit();
                     });
         });

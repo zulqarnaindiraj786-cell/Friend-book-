@@ -31,6 +31,7 @@ import androidx.credentials.exceptions.GetCredentialException;
 import com.friendbook.social.R;
 import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Presence;

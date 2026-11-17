@@ -947,7 +947,10 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                     up.put("requireJoinApproval", swJoinAppr.isChecked());
                     com.friendbook.social.core.DataRouter.mirrorPut("groups", id, up);
                     com.friendbook.social.core.DataRouter.batch().set("groups", id, up)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Group settings saved ✓")).commit();
+                            .commit((ok, error) -> {
+                                if (ok) Ui.toast(this, "Group settings saved ✓");
+                                else Ui.toast(this, "Couldn't save group settings. Try again.");
+                            });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

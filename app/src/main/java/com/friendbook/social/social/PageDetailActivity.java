@@ -297,7 +297,10 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
                     upd.put("about", aIn.getText().toString().trim());
                     com.friendbook.social.core.DataRouter.mirrorPut("pages", pageId, upd);
                     com.friendbook.social.core.DataRouter.batch().set("pages", pageId, upd)
-                            .addOnSuccessListener(x -> Ui.toast(this, "Page updated ✓")).commit();
+                            .commit((ok, error) -> {
+                                if (ok) Ui.toast(this, "Page updated ✓");
+                                else Ui.toast(this, "Couldn't update the Page. Try again.");
+                            });
                 })
                 .setNeutralButton("🗑 Delete Page", (d, w) -> Ui.confirm(this, "Delete Page?",
                         "This removes the Page permanently.", "Delete", () -> {

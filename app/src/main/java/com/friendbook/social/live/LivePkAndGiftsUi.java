@@ -880,7 +880,7 @@ public final class LivePkAndGiftsUi {
         String cid = Fb.chatId(me, targetUid);
         String inviteText = "LIVE Video: " + cleanHostName + " invited you to join \"" + cleanTitle + "\" — Tap video to join Live!";
         long now = System.currentTimeMillis();
-        DocumentReference chatRef = Fb.db().collection("chats").document(cid);
+
         Map<String, Object> msg = new HashMap<>();
         msg.put("senderId", me);
         msg.put("senderName", Fb.myName());
@@ -896,14 +896,17 @@ public final class LivePkAndGiftsUi {
         msg.put("imageUrl", cleanHostPhoto);
         msg.put("isDelivered", false);
         msg.put("isSeen", false);
-        msg.put("createdAt", FieldValue.serverTimestamp());
+        msg.put("createdAt", now);
         msg.put("createdAtMs", now);
-        chatRef.collection("messages").add(msg);
+        msg.put("chatId", cid);
+        // The invite message goes to D1; a Firestore subcollection add() never landed, so the
+        // "join my Live" card never appeared in the invitee's inbox.
+        com.friendbook.social.core.DataRouter.add("messages", msg, null);
 
         Map<String, Object> room = new HashMap<>();
         room.put("participants", Arrays.asList(me, targetUid));
         room.put("lastMessage", "LIVE Video · Tap to join " + cleanHostName + "'s Live");
-        room.put("lastMessageTime", FieldValue.serverTimestamp());
+        room.put("lastMessageTime", now);
         room.put("lastMessageTimeMs", now);
         Map<String, Object> pNames = new HashMap<>();
         pNames.put(me, Fb.myName());
@@ -918,11 +921,13 @@ public final class LivePkAndGiftsUi {
             pPhotos.put(targetUid, cachedPeer.photoUrl);
         }
         room.put("participantPhotos", pPhotos);
-        Map<String, Object> unread = new HashMap<>();
-        unread.put(targetUid, FieldValue.increment(1));
-        unread.put(me, 0);
-        room.put("unreadCount", unread);
-        chatRef.set(room, SetOptions.merge());
+        room.put("unreadCount", Fb.map(me, 0));
+        com.friendbook.social.core.CloudflareStore.put("chats", cid, room, null, null);
+        // The badge is a server-side increment, so it cannot be lost to a read-modify-write.
+        com.friendbook.social.core.CloudflareStore.patch("chats", cid,
+                new org.json.JSONArray().put(
+                        com.friendbook.social.core.CloudflareStore.increment("unreadCount." + targetUid, 1)),
+                null, null);
     }
 
     // ==================== 5. TIKTOK PK BATTLE MATCHMAKING DRAWER ====================
@@ -1210,8 +1215,9 @@ public final class LivePkAndGiftsUi {
         Ui.confirm(a, "Block " + targetName + "?",
                 targetName + " will be removed from your Live immediately and blocked across friendbook.",
                 "Block", () -> {
-                    Fb.db().collection("users").document(me)
-                            .set(Fb.map("blockedUsers", FieldValue.arrayUnion(targetUid)), SetOptions.merge());
+                    com.friendbook.social.core.CloudflareStore.put("users", me,
+                            Fb.map("blockedUsers", com.friendbook.social.core.CloudflareStore.arrayUnion(targetUid)),
+                            null, null);
                     if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(targetUid)) {
                         Fb.me.blocked.add(targetUid);
                     }

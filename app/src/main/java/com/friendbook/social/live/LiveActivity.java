@@ -1364,8 +1364,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         liveStartMs = System.currentTimeMillis();
         isLiveStarted = true;
 
-        DocumentReference docRef = Fb.db().collection("lives").document();
-        liveId = docRef.getId();
+        // The broadcast id is minted locally: Firestore is off, and document() threw here, so
+        // "Go Live" died before it wrote anything.
+        liveId = "live_" + liveStartMs + "_"
+                + Integer.toHexString(new java.util.Random().nextInt(0x10000));
         activeViewerIds.add(me);
         viewerNames.put(me, hostNameStr + " (Host)");
         viewerPhotos.put(me, hostPhotoStr);
@@ -1408,7 +1410,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         Ui.avatar(this, hostTopAvatar, hostPhotoStr);
         hostTopName.setText(hostNameStr);
 
-        docRef.set(doc).addOnSuccessListener(unused -> {
+        com.friendbook.social.core.CloudflareStore.put("lives", liveId, doc, () -> {
             setupRtdbFastLane();
             attachRoomListeners();
             // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
@@ -1418,8 +1420,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             uiHandler.postDelayed(hostHeartbeatTask, 8000L);
             postSystemChat(hostNameStr + " started a live video & voice broadcast!");
             notifyFollowersGoingLive();
-        }).addOnFailureListener(e -> {
-            Ui.toast(this, "Could not start live: " + e.getMessage());
+        }, () -> {
+            Ui.toast(this, "Could not start live. Check your connection and retry.");
             finish();
         });
     }
@@ -1444,8 +1446,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
         // Update `viewers` (100% allowed by deployed firestore.rules!) + post join packet in `chat`!
         viewerCountJoined = true;
-        Fb.db().collection("lives").document(liveId)
-                .update("viewers", FieldValue.increment(1));
+        // Server-side increment: D1 does the arithmetic, so two viewers arriving at once do not
+        // overwrite each other's count.
+        com.friendbook.social.core.CloudflareStore.patch("lives", liveId,
+                new org.json.JSONArray().put(
+                        com.friendbook.social.core.CloudflareStore.increment("viewers", 1)), null, null);
 
         Map<String, Object> joinPkt = new HashMap<>();
         joinPkt.put("type", "join");
@@ -1661,12 +1666,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     /** Same, for a packet addressed to a room other than the one on screen. */
     private void addChatPacket(String roomId, Map<String, Object> packet) {
         if (roomId == null || packet == null) return;
-        com.google.firebase.firestore.DocumentReference ref =
-                Fb.db().collection("lives").document(roomId).collection("chat").document();
-        ref.set(packet);
-        Map<String, Object> mirrored = new HashMap<>(packet);
-        mirrored.put("liveId", roomId);
-        com.friendbook.social.core.DataRouter.mirrorPut("live_chat", ref.getId(), mirrored);
+        // One flat live_chat row keyed by a locally minted id. The packet was written only to a
+        // Firestore subcollection, so with Firestore off a chat message never reached the room -
+        // and the id that used to come from Firestore threw before anything was written.
+        String packetId = "lc_" + System.currentTimeMillis() + "_"
+                + Integer.toHexString(new java.util.Random().nextInt(0x100000));
+        Map<String, Object> row = new HashMap<>(packet);
+        row.put("liveId", roomId);
+        row.put("roomId", roomId);
+        if (!row.containsKey("createdAtMs")) row.put("createdAtMs", System.currentTimeMillis());
+        com.friendbook.social.core.CloudflareStore.put("live_chat", packetId, row, null, null);
     }
 
     private void attachRoomListeners() {
@@ -2580,8 +2589,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
         if (liveId == null || isEnded) return;
         // `likesCount` is explicitly allowed for any signed-in viewer in deployed firestore.rules!
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
+        com.friendbook.social.core.CloudflareStore.patch("lives", liveId,
+                new org.json.JSONArray().put(
+                        com.friendbook.social.core.CloudflareStore.increment("likesCount", 1)), null, null);
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2598,8 +2608,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         spawnFloatingEmoji(emoji);
         if (liveId == null || isEnded) return;
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
+        com.friendbook.social.core.CloudflareStore.patch("lives", liveId,
+                new org.json.JSONArray().put(
+                        com.friendbook.social.core.CloudflareStore.increment("likesCount", 1)), null, null);
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2678,15 +2689,19 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                             ? pkHostBName : nameA;
 
                     if (recipientLiveId != null && !recipientLiveId.isEmpty()) {
-                        Fb.db().collection("lives").document(recipientLiveId)
-                                .update("stars", FieldValue.increment(coins));
+                        com.friendbook.social.core.CloudflareStore.patch("lives", recipientLiveId,
+                                new org.json.JSONArray().put(
+                                        com.friendbook.social.core.CloudflareStore.increment("stars", coins)),
+                                null, null);
                     }
 
                     // Boost PK Battle Score Bar in real time across BOTH rooms!
                     if (pkBattleActive && !pkVictoryPhase && !pkBattleId.isEmpty()) {
                         String scoreField = targetPkSideB ? "scoreB" : "scoreA";
-                        Fb.db().collection("chats").document("pkbattle_" + pkBattleId)
-                                .set(Fb.map(scoreField, FieldValue.increment(coins)), SetOptions.merge());
+                        com.friendbook.social.core.CloudflareStore.patch("chats", "pkbattle_" + pkBattleId,
+                                new org.json.JSONArray().put(
+                                        com.friendbook.social.core.CloudflareStore.increment(scoreField, coins)),
+                                null, null);
                     }
 
                     Map<String, Object> giftDoc = new HashMap<>();
@@ -2747,8 +2762,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             opts.add("Hide / Delete comment");
             acts.add(() -> {
                 deletedMsgIds.add(item.id);
-                Fb.db().collection("lives").document(liveId)
-                        .update("deletedMsgIds", new ArrayList<>(deletedMsgIds));
+                com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                        Fb.map("deletedMsgIds", new ArrayList<>(deletedMsgIds)), null, null);
             });
 
             if (!item.uid.equals(Fb.uid())) {
@@ -2757,8 +2772,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 acts.add(() -> {
                     if (muted) mutedUserIds.remove(item.uid);
                     else mutedUserIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                    com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                            Fb.map("mutedUserIds", new ArrayList<>(mutedUserIds)), null, null);
                     Ui.toast(this, muted ? "Unmuted " + item.name : "Muted " + item.name);
                 });
 
@@ -2767,8 +2782,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 acts.add(() -> {
                     if (isMod) moderatorIds.remove(item.uid);
                     else moderatorIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("moderatorIds", new ArrayList<>(moderatorIds));
+                    com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                            Fb.map("moderatorIds", new ArrayList<>(moderatorIds)), null, null);
                     postSystemChat(isMod ? (item.name + " is no longer moderator")
                             : (item.name + " is now a Live Moderator!"));
                 });
@@ -2795,8 +2810,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 opts.add("Remove / Kick " + item.name + " from Live");
                 acts.add(() -> {
                     kickedUserIds.add(item.uid);
-                    Fb.db().collection("lives").document(liveId)
-                            .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                    com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                            Fb.map("kickedUserIds", new ArrayList<>(kickedUserIds)), null, null);
                     Ui.toast(this, "Removed " + item.name + " from broadcast");
                 });
             }
@@ -2898,8 +2913,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 try { pkRtdbBRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
             }
             if (!pkBattleId.isEmpty()) {
-                Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b")
-                        .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+                com.friendbook.social.core.CloudflareStore.put("chats", "pkmedia_" + pkBattleId + "_b",
+                        Fb.map("camOff", nextPaused), null, null);
             }
             Ui.toast(this, nextPaused ? "PK camera OFF (Voice still live)" : "PK camera ON");
             return;
@@ -2939,8 +2954,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (pkRef != null) {
                 try { pkRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
             }
-            Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_" + sideKey)
-                    .set(Fb.map("camOff", nextPaused), SetOptions.merge());
+            com.friendbook.social.core.CloudflareStore.put("chats", "pkmedia_" + pkBattleId + "_" + sideKey,
+                    Fb.map("camOff", nextPaused), null, null);
         }
         Ui.toast(this, nextPaused ? "Camera OFF (Voice still live)" : "Camera ON");
     }
@@ -3099,8 +3114,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                                 public void onUnmuteUser(@NonNull String uid) {
                                     mutedUserIds.remove(uid);
                                     if (liveId != null) {
-                                        Fb.db().collection("lives").document(liveId)
-                                                .update("mutedUserIds", new ArrayList<>(mutedUserIds));
+                                        com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                                                Fb.map("mutedUserIds", new ArrayList<>(mutedUserIds)), null, null);
                                     }
                                     Ui.toast(LiveActivity.this, "Unmuted viewer");
                                 }
@@ -3108,8 +3123,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                                 public void onUnkickUser(@NonNull String uid) {
                                     kickedUserIds.remove(uid);
                                     if (liveId != null) {
-                                        Fb.db().collection("lives").document(liveId)
-                                                .update("kickedUserIds", new ArrayList<>(kickedUserIds));
+                                        com.friendbook.social.core.CloudflareStore.put("lives", liveId,
+                                                Fb.map("kickedUserIds", new ArrayList<>(kickedUserIds)), null, null);
                                     }
                                     Ui.toast(LiveActivity.this, "Viewer allowed back");
                                 }
@@ -3482,9 +3497,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 .setMessage(challengerName + " challenged you to a " + mins
                         + "-minute Split-Screen Live Video + Voice PK Match!\n\nAccept to go side-by-side live now?")
                 .setPositiveButton("Accept PK", (d, w) -> acceptIncomingPkBattle(incomingPkId, durationSec))
-                .setNegativeButton("Decline", (d, w) -> Fb.db().collection("chats")
-                        .document("pkbattle_" + incomingPkId)
-                        .set(Fb.map("status", "declined"), SetOptions.merge()))
+                .setNegativeButton("Decline", (d, w) ->
+                        com.friendbook.social.core.CloudflareStore.put("chats", "pkbattle_" + incomingPkId,
+                                Fb.map("status", "declined"), null, null))
                 .show();
     }
 
@@ -3840,8 +3855,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endDoc.put("status", "ended");
             endDoc.put("endedByUid", Fb.uid() == null ? "" : Fb.uid());
             endDoc.put("endedByName", Fb.myName());
-            Fb.db().collection("chats").document("pkbattle_" + oldPkId)
-                    .set(endDoc, SetOptions.merge());
+            com.friendbook.social.core.CloudflareStore.put("chats", "pkbattle_" + oldPkId,
+                    endDoc, null, null);
         }
         if (isHost && liveId != null) {
             Map<String, Object> lu = new HashMap<>();
@@ -4148,8 +4163,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             com.friendbook.social.core.DataRouter.batch().set("lives", liveId, endMap).commit();
         } else if (!isHost && viewerCountJoined && liveId != null) {
             viewerCountJoined = false;
-            Fb.db().collection("lives").document(liveId)
-                    .update("viewers", FieldValue.increment(-1));
+            com.friendbook.social.core.CloudflareStore.patch("lives", liveId,
+                    new org.json.JSONArray().put(
+                            com.friendbook.social.core.CloudflareStore.increment("viewers", -1)), null, null);
             Map<String, Object> leave = new HashMap<>();
             leave.put("type", "leave");
             leave.put("uid", Fb.uid());

@@ -72,10 +72,11 @@ public class FollowListActivity extends Activity {
                 if(isFinishing())return;
                 if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
                 List<UsersAdapter.Row> rows=followers?followersRows:followingRows;rows.clear();
-                for(java.util.Map<String,Object> row:docs){
-                    String rowId=row.get("id")==null?"":String.valueOf(row.get("id"));
-                    Models.User u=Models.User.fromMap(rowId,row);if(u.deactivated)continue;
-                    com.friendbook.social.core.FastCache.putUser(u);UsersAdapter.Row row=new UsersAdapter.Row();row.user=u;row.subtitle=u.bio;rows.add(row);}
+                for(java.util.Map<String,Object> doc:docs){
+                    String rowId=doc.get("id")==null?"":String.valueOf(doc.get("id"));
+                    Models.User u=Models.User.fromMap(rowId,doc);if(u.deactivated)continue;
+                    com.friendbook.social.core.FastCache.putUser(u);
+                    UsersAdapter.Row line=new UsersAdapter.Row();line.user=u;line.subtitle=u.bio;rows.add(line);}
                 render();moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry":more?"Load 20 more":"All loaded");
                 moreButton.setEnabled(!loading && more);
             });

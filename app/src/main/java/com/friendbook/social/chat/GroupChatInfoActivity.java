@@ -418,9 +418,9 @@ public class GroupChatInfoActivity extends Activity {
         com.friendbook.social.core.CloudflareStore.query(
                 com.friendbook.social.core.DocQuery.of("users").limit(100).build(), snap -> {
             if (snap == null || isFinishing()) return;
-            for (java.util.Map<String, Object> row : snap.documents) {
-                String rowId = row.get("id") == null ? "" : String.valueOf(row.get("id"));
-                Models.User u = Models.User.fromMap(rowId, row);
+            for (java.util.Map<String, Object> doc : snap.documents) {
+                String rowId = doc.get("id") == null ? "" : String.valueOf(doc.get("id"));
+                Models.User u = Models.User.fromMap(rowId, doc);
                 if (room.participants.contains(u.uid) || u.banned) continue;
                 LinearLayout row = Ui.row(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
