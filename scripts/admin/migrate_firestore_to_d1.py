@@ -140,7 +140,9 @@ class D1:
         try: payload = response.json()
         except Exception: payload = {}
         if response.status_code != 200 or not payload.get('success'):
-            raise CopyError(f'Cloudflare D1 query failed HTTP {response.status_code}; no source data changed')
+            errors = payload.get('errors', []) if isinstance(payload, dict) else []
+            detail = '; '.join(str(item.get('message', item))[:300] for item in errors[:3])
+            raise CopyError(f'Cloudflare D1 query failed HTTP {response.status_code}: {detail or "no safe diagnostic message returned"}')
         result = payload.get('result', [])
         if not result or any(not r.get('success') for r in result):
             raise CopyError('Cloudflare D1 did not confirm query success')
@@ -166,9 +168,9 @@ def root_priority(path):
 
 
 def persist_page(d1, task, records, next_token, read_total):
-    # Page-level insert requests are bounded to 20 rows (80 bound parameters).
-    for start in range(0, len(records), 20):
-        part = records[start:start + 20]
+    # Cloudflare D1 uses a 100-bind ceiling; 12 rows x 8 values = 96 parameters.
+    for start in range(0, len(records), 12):
+        part = records[start:start + 12]
         if not part: continue
         values = ','.join('(?,?,?,?,?,?,?,?)' for _ in part)
         params = []

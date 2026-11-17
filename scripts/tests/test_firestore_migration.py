@@ -62,20 +62,22 @@ class FirestoreMigrationTests(unittest.TestCase):
         root = copy.PREFIX + '/users'
         d1.add_task(root, 0)
         docs = [
-            {'name':copy.PREFIX+'/users/u1','createTime':'2026-11-10T00:00:00Z','fields':{'uid':{'stringValue':'u1'}}},
-            {'name':copy.PREFIX+'/users/u2','createTime':'2026-11-10T00:00:01Z','fields':{'uid':{'stringValue':'u2'}}},
+            {'name':copy.PREFIX+f'/users/u{i}','createTime':f'2026-11-10T00:00:{i:02d}Z','fields':{'uid':{'stringValue':f'u{i}'}}}
+            for i in range(13)
         ]
-        source = FakeSource({'first':([docs[0]],'cursor-2'),'cursor-2':([docs[1]],None)},2)
+        source = FakeSource({'first':(docs[:12],'cursor-2'),'cursor-2':(docs[12:],None)},13)
         sleeps=[]
         final = copy.run_collection(source,d1,root,pause=copy.PAUSE_SECONDS,sleep=sleeps.append)
         self.assertEqual(final['status'],'complete')
-        self.assertEqual(final['documents_read'],2)
-        self.assertEqual(final['documents_written'],2)
-        self.assertEqual(final['firebase_count'],2)
-        self.assertEqual(final['d1_count'],2)
+        self.assertEqual(final['documents_read'],13)
+        self.assertEqual(final['documents_written'],13)
+        self.assertEqual(final['firebase_count'],13)
+        self.assertEqual(final['d1_count'],13)
         self.assertEqual(sleeps,[copy.PAUSE_SECONDS,copy.PAUSE_SECONDS])
         rows=d1.query(f'SELECT path,owner_uid FROM {copy.DOC_TABLE} ORDER BY path')
-        self.assertEqual(rows,[{'path':'users/u1','owner_uid':'u1'},{'path':'users/u2','owner_uid':'u2'}])
+        self.assertEqual(len(rows),13)
+        self.assertEqual(rows[0],{'path':'users/u0','owner_uid':'u0'})
+        self.assertEqual(rows[-1],{'path':'users/u9','owner_uid':'u9'})
 
     def test_quota_429_waits_ten_minutes_then_retries_same_page(self):
         waits=[]
