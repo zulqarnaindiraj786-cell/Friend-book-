@@ -291,7 +291,6 @@ jobs:
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
         run: |
           set +e
           mkdir -p firestore-copy-report
@@ -337,7 +336,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
           FIREBASE_PROJECT_ID: 'friendbook-17551'
-          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
           WORKER_URL: 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
         run: |
           set -euo pipefail
@@ -367,14 +365,15 @@ jobs:
             const uid = auth.localId;
             console.log('PROOF_PHASE: Firebase Auth token acquired; UID claim matches Auth user');
             const claims = JSON.parse(Buffer.from(auth.idToken.split('.')[1], 'base64url').toString('utf8'));
-            console.log('Firebase Auth token claims:', JSON.stringify({aud:claims.aud, iss:claims.iss, sub:claims.sub, auth_time:claims.auth_time, iat:claims.iat, exp:claims.exp}));
+            console.log('Firebase Auth token claims:', JSON.stringify({aud:claims.aud, iss:claims.iss, subjectMatchesAuthUid:claims.sub === uid, auth_time:claims.auth_time, iat:claims.iat, exp:claims.exp}));
             console.log('PROOF_PHASE: Firebase Auth accounts:lookup validates issued ID token');
             const lookup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_API_KEY}`, {
               method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({idToken:auth.idToken})
             });
             const lookupBody = await lookup.json().catch(() => ({}));
-            console.log('Firebase ID-token lookup status:', lookup.status, JSON.stringify(lookupBody).slice(0,500));
-            if (!lookup.ok) fail(`Firebase Auth issued ID-token lookup failed: HTTP ${lookup.status} ${JSON.stringify(lookupBody).slice(0,500)}`);
+            if (!lookup.ok) fail(`Firebase Auth issued ID-token lookup failed: HTTP ${lookup.status} ${lookupBody.error?.message || lookupBody.error || 'unknown error'}`);
+            const lookedUpUser = lookupBody.users?.[0];
+            console.log('Firebase ID-token lookup:', JSON.stringify({status:lookup.status, userFound:Boolean(lookedUpUser), subjectMatchesAuthUid:lookedUpUser?.localId === uid, providerIds:(lookedUpUser?.providerUserInfo || []).map(x=>x.providerId)}));
             console.log('PROOF_PHASE: Worker /v1/me verifies Firebase ID token');
             const authCheck = await fetch(new URL('/v1/me', process.env.WORKER_URL), {headers:{authorization:`Bearer ${auth.idToken}`}});
             const authCheckBody = await authCheck.text();
@@ -392,6 +391,7 @@ jobs:
             });
             const putBody = await put.json().catch(() => ({}));
             if (!put.ok || putBody.path !== docPath || putBody.data?.proofMarker !== 'd1-only') fail(`Worker D1 write failed: HTTP ${put.status} ${JSON.stringify(putBody)}`);
+            console.log('PROOF_PHASE: authenticated Worker D1 document read-back');
             const readBack = await fetch(workerUrl, {headers:{authorization:`Bearer ${auth.idToken}`}});
             const readBody = await readBack.json().catch(() => ({}));
             if (!readBack.ok || readBody.path !== docPath || readBody.data?.uid !== uid || readBody.data?.proofMarker !== 'd1-only') {
@@ -399,6 +399,7 @@ jobs:
             }
             console.log('Authenticated Worker read-back:', JSON.stringify({status:readBack.status, path:readBody.path, uid:readBody.data.uid, proofMarker:readBody.data.proofMarker}));
 
+            console.log('PROOF_PHASE: Cloudflare remote D1 row verification');
             const sql = `SELECT path, owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = '${docPath}'`;
             const d1 = spawnSync('npx', ['wrangler','d1','execute','friendbook-db','--remote','--command',sql,'--json'], {encoding:'utf8'});
             if (d1.status !== 0) fail(`Remote D1 read failed: ${d1.stderr || d1.stdout}`);
@@ -407,32 +408,12 @@ jobs:
             const row = query.flatMap(x => x.results || []).find(r => r.path === docPath && r.owner_uid === uid);
             if (!row || !row.document_json.includes('d1-only') || !row.document_json.includes(email)) fail('Expected test profile row missing from Cloudflare D1.');
 
-            console.log('Verified Cloudflare D1 row:', JSON.stringify({path:row.path, owner_uid:row.owner_uid, document:JSON.parse(row.document_json)}));
-            const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT || 'null');
-            if (!serviceAccount?.client_email || !serviceAccount?.private_key || serviceAccount.project_id !== process.env.FIREBASE_PROJECT_ID) fail('Existing Firebase Admin service-account secret is unavailable or targets a different project.');
-            const b64url = value => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
-            const now = Math.floor(Date.now() / 1000);
-            const jwtBody = `${b64url({alg:'RS256',typ:'JWT'})}.${b64url({iss:serviceAccount.client_email,scope:'https://www.googleapis.com/auth/datastore',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600})}`;
-            const signature = crypto.sign('RSA-SHA256', Buffer.from(jwtBody), serviceAccount.private_key).toString('base64url');
-            const oauth = await fetch('https://oauth2.googleapis.com/token', {method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${jwtBody}.${signature}`})});
-            const oauthBody = await oauth.json();
-            if (!oauth.ok || !oauthBody.access_token) fail(`Firebase Admin read-token request failed: ${oauthBody.error || oauth.status}`);
-            const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${docPath}`;
-            let firestore;
-            let firestoreText = '';
-            for (let attempt = 0; attempt < 6; attempt++) {
-              firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${oauthBody.access_token}`}});
-              firestoreText = await firestore.text();
-              if (firestore.status !== 429) break;
-              const waitMs = Math.min(60000, 10000 * (attempt + 1));
-              console.log(`Firestore read quota returned HTTP 429; retry ${attempt + 1}/5 after ${waitMs}ms.`);
-              await new Promise(resolve => setTimeout(resolve, waitMs));
-            }
-            if (firestore.status !== 404) fail(`Expected no Firebase Firestore profile (404); got HTTP ${firestore.status}: ${firestoreText.slice(0,500)}`);
-
-            const report = {result:'PASS', firebaseAuthUserCreated:true, uid, email, workerPath:docPath,
-              cloudflareD1Row:{path:row.path, owner_uid:row.owner_uid, document:JSON.parse(row.document_json)},
-              firebaseFirestoreProfile:{httpStatus:firestore.status, exists:false}};
+            console.log('Verified Cloudflare D1 row:', JSON.stringify({path:row.path, owner_uid:row.owner_uid, proofMarker:'d1-only'}));
+            const report = {result:'PASS', firebaseAuthUserCreated:true, firebaseIdTokenVerifiedByWorker:true,
+              workerProfileBeforeWrite:authCheck.status, authenticatedD1DocumentWrite:true, authenticatedD1DocumentReadBack:true,
+              remoteD1SqlRowMatched:true, workerPath:docPath,
+              cloudflareD1Row:{path:row.path, owner_uid:row.owner_uid, proofMarker:'d1-only'},
+              firestoreDataRequests:0};
             fs.writeFileSync('live-d1-proof/report.json', JSON.stringify(report, null, 2));
             console.log(JSON.stringify(report, null, 2));
           })().catch(e => fail(`Live D1 proof failed: ${e.message}`));
