@@ -93,9 +93,7 @@ class FirestoreSource:
             except Exception: data = {}
             code = data.get('error', {}).get('status') if isinstance(data, dict) else None
             if response.status_code == 429 or code == 'RESOURCE_EXHAUSTED':
-                print(f'Firebase quota exhausted; waiting {QUOTA_WAIT_SECONDS}s, then retrying the same request/cursor.', flush=True)
-                self.sleep(QUOTA_WAIT_SECONDS)
-                continue
+                raise CopyError('Firebase quota exhausted; stopped without retry. D1 checkpoint/cursor retained; rerun resumes at the saved cursor.')
             if response.status_code != 200:
                 raise CopyError(f'{operation} failed HTTP {response.status_code}; checkpoint retained and no source writes made')
             return data
@@ -221,7 +219,7 @@ def persist_page(d1, task, records, next_token, read_total):
       (next_token, old_read + read_total, old_written + len(records), status, int(time.time() * 1000), task['collection_path']))
 
 
-def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.sleep):
+def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.sleep, include_children=True):
     task = d1.task(collection_path)
     if not task:
         d1.add_task(collection_path, root_priority(collection_path))
@@ -247,7 +245,7 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
             marker = PREFIX + '/'
             if not name.startswith(marker): raise CopyError('Unexpected Firestore document identity')
             source_path = name[len(marker):]
-            child_collections = source.child_collections(name)
+            child_collections = source.child_collections(name) if include_children else []
             if 'createTime' in doc:
                 record = document_record(doc)
                 record['child_collections'] = child_collections
@@ -333,32 +331,20 @@ def main():
             d1_session.headers['Authorization'] = 'Bearer ' + cf_token
             d1 = D1(d1_session)
             d1.normalize_legacy_child_paths()
-            # Process root collections one at a time in priority order; the D1 task queue
-            # resumes incomplete roots and their subcollections from the saved cursor.
+            # Only the 320 legacy root user documents are in scope. Do not enumerate
+            # Firestore root collections or traverse per-user subcollections (sessions,
+            # chats, posts, etc.); existing D1 records/checkpoints remain untouched.
             source_credentials = service_account.Credentials.from_service_account_info(
                 firebase, scopes=['https://www.googleapis.com/auth/datastore'])
             with AuthorizedSession(source_credentials) as source_session:
                 source = FirestoreSource(source_session)
-                root_url = FIRESTORE + quote(PREFIX, safe='/()') + ':listCollectionIds'
-                roots, root_token = [], None
-                while True:
-                    payload = {'pageSize': 100}
-                    if root_token: payload['pageToken'] = root_token
-                    roots_data = source.request('post', root_url, json=payload)
-                    roots.extend(roots_data.get('collectionIds', []))
-                    root_token = roots_data.get('nextPageToken')
-                    if not root_token: break
-                if not roots: raise CopyError('Firestore root collection list was empty; refusing to certify')
-                for root in roots:
-                    d1.add_task(PREFIX + '/' + root, ROOT_PRIORITY.get(root, 3))
-                while True:
-                    pending = d1.tasks()
-                    if not pending: break
-                    task = pending[0]
-                    run_collection(source, d1, task['collection_path'])
-            summary = d1.query(f'''SELECT priority,COUNT(*) AS collections,
-              SUM(documents_read) AS firebase_documents,SUM(documents_written) AS d1_documents
-              FROM {PROGRESS_TABLE} WHERE status='complete' GROUP BY priority ORDER BY priority''')
+                users_path = PREFIX + '/users'
+                existing = d1.task(users_path)
+                if not existing or existing['status'] != 'complete':
+                    d1.add_task(users_path, 0)
+                    run_collection(source, d1, users_path, include_children=False)
+            summary = d1.query(f'''SELECT status,documents_read,documents_written,firebase_count,d1_count
+              FROM {PROGRESS_TABLE} WHERE collection_path=?''', (PREFIX + '/users',))
             samples = d1.query(f'''SELECT doc_id,owner_uid,document_json FROM {DOC_TABLE}
               WHERE parent_path='users' AND collection_id='users'
               AND document_json NOT LIKE '%d1-only%' ORDER BY RANDOM() LIMIT 3''')
@@ -367,9 +353,10 @@ def main():
                 data = json.loads(row['document_json'])
                 user_samples.append({'uid':row['owner_uid'] or row['doc_id'],
                                      'displayName':data.get('displayName') or data.get('name') or ''})
-            print(json.dumps({'copy_status':'all_discovered_collections_verified',
-                              'collection_summary_by_priority':summary,
+            print(json.dumps({'copy_status':'users_collection_verified_only',
+                              'users_checkpoint':summary[0] if summary else None,
                               'sample_old_users':user_samples,
+                              'other_collections_scanned':False,
                               'firebase_writes':0,'firebase_deletions':0}, ensure_ascii=False), flush=True)
         return 0
     except Exception as error:

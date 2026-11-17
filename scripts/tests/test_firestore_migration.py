@@ -84,11 +84,20 @@ class FirestoreMigrationTests(unittest.TestCase):
         fixed=d1.task(corrected)
         self.assertEqual(fixed['next_page_token'],'resume-token'); self.assertEqual(fixed['documents_read'],7)
 
-    def test_quota_429_waits_ten_minutes_then_retries_same_page(self):
-        waits=[]
-        source=copy.FirestoreSource(session=RetrySession(),sleep=waits.append)
-        result=source.request('get','https://firestore.example',params={})
-        self.assertEqual(result,{'documents':[]}); self.assertEqual(waits,[600])
+    def test_users_only_copy_never_enumerates_user_subcollections(self):
+        d1=LocalD1(); root=copy.PREFIX+'/users'; d1.add_task(root,0)
+        doc={'name':copy.PREFIX+'/users/u1','createTime':'2026-11-10T00:00:00Z','fields':{'uid':{'stringValue':'u1'}}}
+        source=FakeSource({'first':([doc],None)},1,children=['sessions','chats','posts'])
+        copy.run_collection(source,d1,root,pause=0,sleep=lambda _:None,include_children=False)
+        self.assertFalse(any(call[0]=='children' for call in source.calls))
+        self.assertEqual(d1.query(f'SELECT COUNT(*) AS n FROM {copy.PROGRESS_TABLE}')[0]['n'],1)
+
+    def test_quota_429_stops_immediately_without_repeating_request(self):
+        session=RetrySession()
+        source=copy.FirestoreSource(session=session,sleep=lambda _: self.fail('quota handling must not sleep/retry'))
+        with self.assertRaisesRegex(copy.CopyError,'stopped without retry'):
+            source.request('get','https://firestore.example',params={})
+        self.assertEqual(session.calls,1)
 
     def test_firestore_empty_parent_child_listing_request_context_and_decoding(self):
         self.assertEqual(copy.document_record({'name':copy.PREFIX+'/users/u1/posts/p1','fields':{}})['path'],'users/u1/posts/p1')
