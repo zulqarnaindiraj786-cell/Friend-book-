@@ -347,8 +347,14 @@ jobs:
           const crypto = require('node:crypto');
           const fs = require('node:fs');
           const {spawnSync} = require('node:child_process');
-          const fail = (m) => { console.error(m); process.exit(1); };
+          const fail = (m) => {
+            const message = `LIVE_D1_PROOF_ERROR: ${String(m).slice(0, 1200)}`;
+            console.error(message);
+            try { fs.writeFileSync('live-d1-proof/error.txt', message + '\\n'); } catch {}
+            process.exit(1);
+          };
           (async () => {
+            console.log('PROOF_PHASE: Firebase Auth account signup');
             const suffix = crypto.randomUUID().replaceAll('-', '');
             const email = `cf-d1-proof-${suffix}@example.com`;
             const password = crypto.randomBytes(24).toString('base64url');
@@ -357,22 +363,29 @@ jobs:
               body: JSON.stringify({email, password, returnSecureToken: true})
             });
             const auth = await signup.json();
-            if (!signup.ok || !auth.localId || !auth.idToken) fail(`Firebase Auth signup failed: ${auth.error?.message || signup.status}`);
+            if (!signup.ok || !auth.localId || !auth.idToken) fail(`Firebase Auth signup HTTP ${signup.status}: ${auth.error?.message || JSON.stringify(auth)}`);
             const uid = auth.localId;
+            console.log('PROOF_PHASE: Firebase Auth token acquired; UID claim matches Auth user');
             const claims = JSON.parse(Buffer.from(auth.idToken.split('.')[1], 'base64url').toString('utf8'));
             console.log('Firebase Auth token claims:', JSON.stringify({aud:claims.aud, iss:claims.iss, sub:claims.sub, auth_time:claims.auth_time, iat:claims.iat, exp:claims.exp}));
+            console.log('PROOF_PHASE: Firebase Auth accounts:lookup validates issued ID token');
             const lookup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_API_KEY}`, {
               method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({idToken:auth.idToken})
             });
-            console.log('Firebase ID-token lookup status:', lookup.status);
+            const lookupBody = await lookup.json().catch(() => ({}));
+            console.log('Firebase ID-token lookup status:', lookup.status, JSON.stringify(lookupBody).slice(0,500));
+            if (!lookup.ok) fail(`Firebase Auth issued ID-token lookup failed: HTTP ${lookup.status} ${JSON.stringify(lookupBody).slice(0,500)}`);
+            console.log('PROOF_PHASE: Worker /v1/me verifies Firebase ID token');
             const authCheck = await fetch(new URL('/v1/me', process.env.WORKER_URL), {headers:{authorization:`Bearer ${auth.idToken}`}});
             const authCheckBody = await authCheck.text();
             console.log('Worker Firebase identity check:', authCheck.status, authCheckBody.slice(0,500));
-            if (!authCheck.ok) fail('Worker rejected a fresh Firebase Auth token before the D1 write.');
+            console.log('PROOF_PHASE: Worker /v1/me response', JSON.stringify({status:authCheck.status, body:authCheckBody.slice(0,500)}));
+            if (!authCheck.ok) fail(`Worker /v1/me rejected Firebase ID token: HTTP ${authCheck.status} ${authCheckBody.slice(0,500)}`);
             const docPath = `users/${uid}`;
             const workerUrl = new URL('/v1/firestore/document', process.env.WORKER_URL);
             workerUrl.searchParams.set('path', docPath);
             const payload = {data: {uid, email, displayName: 'Cloudflare D1 migration proof', proofMarker: 'd1-only', createdAt: new Date().toISOString()}};
+            console.log('PROOF_PHASE: authenticated Worker D1 document write');
             const put = await fetch(workerUrl, {
               method: 'PUT', headers: {'authorization': `Bearer ${auth.idToken}`, 'content-type':'application/json'},
               body: JSON.stringify(payload)
@@ -425,6 +438,28 @@ jobs:
           })().catch(e => fail(`Live D1 proof failed: ${e.message}`));
           NODE
 
+      - name: Print authenticated D1 proof result in Job Summary
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        env:
+          PROOF_LOG: live-d1-proof/run.log
+          PROOF_ERROR: live-d1-proof/error.txt
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          log = pathlib.Path(os.environ['PROOF_LOG'])
+          error = pathlib.Path(os.environ['PROOF_ERROR'])
+          text = log.read_text(errors='replace') if log.exists() else ''
+          if error.exists(): text += '\n' + error.read_text(errors='replace')
+          text = re.sub(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
+          text = re.sub(r'AIza[0-9A-Za-z_-]{20,}', '[REDACTED_API_KEY]', text)
+          text = re.sub(r'(?i)(password["\s:=]+)[^,}\s]+', r'\1[REDACTED]', text)
+          lines = [line[-1000:] for line in text.splitlines() if line.strip()]
+          summary = '### Authenticated Firebase-to-D1 proof\n\n' + ('\n'.join(lines[-60:]) if lines else 'No proof log was produced.') + '\n'
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(summary)
+          pathlib.Path('live-d1-proof/public-summary.txt').write_text(summary)
+          print(summary)
+          PY
+
       - name: Upload live D1 proof
         if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
         uses: actions/upload-artifact@v4
@@ -438,7 +473,7 @@ jobs:
         if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
         uses: actions/github-script@v7
         env:
-          PROOF_LOG: live-d1-proof/run.log
+          PROOF_LOG: live-d1-proof/public-summary.txt
         with:
           script: |
             const fs = require('fs');
@@ -448,7 +483,7 @@ jobs:
             const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
             if (!prs.data.length) return core.warning('No PR found to publish the proof summary.');
             const log = fs.existsSync(process.env.PROOF_LOG) ? fs.readFileSync(process.env.PROOF_LOG, 'utf8') : 'Proof step did not produce a log.';
-            const body = 'Live D1 proof for workflow run ' + context.runId + ':\\n\\n' + log.slice(-10000);
+            const body = 'Live D1 proof for workflow run ' + context.runId + ':\n\n' + log.slice(-10000);
             await github.rest.issues.createComment({owner, repo, issue_number: prs.data[0].number, body});
 
       - name: Verify public Android-only release metadata
