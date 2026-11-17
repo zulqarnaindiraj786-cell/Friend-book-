@@ -59,6 +59,12 @@ class FirestoreMigrationTests(unittest.TestCase):
 
     def test_paged_collection_checkpoint_and_exact_counts(self):
         d1 = LocalD1()
+        for i in range(3):
+            uid = f'native-test-{i}'
+            d1.db.execute(f'''INSERT INTO {copy.DOC_TABLE}
+              (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+              VALUES(?,?,?,?,?,?,0,0)''', (f'users/{uid}','users','users',uid,uid,'{"proofMarker":"d1-only","uid":"'+uid+'"}'))
+        d1.db.commit()
         root = copy.PREFIX + '/users'
         d1.add_task(root, 0)
         docs = [
@@ -74,8 +80,10 @@ class FirestoreMigrationTests(unittest.TestCase):
         self.assertEqual(final['firebase_count'],13)
         self.assertEqual(final['d1_count'],13)
         self.assertEqual(sleeps,[copy.PAUSE_SECONDS,copy.PAUSE_SECONDS])
-        rows=d1.query(f'SELECT path,owner_uid FROM {copy.DOC_TABLE} ORDER BY path')
+        rows=d1.query(f"SELECT path,owner_uid FROM {copy.DOC_TABLE} WHERE path LIKE 'users/u%' ORDER BY path")
         self.assertEqual(len(rows),13)
+        total=d1.query(f'SELECT COUNT(*) AS total FROM {copy.DOC_TABLE} WHERE parent_path=? AND collection_id=?',('users','users'))[0]['total']
+        self.assertEqual(total,16)
         self.assertEqual(rows[0],{'path':'users/u0','owner_uid':'u0'})
         self.assertEqual(rows[-1],{'path':'users/u9','owner_uid':'u9'})
 

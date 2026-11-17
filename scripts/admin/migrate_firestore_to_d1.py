@@ -251,18 +251,26 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
         token = next_token
         task = d1.task(collection_path)
     collection_parent = collection_path[len(PREFIX) + 1:]
-    d1_count = d1.query(f'SELECT COUNT(*) AS total FROM {DOC_TABLE} WHERE parent_path=? AND collection_id=?',
-                        (collection_parent, task['collection_id']))[0]['total']
+    d1_counts = d1.query(f'''SELECT COUNT(*) AS total,
+      SUM(CASE WHEN document_json LIKE '%"proofMarker":"d1-only"%' THEN 1 ELSE 0 END) AS native_test_rows
+      FROM {DOC_TABLE} WHERE parent_path=? AND collection_id=?''',
+      (collection_parent, task['collection_id']))[0]
+    d1_total = d1_counts['total']
+    d1_native_test_rows = d1_counts['native_test_rows'] or 0
+    # Pre-existing D1-only test profiles are preserved but aren't counted as Firebase-imported rows.
+    d1_count = d1_total - d1_native_test_rows
     # One Firebase count query per collection; fetched pages provide the independently observed count.
     if read_count != source_total:
         raise CopyError(f'Collection count mismatch for {task["collection_id"]}: Firebase={source_total}, copied/read={read_count}; checkpoint retained')
     if d1_count != source_total:
-        raise CopyError(f'Collection count mismatch for {task["collection_id"]}: Firebase={source_total}, D1={d1_count}; no data deleted and checkpoint retained')
+        raise CopyError(f'Collection count mismatch for {task["collection_id"]}: Firebase={source_total}, D1-source-matched={d1_count}, D1-total={d1_total}, D1-native-test-rows={d1_native_test_rows}; no data deleted and checkpoint retained')
     d1.query(f'''UPDATE {PROGRESS_TABLE} SET d1_count=?,status='complete',updated_at=? WHERE collection_path=?''',
              (d1_count, int(time.time() * 1000), collection_path))
     print(json.dumps({'root_collection': collection_path[len(PREFIX) + 1:].split('/', 1)[0],
                       'collection': task['collection_id'], 'firebase_count': source_total,
-                      'd1_count': d1_count, 'copied_or_already_present': written_count,
+                      'd1_source_matched_count': d1_count, 'd1_total_count': d1_total,
+                      'd1_native_test_rows_preserved': d1_native_test_rows,
+                      'copied_or_already_present': written_count,
                       'remaining': max(0, source_total - written_count), 'status': 'verified'}), flush=True)
     return d1.task(collection_path)
 
