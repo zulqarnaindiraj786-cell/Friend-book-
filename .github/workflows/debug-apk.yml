@@ -56,6 +56,21 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
           test -s app/build/outputs/bundle/debug/app-debug.aab
 
+      - name: Record this debug APK signer SHA-1 for Firebase Google Sign-In
+        shell: bash
+        run: |
+          CERT_INFO="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk)"
+          SHA_RAW="$(printf '%s\n' "$CERT_INFO" | awk -F': ' '/certificate SHA-1 digest:/ {print toupper($2); exit}')"
+          SHA1="$(printf '%s' "$SHA_RAW" | tr -d ':' | sed 's/../&:/g; s/:$//')"
+          test -n "$SHA1" || { echo 'Could not extract debug APK signer SHA-1'; exit 1; }
+          {
+            echo '### Debug APK Google Sign-In certificate'
+            echo
+            echo 'Package: com.friendbook.social'
+            echo
+            echo "Add this SHA-1 under Firebase Console → Project Settings → Your apps → com.friendbook.social → SHA certificate fingerprints: $SHA1"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload debug APK separately
         uses: actions/upload-artifact@v4
         with:
