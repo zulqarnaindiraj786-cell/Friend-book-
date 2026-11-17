@@ -25,7 +25,7 @@ public class FirebaseOffRoutingTest {
   d1.verify(()->D1Client.request(anyString(),anyString(),anyString(),anyString(),nullable(JSONObject.class),nullable(String.class)),never());
  }
  @Test public void authIdentityStillDelegatesToFirebase(){
-  assertFalse(BuildConfig.D1_INTERACTIONS_ENABLED);
+  assertTrue(BuildConfig.D1_INTERACTIONS_ENABLED);
   try(MockedStatic<FirebaseAuth> factory=mockStatic(FirebaseAuth.class)){
    FirebaseAuth auth=mock(FirebaseAuth.class);FirebaseUser user=mock(FirebaseUser.class);
    factory.when(FirebaseAuth::getInstance).thenReturn(auth);when(auth.getCurrentUser()).thenReturn(user);when(user.getUid()).thenReturn("off-user");
