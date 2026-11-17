@@ -153,7 +153,7 @@ public final class D1Batch {
         }
 
         final Op[] pending = queued.toArray(new Op[0]);
-        if (pending.length == 1) {
+        if (pending.length == 1 || !CloudflareStore.enabled()) {
             commitIndividually(pending, callback);
             return;
         }
@@ -178,8 +178,13 @@ public final class D1Batch {
                     item.put("action", "patch");
                     item.put("ops", op.ops);
                 } else {
+                    JSONObject docJson = CloudflareStore.toJson(op.fields);
+                    if (docJson == null) {
+                        commitIndividually(pending, callback);
+                        return;
+                    }
                     item.put("action", "put");
-                    item.put("document", CloudflareStore.toJson(op.fields));
+                    item.put("document", docJson);
                 }
                 int itemBytes = item.toString().length() + 2;
                 if (itemBytes > 24_000) {

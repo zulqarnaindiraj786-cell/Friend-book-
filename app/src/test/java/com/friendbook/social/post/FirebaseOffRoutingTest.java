@@ -70,6 +70,27 @@ public class FirebaseOffRoutingTest {
    noD1(d1);
   }
  }
+ @Test public void d1BatchPacksMultipleOpsIntoSingleBatchRequest(){
+  try(MockedStatic<CloudflareStore> store=mockStatic(CloudflareStore.class)){
+   store.when(CloudflareStore::enabled).thenReturn(true);
+   store.when(()->CloudflareStore.toJson(anyMap())).thenCallRealMethod();
+   store.when(()->CloudflareStore.increment(anyString(),anyDouble())).thenCallRealMethod();
+   store.when(()->CloudflareStore.batch(any(org.json.JSONArray.class),anySet(),any(),any())).thenAnswer(inv->{
+     Runnable ok=inv.getArgument(2);if(ok!=null)ok.run();return null;
+   });
+   boolean[] done={false};
+   DataRouter.batch()
+       .set("comments","c1",Collections.singletonMap("content","fast"))
+       .ops("posts","p1",CloudflareStore.increment("comments",1))
+       .delete("notifications","n1")
+       .commit((ok,err)->done[0]=ok);
+   assertTrue(done[0]);
+   store.verify(()->CloudflareStore.batch(
+       ArgumentMatchers.argThat(arr->arr!=null&&arr.length()==3),anySet(),any(),any()),times(1));
+   store.verify(()->CloudflareStore.put(anyString(),anyString(),anyMap(),any(),any()),never());
+   store.verify(()->CloudflareStore.patch(anyString(),anyString(),any(),any(),any()),never());
+  }
+ }
  @Test public void offCommentWatchReadsFirebaseOnceAndStopsOnClose(){
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d1=mockStatic(D1Client.class,CALLS_REAL_METHODS)){
    d1.when(()->D1Client.enabled(anyString())).thenReturn(false);
