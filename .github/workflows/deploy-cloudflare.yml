@@ -291,6 +291,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
           FIREBASE_PROJECT_ID: 'friendbook-17551'
+          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
           WORKER_URL: 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
         run: |
           set -euo pipefail
@@ -341,8 +342,18 @@ jobs:
             const row = query.flatMap(x => x.results || []).find(r => r.path === docPath && r.owner_uid === uid);
             if (!row || !row.document_json.includes('d1-only') || !row.document_json.includes(email)) fail('Expected test profile row missing from Cloudflare D1.');
 
+            console.log('Verified Cloudflare D1 row:', JSON.stringify({path:row.path, owner_uid:row.owner_uid, document:JSON.parse(row.document_json)}));
+            const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT || 'null');
+            if (!serviceAccount?.client_email || !serviceAccount?.private_key || serviceAccount.project_id !== process.env.FIREBASE_PROJECT_ID) fail('Existing Firebase Admin service-account secret is unavailable or targets a different project.');
+            const b64url = value => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
+            const now = Math.floor(Date.now() / 1000);
+            const jwtBody = `${b64url({alg:'RS256',typ:'JWT'})}.${b64url({iss:serviceAccount.client_email,scope:'https://www.googleapis.com/auth/datastore',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600})}`;
+            const signature = crypto.sign('RSA-SHA256', Buffer.from(jwtBody), serviceAccount.private_key).toString('base64url');
+            const oauth = await fetch('https://oauth2.googleapis.com/token', {method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:`${jwtBody}.${signature}`})});
+            const oauthBody = await oauth.json();
+            if (!oauth.ok || !oauthBody.access_token) fail(`Firebase Admin read-token request failed: ${oauthBody.error || oauth.status}`);
             const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${docPath}`;
-            const firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const firestore = await fetch(firestoreUrl, {headers:{authorization:`Bearer ${oauthBody.access_token}`}});
             const firestoreText = await firestore.text();
             if (firestore.status !== 404) fail(`Expected no Firebase Firestore profile (404); got HTTP ${firestore.status}: ${firestoreText.slice(0,500)}`);
 
