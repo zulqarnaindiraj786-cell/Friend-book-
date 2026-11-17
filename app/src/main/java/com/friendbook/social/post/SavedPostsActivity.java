@@ -28,7 +28,7 @@ public class SavedPostsActivity extends Activity implements FeedAdapter.Host {
 
     private FeedAdapter adapter;
     private ListenerRegistration reg;
-    private com.friendbook.social.core.CursorPager pages;
+    private com.friendbook.social.core.DocPager pages;
     private TextView empty;
     private String filter = "all";
     private final TextView[] chips = new TextView[4];

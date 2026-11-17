@@ -166,8 +166,7 @@ public class Admin {
                                 "✅ Your account suspension has been lifted! You can now post, comment, and upload videos again.", true);
                         Ui.toast(c, "✅ Unsuspended " + name);
                     }
-                })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+                }, () -> Ui.toast(c, "Failed. Check your connection and retry."));
     }
 
     /** Appoint or remove a Global App Moderator (Full Admin only). */
@@ -181,8 +180,7 @@ public class Admin {
                                     : "Your friendbook Moderator role has been removed.",
                             true);
                     Ui.toast(c, (makeMod ? "🛡 Moderator appointed: " : "Moderator removed: ") + displayName);
-                })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+                }, () -> Ui.toast(c, "Failed. Check your connection and retry."));
     }
 
     /** Firestore rules-side check uses this email too (see firebase/firestore.rules). */
@@ -213,8 +211,7 @@ public class Admin {
                             "createdAt", FieldValue.serverTimestamp());
                     com.friendbook.social.core.DataRouter.add("notifications", n, null);
                     Ui.toast(c, tickLabel(level) + " → " + displayName);
-                })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+                }, () -> Ui.toast(c, "Failed. Check your connection and retry."));
     }
 
     /** Back-compat shortcuts (blue / none). */

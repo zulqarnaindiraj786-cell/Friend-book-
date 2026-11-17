@@ -1344,8 +1344,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         sub.put("subscriberId", me);
         sub.put("status", "active");
         sub.put("createdAt", FieldValue.serverTimestamp());
-        sub.put("expiry", new com.google.firebase.Timestamp(
-                new java.util.Date(System.currentTimeMillis() + 30L * 24L * 3600_000L)));
+        // Millis: a Firestore Timestamp has no JSON form, so the expiry was dropped and the
+        // subscription could never be expired.
+        sub.put("expiry", System.currentTimeMillis() + 30L * 24L * 3600_000L);
         com.friendbook.social.core.DataRouter.batch()
                 .set("subscriptions", uid + "_" + me, sub)
                 .commit((ok, error) -> {
@@ -1353,8 +1354,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     subscribedActive = true;
                     updateSubscribeButton();
                     Ui.toast(this, "Joined " + user.displayName + "'s VIP Fan Club ⭐");
-                })
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't join right now"));
+                });
     }
 
     private void watchSubscription() {

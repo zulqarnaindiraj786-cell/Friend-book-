@@ -326,11 +326,6 @@ public class EditProfileActivity extends Activity {
                     if (!ok) { Ui.toast(this, "Couldn't update your profile. Try again."); return; }
                     Ui.toast(this, "Profile & Intro updated ✓");
                     finish();
-                })
-                .addOnFailureListener(e -> {
-                    busy = false;
-                    save.setText("Save changes");
-                    Ui.toast(this, e.getMessage());
                 });
     }
 }

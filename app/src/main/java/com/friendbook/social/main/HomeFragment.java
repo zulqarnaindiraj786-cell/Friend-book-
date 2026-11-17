@@ -966,6 +966,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
     }
 
+    private boolean storyAllowed(Models.Story story){
+        return !story.expired() && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,
+                java.util.Objects.equals(friendGraphActor,Fb.uid()) && friendIds.contains(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
+                Fb.me!=null && Fb.me.blocked.contains(story.authorId),getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),story.authorId));
+    }
     private void renderLoadedStories(){
         if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;storyGroups.clear();storyIds.clear();
         for(java.util.Map<String,Object> row:loadedStoryDocs.values()){

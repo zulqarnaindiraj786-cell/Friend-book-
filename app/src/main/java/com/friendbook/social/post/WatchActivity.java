@@ -129,10 +129,10 @@ public class WatchActivity extends Activity implements FeedAdapter.Host {
         }
     }
 
-    private void consume(List<DocumentSnapshot> docs) {
+    private void consume(List<com.friendbook.social.core.Doc> docs) {
         rawVideos.clear();
-        for (DocumentSnapshot d : docs) {
-            Models.Post p = Models.Post.fromDoc(d);
+        for (com.friendbook.social.core.Doc d : docs) {
+            Models.Post p = Models.Post.fromMap(d.getId(), d.getData());
             if (Fb.me != null && Fb.me.blocked.contains(p.authorId)) continue;
             if (Prefs.isSnoozed(this, p.authorId)) continue;
             rawVideos.add(p);
