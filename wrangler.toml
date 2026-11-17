@@ -1,4 +1,4 @@
-# Production Worker: D1 interactions and R2 video are enabled; Firebase remains the login identity provider.
+# Production Worker rollout: D1 interactions/documents and R2 video enabled; Firebase remains login identity only.
 name = "rough-firefly-dd7b"
 main = "worker.js"
 compatibility_date = "2024-01-01"
