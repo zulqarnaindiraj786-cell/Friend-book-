@@ -344,6 +344,31 @@ jobs:
           fi
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Dispatched the signed Android APK/AAB build from this branch using the repository's GH_TOKEN secret. Workflow run is starting; this confirms dispatch only, not build success."
 
+      - name: Read-only inspect newest account and post in production D1
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-latest-inspect]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT json_object('latest_user_uid',(SELECT doc_id FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' ORDER BY update_time DESC LIMIT 1),'latest_user_updated',(SELECT update_time FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' ORDER BY update_time DESC LIMIT 1),'latest_post_id',(SELECT doc_id FROM friendbook_cf_firestore_documents WHERE collection_id='posts' AND parent_path='posts' ORDER BY update_time DESC LIMIT 1),'latest_post_owner_uid',(SELECT owner_uid FROM friendbook_cf_firestore_documents WHERE collection_id='posts' AND parent_path='posts' ORDER BY update_time DESC LIMIT 1),'latest_post_updated',(SELECT update_time FROM friendbook_cf_firestore_documents WHERE collection_id='posts' AND parent_path='posts' ORDER BY update_time DESC LIMIT 1),'latest_user_post_count',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='posts' AND parent_path='posts' AND owner_uid=(SELECT doc_id FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' ORDER BY update_time DESC LIMIT 1))) AS newest_records;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-latest-records.json
+          cat d1-latest-records.json
+          {
+            echo '### Read-only newest D1 user/post records'
+            echo 'Production D1 SELECT only; no writes, no Firebase reads. UID and post metadata only; no email/profile fields.'
+            echo '```json'; cat d1-latest-records.json; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish newest D1 record verification on PR with GH_TOKEN
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-latest-inspect]') && hashFiles('d1-latest-records.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          test -n "$PR_NUMBER" && test "$PR_NUMBER" != null
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Read-only production D1 inspection for run $GITHUB_RUN_ID (SELECT only; no writes/Firebase reads). Newest user and post UID/ID/timestamps and same-user post count are in this run's Job Summary."
+
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
