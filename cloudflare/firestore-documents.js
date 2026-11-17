@@ -19,6 +19,10 @@ function isDocumentPath(path) {
   const parts = splitPath(path);
   return parts && parts.length % 2 === 0;
 }
+function isRootDocument(path) {
+  const parts = splitPath(path);
+  return Boolean(parts && parts.length === 2);
+}
 function isCollectionPath(path) {
   const parts = splitPath(path);
   return parts && parts.length % 2 === 1;
@@ -236,7 +240,7 @@ async function writeRow(db, path, doc, now, existing) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
   const id = docIdOf(path);
-  const owner = ownerOf(doc, existing?.owner_uid || '');
+  const owner = ownerOf(doc, existing?.owner_uid || (coll === 'users' ? id : ''));
   const createTime = existing?.create_time || now;
   const serialized = JSON.stringify(doc);
   if (serialized.length > 1_800_000) throw new Error('Document too large');
@@ -245,6 +249,20 @@ async function writeRow(db, path, doc, now, existing) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
   ).bind(path, parent, coll, id, owner, serialized, createTime, now).run();
+
+  // Keep the engagement/feed source documents in sync with the Firestore-compatible D1 facade.
+  // The app's feed and D1 engagement ACL read friendbook_cf_documents; auth/profile screens and
+  // legacy app queries use friendbook_cf_firestore_documents. Without this mirror, a newly
+  // registered user or post exists in one D1 table but is invisible to the rest of the app.
+  if (isRootDocument(path) && id && coll) {
+    const appDoc = JSON.stringify({ ...doc, id });
+    const appOwner = owner || (coll === 'users' ? id : '');
+    await db.prepare(
+      `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
+    ).bind(path, coll, id, appOwner, appDoc, now).run();
+  }
   return { path, parent_path: parent, collection_id: coll, doc_id: id, owner_uid: owner, document_json: serialized, create_time: createTime, update_time: now };
 }
 function rowToDocument(row) {
@@ -382,6 +400,7 @@ async function applyOperation(db, op, uid, now, existingCache) {
   const type = op.type || 'set';
   if (type === 'delete') {
     await db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).run();
+    if (isRootDocument(path)) await db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(path).run();
     return { path, deleted: true };
   }
   if (type === 'update') {
@@ -463,6 +482,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     await db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(docPath).run();
+    if (isRootDocument(docPath)) await db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(docPath).run();
     return json({ deleted: true, path: docPath });
   }
 
@@ -568,9 +588,10 @@ export async function firestoreDocuments(request, env, identity) {
       const statements = [];
       for (const p of order) {
         const entry = finalDocs.get(p);
-        if (entry.deleted) {
-          statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));
-        } else {
+      if (entry.deleted) {
+        statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));
+        if (isRootDocument(p)) statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(p));
+      } else {
           const parent = parentPath(p);
           const coll = collectionIdOf(p);
           const id = docIdOf(p);
@@ -583,6 +604,15 @@ export async function firestoreDocuments(request, env, identity) {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
           ).bind(p, parent, coll, id, owner, serialized, createTime, now));
+          if (isRootDocument(p) && id && coll) {
+            const appDoc = JSON.stringify({ ...entry.doc, id });
+            const appOwner = owner || (coll === 'users' ? id : '');
+            statements.push(db.prepare(
+              `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
+            ).bind(p, coll, id, appOwner, appDoc, now));
+          }
         }
       }
       if (typeof db.batch === 'function' && statements.length) {
