@@ -70,11 +70,20 @@ export async function interactions(request, env, identity, match, authorize = au
     const vSet = getVerifiedSet(env.DB);
     if (!vSet.has(resource)) {
       const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
-      if (ready && ready.state !== 'verified') {
-        // Explicitly staged for import: refuse without reading the source. Unchanged.
-        return json({ error: 'Resource migration not verified' }, 503);
-      }
-      if (!ready) {
+      if (!ready || ready.state !== 'verified') {
+        // Two ways to be unverified, and they mean the same thing: the old migration never
+        // finished with this resource. Either there is no row at all, or the row says 'staging' -
+        // the plan it intended to carry out. Neither is a judgement about the data, and treating
+        // 'staging' as a refusal left whole posts, comments and like sheets answering 503 with
+        // "Retry reactions" while the app had nothing left to fall back to.
+        //
+        // What still decides it is whether D1 actually holds the resource. That is checked first,
+        // and cheaply, because an unverified resource with no copy must be refused without
+        // reading the source at all.
+        const copy = await db.prepare(
+          'SELECT 1 AS n FROM friendbook_cf_documents WHERE path = ?'
+        ).bind(resource).first();
+        if (!copy) return json({ error: 'Resource migration not verified' }, 503);
         if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
         // The resource was never marked 'verified' - the old migration that was supposed to do
         // that never finished, so this was true for every post on production and every reaction

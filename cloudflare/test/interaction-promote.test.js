@@ -284,3 +284,30 @@ test('a reaction PUT answers with the counters it just changed', async () => {
   assert.equal(like.count, 1, 'one like must read as one, not zero');
   assert.equal(like.mine, 0, 'another viewer has not reacted');
 });
+
+// The old migration left rows saying 'staging' - the plan it never carried out. That is not a
+// judgement about the data, and refusing on it put whole posts into 503 with "Retry reactions".
+test('a staged resource that D1 holds is served, not refused', async () => {
+  const d = db();
+  putDocument(d, 'posts', 'staged', {
+    id: 'staged', authorId: 'uid_a', createdAt: 1,
+    reactionsMap: { uid_x: { type: 'like' } },
+  });
+  d.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/staged','staging')")
+    .run();
+
+  const response = await engagement(d, '/v1/engagement/posts/staged/reactors');
+  assert.equal(response.status, 200, 'a staged resource with a D1 copy must be served');
+
+  const body = await response.json();
+  assert.deepEqual(body.reactors.map((r) => r.uid), ['uid_x']);
+});
+
+test('a staged resource with no D1 copy is still refused', async () => {
+  const d = db();
+  d.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/ghost','staging')")
+    .run();
+
+  const response = await engagement(d, '/v1/engagement/posts/ghost/reactors');
+  assert.equal(response.status, 503, 'serving it would drop its real likes');
+});

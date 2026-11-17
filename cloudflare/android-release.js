@@ -7,8 +7,8 @@
 // minimum it can enforce offline.
 export const androidRelease = Object.freeze({
   packageName: 'com.friendbook.social',
-  versionCode: 134,
-  versionName: '2.9.8',
+  versionCode: 135,
+  versionName: '2.9.9',
   minVersionCode: 126,
   apkUrl: 'https://play.google.com/store/apps/details?id=com.friendbook.social',
 });
