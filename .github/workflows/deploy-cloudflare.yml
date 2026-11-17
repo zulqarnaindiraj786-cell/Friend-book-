@@ -367,7 +367,10 @@ jobs:
           set -euo pipefail
           PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
           test -n "$PR_NUMBER" && test "$PR_NUMBER" != null
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Read-only production D1 inspection for run $GITHUB_RUN_ID (SELECT only; no writes/Firebase reads). Newest user and post UID/ID/timestamps and same-user post count are in this run's Job Summary."
+          BODY=$(printf 'Read-only production D1 inspection for run %s (SELECT only; no writes/Firebase reads). Latest record metadata only:\n\n```json\n' "$GITHUB_RUN_ID")
+          BODY+="$(cat d1-latest-records.json)"
+          BODY+=$'\n```'
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$BODY"
 
       - name: Verify read-only Worker and D1 connectivity
         run: |
