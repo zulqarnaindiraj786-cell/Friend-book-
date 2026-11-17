@@ -379,6 +379,12 @@ jobs:
             });
             const putBody = await put.json().catch(() => ({}));
             if (!put.ok || putBody.path !== docPath || putBody.data?.proofMarker !== 'd1-only') fail(`Worker D1 write failed: HTTP ${put.status} ${JSON.stringify(putBody)}`);
+            const readBack = await fetch(workerUrl, {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const readBody = await readBack.json().catch(() => ({}));
+            if (!readBack.ok || readBody.path !== docPath || readBody.data?.uid !== uid || readBody.data?.proofMarker !== 'd1-only') {
+              fail(`Authenticated Worker D1 read-back failed: HTTP ${readBack.status} ${JSON.stringify(readBody)}`);
+            }
+            console.log('Authenticated Worker read-back:', JSON.stringify({status:readBack.status, path:readBody.path, uid:readBody.data.uid, proofMarker:readBody.data.proofMarker}));
 
             const sql = `SELECT path, owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = '${docPath}'`;
             const d1 = spawnSync('npx', ['wrangler','d1','execute','friendbook-db','--remote','--command',sql,'--json'], {encoding:'utf8'});
