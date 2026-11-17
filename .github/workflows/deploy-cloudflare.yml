@@ -261,6 +261,75 @@ jobs:
           echo '::error::Every deploy attempt was refused. The raw wrangler output of each attempt is in the Analytics Engine report on the pull request.'
           exit 1
 
+      - name: Print exact Cloudflare Workers Builds failure and publish it to the PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WORKERS_BUILD_ID: '7e5fbcc8-fc28-4e09-b2d6-fc43084e1aa2'
+        run: |
+          node <<'NODE' | tee workers-build-diagnostic.log
+          const fs = require('node:fs');
+          (async () => {
+            const endpoint = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/builds/builds/${process.env.WORKERS_BUILD_ID}/logs`;
+            const response = await fetch(endpoint, {headers:{Authorization:`Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,Accept:'application/json'}});
+            const raw = await response.text();
+            let payload; try { payload=JSON.parse(raw); } catch { payload={raw:raw.slice(0,4000)}; }
+            const redactions=[process.env.CLOUDFLARE_API_TOKEN].filter(Boolean);
+            const redact = value => redactions.reduce((text,secret)=>text.replaceAll(secret,'[REDACTED_TOKEN]'),String(value));
+            let lines = payload?.result?.lines || [];
+            lines = lines.map(x => Array.isArray(x) ? x[x.length-1] : x).map(redact);
+            const detail = lines.length ? lines.slice(-160).join('\n') : redact(JSON.stringify(payload));
+            const report = {buildId:process.env.WORKERS_BUILD_ID,httpStatus:response.status,apiSuccess:payload.success,errors:(payload.errors||[]).map(e=>({...e,message:redact(e.message||'')})),logs:detail};
+            fs.writeFileSync('workers-build-diagnostic.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify(report,null,2));
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`### Cloudflare Workers Builds diagnostic\n\nBuild \`${report.buildId}\` — API HTTP ${report.httpStatus}; API success: ${report.apiSuccess}\n\n\`\`\`text\n${detail.slice(-16000)}\n\`\`\`\n`);
+            if (response.status >= 400 || payload.success === false) console.log('Workers Builds diagnostic API returned an error; exact response is shown above.');
+          })().catch(error => { console.error(`Workers Builds diagnostic fetch failed: ${error.message}`); process.exitCode=1; });
+          NODE
+
+      - name: Verify legacy users and sessions in D1 using read-only remote SQL
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-audit]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT json_object('users_count', (SELECT COUNT(DISTINCT doc_id) FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%'), 'users_rows', (SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%'), 'user_sample', (SELECT json_group_array(json_object('doc_id',doc_id,'name',COALESCE(json_extract(document_json,'$.displayName'),json_extract(document_json,'$.name'),''),'email',COALESCE(json_extract(document_json,'$.email'),''))) FROM (SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%' ORDER BY create_time ASC LIMIT 10)), 'sessions_count', (SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='sessions' AND path LIKE 'users/%/sessions/%'), 'sessions_sample', (SELECT json_group_array(json_object('path',path,'owner_uid',owner_uid,'created',create_time,'updated',update_time)) FROM (SELECT path,owner_uid,create_time,update_time FROM friendbook_cf_firestore_documents WHERE collection_id='sessions' AND path LIKE 'users/%/sessions/%' ORDER BY create_time ASC LIMIT 50))) AS readonly_legacy_audit;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-legacy-audit.json
+          python3 - <<'PY'
+          import json, pathlib, os
+          result=json.loads(pathlib.Path('d1-legacy-audit.json').read_text())
+          blocks=[b for b in result if isinstance(b,dict)]
+          lines=['### Read-only legacy user/session D1 audit','', 'Queried production D1 only; no Firebase reads and no writes.','', '```json', json.dumps(blocks,indent=2), '```','']
+          summary='\n'.join(lines)
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(summary)
+          print(summary)
+          PY
+
+      - name: Publish exact Workers Builds error to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]') && hashFiles('workers-build-diagnostic.json') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'); const report=JSON.parse(fs.readFileSync('workers-build-diagnostic.json','utf8'));
+            const owner=context.repo.owner, repo=context.repo.repo, branch=context.ref.replace('refs/heads/','');
+            const prs=await github.rest.pulls.list({owner,repo,state:'open',head:`${owner}:${branch}`});
+            if(!prs.data.length) { core.warning('Open PR not found for this branch; full diagnostic is in Job Summary.'); return; }
+            const body=['Workers Builds failure diagnostic for '+report.buildId+' (HTTP '+report.httpStatus+', API success '+report.apiSuccess+')','','```json',JSON.stringify({errors:report.errors,logs:report.logs},null,2).slice(0,12000),'```'].join(String.fromCharCode(10));
+            await github.rest.issues.createComment({owner,repo,issue_number:prs.data[0].number,body});
+
+      - name: Publish read-only D1 legacy audit to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-audit]') && hashFiles('d1-legacy-audit.json') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'); const raw=JSON.parse(fs.readFileSync('d1-legacy-audit.json','utf8'));
+            const owner=context.repo.owner, repo=context.repo.repo, branch=context.ref.replace('refs/heads/','');
+            const prs=await github.rest.pulls.list({owner,repo,state:'open',head:`${owner}:${branch}`});
+            if(!prs.data.length) { core.warning('Open PR not found for this branch; D1 audit is in Job Summary.'); return; }
+            const body=['Read-only production D1 user/session audit for run '+context.runId+'; no Firebase reads or D1 writes.','','```json',JSON.stringify(raw,null,2).slice(0,10000),'```'].join(String.fromCharCode(10));
+            await github.rest.issues.createComment({owner,repo,issue_number:prs.data[0].number,body});
+
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
