@@ -83,6 +83,11 @@ public final class AuthToken {
                 });
     }
 
+    /** Convenience form for callers with nothing to do when no token can be had. */
+    public static void with(FirebaseUser user, Consumer<String> onToken) {
+        with(user, onToken, null);
+    }
+
     /** Blocking form, for code that already runs on a background thread. */
     public static String await(FirebaseUser user, long timeoutMs) throws Exception {
         if (user == null) return null;
