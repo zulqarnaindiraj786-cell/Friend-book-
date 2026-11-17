@@ -293,8 +293,43 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
         run: |
-          python3 -m pip install 'google-auth==2.40.3' 'requests==2.32.5'
-          python3 scripts/admin/migrate_firestore_to_d1.py --execute --quota-reviewed
+          set +e
+          mkdir -p firestore-copy-report
+          python3 -m pip install 'google-auth==2.40.3' 'requests==2.32.5' 2>&1 | tee firestore-copy-report/run.log
+          install_status=${PIPESTATUS[0]}
+          if [ "$install_status" -ne 0 ]; then exit "$install_status"; fi
+          python3 scripts/admin/migrate_firestore_to_d1.py --execute --quota-reviewed 2>&1 | tee -a firestore-copy-report/run.log
+          copy_status=${PIPESTATUS[0]}
+          echo "copy_exit_code=$copy_status" | tee -a firestore-copy-report/run.log
+          echo "copy_exit_code=$copy_status" >> "$GITHUB_OUTPUT"
+          exit "$copy_status"
+        id: firestore_copy
+
+      - name: Upload Firestore copy checkpoint report
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-copy-report-${{ github.run_id }}
+          path: firestore-copy-report/run.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish Firestore copy status to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        uses: actions/github-script@v7
+        env:
+          COPY_REPORT: firestore-copy-report/run.log
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
+            if (!prs.data.length) return core.warning('No open PR found; copy report remains in the workflow artifact.');
+            const report = fs.existsSync(process.env.COPY_REPORT) ? fs.readFileSync(process.env.COPY_REPORT, 'utf8') : 'No report file was produced.';
+            const body = 'Firestore-to-D1 copy report for run ' + context.runId + ':\\n\\n' + report.slice(-10000);
+            await github.rest.issues.createComment({owner, repo, issue_number: prs.data[0].number, body});
 
       - name: Create one-time Firebase Auth user and prove D1-only profile storage
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')

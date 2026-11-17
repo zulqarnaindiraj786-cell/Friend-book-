@@ -253,9 +253,9 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
                         (collection_parent, task['collection_id']))[0]['total']
     # One Firebase count query per collection; fetched pages provide the independently observed count.
     if read_count != source_total:
-        raise CopyError(f'Collection count mismatch for {collection_path}: Firebase={source_total}, copied/read={read_count}; checkpoint retained')
+        raise CopyError(f'Collection count mismatch for {task["collection_id"]}: Firebase={source_total}, copied/read={read_count}; checkpoint retained')
     if d1_count != source_total:
-        raise CopyError(f'Collection count mismatch for {collection_path}: Firebase={source_total}, D1={d1_count}; no data deleted and checkpoint retained')
+        raise CopyError(f'Collection count mismatch for {task["collection_id"]}: Firebase={source_total}, D1={d1_count}; no data deleted and checkpoint retained')
     d1.query(f'''UPDATE {PROGRESS_TABLE} SET d1_count=?,status='complete',updated_at=? WHERE collection_path=?''',
              (d1_count, int(time.time() * 1000), collection_path))
     print(json.dumps({'root_collection': collection_path[len(PREFIX) + 1:].split('/', 1)[0],
