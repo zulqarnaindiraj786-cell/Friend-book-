@@ -1,9 +1,5 @@
-// Cloudflare D1 Firestore-compatible document API (/v1/firestore/*).
-// Android's com.google.firebase.firestore shim talks here with a Firebase Auth
-// bearer token (verified in worker.js). All app data lands in D1; Firebase
-// keeps ONLY Auth + FCM. Legacy Firestore docs are lazily backfilled on read
-// miss (read-only REST, never a write to Firestore) so old users keep working.
-import { fromFirestoreFields } from './app-documents.js';
+// Cloudflare D1 document API (/v1/d1/*). Android uses a D1-backed document adapter
+// authenticated with Firebase Auth tokens; Firebase stores Auth + FCM only.
 
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -267,62 +263,6 @@ function rowToDocument(row) {
   };
 }
 
-// ---------- legacy Firestore read-only backfill (never writes to Firestore) ----------
-async function backfillDocument(db, path, identity, env) {
-  const project = env.FIREBASE_PROJECT_ID;
-  const token = identity?.token;
-  if (!project || !token || !isDocumentPath(path)) return null;
-  try {
-    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(project)}/databases/(default)/documents/${path.split('/').map(encodeURIComponent).join('/')}`;
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return null;
-    const body = await r.json();
-    if (!body || typeof body !== 'object') return null;
-    const plain = fromFirestoreFields(body.fields || {});
-    const now = Date.now();
-    const createMs = body.createTime ? Date.parse(body.createTime) : now;
-    const updateMs = body.updateTime ? Date.parse(body.updateTime) : now;
-    const encoded = encodeValue(plain);
-    const row = await writeRow(db, path, encoded, Number.isFinite(updateMs) ? updateMs : now, null);
-    // Preserve original create time if available.
-    if (Number.isFinite(createMs) && createMs > 0) {
-      await db.prepare('UPDATE friendbook_cf_firestore_documents SET create_time = ? WHERE path = ?').bind(createMs, path).run();
-      row.create_time = createMs;
-    }
-    return rowToDocument(row);
-  } catch {
-    return null; // quota / permission / network: never crash the app
-  }
-}
-async function backfillCollection(db, parent, identity, env) {
-  const project = env.FIREBASE_PROJECT_ID;
-  const token = identity?.token;
-  if (!project || !token || !isCollectionPath(parent)) return 0;
-  try {
-    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(project)}/databases/(default)/documents/${parent.split('/').map(encodeURIComponent).join('/')}?pageSize=100&showMissing=true`;
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return 0;
-    const body = await r.json();
-    const docs = Array.isArray(body?.documents) ? body.documents : [];
-    let count = 0;
-    const now = Date.now();
-    for (const d of docs) {
-      const name = d?.name || '';
-      const prefix = `projects/${project}/databases/(default)/documents/`;
-      if (!name.startsWith(prefix)) continue;
-      const path = name.slice(prefix.length);
-      if (!isDocumentPath(path) || parentPath(path) !== parent) continue;
-      if (await readRow(db, path)) continue;
-      const plain = fromFirestoreFields(d.fields || {});
-      await writeRow(db, path, encodeValue(plain), now, null);
-      count++;
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
 // ---------- query engine ----------
 function typeRank(v) {
   if (v === undefined || v === null) return 0;
@@ -476,13 +416,7 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'GET') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
-    let row = await readRow(db, docPath).catch(() => null);
-    if (!row) row = await backfillDocument(db, docPath, identity, env).then(d => d ? { path: d.path, parent_path: d.parent, collection_id: d.collection, doc_id: d.id, owner_uid: '', document_json: JSON.stringify(encodeValue(d.data)), create_time: d.createTime, update_time: d.updateTime } : null).catch(() => null);
-    // backfillDocument already wrote the row; re-read for canonical shape.
-    if (!row) {
-      const reread = await readRow(db, docPath).catch(() => null);
-      if (reread) row = reread;
-    }
+    const row = await readRow(db, docPath).catch(() => null);
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     return json(rowToDocument(row));
   }
@@ -496,6 +430,7 @@ export async function firestoreDocuments(request, env, identity) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
     try {
       const existing = await readRow(db, docPath);
+      if (body.createOnly === true && existing) return json({ error: 'ALREADY_EXISTS' }, 409);
       const existingDoc = existing ? decodeValue(JSON.parse(existing.document_json)) : null;
       const next = applySet(existingDoc, body.data || {}, Boolean(body.merge), body.mergeFields || null, now);
       const row = await writeRow(db, docPath, next, now, existing);
@@ -560,11 +495,7 @@ export async function firestoreDocuments(request, env, identity) {
       ).bind(parent).all();
       return (rows?.results || []).map(rowToDocument).filter(Boolean);
     };
-    let docs = await fetchDocs().catch(() => []);
-    if (docs.length === 0) {
-      await backfillCollection(db, parent, identity, env).catch(() => 0);
-      docs = await fetchDocs().catch(() => []);
-    }
+    const docs = await fetchDocs().catch(() => []);
     const result = applyQuery(docs, body || {});
     return json({ parent, documents: result });
   }

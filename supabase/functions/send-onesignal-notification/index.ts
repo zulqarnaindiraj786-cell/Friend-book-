@@ -1,19 +1,11 @@
 import { createRemoteJWKSet, jwtVerify } from "npm:jose@5.9.6";
+import { getD1Document } from "../_shared/d1-documents.ts";
 
 const APP_ID = "6921b7fa-7c0a-40e3-8dd9-e698429a038a";
 const PROJECT = "friendbook-17551";
 const keys = createRemoteJWKSet(new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"));
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const validId = (v: unknown): v is string => typeof v === "string" && /^[\w-]{1,256}$/.test(v);
-function decode(v: any): any {
-  if (!v) return null;
-  if ("stringValue" in v) return v.stringValue;
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("timestampValue" in v) return v.timestampValue;
-  if ("arrayValue" in v) return (v.arrayValue.values || []).map(decode);
-  if ("mapValue" in v) return Object.fromEntries(Object.entries(v.mapValue.fields || {}).map(([k, x]) => [k, decode(x)]));
-  return null;
-}
 Deno.serve(async req => {
   if (req.method !== "POST") return json({ error: "POST required" }, 405);
   const secret = Deno.env.get("ONESIGNAL_REST_API_KEY");
@@ -35,12 +27,9 @@ Deno.serve(async req => {
     const { target_user_id: target, data: input } = JSON.parse(raw);
     if (!validId(target) || !input || typeof input !== "object" || target === actor) return json({ error: "Invalid target" }, 400);
     const doc = async (path: string) => {
-      const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/${path}`, {
-        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000),
-      });
-      if (!r.ok) throw new Error("Event unavailable");
-      const d = await r.json();
-      return Object.fromEntries(Object.entries(d.fields || {}).map(([k, v]) => [k, decode(v)]));
+      const value = await getD1Document(path, token);
+      if (!value) throw new Error('Event unavailable');
+      return value;
     };
     const [sender, recipient] = await Promise.all([doc(`users/${actor}`), doc(`users/${target}`)]);
     if (sender.banned || recipient.banned) return json({ error: "Unavailable account" }, 403);

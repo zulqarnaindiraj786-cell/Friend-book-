@@ -16,7 +16,7 @@ class BulkMentionGuards(unittest.TestCase):
         self.assertIn('/functions/v1/bulk-mentions',(JAVA/'push/PushGateway.java').read_text())
     def test_server_and_atomic_daily_limit(self):
         source=(ROOT/'supabase/functions/bulk-mentions/index.ts').read_text()
-        for token in ['jwtVerify','NO_PERSISTED_BULK_MENTION','FOLLOWERS_REQUIRES_POST_OWNER','BULK_PUBLIC_POST_REQUIRED','reserve_bulk_mention','currentDocument.exists=false','recipient.bulkMentionsEnabled===false','eligible.length>=20','highlightIds','recipient.following.includes(actor)']:
+        for token in ['jwtVerify','NO_PERSISTED_BULK_MENTION','FOLLOWERS_REQUIRES_POST_OWNER','BULK_PUBLIC_POST_REQUIRED','reserve_bulk_mention','putD1Document(`notifications/${id}`,values,token,true)','recipient.bulkMentionsEnabled===false','eligible.length>=20','highlightIds','recipient.following.includes(actor)']:
             self.assertIn(token,source)
         sql=(ROOT/'supabase/migrations/202611020001_bulk_mentions.sql').read_text()
         for token in ['pg_advisory_xact_lock','24 hours','enable row level security','to service_role']:

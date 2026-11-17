@@ -2,17 +2,9 @@ import { importPKCS8, SignJWT } from "npm:jose@5.9.6";
 
 const PROJECT = "friendbook-17551";
 import { verifyFirebaseSession } from "../_shared/firebase-session.ts";
+import { getD1Document } from "../_shared/d1-documents.ts";
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const validId = (v: unknown): v is string => typeof v === "string" && /^[\w-]{1,256}$/.test(v);
-function decode(v: any): any {
-  if (!v) return null;
-  if ("stringValue" in v) return v.stringValue;
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("timestampValue" in v) return v.timestampValue;
-  if ("arrayValue" in v) return (v.arrayValue.values || []).map(decode);
-  if ("mapValue" in v) return Object.fromEntries(Object.entries(v.mapValue.fields || {}).map(([k, x]) => [k, decode(x)]));
-  return null;
-}
 let cachedToken = "", tokenUntil = 0;
 async function googleToken() {
   if (cachedToken && Date.now() < tokenUntil) return cachedToken;
@@ -88,12 +80,9 @@ export async function handleRequest(req: Request, verifySession = verifyFirebase
       data = { type: "push_test", toUserId: actor, fromUserId: actor, eventId: event, title, body: message };
     } else {
     const doc = async (path: string) => {
-      const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/${path}`, {
-        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000),
-      });
-      if (!r.ok) throw new Error("Event unavailable");
-      const d = await r.json();
-      return Object.fromEntries(Object.entries(d.fields || {}).map(([k, v]) => [k, decode(v)]));
+      const value = await getD1Document(path, token);
+      if (!value) throw new Error('Event unavailable');
+      return value;
     };
     const [sender, recipient] = await Promise.all([doc(`users/${actor}`), doc(`users/${target}`)]);
     if (sender.banned || recipient.banned) return json({ error: "Unavailable account" }, 403);

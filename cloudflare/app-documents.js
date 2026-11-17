@@ -91,9 +91,7 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
-const DOC_CACHE_TTL_MS = 600_000;
 const LIST_CACHE_TTL_MS = 600_000;
-const docCache = new WeakMap();
 const listCache = new WeakMap();
 
 function getDbMap(store, db) {
@@ -107,15 +105,11 @@ function getDbMap(store, db) {
 
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
-  const now = Date.now();
-  const cache = getDbMap(docCache, db);
-  const hit = cache.get(path);
-  if (hit && hit.expiresAt > now) return hit.fields;
+  // Authorization and privacy fields must reflect the current D1 row, not a
+  // stale per-isolate cache after another device changes a block or ban.
   try {
     const row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
-    const fields = row?.document_json ? toFirestoreFields(row.document_json) : null;
-    cache.set(path, { fields, expiresAt: now + DOC_CACHE_TTL_MS });
-    return fields;
+    return row?.document_json ? toFirestoreFields(row.document_json) : null;
   } catch {
     return null;
   }
@@ -223,7 +217,6 @@ export async function appDocuments(request, env, identity) {
            document_json = excluded.document_json,
            updated_at = excluded.updated_at`
       ).bind(docPath, collection, docId, ownerUid, serialized, now).run();
-      getDbMap(docCache, env.DB).delete(docPath);
       getDbMap(listCache, env.DB).clear();
 
       if (collection === 'posts' || collection === 'reels') {
