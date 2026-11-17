@@ -310,9 +310,10 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
         self.assertIn('}, 15_000L);', reels)
         self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
-        # The page-load listener must settle its source even when the page cannot be applied: this
+        # The D1 page-load callback must settle its source even when the page cannot be applied: this
         # early return is what kept pagingVideos true and the spinner visible forever.
-        self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)
+        self.assertIn('CloudflareStore.query(qb.build(), page -> {', reels)
+        self.assertIn('}\n                done.run();\n            }, () -> {', reels)
         # One second of real watching is enough to count this user's one view.
         self.assertIn('if (!viewCountedThisPlay && pos >= 1000)', reels)
         self.assertIn('countRealView();', reels)

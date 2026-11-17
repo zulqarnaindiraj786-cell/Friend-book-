@@ -57,7 +57,10 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 7;
+    // 15 posts per page: a 7-post page meant a fresh D1 round trip every few swipes, so
+    // scrolling felt like the feed was fetching as fast as it was being read. 15 halves the
+    // round trips while still bounding each query to one small page.
+    private static final int PAGE = 15;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -207,12 +210,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     /** Called by MainActivity when user returns from background (>= 15s away). */
     public void onWarmSessionResume() {
         if (rv == null || adapter == null) return;
-        LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
-        int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
-        if (firstPos <= 1) {
-            applyFilterOnCachedFeed();
-            adapter.refreshSponsoredAds();
-        } else if (freshPill != null) {
+        // Resume where the user left off: never reload or reshuffle an already-rendered feed.
+        if (freshPill != null) {
             freshPill.setVisibility(View.GONE);
         }
     }
@@ -540,7 +539,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // Returning to Home from another tab used to tear down and re-create this listener,
         // which re-bills every live document. The strip changes slowly, so reopening it within
         // three minutes keeps whatever is already on screen.
-        if (livesReg != null && now0 - lastLivesStart < LIVES_CACHE_MS) return;
+        if (lastLivesStart > 0 && now0 - lastLivesStart < LIVES_CACHE_MS) return;
         if (livesReg != null) { livesReg.remove(); livesReg = null; }
         lastLivesStart = now0;
         // One read, cached by LIVES_CACHE_MS above. The strip used to be a subscription, which
@@ -571,13 +570,17 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     // ---------- friends (for privacy filtering) ----------
+    private long lastFriendsFetch;
+    private static final long FRIENDS_CACHE_MS = 5 * 60_000L;
+
     private void startFriendsListener() {
         String me = Fb.uid();
         if (me == null) return;
-        if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
-        // One read. The friend set only changes when a friendship is added or removed, and this
-        // screen re-reads it when it becomes visible again - a subscription here re-read the
-        // whole graph on every unrelated write to any friend's document.
+        if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;lastFriendsFetch=0L;}
+        long nowMs = android.os.SystemClock.elapsedRealtime();
+        if (lastFriendsFetch > 0 && nowMs - lastFriendsFetch < FRIENDS_CACHE_MS) return;
+        lastFriendsFetch = nowMs;
+        // One read, cached across warm resumes/tab switches for five minutes.
         com.friendbook.social.core.D1Snap.read(
                 com.friendbook.social.core.DocQuery.of("friends")
                         .whereArrayContains("participants", me).limit(50).build(), snap -> {
@@ -668,6 +671,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             adapter.setFeaturedReels(featuredReels);
         }
         // 2. Check Cloudflare D1/Worker reels
+        featuredReelsFetchedAt = android.os.SystemClock.elapsedRealtime();
         com.friendbook.social.core.CloudflareStore.list("reels", 12, docs -> {
             if (!isAdded() || docs == null) return;
             boolean changed = false;

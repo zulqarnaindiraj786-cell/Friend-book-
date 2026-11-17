@@ -518,8 +518,11 @@ public class MenuFragment extends Fragment {
     private void claimDailyBonus(final Activity a) {
         final String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("users").document(me).get()
-                .addOnSuccessListener(d -> {
+        // Read from D1: the old Firestore get() read the local disk cache, so a bonus claimed
+        // on another device (or after a cache clear) looked unclaimed here and could be
+        // claimed twice.
+        com.friendbook.social.core.CloudflareStore.get("users", me, d -> {
+                    if (d == null) { Ui.toast(a, "Could not load your profile. Try again."); return; }
                     long now = System.currentTimeMillis();
                     Calendar cal = Calendar.getInstance();
                     cal.set(Calendar.HOUR_OF_DAY, 0);
@@ -559,7 +562,6 @@ public class MenuFragment extends Fragment {
                                             + (newStreak >= 5 ? "Max bonus unlocked — keep it going! 👑"
                                             : "Come back tomorrow — streak rewards grow!"));
                             });
-                })
-                .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
+                });
     }
 }

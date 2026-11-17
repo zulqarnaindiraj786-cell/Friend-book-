@@ -153,6 +153,92 @@ public final class D1Batch {
         }
 
         final Op[] pending = queued.toArray(new Op[0]);
+        if (pending.length == 1) {
+            commitIndividually(pending, callback);
+            return;
+        }
+
+        // Pack multi-op batches into POST /v1/docs/batch chunks (<= 40 ops and <= 24 KB each so
+        // D1HttpTransport's 32 KB ceiling is never exceeded). One HTTP request replaces N.
+        List<JSONArray> chunks = new ArrayList<>();
+        List<java.util.Set<String>> chunkCollections = new ArrayList<>();
+        List<List<Op>> chunkOps = new ArrayList<>();
+        try {
+            JSONArray current = new JSONArray();
+            java.util.Set<String> cols = new java.util.HashSet<>();
+            List<Op> rawOps = new ArrayList<>();
+            int approxBytes = 16;
+            for (Op op : pending) {
+                JSONObject item = new JSONObject();
+                item.put("collection", op.collection);
+                item.put("id", op.docId);
+                if (op.delete) {
+                    item.put("action", "delete");
+                } else if (op.ops != null) {
+                    item.put("action", "patch");
+                    item.put("ops", op.ops);
+                } else {
+                    item.put("action", "put");
+                    item.put("document", CloudflareStore.toJson(op.fields));
+                }
+                int itemBytes = item.toString().length() + 2;
+                if (itemBytes > 24_000) {
+                    // Single large document: fall back to individual requests.
+                    commitIndividually(pending, callback);
+                    return;
+                }
+                if (current.length() > 0 && (current.length() >= 40 || approxBytes + itemBytes > 24_000)) {
+                    chunks.add(current);
+                    chunkCollections.add(cols);
+                    chunkOps.add(rawOps);
+                    current = new JSONArray();
+                    cols = new java.util.HashSet<>();
+                    rawOps = new ArrayList<>();
+                    approxBytes = 16;
+                }
+                current.put(item);
+                cols.add(op.collection);
+                rawOps.add(op);
+                approxBytes += itemBytes;
+            }
+            if (current.length() > 0) {
+                chunks.add(current);
+                chunkCollections.add(cols);
+                chunkOps.add(rawOps);
+            }
+        } catch (Throwable buildErr) {
+            commitIndividually(pending, callback);
+            return;
+        }
+
+        sendBatchChunk(chunks, chunkCollections, chunkOps, 0, callback);
+    }
+
+    private void sendBatchChunk(List<JSONArray> chunks, List<java.util.Set<String>> chunkCollections,
+                                List<List<Op>> chunkOps, int index, Callback callback) {
+        if (index >= chunks.size()) {
+            if (callback != null) callback.done(true, null);
+            return;
+        }
+        CloudflareStore.batch(chunks.get(index), chunkCollections.get(index),
+                () -> sendBatchChunk(chunks, chunkCollections, chunkOps, index + 1, callback),
+                unsupported -> {
+                    if (Boolean.TRUE.equals(unsupported)) {
+                        // Rollout safety: server doesn't have /v1/docs/batch yet; run remaining ops individually.
+                        List<Op> rest = new ArrayList<>();
+                        for (int i = index; i < chunkOps.size(); i++) rest.addAll(chunkOps.get(i));
+                        commitIndividually(rest.toArray(new Op[0]), callback);
+                        return;
+                    }
+                    if (callback != null) callback.done(false, "D1 refused batch (" + chunks.get(index).length() + " ops)");
+                    if (onRefused != null) {
+                        Runnable retry = onRefused;
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(retry);
+                    }
+                });
+    }
+
+    private void commitIndividually(final Op[] pending, final Callback callback) {
         final boolean[] failed = {false};
         final String[] error = {null};
         final int[] remaining = {pending.length};
@@ -163,8 +249,6 @@ public final class D1Batch {
                     remaining[0]--;
                     if (remaining[0] == 0) {
                         if (failed[0] && onRefused != null) {
-                            // Reported to the caller as a failure first, so a caller that only
-                            // understands the boolean still sees the truth.
                             if (callback != null) callback.done(false, error[0]);
                             Runnable retry = onRefused;
                             android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -190,8 +274,6 @@ public final class D1Batch {
                     CloudflareStore.remove(op.collection, op.docId, finish, fail);
                 } else if (op.ops != null) {
                     CloudflareStore.patch(op.collection, op.docId, op.ops, finish, fail);
-                } else if (op.merge) {
-                    CloudflareStore.put(op.collection, op.docId, op.fields, finish, fail);
                 } else {
                     CloudflareStore.put(op.collection, op.docId, op.fields, finish, fail);
                 }

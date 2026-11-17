@@ -6,9 +6,16 @@
 -renamesourcefileattribute SourceFile
 -keepattributes SourceFile,LineNumberTable,*Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Glide Generated API / Module entry points (AAR consumer rules handle internal classes)
+# Glide Generated API / Module entry points (keep constructors & repackaging off for R8 Full Mode reflection)
 -keep public class * implements com.bumptech.glide.module.GlideModule
--keep public class * extends com.bumptech.glide.module.AppGlideModule
+-keep public class * extends com.bumptech.glide.module.AppGlideModule {
+    <init>(...);
+    *;
+}
+-keep class com.bumptech.glide.GeneratedAppGlideModuleImpl {
+    <init>(...);
+    *;
+}
 
 # Suppress benign optional library warnings while allowing R8 to obfuscate & shrink all unused library code
 -dontwarn com.google.firebase.**

@@ -66,6 +66,55 @@ public final class QueryActions {
     }
 
     /**
+     * Patches every D1 document matching a query, a page at a time.
+     *
+     * <p>The Firestore {@link #updateMatching} reads with {@code Source.SERVER}, which fails
+     * outright with Firestore's network off - so "limit past posts" silently did nothing.
+     * This is the D1-native twin: it pages the matches from D1 and patches each one, reporting
+     * how many changed. Used for explicitly confirmed bulk actions, never at app start.
+     */
+    public static void updateMatchingD1(DocQuery query, java.util.Map<String, Object> patch,
+                                        java.util.function.Consumer<Integer> done) {
+        if (query == null || patch == null) {
+            if (done != null) done.accept(0);
+            return;
+        }
+        final String actor = Fb.uid();
+        updateMatchingD1Page(query, patch, actor, 0, done);
+    }
+
+    private static void updateMatchingD1Page(DocQuery query, java.util.Map<String, Object> patch,
+                                             String actor, int total,
+                                             java.util.function.Consumer<Integer> done) {
+        if (actor == null || !Objects.equals(actor, Fb.uid())) {
+            if (done != null) done.accept(total);
+            return;
+        }
+        CloudflareStore.query(
+                query,
+                page -> {
+                    if (page == null || page.isEmpty()) {
+                        if (done != null) done.accept(total);
+                        return;
+                    }
+                    D1Batch batch = DataRouter.batch();
+                    for (java.util.Map<String, Object> doc : page.documents) {
+                        String id = Format.str(doc, "id");
+                        if (!id.isEmpty()) batch.update(query.collection(), id, patch);
+                    }
+                    batch.commit((ok, error) -> {
+                        int next = total + page.documents.size();
+                        if (!ok || page.nextCursor == null) {
+                            if (done != null) done.accept(next);
+                            return;
+                        }
+                        updateMatchingD1Page(query.nextPage(page.nextCursor), patch, actor, next, done);
+                    });
+                },
+                () -> { if (done != null) done.accept(total); });
+    }
+
+    /**
      * Deletes every D1 document in a collection whose field equals a value, a page at a time.
      *
      * <p>Used when one document owns others - a post owns its comments. Firestore could cascade

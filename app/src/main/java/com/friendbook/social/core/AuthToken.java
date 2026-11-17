@@ -88,6 +88,13 @@ public final class AuthToken {
         with(user, onToken, null);
     }
 
+    /** Convenience form using the currently signed-in FirebaseUser. */
+    public static void with(Consumer<String> onToken, Runnable onFailure) {
+        FirebaseUser user = null;
+        try { user = Fb.auth().getCurrentUser(); } catch (Throwable ignored) { }
+        with(user, onToken, onFailure);
+    }
+
     /** Blocking form, for code that already runs on a background thread. */
     public static String await(FirebaseUser user, long timeoutMs) throws Exception {
         if (user == null) return null;

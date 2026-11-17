@@ -53,7 +53,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const photo = path === '/v1/photos';
       // /v1/docs/count is a distinct route; without it the two-segment pattern below would
       // never match and the count would 404 at the fall-through.
-      const docs = path === '/v1/docs' || path === '/v1/docs/count' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
+      const docs = path === '/v1/docs' || path === '/v1/docs/count' || path === '/v1/docs/batch' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);

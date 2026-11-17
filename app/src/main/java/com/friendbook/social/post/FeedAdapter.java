@@ -1653,14 +1653,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     }
                     Ui.confirm(activity, "🛡 Ban " + p.authorName + "?",
                             "This user will be banned from using friendbook.",
-                            "Ban User", () -> Fb.db().collection("users").document(p.authorId)
-                                    .set(Fb.map("banned", true), com.google.firebase.firestore.SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
+                            "Ban User", () -> com.friendbook.social.core.DataRouter.batch()
+                                    .set("users", p.authorId, Fb.map("banned", true))
+                                    .commit((ok, error) -> {
+                                        if (!ok) { Ui.toast(activity, "Could not ban right now. Try again."); return; }
                                         Notify.sendOfficialTeamMessage(p.authorId, "ban",
                                                 "Your account was suspended by a friendbook Moderator.", false);
                                         Ui.toast(activity, "Banned " + p.authorName + " 🚫");
-                                    })
-                                    .addOnFailureListener(e -> Ui.toast(activity, e.getMessage())));
+                                    }));
                 });
             }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
@@ -1895,20 +1895,22 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void sendQuickFriendRequest(Models.User target, TextView btn) {
         String me = Fb.uid();
         if (me == null || target == null || target.uid == null) return;
+        btn.setText("Requested ✓");
+        btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
+        btn.setTextColor(Ui.sub(activity));
         Map<String, Object> req = Fb.map(
                 "fromUid", me,
                 "toUid", target.uid,
                 "fromUserName", Fb.myName(),
                 "fromUserPhotoUrl", Fb.myPhoto(),
                 "status", "pending",
-                "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("friend_requests").document(me + "_" + target.uid)
-                .set(req)
-                .addOnSuccessListener(x -> {
-                    btn.setText("Requested ✓");
-                    btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
-                    btn.setTextColor(Ui.sub(activity));
-                    Notify.send(target.uid, "friend_request", "sent you a friend request", "");
+                "createdAt", System.currentTimeMillis());
+        com.friendbook.social.core.DataRouter.batch()
+                .set("friend_requests", me + "_" + target.uid, req)
+                .commit((ok, err) -> {
+                    if (ok) {
+                        Notify.send(target.uid, "friend_request", "sent you a friend request", "");
+                    }
                 });
     }
 

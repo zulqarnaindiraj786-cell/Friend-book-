@@ -329,14 +329,16 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         String dispPhoto = (liveUser != null && liveUser.photoUrl != null && !liveUser.photoUrl.isEmpty())
                 ? liveUser.photoUrl : c.authorPhoto;
         if (liveUser == null && c.authorId != null && !c.authorId.isEmpty()) {
-            Fb.db().collection("users").document(c.authorId).get()
-                    .addOnSuccessListener(doc -> {
-                        if (doc != null && doc.exists()) {
-                            com.friendbook.social.models.Models.User u = com.friendbook.social.models.Models.User.fromDoc(doc);
-                            com.friendbook.social.core.FastCache.putUser(u);
-                            notifyDataSetChanged();
-                        }
-                    });
+            // D1, not the Firestore disk cache: with Firestore's network off the old get()
+            // only ever found authors already cached on this device, so a commenter who had
+            // never been seen before rendered as "friendbook User" until a cache miss.
+            com.friendbook.social.core.CloudflareStore.get("users", c.authorId, doc -> {
+                if (doc != null) {
+                    com.friendbook.social.models.Models.User u = com.friendbook.social.models.Models.User.fromMap(c.authorId, doc);
+                    com.friendbook.social.core.FastCache.putUser(u);
+                    notifyDataSetChanged();
+                }
+            });
         }
 
         Ui.avatar(activity, h.av, dispPhoto);

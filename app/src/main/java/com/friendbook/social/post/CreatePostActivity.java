@@ -734,17 +734,19 @@ public class CreatePostActivity extends Activity {
     }
 
     private void loadForEdit() {
-        Fb.db().collection("posts").document(editId).get().addOnSuccessListener(d -> {
-            if (!d.exists()) { Ui.toast(this, "Post not found"); finish(); return; }
-            com.friendbook.social.core.Mentions.restore(text, d.getString("content"), com.friendbook.social.core.Mentions.read(d.get("mentions")));
-            String f = d.getString("feeling");
+        // Read from D1: the old Firestore get() read the local disk cache, so editing a post
+        // that had never been cached on this device said "Post not found" and closed.
+        com.friendbook.social.core.CloudflareStore.get("posts", editId, d -> {
+            if (d == null) { Ui.toast(this, "Post not found"); finish(); return; }
+            com.friendbook.social.core.Mentions.restore(text, com.friendbook.social.core.Format.str(d, "content"), com.friendbook.social.core.Mentions.read(d.get("mentions")));
+            String f = com.friendbook.social.core.Format.str(d, "feeling");
             if (f != null && !f.isEmpty()) { feeling = f; feelingBtn.setText(f); }
-            String p = d.getString("privacy");
+            String p = com.friendbook.social.core.Format.str(d, "privacy");
             if (p != null) { privacy = p; privacyBtn.setText(privacyLabel()); }
-            String loc = d.getString("location");
+            String loc = com.friendbook.social.core.Format.str(d, "location");
             if (loc != null) location = loc;
-            String mt = d.getString("mediaType");
-            String mu = d.getString("mediaUrl");
+            String mt = com.friendbook.social.core.Format.str(d, "mediaType");
+            String mu = com.friendbook.social.core.Format.str(d, "mediaUrl");
             if (mt != null && !"none".equals(mt) && mu != null && !mu.isEmpty()) {
                 previewWrap.setVisibility(View.VISIBLE);
                 if ("image".equals(mt) || "images".equals(mt)) {
@@ -758,8 +760,8 @@ public class CreatePostActivity extends Activity {
                 }
                 mediaType = mt; // keep old media unless removed
             }
-            Long c = d.getLong("bgColor");
-            if (c != null && c != 0) applyBackground(c.intValue());
+            long c = com.friendbook.social.core.Format.longOf(d, "bgColor");
+            if (c != 0) applyBackground((int) c);
         });
     }
 

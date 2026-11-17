@@ -294,16 +294,16 @@ public class ModeratorDeskActivity extends Activity {
             Ui.confirm(this, (nextBan ? "🚫 Ban " : "✓ Unban ") + u.displayName + "?",
                     nextBan ? "This user will be blocked from using friendbook." : "Restore account access?",
                     nextBan ? "Ban" : "Unban", () ->
-                            Fb.db().collection("users").document(u.uid)
-                                    .set(Fb.map("banned", nextBan), SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
+                            com.friendbook.social.core.DataRouter.batch()
+                                    .set("users", u.uid, Fb.map("banned", nextBan))
+                                    .commit((ok, error) -> {
+                                        if (!ok) { Ui.toast(this, "Could not update the ban. Try again."); return; }
                                         if (nextBan) {
                                             Notify.sendOfficialTeamMessage(u.uid, "ban",
                                                     "Your account was suspended by a friendbook Moderator.", false);
                                         }
                                         Ui.toast(this, nextBan ? "Banned 🚫" : "Unbanned ✓");
-                                    })
-                                    .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
+                                    }));
         });
         row.addView(banBtn);
 

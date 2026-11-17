@@ -1248,9 +1248,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             highlightsRow.addView(addBubble, alp);
         }
         for (final String sid : hiIds) {
-            Fb.db().collection("stories").document(sid).get().addOnSuccessListener(sd -> {
-                if (!sd.exists()) return;
-                Models.Story s = Models.Story.fromDoc(sd);
+            com.friendbook.social.core.CloudflareStore.get("stories", sid, sd -> {
+                if (sd == null || sd.isEmpty() || isFinishing() || isDestroyed()) return;
+                Models.Story s = Models.Story.fromMap(sid, sd);
                 LinearLayout b = Ui.col(this);
                 b.setGravity(Gravity.CENTER);
                 ImageView iv = new ImageView(this);
@@ -1271,7 +1271,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     startActivity(in);
                 });
                 highlightsRow.addView(b, blp);
-            });
+            }, () -> {});
         }
     }
 
@@ -1636,23 +1636,33 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         unban ? "They can use friendbook again."
                                 : "They will be signed out and blocked from using friendbook.",
                         unban ? "Unban" : "Ban", () ->
-                                Fb.db().collection("users").document(uid)
-                                        .set(Fb.map("banned", !unban), SetOptions.merge())
-                                        .addOnSuccessListener(x -> {
+                                com.friendbook.social.core.DataRouter.batch()
+                                        .update("users", uid, Fb.map("banned", !unban))
+                                        .commit((ok, err) -> {
+                                            if (!ok) { Ui.toast(this, err != null ? err : "Could not update user"); return; }
                                             if (user != null) user.banned = !unban;
                                             Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");
                                             if (!unban) Notify.sendOfficialTeamMessage(uid, "ban",
                                                     "Your account was suspended for violating community standards.", false);
-                                        })
-                                        .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
+                                        }));
             } else if (t.contains("Adjust stars")) adminAdjustStars();
             else if (t.contains("official message")) adminMessageDialog();
             else if (t.contains("User stats (admin)")) adminStats();
             else if (t.contains("Favorites")) toggleFavorite();
             else if (t.contains("Restricted list")) {
                 boolean rem = Fb.me != null && Fb.me.restrictedUids != null && Fb.me.restrictedUids.contains(uid);
-                Fb.db().collection("users").document(Fb.uid())
-                        .update("restrictedUids", rem ? FieldValue.arrayRemove(uid) : FieldValue.arrayUnion(uid));
+                String myId = Fb.uid();
+                if (myId != null) {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops("users", myId, rem
+                                    ? com.friendbook.social.core.CloudflareStore.arrayRemove("restrictedUids", uid)
+                                    : com.friendbook.social.core.CloudflareStore.arrayUnion("restrictedUids", uid))
+                            .commit();
+                    if (Fb.me != null && Fb.me.restrictedUids != null) {
+                        if (rem) Fb.me.restrictedUids.remove(uid);
+                        else if (!Fb.me.restrictedUids.contains(uid)) Fb.me.restrictedUids.add(uid);
+                    }
+                }
                 Ui.toast(this, rem ? "Removed from Restricted list" : "Added to Restricted list");
             } else if (t.contains("View as Public")) {
                 viewAsPublic = true;
@@ -1683,20 +1693,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void toggleFavorite() {
-        if (Fb.me == null) return;
+        if (Fb.me == null || Fb.uid() == null) return;
         boolean removing = Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(uid);
-        Fb.db().collection("users").document(Fb.uid())
-                .update("favoriteUids", removing
-                        ? FieldValue.arrayRemove(uid)
-                        : FieldValue.arrayUnion(uid))
-                .addOnSuccessListener(x -> {
-                    if (removing) Fb.me.favoriteUids.remove(uid);
-                    else Fb.me.favoriteUids.add(uid);
+        com.friendbook.social.core.DataRouter.batch()
+                .ops("users", Fb.uid(), removing
+                        ? com.friendbook.social.core.CloudflareStore.arrayRemove("favoriteUids", uid)
+                        : com.friendbook.social.core.CloudflareStore.arrayUnion("favoriteUids", uid))
+                .commit((ok, err) -> {
+                    if (!ok) { Ui.toast(this, err != null ? err : "Could not update favorites"); return; }
+                    if (Fb.me != null && Fb.me.favoriteUids != null) {
+                        if (removing) Fb.me.favoriteUids.remove(uid);
+                        else if (!Fb.me.favoriteUids.contains(uid)) Fb.me.favoriteUids.add(uid);
+                    }
                     Ui.toast(this, removing ? "Removed from Favorites"
                             : "⭐ Favorites — " + firstOnly(user != null ? user.displayName : "")
                             + "'s posts show first");
-                })
-                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+                });
     }
 
     private void adminAdjustStars() {
@@ -1719,14 +1731,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         Ui.toast(this, "Enter a number like 50 or -20"); return;
                     }
                     if (delta == 0) return;
-                    Fb.db().collection("users").document(uid)
-                            .update("stars", FieldValue.increment(delta))
-                            .addOnSuccessListener(x -> {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops("users", uid, com.friendbook.social.core.CloudflareStore.increment("stars", delta))
+                            .commit((ok, err) -> {
+                                if (!ok) { Ui.toast(this, err != null ? err : "Could not update stars"); return; }
                                 if (user != null) user.stars += delta;
                                 Notify.send(uid, "stars", "⭐ " + delta + " Stars adjusted on your account.", null);
                                 Ui.toast(this, "Stars updated ✓ (" + (cur + delta) + ")");
-                            })
-                            .addOnFailureListener(err -> Ui.toast(this, err.getMessage()));
+                            });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1754,19 +1766,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void adminStats() {
         Ui.toast(this, "Counting posts…");
-        Fb.db().collection("posts").whereEqualTo("authorId", uid).limit(100).get()
-                .addOnSuccessListener(snap -> {
-                    int pcount = snap.size();
-                    Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
-                            "• Posts: " + pcount + (pcount >= 100 ? "+" : "") + "\n"
-                            + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
-                            + "• Followers: " + (user != null && user.followers != null
-                                    ? user.followers.size() : 0) + "\n"
-                            + "• Stars: " + (user != null ? user.stars : 0) + " ⭐\n"
-                            + "• Tick: " + (user != null ? Admin.tickLabel(user.tickLevel) : "none") + "\n"
-                            + "• ID: " + uid);
-                })
-                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+        // A D1 count, not a Firestore page: the old limit(100) get() read the local disk
+        // cache with Firestore's network off, so the number was whatever had been cached.
+        com.friendbook.social.core.DocQuery q = com.friendbook.social.core.DocQuery.of("posts")
+                .whereEqualTo("authorId", uid).build();
+        com.friendbook.social.core.CloudflareStore.count(q, total -> {
+            int pcount = (int) Math.min(total, Integer.MAX_VALUE);
+            Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
+                    "• Posts: " + pcount + "\n"
+                    + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
+                    + "• Followers: " + (user != null && user.followers != null
+                            ? user.followers.size() : 0) + "\n"
+                    + "• Stars: " + (user != null ? user.stars : 0) + " ⭐\n"
+                    + "• Tick: " + (user != null ? Admin.tickLabel(user.tickLevel) : "none") + "\n"
+                    + "• ID: " + uid);
+        }, () -> Ui.toast(this, "Could not count posts right now"));
     }
 
     private void showFriendship() {

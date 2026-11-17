@@ -656,14 +656,14 @@ public final class FastCache {
     public static void preloadFeedForOffline(Activity a, Runnable onDone) {
         if (a == null) return;
         Ui.toast(a, "📥 Caching latest 30 posts & mini thumbnails for offline reading…");
-        Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(30)
-                .get()
-                .addOnSuccessListener(snap -> {
+        // D1, not the Firestore disk cache: the old get() re-cached whatever was already on
+        // disk, so "download for offline" never actually downloaded anything new.
+        DocQuery q = DocQuery.of("posts").orderByDescending("createdAt").limit(30).build();
+        CloudflareStore.query(q, page -> {
                     List<Models.Post> list = new ArrayList<>();
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Models.Post p = Models.Post.fromDoc(d);
+                    if (page != null) for (java.util.Map<String, Object> d : page.documents) {
+                        String rowId = d.get("id") == null ? "" : String.valueOf(d.get("id"));
+                        Models.Post p = Models.Post.fromMap(rowId, d);
                         list.add(p);
                         if (!Prefs.textOnlyMode(a)) {
                             String u = p.mediaUrl;
@@ -680,8 +680,7 @@ public final class FastCache {
                     saveFeed(a, list);
                     Ui.toast(a, "✅ " + list.size() + " posts saved! Ready for 0ms offline & 2G reading.");
                     if (onDone != null) onDone.run();
-                })
-                .addOnFailureListener(e -> Ui.toast(a, "Using " + FEED.size() + " already-cached posts offline."));
+                }, () -> Ui.toast(a, "Using " + FEED.size() + " already-cached posts offline."));
     }
 
     // ===================== LITE MODE & 2G SPEED CONTROL SHEET =====================

@@ -639,20 +639,23 @@ public final class TikTokReelStudioHelper {
         renderList[0].run();
 
         try {
-            Fb.db().collection("reels")
-                    .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(25)
-                    .get()
-                    .addOnSuccessListener(snap -> {
-                        if (act.isFinishing() || snap == null) return;
-                        for (DocumentSnapshot doc : snap.getDocuments()) {
-                            Models.Reel reel = Models.Reel.fromDoc(doc);
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of("reels")
+                            .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC)
+                            .limit(25).build(),
+                    page -> {
+                        if (act.isFinishing() || page == null) return;
+                        for (Map<String, Object> doc : page.documents) {
+                            String id = doc.get("id") != null ? String.valueOf(doc.get("id")) : "";
+                            if (id.isEmpty()) continue;
+                            Models.Reel reel = Models.Reel.fromMap(id, doc);
                             if (reel != null) addReelToSoundMap(dedup, reel);
                         }
                         allSounds.clear();
                         allSounds.addAll(dedup.values());
                         renderList[0].run();
-                    });
+                    },
+                    () -> {});
         } catch (Throwable ignored) {}
 
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);

@@ -702,13 +702,15 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         }
 
         if (!lid.isEmpty()) {
-            Fb.db().collection("lives").document(lid).get().addOnSuccessListener(doc -> {
-                if (c.isFinishing() || doc == null || !doc.exists()) return;
-                String status = Format.str(doc.getData(), "status");
+            // D1, not the Firestore disk cache: a live badge that reads stale cache says
+            // "LIVE NOW" for a stream that ended hours ago.
+            com.friendbook.social.core.CloudflareStore.get("lives", lid, doc -> {
+                if (c.isFinishing() || doc == null) return;
+                String status = Format.str(doc, "status");
                 boolean isStillLive = !"ended".equalsIgnoreCase(status);
                 h.liveBadgeTv.setText(isStillLive ? "🔴 LIVE NOW" : "⏹ LIVE ENDED");
                 h.liveBadgeTv.setBackground(Ui.round(c, isStillLive ? 0xFFFE2C55 : 0xAA37474F, 12));
-                String frameB64 = Format.str(doc.getData(), "liveFrameB64");
+                String frameB64 = Format.str(doc, "liveFrameB64");
                 if (!frameB64.isEmpty()) {
                     try {
                         byte[] raw = android.util.Base64.decode(frameB64, android.util.Base64.DEFAULT);
@@ -729,15 +731,15 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                 li.putExtra("host_id", hostUid);
                 c.startActivity(li);
             } else if (!hostUid.isEmpty()) {
-                Fb.db().collection("lives")
+                com.friendbook.social.core.DocQuery liveQ = com.friendbook.social.core.DocQuery.of("lives")
                         .whereEqualTo("hostId", hostUid)
                         .whereEqualTo("status", "live")
-                        .limit(1)
-                        .get()
-                        .addOnSuccessListener(snap -> {
+                        .limit(1).build();
+                com.friendbook.social.core.CloudflareStore.query(liveQ, page -> {
                             if (c.isFinishing()) return;
-                            if (snap != null && !snap.isEmpty()) {
-                                String foundId = snap.getDocuments().get(0).getId();
+                            if (page != null && !page.isEmpty()) {
+                                Object foundObj = page.documents.get(0).get("id");
+                                String foundId = foundObj == null ? "" : String.valueOf(foundObj);
                                 Intent li = new Intent(c, com.friendbook.social.live.LiveActivity.class);
                                 li.putExtra("live_id", foundId);
                                 li.putExtra("host_id", hostUid);
@@ -745,8 +747,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                             } else {
                                 c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
                             }
-                        })
-                        .addOnFailureListener(e -> c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
+                        }, () -> c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
             } else {
                 c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
             }

@@ -56,7 +56,7 @@ public final class CfClient {
         return BuildConfig.CLOUDFLARE_DATA_ENABLED;
     }
 
-    /** Get current user's ID token for authenticated requests */
+    /** Get current user's ID token for authenticated requests (cached via AuthToken). */
     private static Task<String> getIdToken() {
         TaskCompletionSource<String> tcs = new TaskCompletionSource<>();
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
@@ -64,13 +64,8 @@ public final class CfClient {
             tcs.setException(new IllegalStateException("Not signed in"));
             return tcs.getTask();
         }
-        user.getIdToken(false).addOnSuccessListener(result -> {
-            if (result != null && result.getToken() != null) {
-                tcs.setResult(result.getToken());
-            } else {
-                tcs.setException(new IllegalStateException("Failed to get ID token"));
-            }
-        }).addOnFailureListener(tcs::setException);
+        AuthToken.with(user, tcs::trySetResult,
+                () -> tcs.trySetException(new IllegalStateException("Failed to get ID token")));
         return tcs.getTask();
     }
 

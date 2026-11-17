@@ -413,8 +413,10 @@ public class StoryViewerActivity extends Activity {
 
         String me = Fb.uid();
         if (me != null && !mine && !s.viewedBy.contains(me)) {
-            Fb.db().collection("stories").document(s.id)
-                    .update("viewedBy", FieldValue.arrayUnion(me));
+            s.viewedBy.add(me);
+            com.friendbook.social.core.DataRouter.batch()
+                    .ops("stories", s.id, com.friendbook.social.core.CloudflareStore.arrayUnion("viewedBy", me))
+                    .commit();
         }
     }
 
@@ -448,8 +450,9 @@ public class StoryViewerActivity extends Activity {
                 if (myUid != null && s.authorId != null) {
                     Ui.confirm(this, "Block " + s.authorName + "?",
                             "You won't see their stories, posts, or messages anymore.", "Block", () -> {
-                                Fb.db().collection("users").document(myUid)
-                                        .set(Fb.map("blockedUsers", FieldValue.arrayUnion(s.authorId)), SetOptions.merge());
+                                com.friendbook.social.core.DataRouter.batch()
+                                        .ops("users", myUid, com.friendbook.social.core.CloudflareStore.arrayUnion("blockedUsers", s.authorId))
+                                        .commit();
                                 if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(s.authorId)) {
                                     Fb.me.blocked.add(s.authorId);
                                 }
@@ -495,16 +498,21 @@ public class StoryViewerActivity extends Activity {
     private void addCurrentToHighlights() {
         if (stories.isEmpty() || Fb.uid() == null) return;
         Models.Story s = stories.get(index);
-        Fb.db().collection("users").document(Fb.uid())
-                .update("highlightStoryIds", FieldValue.arrayUnion(s.id))
-                .addOnSuccessListener(x -> Ui.toast(this, "Pinned to Profile Highlights ✨"));
+        com.friendbook.social.core.DataRouter.batch()
+                .ops("users", Fb.uid(), com.friendbook.social.core.CloudflareStore.arrayUnion("highlightStoryIds", s.id))
+                .commit((ok, err) -> {
+                    if (ok) Ui.toast(this, "Pinned to Profile Highlights ✨");
+                });
     }
 
     private void sendQuickReaction(String emoji) {
         if (stories.isEmpty() || Fb.uid() == null) return;
         Models.Story s = stories.get(index);
-        Fb.db().collection("stories").document(s.id)
-                .update("reactions." + Fb.uid(), emoji);
+        if (s.reactions == null) s.reactions = new HashMap<>();
+        s.reactions.put(Fb.uid(), emoji);
+        com.friendbook.social.core.DataRouter.batch()
+                .update("stories", s.id, Fb.map("reactions", s.reactions))
+                .commit();
         Notify.send(s.authorId, "story_reaction", "reacted " + emoji + " to your story", "");
         Ui.toast(this, "Sent " + emoji + " to " + s.authorName);
     }

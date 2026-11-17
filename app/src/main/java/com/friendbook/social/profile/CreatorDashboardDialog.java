@@ -189,15 +189,19 @@ public final class CreatorDashboardDialog {
         dlg.show();
 
         // Live query of all user's posts to compute exact reactions, comments, shares & reach!
-        Fb.db().collection("posts").whereEqualTo("authorId", me).limit(150).get()
-                .addOnSuccessListener(snap -> {
-                    if (a.isFinishing() || snap == null) return;
-                    int posts = snap.size();
+        // D1, not the Firestore disk cache: the old limit(150) get() only ever counted posts
+        // already cached on this device.
+        com.friendbook.social.core.DocQuery postsQ = com.friendbook.social.core.DocQuery.of("posts")
+                .whereEqualTo("authorId", me).limit(150).build();
+        com.friendbook.social.core.CloudflareStore.query(postsQ, page -> {
+                    if (a.isFinishing() || page == null) return;
+                    int posts = page.documents.size();
                     int totalLikes = 0;
                     int totalComments = 0;
                     int totalShares = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Models.Post p = Models.Post.fromDoc(d);
+                    for (java.util.Map<String, Object> d : page.documents) {
+                        String rowId = d.get("id") == null ? "" : String.valueOf(d.get("id"));
+                        Models.Post p = Models.Post.fromMap(rowId, d);
                         totalLikes += FastCache.getReactionTotal(p.id, p.likes);
                         totalComments += Math.max(0, p.comments);
                         totalShares += Math.max(0, p.shares);

@@ -382,7 +382,7 @@ public class Ui {
                 .override(240, 240)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .into(iv);
     }
 
@@ -432,7 +432,7 @@ public class Ui {
                 .override(640, 640)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .into(iv);
     }
 
@@ -459,7 +459,7 @@ public class Ui {
                     .override(960, 1200)
                     .fitCenter()
                     .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                     .placeholder(ph).error(ph)
                     .thumbnail(tinyUrl == null
                             ? Glide.with(c.getApplicationContext()).load(fastUrl).override(40, 40)
@@ -470,7 +470,7 @@ public class Ui {
                     .override(960, 1200)
                     .centerCrop()
                     .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                     .placeholder(ph).error(ph)
                     .thumbnail(tinyUrl == null
                             ? Glide.with(c.getApplicationContext()).load(fastUrl).override(40, 40)
@@ -520,7 +520,7 @@ public class Ui {
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .centerCrop()
                 .dontAnimate()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .placeholder(ph)
                 .error(ph)
                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -546,7 +546,7 @@ public class Ui {
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .centerCrop()
                 .dontAnimate()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .placeholder(ph).error(ph).into(iv);
     }
 
@@ -563,7 +563,7 @@ public class Ui {
         Glide.with(c.getApplicationContext()).load(hdUrl)
                 .fitCenter()
                 .dontAnimate()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .placeholder(transparentPh)
                 .error(com.friendbook.social.R.drawable.ic_default_avatar)
                 .into(iv);

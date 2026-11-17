@@ -508,12 +508,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                         Ui.toast(this, "You left " + group.name);
                     });
         } else if (isPending) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayRemove(me));
+            com.friendbook.social.core.DataRouter.batch()
+                    .set("groups", id, Fb.map("pendingMemberIds", FieldValue.arrayRemove(me))).commit();
             Ui.toast(this, "Join request cancelled");
         } else if (!isInvited && ("Private".equalsIgnoreCase(group.privacy) || group.requireJoinApproval)) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayUnion(me));
+            com.friendbook.social.core.DataRouter.batch()
+                    .set("groups", id, Fb.map("pendingMemberIds", FieldValue.arrayUnion(me))).commit();
             Ui.toast(this, "⏳ Join request sent to Group Admins & Moderators");
         } else {
             Map<String, Object> up = new HashMap<>();
@@ -590,8 +590,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setView(sv)
                 .setPositiveButton("Send Invites", (d, w) -> {
                     if (selected.isEmpty()) return;
-                    Fb.db().collection("groups").document(id)
-                            .update("invitedUids", FieldValue.arrayUnion(selected.toArray()));
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("groups", id, Fb.map("invitedUids", FieldValue.arrayUnion(selected.toArray()))).commit();
                     for (String toUid : selected) {
                         Notify.sendGroupInvite(toUid, id, group.name);
                     }
@@ -775,8 +775,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-2, -2);
             nlp.leftMargin = Ui.dp(this, 6);
             no.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id)
-                        .update("pendingMemberIds", FieldValue.arrayRemove(reqUid));
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("groups", id, Fb.map("pendingMemberIds", FieldValue.arrayRemove(reqUid))).commit();
                 row.setVisibility(View.GONE);
             });
             row.addView(ok);
@@ -873,8 +873,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView unban = Ui.btnOutline(this, "Unban", Ui.GREEN);
             Ui.pad(unban, 10, 5, 10, 5);
             unban.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id)
-                        .update("bannedMemberIds", FieldValue.arrayRemove(bUid));
+                com.friendbook.social.core.DataRouter.batch()
+                        .set("groups", id, Fb.map("bannedMemberIds", FieldValue.arrayRemove(bUid))).commit();
                 row.setVisibility(View.GONE);
                 Ui.toast(this, "Unbanned ✓");
             });
@@ -1172,9 +1172,11 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         Ui.toast(this, "Uploading " + (cover ? "cover photo…" : "group icon…"));
         String path = "groups/" + id + "_" + (cover ? "cover_" : "icon_") + System.currentTimeMillis() + ".jpg";
         Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> Fb.db().collection("groups").document(id)
-                        .update(cover ? "coverUrl" : "photoUrl", url.toString())
-                        .addOnSuccessListener(x -> Ui.toast(this, "Updated ✓")))
+                .addOnSuccessListener(url -> {
+                    com.friendbook.social.core.DataRouter.batch()
+                            .set("groups", id, Fb.map(cover ? "coverUrl" : "photoUrl", url.toString()))
+                            .commit((ok, error) -> { if (ok) Ui.toast(this, "Updated ✓"); else Ui.toast(this, "Could not save the photo"); });
+                })
                 .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
     }
 

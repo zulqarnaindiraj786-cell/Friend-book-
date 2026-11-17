@@ -124,8 +124,9 @@ public class FeedPreferencesActivity extends Activity {
         if (me == null) return;
         if (favorites.contains(u.uid)) favorites.remove(u.uid);
         else favorites.add(u.uid);
-        Fb.db().collection("users").document(me)
-                .set(Fb.map("favoriteUids", new ArrayList<>(favorites)), SetOptions.merge());
+        com.friendbook.social.core.DataRouter.batch()
+                .update("users", me, Fb.map("favoriteUids", new ArrayList<>(favorites)))
+                .commit();
         render();
     }
 

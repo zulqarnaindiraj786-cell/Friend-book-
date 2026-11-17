@@ -149,8 +149,7 @@ public class AdminContentActivity extends Activity {
                 it.title + "\n" + it.sub, "Delete", () -> {
                     com.friendbook.social.core.DataRouter.batch().delete(tab, it.id).commit();
                     if ("posts".equals(tab)) {
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
-                                .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));
+                        com.friendbook.social.core.QueryActions.deleteMatchingD1("comments", "postId", it.id, null);
                     }
                     Ui.toast(this, "Deleted ✓");
                 });

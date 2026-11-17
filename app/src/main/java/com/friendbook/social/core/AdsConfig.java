@@ -308,10 +308,12 @@ public class AdsConfig {
         m.put("appAdsTxtUrl", APP_ADS_TXT_URL);
         m.put("updatedBy", Fb.uid());
         m.put("updatedAt", FieldValue.serverTimestamp());
-        Fb.db().collection("config").document("ads")
-                .set(m, SetOptions.merge())
-                .addOnSuccessListener(v -> Ui.toast(ctx, "Production AdMob config saved ✓"))
-                .addOnFailureListener(e -> Ui.toast(ctx, "Save failed: " + e.getMessage()));
+        com.friendbook.social.core.DataRouter.batch()
+                .update("config", "ads", m)
+                .commit((ok, err) -> {
+                    if (ok) Ui.toast(ctx, "Production AdMob config saved ✓");
+                    else Ui.toast(ctx, "Save failed: " + (err != null ? err : "error"));
+                });
     }
 
     public static void reset(Context ctx) {
@@ -815,7 +817,7 @@ public class AdsConfig {
         return p;
     }
 
-    /** Hydrates real user likes, reactions & comment counts from Firestore `posts/{adDocId}` once per ad creative. */
+    /** Hydrates real user likes, reactions & comment counts from D1 `posts/{adDocId}` once per ad creative. */
     public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         final String docId = adPost.id;
@@ -824,11 +826,10 @@ public class AdsConfig {
             return;
         }
         try {
-            Fb.db().collection("posts").document(docId).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap != null && snap.exists()) {
+            CloudflareStore.get("posts", docId, snap -> {
+                        if (snap != null) {
                             com.friendbook.social.models.Models.Post remote =
-                                    com.friendbook.social.models.Models.Post.fromDoc(snap);
+                                    com.friendbook.social.models.Models.Post.fromMap(docId, snap);
                             adPost.likes = Math.max(0, remote.likes);
                             adPost.comments = Math.max(0, remote.comments);
                             adPost.shares = Math.max(0, remote.shares);
@@ -859,10 +860,6 @@ public class AdsConfig {
                             com.friendbook.social.core.DataRouter.mirrorPut("posts", docId, seed);
                             com.friendbook.social.core.DataRouter.batch().set("posts", docId, seed).commit();
                         }
-                        if (onHydrated != null) onHydrated.run();
-                    })
-                    .addOnFailureListener(e -> {
-                        AD_POST_FETCHED.remove(docId);
                         if (onHydrated != null) onHydrated.run();
                     });
         } catch (Throwable ignored) {

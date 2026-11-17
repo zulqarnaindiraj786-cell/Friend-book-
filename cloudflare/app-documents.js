@@ -14,7 +14,7 @@ const ALLOWED_COLLECTIONS = new Set([
   // Written from the app but missing here: a report, a payment request and a live gift all go
   // through the same document write, and 'Unsupported collection' is a 400 the caller cannot
   // retry. Reporting therefore failed silently, and a paid request never reached the admin.
-  'reports', 'payments', 'gifts', 'feedback', 'events',
+  'reports', 'payments', 'gifts', 'feedback', 'events', 'config',
 ]);
 
 // Field names come from the client and are interpolated into a JSON path, so they are
@@ -230,6 +230,136 @@ export async function appDocuments(request, env, identity) {
       return json({ collection: query.collection, total: Number(row?.total || 0) });
     } catch {
       return json({ error: 'Count unavailable' }, 503);
+    }
+  }
+
+  if (path === '/v1/docs/batch') {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+    let payload;
+    try { payload = await request.json(); }
+    catch { return json({ error: 'Invalid JSON payload' }, 400); }
+    const writes = payload && Array.isArray(payload.writes) ? payload.writes : null;
+    if (!writes || writes.length === 0 || writes.length > 100) {
+      return json({ error: 'writes array (1..100) required' }, 400);
+    }
+    for (const item of writes) {
+      if (!item || typeof item !== 'object') return json({ error: 'Invalid write item' }, 400);
+      if (!ALLOWED_COLLECTIONS.has(item.collection) || !validSegment(item.id)) {
+        return json({ error: 'Invalid collection or document ID' }, 400);
+      }
+      if (item.action === 'put') {
+        if (!item.document || typeof item.document !== 'object' || Array.isArray(item.document)) {
+          return json({ error: 'Document object required' }, 400);
+        }
+      } else if (item.action === 'patch') {
+        if (!Array.isArray(item.ops) || item.ops.length === 0 || item.ops.length > 32) {
+          return json({ error: 'ops array required' }, 400);
+        }
+        for (const op of item.ops) {
+          if (!op || typeof op.field !== 'string' || !FIELD_NAME.test(op.field)) {
+            return json({ error: 'Invalid field' }, 400);
+          }
+          if (op.increment !== undefined && !Number.isFinite(Number(op.increment))) {
+            return json({ error: 'Invalid increment' }, 400);
+          }
+          if ((op.arrayUnion !== undefined && !Array.isArray(op.arrayUnion))
+              || (op.arrayRemove !== undefined && !Array.isArray(op.arrayRemove))) {
+            return json({ error: 'Invalid array operation' }, 400);
+          }
+        }
+      } else if (item.action !== 'delete') {
+        return json({ error: 'Invalid write action' }, 400);
+      }
+    }
+    const now = Date.now();
+    const dCache = getDbMap(docCache, env.DB);
+    try {
+      for (const item of writes) {
+        const itemPath = `${item.collection}/${item.id}`;
+        if (item.action === 'delete') {
+          const row = await env.DB.prepare(
+            'SELECT owner_uid FROM friendbook_cf_documents WHERE path = ?'
+          ).bind(itemPath).first();
+          if (row) {
+            if (row.owner_uid && row.owner_uid !== uid) {
+              return json({ error: 'Forbidden' }, 403);
+            }
+            await env.DB.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(itemPath).run();
+            dCache.delete(itemPath);
+          }
+        } else if (item.action === 'patch') {
+          for (const op of item.ops) {
+            const field = op.field;
+            if (op.increment !== undefined) {
+              const amount = Number(op.increment);
+              await env.DB.prepare(
+                `UPDATE friendbook_cf_documents
+                    SET document_json = json_set(
+                          document_json,
+                          '$.' || ?,
+                          COALESCE(json_extract(document_json, '$.' || ?), 0) + ?),
+                        updated_at = ?
+                  WHERE path = ?`
+              ).bind(field, field, amount, now, itemPath).run();
+            } else if (op.arrayUnion !== undefined || op.arrayRemove !== undefined) {
+              const adding = op.arrayUnion !== undefined;
+              const values = adding ? op.arrayUnion : op.arrayRemove;
+              const row = await env.DB.prepare(
+                'SELECT document_json FROM friendbook_cf_documents WHERE path = ?'
+              ).bind(itemPath).first();
+              if (!row) return json({ error: 'Not found' }, 404);
+              const current = toPlainDocument(row.document_json, item.id) || {};
+              const existing = Array.isArray(current[field]) ? current[field] : [];
+              const wanted = values.map(String);
+              const next = adding
+                ? [...existing, ...wanted.filter(v => !existing.includes(v))]
+                : existing.filter(v => !wanted.includes(v));
+              await env.DB.prepare(
+                'UPDATE friendbook_cf_documents SET document_json = json_set(document_json, ?, json(?)), updated_at = ? WHERE path = ?'
+              ).bind(`$.${field}`, JSON.stringify(next), now, itemPath).run();
+            } else {
+              await env.DB.prepare(
+                'UPDATE friendbook_cf_documents SET document_json = json_set(document_json, ?, json(?)), updated_at = ? WHERE path = ?'
+              ).bind(`$.${field}`, JSON.stringify(op.value === undefined ? null : op.value), now, itemPath).run();
+            }
+            const changed = await env.DB.prepare('SELECT changes() AS n').first();
+            if (!changed || changed.n === 0) return json({ error: 'Not found' }, 404);
+          }
+          dCache.delete(itemPath);
+        } else {
+          const existingRow = await env.DB.prepare(
+            'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'
+          ).bind(itemPath).first();
+          const existingPlain = existingRow ? (toPlainDocument(existingRow.document_json, item.id) || {}) : {};
+          const merged = { ...existingPlain, ...item.document, id: item.id };
+          if (!merged.createdAt) merged.createdAt = now;
+          merged.updatedAt = now;
+          const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingRow?.owner_uid || uid);
+          const serialized = JSON.stringify(merged);
+          if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
+          await env.DB.prepare(
+            `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET
+               owner_uid = excluded.owner_uid,
+               document_json = excluded.document_json,
+               updated_at = excluded.updated_at`
+          ).bind(itemPath, item.collection, item.id, ownerUid, serialized, now).run();
+          dCache.delete(itemPath);
+          if (item.collection === 'users' && item.id === uid) {
+            const displayName = typeof merged.displayName === 'string' ? merged.displayName.slice(0, 200) : '';
+            const avatarUrl = typeof merged.photoUrl === 'string' ? merged.photoUrl.slice(0, 2048) : null;
+            await env.DB.prepare(
+              'INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) '
+              + 'ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url'
+            ).bind(uid, displayName, avatarUrl).run();
+          }
+        }
+      }
+      getDbMap(listCache, env.DB).clear();
+      return json({ ok: true, applied: writes.length });
+    } catch {
+      return json({ error: 'Batch write unavailable' }, 503);
     }
   }
 

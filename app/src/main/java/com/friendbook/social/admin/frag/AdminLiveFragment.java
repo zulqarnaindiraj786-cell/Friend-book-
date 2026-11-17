@@ -129,8 +129,8 @@ public class AdminLiveFragment extends Fragment {
 
     /** Ends a broadcast by id; the id is all a Doc carries, so the write names it explicitly. */
     private void endLive(String liveId) {
-        Fb.db().collection("lives").document(liveId)
-                .update("status", "ended", "endedAt", FieldValue.serverTimestamp());
+        // D1 only: the old Firestore update queued locally with the network off and never
+        // synced, so a "ended" live stayed live in D1 until the mirror below ran.
         com.friendbook.social.core.DataRouter.mirrorPut("lives", liveId,
                 Fb.map("status", "ended", "endedAt", System.currentTimeMillis()));
     }

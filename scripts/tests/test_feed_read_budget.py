@@ -4,12 +4,13 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class FeedReadBudgetTest(unittest.TestCase):
-    def test_feed_first_page_is_seven_and_reads_only_d1(self):
+    def test_feed_first_page_is_fifteen_and_reads_only_d1(self):
         # The first page is one bounded D1 query. It used to be a Firestore get() with a cache
         # variant and an unordered retry behind it - three reads, from a database the app no
-        # longer writes the feed to.
+        # longer writes the feed to. 15 posts per page: a 7-post page cost a round trip every
+        # few swipes, which is what made scrolling feel like fetching.
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('private static final int PAGE = 7;',source)
+        self.assertIn('private static final int PAGE = 15;',source)
         first=source.split('private void startPostsQuery(boolean ordered)',1)[1].split('private void consumePostsFresh',1)[0]
         self.assertIn('CloudflareStore.query(feedQuery',first)
         self.assertIn('DocQuery.of("posts")',first)

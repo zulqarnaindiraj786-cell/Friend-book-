@@ -195,4 +195,30 @@ test('/v1/docs filters, paginates and deletes through the real worker', async ()
     { headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 400);
   assert.equal((await w.fetch(new Request('https://example.com/v1/docs?collection=nope',
     { headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 400);
+
+  // POST /v1/docs/batch executes put + patch + delete in a single Worker invocation.
+  const batchRes = await w.fetch(new Request('https://example.com/v1/docs/batch', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer uid_owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      writes: [
+        { action: 'put', collection: 'posts', id: 'batch_p1', document: { authorId: 'uid_owner', content: 'batched', shares: 1, savedBy: [] } },
+        { action: 'put', collection: 'posts', id: 'batch_temp', document: { authorId: 'uid_owner', content: 'to delete' } },
+        { action: 'patch', collection: 'posts', id: 'batch_p1', ops: [
+          { field: 'shares', increment: 2 },
+          { field: 'savedBy', arrayUnion: ['uid_owner', 'uid_2'] },
+        ] },
+        { action: 'delete', collection: 'posts', id: 'batch_temp' },
+      ],
+    }),
+  }), env);
+  assert.equal(batchRes.status, 200);
+  const batchJson = await batchRes.json();
+  assert.equal(batchJson.applied, 4);
+  const readBatch = await (await w.fetch(new Request('https://example.com/v1/docs/posts/batch_p1', {
+    headers: { Authorization: 'Bearer uid_owner' } }), env)).json();
+  assert.equal(readBatch.document.shares, 3);
+  assert.deepEqual(readBatch.document.savedBy, ['uid_owner', 'uid_2']);
+  assert.equal((await w.fetch(new Request('https://example.com/v1/docs/posts/batch_temp', {
+    headers: { Authorization: 'Bearer uid_owner' } }), env)).status, 404);
 });

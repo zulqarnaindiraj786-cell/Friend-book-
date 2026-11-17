@@ -362,22 +362,7 @@ public final class ReelVideoCache {
                     if (++warmed >= 2) break;
                 }
             }
-            Fb.db().collection("reels")
-                    .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(3)
-                    .get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap == null) return;
-                        List<Models.Reel> top = new ArrayList<>();
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                            Models.Reel r = Models.Reel.fromDoc(d);
-                            if (r.videoUrl != null && !r.videoUrl.isEmpty()) top.add(r);
-                        }
-                        if (!top.isEmpty()) {
-                            prefetchWindow(appCtx, top, 0);
-                        }
-                    });
+            // No background reels query at cold start: save D1 reads and mobile data until Reels tab opens.
         } catch (Throwable ignored) { }
     }
 

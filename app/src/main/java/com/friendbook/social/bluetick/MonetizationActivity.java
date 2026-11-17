@@ -130,8 +130,11 @@ public class MonetizationActivity extends Activity {
         if (me == null) { finish(); return; }
         // Shares the session-wide users/{me} listener.
         Fb.observeMe(meObserver);
-        Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
-                .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
+        // D1 count, not a Firestore page from the local disk cache.
+        com.friendbook.social.core.DocQuery reelsQ = com.friendbook.social.core.DocQuery.of("reels")
+                .whereEqualTo("authorId", me).build();
+        com.friendbook.social.core.CloudflareStore.count(reelsQ,
+                total -> checkEligibility(followersCount, (int) Math.min(total, Integer.MAX_VALUE)));
         if (subsCountReg != null) subsCountReg.remove();
         subsCountReg=com.friendbook.social.core.CountReads.once(
                 com.friendbook.social.core.DocQuery.of("subscriptions")
@@ -180,8 +183,10 @@ public class MonetizationActivity extends Activity {
     }
 
     private void toggleSubs(CompoundButton btn, boolean on) {
-        Fb.db().collection("users").document(Fb.uid())
-                .set(Fb.map("subscriptionsEnabled", on), SetOptions.merge());
+        // D1 write: the old Firestore set() queued locally with the network off and never
+        // synced, so the toggle looked on but the setting never stuck.
+        com.friendbook.social.core.DataRouter.batch()
+                .set("users", Fb.uid(), Fb.map("subscriptionsEnabled", on)).commit();
         Ui.toast(this, on ? "Free VIP Fan Club ON ⭐" : "VIP Fan Club turned off");
     }
 

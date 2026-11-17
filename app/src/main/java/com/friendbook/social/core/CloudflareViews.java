@@ -129,31 +129,28 @@ public final class CloudflareViews {
                 if (onUnavailable != null) onUnavailable.run();
                 return;
             }
-            user.getIdToken(false)
-                    .addOnSuccessListener(res -> {
-                        final String token = res != null ? res.getToken() : null;
-                        if (token == null || token.isEmpty()) {
-                            if (onUnavailable != null) onUnavailable.run();
-                            return;
-                        }
+            AuthToken.with(user, token -> {
+                if (token == null || token.isEmpty()) {
+                    if (onUnavailable != null) onUnavailable.run();
+                    return;
+                }
+                try {
+                    IO.execute(() -> {
                         try {
-                            IO.execute(() -> {
-                                try {
-                                    // Never count or read views for a different account.
-                                    if (!actor.equals(Fb.uid())) {
-                                        if (onUnavailable != null) MAIN.post(onUnavailable);
-                                        return;
-                                    }
-                                    work.run(token);
-                                } catch (Throwable ignored) { }
-                            });
-                        } catch (Throwable rejected) {
-                            if (onUnavailable != null) onUnavailable.run();
-                        }
-                    })
-                    .addOnFailureListener(e -> {
-                        if (onUnavailable != null) onUnavailable.run();
+                            // Never count or read views for a different account.
+                            if (!actor.equals(Fb.uid())) {
+                                if (onUnavailable != null) MAIN.post(onUnavailable);
+                                return;
+                            }
+                            work.run(token);
+                        } catch (Throwable ignored) { }
                     });
+                } catch (Throwable rejected) {
+                    if (onUnavailable != null) onUnavailable.run();
+                }
+            }, () -> {
+                if (onUnavailable != null) onUnavailable.run();
+            });
         } catch (Throwable ignored) {
             if (onUnavailable != null) onUnavailable.run();
         }

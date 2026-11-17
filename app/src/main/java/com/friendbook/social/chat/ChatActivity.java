@@ -1016,9 +1016,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Couldn't send voice note"); return; }
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-                    // The peer's push cannot confirm our own message; re-read locally so it
-                    // appears.
-                    if (chatPushAction != null) chatPushAction.run();
+                    // No re-read here: the message is already on screen via the optimistic
+                    // append, and a 20-document refresh per sent message was pure quota.
+                    // The peer's reply still arrives through the push-triggered refresh.
                 });
     }
 
@@ -1118,9 +1118,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-                    // The peer's push cannot confirm our own message; re-read locally so it
-                    // appears.
-                    if (chatPushAction != null) chatPushAction.run();
+                    // No re-read here: the message is already on screen via the optimistic
+                    // append, and a 20-document refresh per sent message was pure quota.
+                    // The peer's reply still arrives through the push-triggered refresh.
                 });
     }
 
@@ -1209,9 +1209,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-                    // The peer's push cannot confirm our own message; re-read locally so it
-                    // appears.
-                    if (chatPushAction != null) chatPushAction.run();
+                    // No re-read here: the message is already on screen via the optimistic
+                    // append, and a 20-document refresh per sent message was pure quota.
+                    // The peer's reply still arrives through the push-triggered refresh.
                 });
     }
 

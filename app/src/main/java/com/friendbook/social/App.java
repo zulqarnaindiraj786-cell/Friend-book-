@@ -60,11 +60,11 @@ public class App extends Application implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         instance = this;
-        com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
-        // Initialize Facebook-style Ad Queue Manager (3 ads Feed + 3 ads Reels)
-        com.friendbook.social.core.AdsConfig.warmUpPools(this);
+        // Ad queue preload (3 Feed + 3 Reels ad loads) is deferred to the idle handler below:
+        // six ad requests at cold start compete with the feed's first page for bandwidth and
+        // CPU, which is exactly when the user is watching the splash.
         // 🔐 App Check with Play Integrity — MONITOR mode first (won't block users)
         // TODO: Switch to enforce after verifying in Firebase Console (App Check > Apps > friendbook > Enforce)
         com.google.firebase.appcheck.FirebaseAppCheck.getInstance()
@@ -73,8 +73,10 @@ public class App extends Application implements SensorEventListener {
         com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
-        // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
+        // Defer non-critical audio decode, ad warmup, presence & me sync to idle handler so cold-launch frame #1 paints in 0ms
         Looper.myQueue().addIdleHandler(() -> {
+            com.friendbook.social.core.SoundEffects.warmUp(this);
+            com.friendbook.social.core.AdsConfig.warmUpPools(this);
             Presence.init();
             Fb.startMeListener();
             // A session whose profile row is missing from D1 - a lost signup write, or a build

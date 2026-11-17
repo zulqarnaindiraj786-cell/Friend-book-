@@ -274,30 +274,41 @@ public class Presence {
             if (!h.closed) cb.onPresence(fsOnline[0], fsLastSeen[0]);
         };
 
-        // Read once. Privacy flags (showActiveStatus, deactivated, banned) change when the user
-        // edits their settings, not continuously, and a per-contact subscription re-read that
-        // document every time anything about the account changed.
-        CloudflareStore.get("users", uid, doc -> {
-                    if (h.closed) return;
-                    if (doc == null) {
-                        fsSeen[0] = false; fsOnline[0] = false; fsLastSeen[0] = 0L; emit.run(); return;
-                    }
-                    fsSeen[0] = true;
-                    Object show = doc.get("showActiveStatus");
-                    boolean allowed = (!(show instanceof Boolean) || (Boolean) show)
-                            && !Boolean.TRUE.equals(doc.get("deactivated"))
-                            && !Boolean.TRUE.equals(doc.get("banned"));
-                    fsOnline[0] = allowed && firestoreActive(com.friendbook.social.core.Doc.of(uid, doc));
-                    fsLastSeen[0] = extractLastSeenMs(com.friendbook.social.core.Doc.of(uid, doc));
-                    emit.run();
-                });
+        // Use RAM FastCache first so opening Chat/Profile does not re-read users/{uid} a second time.
+        Models.User cachedUser = FastCache.getUser(uid);
+        if (cachedUser != null) {
+            fsSeen[0] = true;
+            boolean allowed = cachedUser.showActiveStatus && !cachedUser.deactivated && !cachedUser.banned;
+            fsLastSeen[0] = cachedUser.lastSeen;
+            fsOnline[0] = allowed && PresencePolicy.isFreshOnline(cachedUser.isOnline, cachedUser.lastSeen, now());
+            emit.run();
+        } else {
+            CloudflareStore.get("users", uid, doc -> {
+                        if (h.closed) return;
+                        if (doc == null) {
+                            fsSeen[0] = false; fsOnline[0] = false; fsLastSeen[0] = 0L; emit.run(); return;
+                        }
+                        Models.User u = Models.User.fromMap(uid, doc);
+                        if (u != null) FastCache.putUser(u);
+                        fsSeen[0] = true;
+                        Object show = doc.get("showActiveStatus");
+                        boolean allowed = (!(show instanceof Boolean) || (Boolean) show)
+                                && !Boolean.TRUE.equals(doc.get("deactivated"))
+                                && !Boolean.TRUE.equals(doc.get("banned"));
+                        fsOnline[0] = allowed && firestoreActive(com.friendbook.social.core.Doc.of(uid, doc));
+                        fsLastSeen[0] = extractLastSeenMs(com.friendbook.social.core.Doc.of(uid, doc));
+                        emit.run();
+                    });
+        }
 
-        // Cloudflare HTTP presence polling (real-time WebSocket state)
+        // Cloudflare HTTP presence polling (real-time WebSocket state). 60s, not 30s: the
+        // chat list watches every peer, so a 30s tick was 40 requests a minute for presence
+        // dots. A minute-old dot is still a dot; the WebSocket carries the live state.
         if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
             h.ticker = () -> {
                 if (!h.closed) {
                     fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, emit);
-                    H.postDelayed(h.ticker, 30_000L); // poll every 30s
+                    H.postDelayed(h.ticker, 60_000L); // poll every 60s
                 }
             };
             H.post(h.ticker); // immediate first fetch
@@ -315,35 +326,31 @@ public class Presence {
         if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null) return;
         long nowMs = android.os.SystemClock.elapsedRealtime();
         Long lastFetch = CF_PRESENCE_FETCH_AT.get(uid);
-        if (lastFetch != null && (nowMs - lastFetch) < 30_000L) return; // rate limit
+        if (lastFetch != null && (nowMs - lastFetch) < 60_000L) return; // rate limit
         CF_PRESENCE_FETCH_AT.put(uid, nowMs);
 
-        try {
-            FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty() || h.closed) return;
-                CF_IO.execute(() -> {
-                    try {
-                        String route = uid.equals(user.getUid()) ? "/me" : ("/contact/" + android.net.Uri.encode(uid));
-                        JSONObject data = D1HttpTransport.send(new java.net.URL(CF_PRESENCE_BASE + route), "GET", token, null);
-                        boolean cfOnline = data.optBoolean("online", false);
-                        long cfSeen = data.optLong("lastSeen", 0L);
-                        H.post(() -> {
-                            if (h.closed) return;
-                            // Cloudflare is the real-time source; Firestore is privacy gate
-                            if (cfOnline || cfSeen > 0L) {
-                                fsSeen[0] = true;
-                                fsOnline[0] = cfOnline;
-                                if (cfSeen > 0L) fsLastSeen[0] = Math.max(fsLastSeen[0], cfSeen);
-                                emit.run();
-                            }
-                        });
-                    } catch (Throwable ignored) { }
-                });
+        final String me = Fb.uid();
+        if (me == null) return;
+        AuthToken.with(token -> {
+            if (h.closed) return;
+            CF_IO.execute(() -> {
+                try {
+                    String route = uid.equals(me) ? "/me" : ("/contact/" + android.net.Uri.encode(uid));
+                    JSONObject data = D1HttpTransport.send(new java.net.URL(CF_PRESENCE_BASE + route), "GET", token, null);
+                    boolean cfOnline = data.optBoolean("online", false);
+                    long cfSeen = data.optLong("lastSeen", 0L);
+                    H.post(() -> {
+                        if (h.closed) return;
+                        if (cfOnline || cfSeen > 0L) {
+                            fsSeen[0] = true;
+                            fsOnline[0] = cfOnline;
+                            if (cfSeen > 0L) fsLastSeen[0] = Math.max(fsLastSeen[0], cfSeen);
+                            emit.run();
+                        }
+                    });
+                } catch (Throwable ignored) { }
             });
-        } catch (Throwable ignored) { }
+        }, () -> { });
     }
 
     /** Same freshness rule, for a D1 row. */
@@ -371,97 +378,16 @@ public class Presence {
         return Boolean.TRUE.equals(active) || Boolean.TRUE.equals(legacy);
     }
 
-    // ---------- TYPING (Cloudflare HTTP only, NO RTDB) ----------
+    // ---------- TYPING (disabled to save Worker/D1 quota; zero network requests) ----------
 
-    private static final Map<String, Runnable> typingClear = new HashMap<>();
-
-    /** Set typing state for current user in a chat (Cloudflare HTTP). */
+    /** No-op: typing indicator polling was dropped to save quota, so writing typing state is pure waste. */
     public static void setTyping(String chatId, boolean typing) {
-        String uid = Fb.uid();
-        if (uid == null || chatId == null) return;
-
-        // Cloudflare carries typing in real time (short-lived, per-chat).
-        // The Firestore mirror used to fire on EVERY keystroke: one write per character per user,
-        // which is by far the largest Firestore consumer in the app and pure waste — typing state
-        // is meaningless once it is a few seconds old and it is never read after a reload.
-        sendCloudflareTyping(chatId, typing);
-
-        if (typing) {
-            Runnable clear = () -> {
-                setTyping(chatId, false);
-            };
-            typingClear.put(chatId, clear);
-            H.postDelayed(clear, 3000); // 3s auto-stop
-        } else {
-            Runnable old = typingClear.remove(chatId);
-            if (old != null) H.removeCallbacks(old);
-        }
+        // Intentionally empty: zero Worker invocations on keystrokes.
     }
 
-    private static void sendCloudflareTyping(String chatId, boolean typing) {
-        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || chatId == null || chatId.isEmpty()) return;
-        try {
-            FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                CF_IO.execute(() -> {
-                    try {
-                        JSONObject body = new JSONObject();
-                        body.put("typing", typing);
-                        Request request = new Request.Builder()
-                                .url(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId))
-                                .put(RequestBody.create(body.toString(), JSON))
-                                .header("Authorization", "Bearer " + token)
-                                .build();
-                        CF_CLIENT.newCall(request).enqueue(new okhttp3.Callback() {
-                            @Override public void onFailure(Call call, java.io.IOException e) { }
-                            @Override public void onResponse(Call call, Response response) {
-                                if (response != null) response.close();
-                            }
-                        });
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
-    }
-
-    /** Watch whether any OTHER participant in a chat is typing (Cloudflare HTTP polling + Firestore). */
+    /** No-op handle: avoids reading chats/{chatId} a second time on every chat open. */
     public static Handle watchTyping(String chatId, String myUid, java.util.function.Consumer<Boolean> cb) {
-        Handle h = new Handle();
-        final boolean[] fsTyping = {false};
-        final boolean[] cfTyping = {false};
-
-        Runnable emit = () -> {
-            if (!h.closed) cb.accept(fsTyping[0] || cfTyping[0]);
-        };
-
-        // Read once; typing state refreshes on the next watch rather than being subscribed to.
-        CloudflareStore.get("chats", chatId, doc -> {
-                    if (h.closed) return;
-                    fsTyping[0] = false;
-                    if (doc != null) {
-                        Object t = doc.get("typing");
-                        if (t instanceof Map) {
-                            for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
-                                if (!String.valueOf(e.getKey()).equals(myUid)
-                                        && Boolean.TRUE.equals(e.getValue())) {
-                                    fsTyping[0] = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    emit.run();
-                });
-
-        // Typing has no Cloudflare channel to read, and polling for it every few seconds was
-        // the single most expensive thing the app did to D1: one request per open chat per three
-        // seconds, for a hint that disappears on its own. The indicator is dropped rather than
-        // billed; the message itself still arrives.
-
-        return h;
+        return new Handle();
     }
 
     // ---------- RTDB: ONLY for activeCall (call signaling) ----------

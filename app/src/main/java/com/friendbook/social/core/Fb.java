@@ -144,17 +144,42 @@ public class Fb {
      * on another device would never arrive and a fresh install would never populate at all.
      * D1 is the source of truth for this document now, so this is what fills it in.
      */
+    private static volatile String meLoadedUid;
+    private static volatile boolean meInFlight;
+
     public static void hydrateMeFromD1() {
         final String uid = uid();
         if (uid == null) return;
+        if (meInFlight && uid.equals(meLoadedUid)) return;
+        meInFlight = true;
+        meLoadedUid = uid;
+        meLastRefresh = System.currentTimeMillis();
         CloudflareStore.get("users", uid, doc -> {
+            meInFlight = false;
             if (doc == null || !uid.equals(uidOf())) return;
-            Models.User fresh = Models.User.fromMap(uid, doc);
-            if (fresh == null || fresh.uid == null) return;
-            me = fresh;
-            FastCache.saveMe(com.friendbook.social.App.instance, fresh);
-            notifyMeObservers(null);
-        });
+            Models.User u = Models.User.fromMap(uid, doc);
+            if (u == null || u.uid == null) return;
+            me = u;
+            FastCache.saveMe(com.friendbook.social.App.instance, u);
+            syncProfileToCloudflare(u);
+            notifyMeObservers(com.friendbook.social.core.Doc.of(uid, doc));
+            if (u.banned && !Admin.isOwnerEmail(u.email)) {
+                me = null;
+                FastCache.clearAll(com.friendbook.social.App.instance);
+                Presence.goOffline();
+                com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
+                auth().signOut();
+                android.content.Context app = com.friendbook.social.App.instance;
+                if (app != null) {
+                    Ui.toast(app, "Your friendbook account has been suspended by an admin.");
+                    android.content.Intent i = new android.content.Intent(app,
+                            com.friendbook.social.auth.LoginActivity.class);
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    app.startActivity(i);
+                }
+            }
+        }, () -> meInFlight = false);
     }
 
     /** The signed-in uid, read defensively so this class works before auth settles. */
@@ -173,37 +198,8 @@ public class Fb {
             Models.User cachedMe = FastCache.getMe();
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
         }
-        if (meReg != null) meReg.remove();
-        if (com.friendbook.social.BuildConfig.CLOUDFLARE_DATA_ENABLED) hydrateMeFromD1();
-        // One read of the signed-in user's document. This used to be a subscription, which meant
-        // every screen holding a MeObserver re-rendered on any change to the account and D1 was
-        // asked again for the same document on each app start. hydrateMeFromD1 above already
-        // serves the cached copy while this lands.
-        CloudflareStore.get("users", uid, doc -> {
-                    if (doc == null) return;
-                    Models.User u = Models.User.fromMap(uid, doc);
-                    me = u;
-                    FastCache.saveMe(com.friendbook.social.App.instance, u);
-                    syncProfileToCloudflare(u);
-                    notifyMeObservers(com.friendbook.social.core.Doc.of(uid, doc));
-                    if (u.banned && !Admin.isOwnerEmail(u.email)) {
-                        me = null;
-                        FastCache.clearAll(com.friendbook.social.App.instance);
-                        Presence.goOffline();
-                        com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
-                        auth().signOut();
-                        android.content.Context app = com.friendbook.social.App.instance;
-                        if (app != null) {
-                            Ui.toast(app, "Your friendbook account has been suspended by an admin.");
-                            android.content.Intent i = new android.content.Intent(app,
-                                    com.friendbook.social.auth.LoginActivity.class);
-                            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                    | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                            app.startActivity(i);
-                        }
-                    }
-                });
-        meLastRefresh = System.currentTimeMillis();
+        if (meReg != null) { meReg.remove(); meReg = null; }
+        hydrateMeFromD1();
     }
 
     /** Live listeners on users/{me}, shared by every screen that needs them. */
@@ -236,7 +232,10 @@ public class Fb {
         if (cached != null) {
             try { observer.onMe(null); } catch (Throwable ignored) { }
         }
-        if (meReg == null) startMeListener();
+        String current = uid();
+        if (current != null && (cached == null || !current.equals(meLoadedUid))) {
+            startMeListener();
+        }
     }
 
     public static void removeMeObserver(MeObserver observer) {
@@ -259,8 +258,10 @@ public class Fb {
     }
 
     public static void ensureMeFresh() {
-        if (uid() != null && (meReg == null || System.currentTimeMillis() - meLastRefresh > 60_000))
+        String current = uid();
+        if (current != null && (!current.equals(meLoadedUid) || System.currentTimeMillis() - meLastRefresh > 120_000L)) {
             startMeListener();
+        }
     }
 
     public static String myName() {
@@ -286,7 +287,6 @@ public class Fb {
         String uid = uid();
         if (uid == null) return;
         CloudflareStore.put("users", uid, fields);
-        db().collection("users").document(uid).set(fields, SetOptions.merge());
     }
 
     public static Map<String, Object> map(Object... kv) {
@@ -301,10 +301,9 @@ public class Fb {
     }
 
     /**
-     * ⚡ Zero-latency 3-tier user lookup:
+     * ⚡ Zero-latency user lookup:
      * 1. RAM Cache (`FastCache`) → 0.0ms immediate return!
-     * 2. Local Firestore Disk Cache (`Source.CACHE`) → <2ms offline/2G return!
-     * 3. Server fallback only on cold miss (and stores into RAM + Disk cache).
+     * 2. D1 direct fetch on cold miss (skips dead Firestore disk read when D1 is enabled).
      */
     public static Task<Models.User> getUser(String uid) {
         if (uid == null || uid.isEmpty()) return Tasks.forResult(null);
@@ -312,6 +311,10 @@ public class Fb {
         if (ram != null) return Tasks.forResult(ram);
 
         TaskCompletionSource<Models.User> tcs = new TaskCompletionSource<>();
+        if (com.friendbook.social.BuildConfig.CLOUDFLARE_DATA_ENABLED) {
+            fetchUserNetwork(uid, tcs);
+            return tcs.getTask();
+        }
         db().collection("users").document(uid).get(Source.CACHE)
                 .addOnSuccessListener(d -> {
                     if (d != null && d.exists()) {
@@ -337,21 +340,13 @@ public class Fb {
         String key = u.uid + "|" + dn + "|" + ph;
         if (key.equals(lastCloudflareProfileKey)) return;
         lastCloudflareProfileKey = key;
-        try {
-            com.google.firebase.auth.FirebaseUser user = auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                CF_PROFILE_IO.execute(() -> {
-                    try {
-                        D1HttpTransport.send(
-                                new java.net.URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me"),
-                                "PUT", token, D1Client.object("displayName", dn, "photoUrl", ph));
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
+        AuthToken.with(token -> CF_PROFILE_IO.execute(() -> {
+            try {
+                D1HttpTransport.send(
+                        new java.net.URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me"),
+                        "PUT", token, D1Client.object("displayName", dn, "photoUrl", ph));
+            } catch (Throwable ignored) { }
+        }), () -> { });
     }
 
     /**

@@ -943,11 +943,13 @@ public class SettingsActivity extends Activity {
             } else {
                 Ui.confirm(this, "Limit past posts?",
                         "All past Public posts on your timeline will change to Friends-only.",
-                        "Limit Past Posts", () -> com.friendbook.social.core.QueryActions.updateMatching(
-                                Fb.db().collection("posts").whereEqualTo("authorId",Fb.uid()).whereEqualTo("privacy","Public"),
-                                Fb.map("privacy","Friends"))
-                                .addOnSuccessListener(changed->Ui.toast(this,changed+" past post(s) limited to Friends"))
-                                .addOnFailureListener(e->Ui.toast(this,"Some posts could not be updated. Retry to continue.")));
+                        "Limit Past Posts", () -> com.friendbook.social.core.QueryActions.updateMatchingD1(
+                                com.friendbook.social.core.DocQuery.of("posts")
+                                        .whereEqualTo("authorId", Fb.uid())
+                                        .whereEqualTo("privacy", "Public")
+                                        .limit(50).build(),
+                                Fb.map("privacy", "Friends"),
+                                changed -> Ui.toast(this, changed + " past post(s) limited to Friends")));
             }
         });
     }
@@ -1337,10 +1339,7 @@ public class SettingsActivity extends Activity {
                     if (uid != null) {
                         String[] cols = {"posts", "reels", "stories", "comments"};
                         for (String col : cols) {
-                            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(200).get()
-                                    .addOnSuccessListener(snap -> {
-                                        for (DocumentSnapshot d : snap) d.getReference().delete();
-                                    });
+                            com.friendbook.social.core.QueryActions.deleteMatchingD1(col, "authorId", uid, null);
                         }
                         com.friendbook.social.core.DataRouter.batch().delete("users", uid).commit();
                     }

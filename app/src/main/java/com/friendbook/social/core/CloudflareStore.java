@@ -82,6 +82,8 @@ public final class CloudflareStore {
     public static void ensureOwnProfile() {
         String uid = Fb.uid();
         if (!enabled() || uid == null || uid.isEmpty()) return;
+        // Skip redundant startup GET when the local cached profile already belongs to this user.
+        if (Fb.me != null && uid.equals(Fb.me.uid)) return;
         get("users", uid, existing -> {
             if (existing != null) return;
             if (!uid.equals(Fb.uid())) return;
@@ -139,26 +141,45 @@ public final class CloudflareStore {
      * {@link #list} and filtered client-side, which read a whole page to get one document.
      */
     public static void get(String collection, String docId, Consumer<Map<String, Object>> callback) {
+        get(collection, docId, callback, null);
+    }
+
+    public static void get(String collection, String docId, Consumer<Map<String, Object>> callback,
+                           Runnable onFailure) {
         if (!enabled() || collection == null || docId == null || docId.isEmpty() || callback == null) {
-            if (callback != null) MAIN.post(() -> callback.accept(null));
+            if (onFailure != null) MAIN.post(onFailure);
+            else if (callback != null) MAIN.post(() -> callback.accept(null));
             return;
         }
         FirebaseUser user = currentUser();
-        if (user == null) { MAIN.post(() -> callback.accept(null)); return; }
+        if (user == null) {
+            if (onFailure != null) MAIN.post(onFailure);
+            else MAIN.post(() -> callback.accept(null));
+            return;
+        }
         AuthToken.with(user, token -> {
             IO.execute(() -> {
                 Map<String, Object> found = null;
+                boolean failed = false;
                 try {
                     URL url = new URL(BASE + "/" + Uri.encode(collection) + "/" + Uri.encode(docId));
                     JSONObject data = D1HttpTransport.send(url, "GET", token, null);
                     JSONObject document = data != null ? data.optJSONObject("document") : null;
                     if (document != null) found = D1Client.map(document);
                 } catch (Throwable absent) {
-                    // A missing document is not an error: the caller decides what to render.
+                    String msg = absent.getMessage();
+                    if (msg == null || !msg.contains("(404)")) failed = true;
                 }
                 final Map<String, Object> result = found;
-                MAIN.post(() -> callback.accept(result));
+                final boolean hadError = failed;
+                MAIN.post(() -> {
+                    if (hadError && onFailure != null) onFailure.run();
+                    else callback.accept(result);
+                });
             });
+        }, () -> {
+            if (onFailure != null) MAIN.post(onFailure);
+            else MAIN.post(() -> callback.accept(null));
         });
     }
 
@@ -528,6 +549,47 @@ public final class CloudflareStore {
                 }
             });
         });
+    }
+
+    /**
+     * Executes multiple put/patch/delete writes in ONE Worker HTTP request ({@code POST /v1/docs/batch}),
+     * cutting both client round-trips and Cloudflare Worker invocations from N to 1.
+     *
+     * <p>{@code onFailure} receives {@code true} when the server returned 404 (older worker build
+     * during deploy rollout), allowing {@link D1Batch} to fall back seamlessly to per-op requests.
+     */
+    public static void batch(JSONArray writes, java.util.Set<String> collections,
+                             Runnable onSuccess, Consumer<Boolean> onFailure) {
+        if (!enabled() || writes == null || writes.length() == 0) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept(false));
+            return;
+        }
+        FirebaseUser user = currentUser();
+        if (user == null) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept(false));
+            return;
+        }
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("writes", writes);
+        } catch (Throwable ignored) {
+            if (onFailure != null) MAIN.post(() -> onFailure.accept(false));
+            return;
+        }
+        AuthToken.with(user, token -> IO.execute(() -> {
+            try {
+                URL url = new URL(BASE + "/batch");
+                D1HttpTransport.send(url, "POST", token, body);
+                if (collections != null) {
+                    for (String c : collections) invalidateLists(c);
+                }
+                if (onSuccess != null) MAIN.post(onSuccess);
+            } catch (Throwable refused) {
+                String msg = refused.getMessage();
+                final boolean unsupported = msg != null && msg.contains("(404)");
+                if (onFailure != null) MAIN.post(() -> onFailure.accept(unsupported));
+            }
+        }));
     }
 
     private static FirebaseUser currentUser() {

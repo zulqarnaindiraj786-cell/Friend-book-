@@ -138,27 +138,33 @@ public class NotificationsFragment extends Fragment {
         // Only the explicit "Mark all read" button invokes this operation.
         String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .limit(450).get().addOnSuccessListener(snap -> {
-                    if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
-                    com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
-                    for (DocumentSnapshot d : snap) {
-                        // Marked read in D1, which is the only store the app writes to. The
-                        // batch used to commit to Firestore, so a refused commit left the
-                        // badge showing unread notifications that were already opened.
-                        batch.update("notifications", d.getId(), Fb.map("isRead", true));
-                    }
-                    batch.commit((success, error) -> {
-                        if (!me.equals(Fb.uid())) return;
-                        if (!success) {
-                            android.util.Log.w("FriendBook", "Mark-all-read failed on D1: " + error);
-                            return;
-                        }
-                        markAllReadOptimisticNow();
-                        MainActivity.clearNotificationsBadgeNow();
-                        if (snap.size() == 450) markAllReadReal();
-                    });
-                });
+        // Read from D1, not the Firestore disk cache: with Firestore's network off the old
+        // query read whatever happened to be cached locally, so mark-all-read silently did
+        // nothing for notifications that had never been cached on this device.
+        com.friendbook.social.core.DocQuery q = com.friendbook.social.core.DocQuery.of("notifications")
+                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false).limit(450).build();
+        com.friendbook.social.core.CloudflareStore.query(q, page -> {
+            if (!me.equals(Fb.uid()) || page == null || page.isEmpty()) return;
+            com.friendbook.social.core.D1Batch batch = com.friendbook.social.core.DataRouter.batch();
+            for (Map<String, Object> d : page.documents) {
+                Object idObj = d.get("id");
+                if (idObj == null) continue;
+                // Marked read in D1, which is the only store the app writes to. The
+                // batch used to commit to Firestore, so a refused commit left the
+                // badge showing unread notifications that were already opened.
+                batch.update("notifications", String.valueOf(idObj), Fb.map("isRead", true));
+            }
+            batch.commit((success, error) -> {
+                if (!me.equals(Fb.uid())) return;
+                if (!success) {
+                    android.util.Log.w("FriendBook", "Mark-all-read failed on D1: " + error);
+                    return;
+                }
+                markAllReadOptimisticNow();
+                MainActivity.clearNotificationsBadgeNow();
+                if (page.documents.size() == 450) markAllReadReal();
+            });
+        });
     }
 
     @Override

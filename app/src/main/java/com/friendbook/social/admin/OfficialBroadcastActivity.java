@@ -127,7 +127,6 @@ public final class OfficialBroadcastActivity extends Activity {
     @Override protected void onStart() { super.onStart(); observeUpload(); }
     private void queue(String text, String uid) {
         if (!uid.equals(Fb.uid()) || !Admin.isAdmin()) { fail("Admin account changed; broadcast stopped"); return; }
-        DocumentReference ref = Fb.db().collection("officialBroadcasts").document(jobId);
         Map<String, Object> spec = new HashMap<>();
         spec.put("adminId", uid); spec.put("text", text); spec.put("mediaUrl", mediaUrl);
         spec.put("mediaType", mediaType); spec.put("storagePath", uploadPath);

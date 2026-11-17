@@ -77,7 +77,7 @@ public class ReelsFragment extends Fragment {
     private ViewPager2 pager;
     private ReelAdapter adapter;
     private ListenerRegistration reelsReg, videoPostsReg;
-    private DocumentSnapshot reelsCursor, postsCursor;
+    private String reelsCursor, postsCursor;
     private boolean pagingVideos, moreReels=true, moreVideoPosts=true;
     /** True when a load attempt ended with nothing because the NETWORK failed, not because empty. */
     private boolean reelsLoadFailed;
@@ -609,49 +609,38 @@ public class ReelsFragment extends Fragment {
             initialLoadingBox.setVisibility(View.VISIBLE);
         }
 
-        // 3. Also check local Firestore disk cache (Source.CACHE) for 0ms offline/slow-network render
-        final int cacheGen = videoGeneration;
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(5)
-                .get(com.google.firebase.firestore.Source.CACHE)
-                .addOnSuccessListener(snap -> {
-                    if (cacheGen != videoGeneration || !isAdded() || snap == null || snap.isEmpty()) return;
-                    boolean added = false;
-                    for (DocumentSnapshot doc : snap.getDocuments()) {
-                        if (Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                        Models.Reel r = Models.Reel.fromDoc(doc);
-                        if (r.videoUrl == null || r.videoUrl.isEmpty()) continue;
-                        if (loadedVideoIds.add("reels/" + doc.getId())) {
-                            fromReels.add(r);
-                            added = true;
-                        }
-                    }
-                    if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
-                });
-
         loadNextVideos();
         if(initialReelId!=null && !initialReelId.isEmpty()) {
             final int request=videoGeneration; final String target=initialReelId; final String actor=Fb.uid();
-            Fb.db().collection("reels").document(target).get().addOnSuccessListener(doc -> {
+            com.friendbook.social.core.CloudflareStore.get("reels", target, doc -> {
                 if(request!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-                if(doc.exists()) { addLinkedVideo(doc,true); return; }
-                Fb.db().collection("posts").document(target).get().addOnSuccessListener(post -> {
-                    if(request==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post.exists()) addLinkedVideo(post,false);
-                });
+                if(doc != null && !doc.isEmpty()) { addLinkedVideo(target, doc, true); return; }
+                com.friendbook.social.core.CloudflareStore.get("posts", target, post -> {
+                    if(request==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post != null && !post.isEmpty()) {
+                        addLinkedVideo(target, post, false);
+                    }
+                }, () -> {});
+            }, () -> {
+                com.friendbook.social.core.CloudflareStore.get("posts", target, post -> {
+                    if(request==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post != null && !post.isEmpty()) {
+                        addLinkedVideo(target, post, false);
+                    }
+                }, () -> {});
             });
         }
     }
-    private void addLinkedVideo(DocumentSnapshot doc,boolean nativeReel) {
-        if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) return;
-        Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+    private void addLinkedVideo(String docId, Map<String, Object> doc, boolean nativeReel) {
+        if(Boolean.TRUE.equals(doc.get("safetyFlagged"))) return;
+        Models.Reel reel=nativeReel?Models.Reel.fromMap(docId, doc):Models.Reel.fromVideoPost(Models.Post.fromMap(docId, doc));
         if(reel.videoUrl==null || reel.videoUrl.isEmpty() || (Fb.me!=null && Fb.me.blocked.contains(reel.authorId))) return;
         if(Prefs.isPostHidden(getActivity(),reel.id)) return;
         if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) return;
         List<Models.Reel> bucket = nativeReel ? fromReels : fromPosts;
-        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
+        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+docId)) {
             bucket.add(0, reel);
         } else {
             for (int i = 0; i < bucket.size(); i++) {
-                if (bucket.get(i) != null && doc.getId().equals(bucket.get(i).id)) {
+                if (bucket.get(i) != null && docId.equals(bucket.get(i).id)) {
                     bucket.set(i, reel);
                     break;
                 }
@@ -663,8 +652,6 @@ public class ReelsFragment extends Fragment {
     private void loadNextVideos() {
         if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
         pagingVideos=true; reelsLoadFailed=false; final int generation=videoGeneration; final String actor=Fb.uid();
-        // A Firestore get() on a black-hole network calls NEITHER listener. Without this watchdog the
-        // opening spinner would spin forever; after 15s the user gets the failure state and a Retry.
         reelsWatchdog.removeCallbacksAndMessages(null);
         final int wdGen=++watchdogGen;
         reelsWatchdog.postDelayed(() -> {
@@ -675,23 +662,7 @@ public class ReelsFragment extends Fragment {
             rebuildMergedFeed(true);
             if (getActivity() != null) Ui.toast(getActivity(), "Network slow — tap Retry to load Reels");
         }, 15_000L);
-        if (reelsCursor == null && postsCursor == null) {
-            com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
-                if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
-                boolean added = false;
-                for (Map<String, Object> m : docs) {
-                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
-                    if (id.isEmpty()) continue;
-                    Models.Reel reel = Models.Reel.fromMap(id, m);
-                    if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
-                    if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
-                    if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
-                    if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added = true; }
-                }
-                if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
-            });
-        }
-        // Two sources contribute five metadata documents each: at most ten per batch.
+        // Page both native reels and video posts directly from D1 on keyset cursors (8 + 8 per batch).
         final int[] pending={(moreReels?1:0)+(moreVideoPosts?1:0)};
         Runnable done=() -> {
             if(generation!=videoGeneration) return;
@@ -700,7 +671,6 @@ public class ReelsFragment extends Fragment {
                 watchdogGen++;
                 reelsWatchdog.removeCallbacksAndMessages(null);
                 if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
-                    // An outage must NOT become a retry storm: three attempts, then a visible Retry.
                     if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
                     else { reelsLoadFailed=true; rebuildMergedFeed(true); }
                 } else {
@@ -711,28 +681,37 @@ public class ReelsFragment extends Fragment {
         };
         for(boolean nativeReel:new boolean[]{true,false}) {
             if(nativeReel?!moreReels:!moreVideoPosts) continue;
-            Query query=nativeReel?Fb.db().collection("reels").orderBy("createdAt",Query.Direction.DESCENDING)
-                    :Fb.db().collection("posts").whereEqualTo("mediaType","video");
-            DocumentSnapshot cursor=nativeReel?reelsCursor:postsCursor;
-            if(cursor!=null) query=query.startAfter(cursor);
-            query.limit(5).get().addOnSuccessListener(page -> {
-                // A superseded generation returns without settling: the newer load owns pagingVideos.
+            com.friendbook.social.core.DocQuery.Builder qb = nativeReel
+                    ? com.friendbook.social.core.DocQuery.of("reels")
+                            .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC).limit(8)
+                    : com.friendbook.social.core.DocQuery.of("posts")
+                            .whereEqualTo("mediaType", "video")
+                            .orderBy("createdAt", com.friendbook.social.core.DocQuery.DESC).limit(8);
+            String cursor = nativeReel ? reelsCursor : postsCursor;
+            if(cursor != null) qb.startAfter(cursor);
+            com.friendbook.social.core.CloudflareStore.query(qb.build(), page -> {
                 if(generation!=videoGeneration) return;
-                // But an auth flip or a hide/show MUST NOT swallow the settle - that is exactly how
-                // pagingVideos stayed true forever and the opening spinner never went away. The page
-                // is simply not applied when it no longer belongs to this session.
-                if(java.util.Objects.equals(actor,Fb.uid()) && isAdded()) {
-                    if(nativeReel) { moreReels=page.size()==5; if(!page.isEmpty()) reelsCursor=page.getDocuments().get(page.size()-1); }
-                    else { moreVideoPosts=page.size()==5; if(!page.isEmpty()) postsCursor=page.getDocuments().get(page.size()-1); }
+                if(java.util.Objects.equals(actor,Fb.uid()) && isAdded() && page != null) {
+                    if(nativeReel) {
+                        reelsCursor = page.nextCursor;
+                        moreReels = page.hasMore && page.nextCursor != null;
+                    } else {
+                        postsCursor = page.nextCursor;
+                        moreVideoPosts = page.hasMore && page.nextCursor != null;
+                    }
                     boolean addedNow = false;
-                    for(DocumentSnapshot doc:page) {
-                        if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                        Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
+                    for(Map<String, Object> doc : page.documents) {
+                        if(Boolean.TRUE.equals(doc.get("safetyFlagged"))) continue;
+                        String docId = Format.str(doc, "id");
+                        if(docId.isEmpty()) continue;
+                        Models.Reel reel = nativeReel
+                                ? Models.Reel.fromMap(docId, doc)
+                                : Models.Reel.fromVideoPost(Models.Post.fromMap(docId, doc));
                         if(reel.videoUrl==null || reel.videoUrl.isEmpty()) continue;
                         if(Fb.me!=null && Fb.me.blocked.contains(reel.authorId)) continue;
                         if(Prefs.isPostHidden(getActivity(),reel.id)) continue;
                         if(ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(getActivity(),nativeReel?"reels":"posts",reel.id,reel.authorId,reel.caption,reel.videoUrl,null)) continue;
-                        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+doc.getId())) {
+                        if(loadedVideoIds.add((nativeReel?"reels/":"posts/")+docId)) {
                             (nativeReel?fromReels:fromPosts).add(reel);
                             addedNow = true;
                         }
@@ -740,7 +719,14 @@ public class ReelsFragment extends Fragment {
                     if (addedNow) rebuildMergedFeed(false);
                 }
                 done.run();
-            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load Reels — tap Retry"); } });
+            }, () -> {
+                if(generation==videoGeneration) {
+                    done.run();
+                    if(getActivity()!=null && (adapter == null || adapter.rawReels().isEmpty())) {
+                        Ui.toast(getActivity(),"Couldn't load Reels — tap Retry");
+                    }
+                }
+            });
         }
     }
 
@@ -2619,13 +2605,17 @@ public class ReelsFragment extends Fragment {
                 saveBtnBox.animate().scaleX(1.25f).scaleY(1.25f).setDuration(110).withEndAction(() ->
                         saveBtnBox.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
                 ).start();
-                Map<String, Object> favUp = new HashMap<>();
-                favUp.put("savedBy", already ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me));
-                favUp.put("favorites", reel.favorites);
-                Fb.db().collection(reel.collectionName()).document(reel.id)
-                        .set(favUp, SetOptions.merge());
-                Fb.db().collection("users").document(me)
-                        .set(Fb.map("savedReelIds", already ? FieldValue.arrayRemove(reel.id) : FieldValue.arrayUnion(reel.id)), SetOptions.merge());
+                com.friendbook.social.core.DataRouter.batch()
+                        .ops(reel.collectionName(), reel.id,
+                                already
+                                        ? com.friendbook.social.core.CloudflareStore.arrayRemove("savedBy", me)
+                                        : com.friendbook.social.core.CloudflareStore.arrayUnion("savedBy", me))
+                        .update(reel.collectionName(), reel.id, Fb.map("favorites", reel.favorites))
+                        .ops("users", me,
+                                already
+                                        ? com.friendbook.social.core.CloudflareStore.arrayRemove("savedReelIds", reel.id)
+                                        : com.friendbook.social.core.CloudflareStore.arrayUnion("savedReelIds", reel.id))
+                        .commit();
                 if (!already) {
                     FeedAlgorithm.recordCreatorAffinity(a, reel.authorId, 8);
                 }
@@ -2724,8 +2714,10 @@ public class ReelsFragment extends Fragment {
                 }, which -> {
                     reel.shares++;
                     renderCounts();
-                    Fb.db().collection(reel.collectionName()).document(reel.id)
-                            .set(Fb.map("shares", FieldValue.increment(1)), SetOptions.merge());
+                    com.friendbook.social.core.DataRouter.batch()
+                            .ops(reel.collectionName(), reel.id,
+                                    com.friendbook.social.core.CloudflareStore.increment("shares", 1))
+                            .commit();
 
                     if (which == 0) {
                         Map<String, Object> postMap = Fb.map(
@@ -2880,8 +2872,10 @@ public class ReelsFragment extends Fragment {
                             Ui.confirm(a, "Block " + reel.authorName + "?",
                                     "You won't see their reels, posts, stories, or messages anymore.",
                                     "Block", () -> {
-                                        Fb.db().collection("users").document(myUid)
-                                                .set(Fb.map("blockedUsers", FieldValue.arrayUnion(reel.authorId)), SetOptions.merge());
+                                        com.friendbook.social.core.DataRouter.batch()
+                                                .ops("users", myUid,
+                                                        com.friendbook.social.core.CloudflareStore.arrayUnion("blockedUsers", reel.authorId))
+                                                .commit();
                                         if (Fb.me != null && Fb.me.blocked != null && !Fb.me.blocked.contains(reel.authorId)) {
                                             Fb.me.blocked.add(reel.authorId);
                                         }

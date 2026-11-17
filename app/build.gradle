@@ -22,8 +22,8 @@ android {
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 137
-        versionName '2.10.1'
+        versionCode 138
+        versionName '2.10.2'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -135,4 +135,9 @@ dependencies {
     implementation 'androidx.viewpager2:viewpager2:1.1.0'
 
     implementation 'com.github.bumptech.glide:glide:4.16.0'
+    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
+    // OkHttp3/4 stack for Glide: the default HttpURLConnection fetcher opens a fresh TCP+TLS
+    // handshake per image, which is why feed photos popped in one by one while scrolling.
+    // Sharing the pooled OkHttp client keeps connections warm across the whole feed.
+    implementation 'com.github.bumptech.glide:okhttp3-integration:4.16.0'
 }
