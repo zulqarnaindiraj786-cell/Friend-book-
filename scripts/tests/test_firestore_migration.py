@@ -87,6 +87,16 @@ class FirestoreMigrationTests(unittest.TestCase):
         self.assertEqual(rows[0],{'path':'users/u0','owner_uid':'u0'})
         self.assertEqual(rows[-1],{'path':'users/u9','owner_uid':'u9'})
 
+    def test_nested_collection_uses_paginated_count_without_aggregation_call(self):
+        d1=LocalD1()
+        path=copy.PREFIX+'/users/u1/posts'
+        d1.add_task(path,0)
+        doc={'name':copy.PREFIX+'/users/u1/posts/p1','createTime':'2026-11-10T00:00:00Z','fields':{'uid':{'stringValue':'u1'}}}
+        source=FakeSource({'first':([doc],None)},1)
+        final=copy.run_collection(source,d1,path,pause=0,sleep=lambda _:None)
+        self.assertEqual(final['firebase_count'],1)
+        self.assertFalse(any(call[0]=='count' for call in source.calls))
+
     def test_quota_429_waits_ten_minutes_then_retries_same_page(self):
         waits=[]
         source=copy.FirestoreSource(RetrySession(),sleep=waits.append)

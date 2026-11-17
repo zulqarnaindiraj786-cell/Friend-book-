@@ -207,7 +207,9 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
         task = d1.task(collection_path)
     if task['status'] == 'complete': return task
     source_total = task['firebase_count']
-    if source_total is None:
+    relative_collection = collection_path[len(PREFIX) + 1:]
+    is_root_collection = '/' not in relative_collection
+    if source_total is None and is_root_collection:
         source_total = source.count(collection_path)
         d1.query(f'''UPDATE {PROGRESS_TABLE} SET firebase_count=?,updated_at=? WHERE collection_path=?''',
                  (source_total, int(time.time() * 1000), collection_path))
@@ -240,7 +242,7 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
         print(json.dumps({'root_collection': collection_path[len(PREFIX) + 1:].split('/', 1)[0],
                           'collection': task['collection_id'], 'firebase_count': source_total,
                           'copied_or_already_present': written_count,
-                          'remaining': max(0, source_total - read_count),
+                          'remaining': max(0, source_total - read_count) if source_total is not None else None,
                           'status': 'checkpointed'}), flush=True)
         sleep(pause)
         if not next_token:
@@ -249,6 +251,13 @@ def run_collection(source, d1, collection_path, pause=PAUSE_SECONDS, sleep=time.
             raise CopyError('Repeated Firestore page cursor; checkpoint retained')
         seen_tokens.add(next_token)
         token = next_token
+        task = d1.task(collection_path)
+    if source_total is None:
+        # For nested collections, the exhaustive paginated listing is the Firebase count;
+        # avoid an extra aggregation request for each subcollection.
+        source_total = read_count
+        d1.query(f'''UPDATE {PROGRESS_TABLE} SET firebase_count=?,updated_at=? WHERE collection_path=?''',
+                 (source_total, int(time.time() * 1000), collection_path))
         task = d1.task(collection_path)
     collection_parent = collection_path[len(PREFIX) + 1:]
     d1_counts = d1.query(f'''SELECT COUNT(*) AS total,
