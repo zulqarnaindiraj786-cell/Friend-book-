@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main, 'arena/**' ]
     # Worker-only changes must not rebuild/re-upload the existing Android release.
-    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml']
+    paths-ignore: ['worker.js', 'wrangler.toml', 'package*.json', 'cloudflare/**', 'docs/**', '.github/workflows/cloudflare-worker.yml', '.github/workflows/deploy-cloudflare.yml', '.github/workflows/debug-apk.yml']
 
 concurrency:
   group: friendbook-apk-release

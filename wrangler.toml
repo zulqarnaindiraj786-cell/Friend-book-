@@ -1,5 +1,4 @@
-# Recheck Git-connected deployment after outage; both D1 gates remain OFF.
-# Git-connected build trigger; no runtime or database changes.
+# Production Worker: D1 interactions and R2 video are enabled; Firebase remains the login identity provider.
 name = "rough-firefly-dd7b"
 main = "worker.js"
 compatibility_date = "2024-01-01"
