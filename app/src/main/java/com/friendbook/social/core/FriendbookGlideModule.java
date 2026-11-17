@@ -56,7 +56,7 @@ public final class FriendbookGlideModule extends AppGlideModule {
         builder.setMemoryCache(new LruResourceCache(memoryBytes));
 
         // 500 MB of transformed images on disk, so a warm scroll never re-decodes.
-        builder.setDiskCacheFactory(new DiskLruCacheFactory(
+        builder.setDiskCache(new DiskLruCacheFactory(
                 context.getCacheDir().getAbsolutePath(), "friendbook_images",
                 500L * 1024L * 1024L));
     }
