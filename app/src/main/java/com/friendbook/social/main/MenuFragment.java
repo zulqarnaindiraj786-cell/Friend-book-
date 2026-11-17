@@ -551,13 +551,14 @@ public class MenuFragment extends Fragment {
                     upd.put("lastBonusAt", now);
                     com.friendbook.social.core.DataRouter.mirrorPut("users", me, upd);
                     com.friendbook.social.core.DataRouter.batch().set("users", me, upd)
-                            .addOnSuccessListener(x -> Ui.info(a, "🎁 Bonus claimed!",
+                            .commit((ok, error) -> { if (!ok) { Ui.toast(a, "Couldn't claim the bonus. Try again."); return; }
+                                    Ui.info(a, "🎁 Bonus claimed!",
                                     "+" + bonusF + " ⭐ added to your balance!\n\n"
                                             + "🔥 Streak: " + newStreak + " day(s)\n"
                                             + (verified ? "✓ Verified ×2 bonus applied 💙\n" : "")
                                             + (newStreak >= 5 ? "Max bonus unlocked — keep it going! 👑"
-                                            : "Come back tomorrow — streak rewards grow!")))
-                            .addOnFailureListener(e -> Ui.toast(a, e.getMessage())).commit();
+                                            : "Come back tomorrow — streak rewards grow!"));
+                            });
                 })
                 .addOnFailureListener(e -> Ui.toast(a, e.getMessage()));
     }
