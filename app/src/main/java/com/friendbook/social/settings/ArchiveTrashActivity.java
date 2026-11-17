@@ -258,8 +258,9 @@ public class ArchiveTrashActivity extends Activity {
         m.put("viewedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
         m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-        com.friendbook.social.core.DataRouter.add("stories", m, null)
-                .addOnSuccessListener(x -> Ui.toast(this, "Story re-shared for 24h 📖"));
+        com.friendbook.social.core.DataRouter.add("stories", m, (id, error) -> {
+            if (error == null) Ui.toast(this, "Story re-shared for 24h 📖");
+        });
     }
 
     private void renderArchivedPosts() {

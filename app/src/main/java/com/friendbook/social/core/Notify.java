@@ -74,7 +74,10 @@ public class Notify {
                 .set("notifications", notificationId, n)
                 .commit((success, error) -> {
                     if (!success) {
-                        com.friendbook.social.push.PushTrace.failure("notification_write_failed", error);
+                        // The trace takes an exception, and D1 reports a message; wrapping keeps
+                        // the failure visible instead of dropping it on a type mismatch.
+                        com.friendbook.social.push.PushTrace.failure("notification_write_failed",
+                                new IllegalStateException(error == null ? "D1 refused the write" : error));
                         return;
                     }
                     com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="

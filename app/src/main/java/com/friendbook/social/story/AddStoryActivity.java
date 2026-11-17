@@ -277,11 +277,13 @@ public class AddStoryActivity extends Activity {
             m.put("viewedBy", new ArrayList<String>());
             m.put("createdAt", FieldValue.serverTimestamp());
             m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-            String storyId = "story_" + System.currentTimeMillis();
-            com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-            com.friendbook.social.core.DataRouter.add("stories", m, null)
-                    .addOnSuccessListener(x -> { Ui.toast(this, "Text story shared 📖"); finish(); })
-                    .addOnFailureListener(e -> fail());
+            // One write, one id. There were two here - a put under a generated id and an add
+            // under a different one - so every text story was stored twice.
+            com.friendbook.social.core.DataRouter.add("stories", m, (id, error) -> {
+                if (error != null) { fail(); return; }
+                Ui.toast(this, "Text story shared 📖");
+                finish();
+            });
             return;
         }
         if (mediaUri == null) { Ui.toast(this, "Choose Aa Text, Photo or Video first"); return; }
@@ -321,11 +323,13 @@ public class AddStoryActivity extends Activity {
                                 m.put("viewedBy", new ArrayList<String>());
                                 m.put("createdAt", FieldValue.serverTimestamp());
                                 m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                                String storyId = "story_" + System.currentTimeMillis();
-                                com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-                                com.friendbook.social.core.DataRouter.add("stories", m, null)
-                                        .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
-                                        .addOnFailureListener(e -> fail());
+                                // Previously a put and an add under two different ids, which
+                                // stored the same story twice.
+                                com.friendbook.social.core.DataRouter.add("stories", m, (id, error) -> {
+                                    if (error != null) { fail(); return; }
+                                    Ui.toast(this, "Story shared ✓");
+                                    finish();
+                                });
                             })
                             .addOnFailureListener(e -> fail());
                 });

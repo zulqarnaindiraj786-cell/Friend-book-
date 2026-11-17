@@ -301,9 +301,8 @@ public class MarketplaceActivity extends Activity {
         m.put("shares", 0);
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
-        com.friendbook.social.core.DataRouter.add("posts", m, null)
-                .addOnSuccessListener(x -> Ui.toast(this, "Listed on Marketplace ✓"))
-                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
+        com.friendbook.social.core.DataRouter.add("posts", m, (id, error) ->
+                Ui.toast(this, error == null ? "Listed on Marketplace ✓" : error));
     }
 
     private void openItemSheet(Models.Post p) {

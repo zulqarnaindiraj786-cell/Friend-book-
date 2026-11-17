@@ -305,12 +305,15 @@ public class GroupsActivity extends Activity {
                     m.put("photoUrl", "");
                     m.put("coverUrl", "");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    com.friendbook.social.core.DataRouter.add("groups", m, null)
-                            .addOnSuccessListener(ref -> {
-                                Ui.toast(this, "Group created 🎉");
-                                startActivity(new Intent(this, GroupDetailActivity.class)
-                                        .putExtra("group_id", ref.getId()));
-                            });
+                    com.friendbook.social.core.DataRouter.add("groups", m, (id, error) -> {
+                        if (error != null || id == null) {
+                            Ui.toast(this, "Couldn't create group. Try again.");
+                            return;
+                        }
+                        Ui.toast(this, "Group created 🎉");
+                        startActivity(new Intent(this, GroupDetailActivity.class)
+                                .putExtra("group_id", id));
+                    });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
