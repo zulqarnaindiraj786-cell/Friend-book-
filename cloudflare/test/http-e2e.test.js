@@ -70,12 +70,12 @@ test('HTTP: enabled comments/media/replies/idempotency/react/pin/edit and retain
  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_comments').get().n,2);
 });
 
-test('HTTP: cursor paging returns 50 + 11 unique comments and 30 + 1 reactors',async t=>{
+test('HTTP: cursor paging returns 20-item comment pages and 30 + 1 reactor pages',async t=>{
  const f=await scenario(t);
  for(let i=0;i<61;i++)assert.equal((await f.call(route('comments'),'POST',{id:'c'+String(i).padStart(3,'0'),text:'fixture'})).status,200);
- const first=await f.call(route('comments')),second=await f.call(route('comments')+'?before='+encodeURIComponent(first.body.next));
- assert.equal(first.body.comments.length,50);assert.equal(second.body.comments.length,11);
- assert.equal(new Set([...first.body.comments,...second.body.comments].map(c=>c.id)).size,61);
+ const first=await f.call(route('comments')),second=await f.call(route('comments')+'?before='+encodeURIComponent(first.body.next)),third=await f.call(route('comments')+'?before='+encodeURIComponent(second.body.next)),fourth=await f.call(route('comments')+'?before='+encodeURIComponent(third.body.next));
+ assert.deepEqual([first.body.comments.length,second.body.comments.length,third.body.comments.length,fourth.body.comments.length],[20,20,20,1]);
+ assert.equal(new Set([...first.body.comments,...second.body.comments,...third.body.comments,...fourth.body.comments].map(c=>c.id)).size,61);
  for(let i=0;i<31;i++)f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','actor'+String(i).padStart(3,'0'),'like',123);
  const people=await f.call(route('reactors')),more=await f.call(route('reactors')+'?after='+encodeURIComponent(people.body.next));
  assert.equal(people.body.reactors.length,30);assert.equal(more.body.reactors.length,1);

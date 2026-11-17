@@ -56,6 +56,19 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     )
     .run();
 
+  await db.prepare(
+    `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
+     VALUES ('users/uid_old', 'users', 'uid_old', 'uid_old', ?, 1690000000000)`,
+  ).bind(JSON.stringify({ fields: { displayName: { stringValue: 'Old User' }, banned: { booleanValue: false } } })).run();
+  for (const [id, privacy] of [['private_post', 'Friends'], ['only_me_post', 'Only me']]) {
+    await db.prepare(
+      `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
+       VALUES (?, 'posts', ?, 'uid_old', ?, 1800000000000)`,
+    ).bind(`posts/${id}`, id, JSON.stringify({ fields: {
+      authorId: { stringValue: 'uid_old' }, content: { stringValue: id }, privacy: { stringValue: privacy },
+    } })).run();
+  }
+
   const w = createWorker(async () => 'uid_new');
   const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test' };
 

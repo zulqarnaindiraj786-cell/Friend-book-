@@ -1,4 +1,5 @@
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
+import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -91,7 +92,7 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
-const LIST_CACHE_TTL_MS = 600_000;
+const LIST_CACHE_TTL_MS = 60_000;
 const listCache = new WeakMap();
 
 function getDbMap(store, db) {
@@ -143,7 +144,7 @@ export async function appDocuments(request, env, identity) {
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
     const now = Date.now();
     const lCache = getDbMap(listCache, env.DB);
-    const cacheKey = `${collection}:${limit}`;
+    const cacheKey = `${uid}:${collection}:${limit}`;
     const cached = lCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
       return json({ collection, documents: cached.documents, cached: true });
@@ -152,10 +153,14 @@ export async function appDocuments(request, env, identity) {
       const rows = await env.DB.prepare(
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
       ).bind(collection, limit).all();
-      const documents = [];
+      let documents = [];
       for (const row of rows?.results || []) {
         const doc = toPlainDocument(row.document_json, row.doc_id);
         if (doc) documents.push(doc);
+      }
+      if (collection === 'posts' || collection === 'reels') {
+        const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id)));
+        documents = documents.filter((_doc, index) => allowed[index]);
       }
       lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
       return json({ collection, documents });

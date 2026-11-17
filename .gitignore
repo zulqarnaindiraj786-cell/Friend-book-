@@ -11,6 +11,9 @@ captures/
 .cxx/
 local.properties
 *.apk
+# Local Android release signing material is never committed.
+*.p12
+*.keystore
 
 # Firebase admin credentials must only be deployed through the secret store.
 **/service_account*.json

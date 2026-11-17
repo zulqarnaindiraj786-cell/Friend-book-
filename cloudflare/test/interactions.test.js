@@ -78,15 +78,16 @@ test('comments are idempotent, reject conflicts, spoofed authors and cross-post 
   const page = await (await call(f.env, 'comments')).json();
   assert.equal(page.comments.length, 2); assert.ok(page.comments.every(c => c.uid === identity.uid));
 });
-test('cursor pages preserve equal-timestamp order and bound each read to fifty', async t => {
+test('cursor pages preserve equal-timestamp order and bound each read to twenty', async t => {
   const f = fixture(); t.after(f.close);
   const insert = f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');
   for (let i = 1; i <= 51; i++) insert.run('posts/p1', `c_${String(i).padStart(3,'0')}`, 'user1', 'text', null, 100);
   const first = await (await call(f.env, 'comments')).json();
-  assert.equal(first.comments.length, 50);
-  const next = await (await call(f.env, 'comments', 'GET', undefined, { query: '?before=' + encodeURIComponent(first.next) })).json();
-  assert.equal(next.comments.length, 1); assert.equal(next.next, null);
-  assert.equal(new Set([...first.comments, ...next.comments].map(c => c.id)).size, 51);
+  assert.equal(first.comments.length, 20);
+  const second = await (await call(f.env, 'comments', 'GET', undefined, { query: '?before=' + encodeURIComponent(first.next) })).json();
+  const third = await (await call(f.env, 'comments', 'GET', undefined, { query: '?before=' + encodeURIComponent(second.next) })).json();
+  assert.equal(second.comments.length, 20); assert.equal(third.comments.length, 11); assert.equal(third.next, null);
+  assert.equal(new Set([...first.comments, ...second.comments, ...third.comments].map(c => c.id)).size, 51);
 });
 test('D1-only authorization enforces privacy, bans, blocks, archives and friendship without source fetches', async () => {
   for (const [privacy, extra, expected] of [['Public', {}, true], ['Only me', {}, false], ['Friends', {}, true],

@@ -74,7 +74,7 @@ public class CommentsEngine {
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
                 try{for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);if(first)latest.put(c.id,c);else older.put(c.id,c);
 }
-                    if(!first)visible+=50;nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;pinned=data.optString("pinned");emit();
+                    if(!first)visible+=20;nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
             }).addOnFailureListener(e->{if(active()){loading=false;error="D1 page unavailable. Tap to retry.";emit();}});
         }

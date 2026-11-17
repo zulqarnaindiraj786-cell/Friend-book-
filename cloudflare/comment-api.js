@@ -32,9 +32,9 @@ export async function commentsAPI(request, db, identity, resource, data, context
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
     const page=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
-      AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 50`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all();
+      AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all();
     const last=page.results.at(-1);
-    return reply({comments:page.results.map(row=>normalized(row,uid)),pinned:await pin(),next:page.results.length===50?btoa(JSON.stringify([last.created_at,last.id])):null});
+    return reply({comments:page.results.map(row=>normalized(row,uid)),pinned:await pin(),next:page.results.length===20?btoa(JSON.stringify([last.created_at,last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);
   if(request.method==='POST') {

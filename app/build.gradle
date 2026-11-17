@@ -51,7 +51,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
-            signingConfig signingConfigs.release
+            // Use Android's standard debug keystore; test builds must not depend on release credentials.
             minifyEnabled false
         }
     }
