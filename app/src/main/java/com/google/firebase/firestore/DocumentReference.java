@@ -40,6 +40,11 @@ public class DocumentReference {
         return new CollectionReference(firestore, path + "/" + trimSlashes(collectionPath));
     }
 
+    public CollectionReference getParent() {
+        int idx = path.lastIndexOf('/');
+        return idx > 0 ? new CollectionReference(firestore, path.substring(0, idx)) : null;
+    }
+
     public Task<DocumentSnapshot> get() {
         return get(Source.DEFAULT);
     }

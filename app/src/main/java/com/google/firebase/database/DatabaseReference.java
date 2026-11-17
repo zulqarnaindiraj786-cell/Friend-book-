@@ -14,6 +14,7 @@ public class DatabaseReference {
     }
 
     public Task<Void> setValue(Object value) { return Tasks.forResult(null); }
+    public Task<Void> updateChildren(java.util.Map<String, Object> update) { return Tasks.forResult(null); }
     public Task<Void> removeValue() { return Tasks.forResult(null); }
     public OnDisconnect onDisconnect() { return new OnDisconnect(); }
     public ValueEventListener addValueEventListener(ValueEventListener listener) { return listener; }
