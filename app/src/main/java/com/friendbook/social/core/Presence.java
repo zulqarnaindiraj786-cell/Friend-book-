@@ -194,17 +194,12 @@ public class Presence {
     /** Handle to a live presence or typing watcher; close() to detach. */
     public static class Handle {
         private ListenerRegistration fsL;
-        private ValueEventListener rtdbL;
-        private DatabaseReference ref;
         private Runnable ticker;
         private boolean closed = false;
 
         public void close() {
             closed = true;
             if (ticker != null) H.removeCallbacks(ticker);
-            if (ref != null && rtdbL != null) {
-                try { ref.removeEventListener(rtdbL); } catch (Throwable ignored) { }
-            }
             if (fsL != null) {
                 try { fsL.remove(); } catch (Throwable ignored) { }
             }
