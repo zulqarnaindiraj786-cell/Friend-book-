@@ -167,6 +167,25 @@ public final class DocQuery {
             return this;
         }
 
+        /**
+         * Any-of equality, like Firestore {@code whereIn}.
+         *
+         * <p>Needed for the one question the friends screen asks about a page of suggestions: is
+         * there already a friendship or a pending request with any of these people. `in` is
+         * supported by the worker; without a method here the caller had to fall back to Firestore,
+         * which is where "Pull down to retry connection check" came from.
+         */
+        public Builder whereIn(String field, List<?> values) {
+            add(field, "in", join(values));
+            return this;
+        }
+
+        /** None-of equality, like Firestore {@code whereNotIn}. */
+        public Builder whereNotIn(String field, List<?> values) {
+            add(field, "nin", join(values));
+            return this;
+        }
+
         /** Field presence, like Firestore {@code whereNotEqualTo(field, null)}. */
         public Builder whereExists(String field) { add(field, "exists", "1"); return this; }
         public Builder whereNotExists(String field) { add(field, "not_exists", "1"); return this; }

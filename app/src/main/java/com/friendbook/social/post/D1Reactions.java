@@ -26,6 +26,20 @@ public final class D1Reactions {
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
   if("posts".equals(collection)){FastCache.setReactionTypes(id,types);FastCache.setReactionState(context,id,mine(data),total(data),true);}
  }
+ /**
+  * Re-reads the summary from D1 after a write, bypassing the "already cached" short circuit.
+  *
+  * <p>Without this, a write that was acknowledged but did not return the document left the
+  * optimistic copy in place, so the count and the highlighted reaction could disagree with the
+  * server until the next full reload.
+  */
+ private static void refresh(Context context,String collection,String id,Runnable ready){
+  scope();String key=D1Client.key(collection,id);FAILED.remove(key);
+  String uid=actor;D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
+   if(!Objects.equals(uid,Fb.uid()))return;remember(context.getApplicationContext(),collection,id,data);ready.run();
+  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;FAILED.add(key);});
+ }
+
  private static void fetch(Context context,String collection,String id,Runnable ready){
   scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){ready.run();return;}if(LOADING.contains(key)||FAILED.contains(key))return;
   String uid=actor;LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
@@ -55,10 +69,20 @@ public final class D1Reactions {
    optimistic.put("types",adjusted);remember(context.getApplicationContext(),collection,id,optimistic);render.run();
   }catch(JSONException ignored){}
   D1Client.request(collection,id,"reactions","PUT",D1Client.object("type",next),null).addOnSuccessListener(data->{
-   if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
-   String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
+   if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);
+   // The write is acknowledged. Only trust a reply that actually carries the reaction summary:
+   // a response without "types" is an acknowledgement, not the document, and remembering it as
+   // one blanked the counters and cleared "mine" - which is exactly "like nahi hota".
+   if(data!=null && data.has("types"))remember(context.getApplicationContext(),collection,id,data);
+   else refresh(context,collection,id,render);
+   String owner=data==null?"":data.optString("owner");
+   if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
    D1Client.changed(key);
-  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);});
+  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);
+   // The optimistic state must not stay on screen as if it were confirmed.
+   FAILED.add(key);
+   refresh(context,collection,id,render);
+  });
  }
  static void historicalNotice(Activity activity,TextView note,LinearLayout filter,LinearLayout rows,int historical,boolean identified){
   note.setVisibility(historical>0?android.view.View.VISIBLE:android.view.View.GONE);

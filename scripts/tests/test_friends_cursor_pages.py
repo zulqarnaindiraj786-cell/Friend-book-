@@ -11,7 +11,12 @@ class FriendsCursorPages(unittest.TestCase):
         self.assertNotIn('addSnapshotListener',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['offset+=10','FriendCandidatePages.pairs(me,ids)','Tasks.whenAllSuccess','a.getMetadata().isFromCache()','a.size()==20','if(!current(token,me))return','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
+        # The probes are D1 queries now. The bounded batch, the fail-closed behaviour and the
+        # "only offer a request when nothing exists" rule are unchanged; what changed is which
+        # store answers, because Firestore answering nothing is what printed "Pull down to retry
+        # connection check" under every single suggestion.
+        for token in ['offset+=10','if(!current(token,me))return','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest',
+                      '.whereArrayContainsAny("participants", ids)','.whereIn("fromUid", ids)','.whereIn("toUid", ids)','done.accept(false)']:
             self.assertIn(token,code)
     def test_action_targets_and_account_guards(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()

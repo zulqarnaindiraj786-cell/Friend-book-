@@ -354,7 +354,29 @@ public class Fb {
         } catch (Throwable ignored) { }
     }
 
+    /**
+     * Reads one user, from D1 first.
+     *
+     * <p>This asked Firestore, which is switched off, so every lookup that missed the RAM cache
+     * returned nothing - names and photos on the friends screen, a reactor, a comment author.
+     * D1 holds the user documents, so it is asked first and Firestore is only tried if D1
+     * genuinely has no such user.
+     */
     private static void fetchUserNetwork(String uid, TaskCompletionSource<Models.User> tcs) {
+        if (!com.friendbook.social.BuildConfig.D1_INTERACTIONS_ENABLED
+                || !D1Client.enabled("users")) {
+            firestoreUser(uid, tcs);
+            return;
+        }
+        CloudflareStore.get("users", uid, doc -> {
+            if (doc == null) { firestoreUser(uid, tcs); return; }
+            Models.User u = Models.User.fromMap(uid, doc);
+            if (u != null) FastCache.putUser(u);
+            tcs.trySetResult(u);
+        });
+    }
+
+    private static void firestoreUser(String uid, TaskCompletionSource<Models.User> tcs) {
         db().collection("users").document(uid).get()
                 .addOnSuccessListener(d -> {
                     Models.User u = (d != null && d.exists()) ? Models.User.fromDoc(d) : null;

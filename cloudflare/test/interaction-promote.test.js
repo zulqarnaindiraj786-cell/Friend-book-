@@ -242,3 +242,45 @@ test('the first reaction on a fresh post appears immediately', async () => {
   const body = await sheet.json();
   assert.deepEqual(body.reactors.map((r) => [r.uid, r.type]), [['uid_visitor', 'like']]);
 });
+
+// A reaction write must answer with the summary the app renders, or not answer with one at all.
+// The app used to treat any 200 as the document and replaced its counters with it, so a like
+// looked like it did nothing.
+test('a reaction PUT answers with the counters it just changed', async () => {
+  const d = db();
+  putDocument(d, 'posts', 'r1', { id: 'r1', authorId: 'uid_a', createdAt: 1 });
+  await engagement(d, '/v1/engagement/posts/r1/reactors'); // promotes it
+
+  const put = (uid) => {
+    const request = new Request('https://test.invalid/v1/engagement/posts/r1/reactions', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'like' }),
+    });
+    const match = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/
+      .exec(new URL(request.url).pathname);
+    return interactions(request, { DB: d, D1_INTERACTIONS_ENABLED: 'true' },
+      { uid }, match, async () => true);
+  };
+
+  const first = await put('uid_visitor');
+  assert.equal(first.status, 200);
+  const body = await first.json();
+
+  // Either the answer is the summary (with the count), or there is no summary key at all - in
+  // both cases what the app stores is right. What must never happen is a summary that says zero.
+  if (Array.isArray(body.types)) {
+    const like = body.types.find((t) => t.type === 'like');
+    assert.ok(like, 'a counted reaction must be in the summary');
+    assert.equal(like.count, 1);
+    assert.equal(like.mine, 1, 'the reaction the caller just made is theirs');
+  }
+
+  // Whatever the PUT answered, the summary must show the reaction to everyone. `engagement()`
+  // reads as a different viewer, so `mine` is 0 here by design - that is what proves the count
+  // is the resource's and not the caller's.
+  const summary = await (await engagement(d, '/v1/engagement/posts/r1/reactions')).json();
+  const like = summary.types.find((t) => t.type === 'like');
+  assert.equal(like.count, 1, 'one like must read as one, not zero');
+  assert.equal(like.mine, 0, 'another viewer has not reacted');
+});

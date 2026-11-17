@@ -338,6 +338,23 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }
     }
 
+    /**
+     * The post as the app already knows it: the in-memory feed, then the cache on disk.
+     *
+     * <p>Used when reading the document fails, so an open post page keeps its header instead of
+     * closing itself.
+     */
+    private Models.Post findKnownPost(String id) {
+        if (id == null || id.isEmpty()) return null;
+        for (Models.Post p : FastCache.cachedFeed()) {
+            if (p != null && id.equals(p.id)) return p;
+        }
+        for (Models.Post p : FastCache.getFeed()) {
+            if (p != null && id.equals(p.id)) return p;
+        }
+        return null;
+    }
+
     private void loadPostAndComments(final boolean forceHeader) {
         initialLoaded = true;
         if (postReg != null) { postReg.remove(); postReg = null; }
@@ -349,7 +366,24 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         com.friendbook.social.core.CloudflareStore.get("posts", postId, doc -> {
             if (doc == null) {
                 if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
-                finish();
+                // The post is already on screen - the feed handed it over - so a failed read is
+                // not a reason to close the page. Closing it is what made tapping Comment bounce
+                // straight back, and the same for any post whose document the read could not
+                // return. Keep what we have and let the comment list below stand on its own.
+                if (!headerRendered[0]) {
+                    Models.Post known = findKnownPost(postId);
+                    if (known != null) {
+                        post = known;
+                        commentsAdapter.postAuthorId = post.authorId;
+                        commentsAdapter.pinnedCommentId = post.pinnedCommentId;
+                        headerRendered[0] = true;
+                        postAdapter.setPosts(Collections.singletonList(post));
+                        int liked = FastCache.getReactionTotal(postId, post.likes);
+                        whoReactedChip.setText(liked > 0
+                                ? (liked + (liked == 1 ? " reaction · See all" : " reactions · See all"))
+                                : "See reactions");
+                    }
+                }
                 return;
             }
             post = Models.Post.fromMap(postId, doc);

@@ -197,9 +197,29 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void consumeSuggestions(List<Map<String,Object>> docs,String me,int token){
         suggestions.clear();for(Map<String,Object> doc:docs){Models.User user=Models.User.fromMap(Format.str(doc,"id"),doc);
             if(me.equals(user.uid) || user.deactivated || "Only me".equalsIgnoreCase(user.lookupPrivacy) || (Fb.me!=null && Fb.me.blocked.contains(user.uid)))continue;
+            // Accounts created by automated tests are not people. The suggestions list is ordered
+            // by creation time, so these sat at the top of "People you may know" - which reads as
+            // the app inventing users. They are real documents in D1, so they are filtered here
+            // rather than deleted.
+            if (isAutomatedAccount(user)) continue;
             suggestions.add(user);userCache.put(user.uid,user);com.friendbook.social.core.FastCache.putUser(user);
         }checkCandidates(me,token);
     }
+
+    /**
+     * True for an account that no person signed up for.
+     *
+     * <p>Matched on the display-name pattern the automated runs used, which is a pair of words
+     * followed by a five-digit number. A real name is left alone, and nothing is deleted.
+     */
+    private static boolean isAutomatedAccount(Models.User user){
+        if (user == null) return true;
+        String name = user.displayName == null ? "" : user.displayName.trim();
+        if (name.isEmpty()) return true;
+        return AUTOMATED_NAME.matcher(name).matches();
+    }
+    private static final java.util.regex.Pattern AUTOMATED_NAME =
+            java.util.regex.Pattern.compile("(?i)^(arena|test|e2e|qa|demo)[ _-]?[a-z]*[ _-]?\\d{3,8}$");
     private UsersAdapter.Row control(String title,boolean loading,Runnable action){
         UsersAdapter.Row row=new UsersAdapter.Row();row.heading=title;row.loading=loading;row.action=action;return row;
     }
@@ -215,24 +235,74 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         }
     }
 
-    /** Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships. */
+    /**
+     * Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships.
+     *
+     * <p>Three questions per batch: is there a friendship, an incoming request, an outgoing
+     * request. They used to be three Firestore {@code whereIn} queries, so with Firestore
+     * switched off every one of them failed and the row said "Pull down to retry connection
+     * check" for every person - the screen the user saw. They are three D1 queries now, and the
+     * batch is acknowledged against D1's answer.
+     */
     private void checkCandidates(String me,int token){
         List<String> unchecked=new ArrayList<>();for(Models.User u:suggestions)if(!checkedCandidates.contains(u.uid) && !checkingUsers.contains(u.uid) && !failedCandidates.contains(u.uid))unchecked.add(u.uid);
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
-            List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(20).get();
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(20).get();
-            com.google.android.gms.tasks.Task<com.google.firebase.firestore.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(20).get();
-            com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
-                if(!current(token,me))return;checkingUsers.removeAll(ids);
-                com.google.firebase.firestore.QuerySnapshot a=(com.google.firebase.firestore.QuerySnapshot)results.get(0),b=(com.google.firebase.firestore.QuerySnapshot)results.get(1),c=(com.google.firebase.firestore.QuerySnapshot)results.get(2);
-                // Saturated legacy duplicate data is not evidence that other candidates have no relationship.
-                if(a.getMetadata().isFromCache() || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || a.size()==20 || b.size()==20 || c.size()==20){failedCandidates.addAll(ids);requestRender();return;}
-                for(DocumentSnapshot doc:a)for(String other:Models.ChatRoom.fromDoc(doc).participants)if(!other.equals(me))candidateFriends.add(other);
-                for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
+            final int[] outstanding={3};final Set<String> friendsFound=new HashSet<>(),incomingFound=new HashSet<>(),outgoingFound=new HashSet<>();
+            Runnable settle=()->{
+                if(!current(token,me))return;
+                checkingUsers.removeAll(ids);
+                candidateFriends.addAll(friendsFound);candidateIncoming.addAll(incomingFound);candidateOutgoing.addAll(outgoingFound);
                 checkedCandidates.addAll(ids);requestRender();
-            }).addOnFailureListener(error->{if(current(token,me)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
+            };
+            Runnable failed=()->{
+                if(!current(token,me))return;
+                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+            };
+            java.util.function.Consumer<Boolean> done=ok->{
+                synchronized(outstanding){
+                    if(!ok){outstanding[0]=Integer.MIN_VALUE;failed.run();return;}
+                    outstanding[0]--;
+                    if(outstanding[0]==0)settle.run();
+                }
+            };
+
+            // Friendship: participants is an array, so any-of membership answers it directly.
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of("friends")
+                            .whereArrayContainsAny("participants", ids).limit(20).build(),
+                    page -> {
+                        for(Map<String,Object> doc:page.documents){
+                            Object parts=doc.get("participants");
+                            if(parts instanceof java.util.List)for(Object other:(java.util.List<?>)parts){
+                                if(other instanceof String && !me.equals(other) && ids.contains(other))friendsFound.add((String)other);
+                            }
+                        }
+                        done.accept(true);
+                    },
+                    () -> done.accept(false));
+
+            // Incoming request from any of them.
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of("friend_requests")
+                            .whereEqualTo("toUid", me).whereIn("fromUid", ids)
+                            .whereEqualTo("status", "pending").limit(20).build(),
+                    page -> {
+                        for(Map<String,Object> doc:page.documents)incomingFound.add(Format.str(doc,"fromUid"));
+                        done.accept(true);
+                    },
+                    () -> done.accept(false));
+
+            // Outgoing request to any of them.
+            com.friendbook.social.core.CloudflareStore.query(
+                    com.friendbook.social.core.DocQuery.of("friend_requests")
+                            .whereEqualTo("fromUid", me).whereIn("toUid", ids)
+                            .whereEqualTo("status", "pending").limit(20).build(),
+                    page -> {
+                        for(Map<String,Object> doc:page.documents)outgoingFound.add(Format.str(doc,"toUid"));
+                        done.accept(true);
+                    },
+                    () -> done.accept(false));
         }
     }
 
