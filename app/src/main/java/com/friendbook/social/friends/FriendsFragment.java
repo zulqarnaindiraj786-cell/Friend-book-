@@ -347,10 +347,16 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             String rid = r.requestId;
             removeRequestOptimistic(rid);
             final String actor=Fb.uid();
-            com.friendbook.social.core.DataRouter.mirrorDelete("friend_requests", rid);
-            Fb.db().collection("friend_requests").document(rid).delete().addOnFailureListener(error->{
-                if(java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);Ui.toast(getActivity(),"Couldn't remove request. Try again.");startSection();}
-            });
+            com.friendbook.social.core.DataRouter.batch()
+                    .delete("friend_requests", rid)
+                    .commit((success, error) -> {
+                        if(!java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+                        if(!success){
+                            dismissedReqIds.remove(rid);
+                            Ui.toast(getActivity(),"Couldn't remove request. Try again.");
+                            startSection();
+                        }
+                    });
             Ui.toast(getActivity(), "Request removed");
         } else if ("Unfriend".equals(r.secondaryLabel)) {
             unfriend(r.user);
@@ -369,27 +375,38 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(!me.equals(Fb.uid()) || getActivity()==null)return;
             if(!page.isEmpty()){requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Ui.toast(getActivity(),"Request already sent");return;}
             String newId = Fb.db().collection("friend_requests").document().getId();
-            Map<String,Object> payload = Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",FieldValue.serverTimestamp());
-            // The id is minted once and used by both stores; two ids would mean the request
-            // exists twice and accept would only clear one of them.
-            com.friendbook.social.core.DataRouter.mirrorPut("friend_requests", newId,
-                    Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",System.currentTimeMillis()));
-            Fb.db().collection("friend_requests").document(newId).set(payload)
-                .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
-                    requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
-                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}});
+            // Written once, to D1, and the toast and the notification both wait for D1's answer.
+            // The Firestore set() was the actual write, so a refused request meant the other
+            // person never saw it and the sender was told "Couldn't send".
+            Map<String,Object> payload = Fb.map("fromUid",me,"toUid",target.uid,
+                    "fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),
+                    "status","pending","createdAt",System.currentTimeMillis());
+            com.friendbook.social.core.DataRouter.batch()
+                    .set("friend_requests", newId, payload)
+                    .commit((success, error) -> {
+                        if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                        requestWrites.remove(target.uid);
+                        if(!success){render();Ui.toast(getActivity(),"Couldn't send. Try again.");return;}
+                        candidateOutgoing.add(target.uid);render();
+                        Notify.send(target.uid,"friend_request","sent you a friend request");
+                        Ui.toast(getActivity(),"Friend request sent ✓");
+                    });
         }, () -> {if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't check request. Try again.");}});
     }
 
     private void cancelRequest(UsersAdapter.Row row) {
         String me=Fb.uid();if(me==null || row.requestId==null)return;
         final String requestId=row.requestId,other=row.user.uid;
-        com.friendbook.social.core.DataRouter.mirrorDelete("friend_requests", requestId);
-        Fb.db().collection("friend_requests").document(requestId).delete().addOnSuccessListener(v->{
-            if(!me.equals(Fb.uid()) || getActivity()==null)return;
-            cancelledRequestIds.add(requestId);if(section==SEC_SENT && activeDocPager!=null)activeDocPager.forget(requestId);outgoing.remove(other);sentIds.remove(other);candidateOutgoing.remove(other);render();
-            Ui.toast(getActivity(),"Request cancelled");
-        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null)Ui.toast(getActivity(),"Couldn't cancel. Try again.");});
+        com.friendbook.social.core.DataRouter.batch()
+                .delete("friend_requests", requestId)
+                .commit((success, error) -> {
+                    if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                    if(!success){Ui.toast(getActivity(),"Couldn't cancel. Try again.");return;}
+                    cancelledRequestIds.add(requestId);
+                    if(section==SEC_SENT && activeDocPager!=null)activeDocPager.forget(requestId);
+                    outgoing.remove(other);sentIds.remove(other);candidateOutgoing.remove(other);render();
+                    Ui.toast(getActivity(),"Request cancelled");
+                });
     }
 
     private void acceptRequest(UsersAdapter.Row r) {

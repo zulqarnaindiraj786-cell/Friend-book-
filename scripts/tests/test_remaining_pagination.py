@@ -19,7 +19,9 @@ class RemainingPaging(unittest.TestCase):
         for token in ['new CursorPager(query,size,key','current[0].next()','current[0].close()','controls.removeView(row)','Refresh ']:self.assertIn(token,source)
     def test_action_batches_do_not_truncate_or_use_offline_results(self):
         source=(JAVA/'core/QueryActions.java').read_text()
-        for token in ['page.limit(50).get(Source.SERVER)','query.startAfter(cursor)','batch.commit()','Objects.equals(actor,Fb.uid())','done::trySetException','else deletePage(query,last,actor,done)','else updatePage(query,last,actor,patch,total+snap.size(),done)']:self.assertIn(token,source)
+        # The batch commits to D1 and reports its answer; commit(callback) replaced the Firestore
+        # commit() whose listener was the only place a failure could be seen.
+        for token in ['page.limit(50).get(Source.SERVER)','query.startAfter(cursor)','batch.commit((success,error)->{','Objects.equals(actor,Fb.uid())','done.trySetException','else deletePage(query,last,actor,done)','else updatePage(query,last,actor,patch,total+snap.size(),done)']:self.assertIn(token,source)
     def test_exact_counts_do_not_download_members(self):
         # Counting moved from a Firestore server aggregation (which cannot succeed with the
         # network off) to a D1 query.

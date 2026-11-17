@@ -1008,12 +1008,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         // Sent to D1, which is the only store the app writes to. The batch used to commit to
         // Firestore, so on a refused commit the note was never delivered and the toast said
         // "Couldn't send voice note".
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         com.friendbook.social.core.DataRouter.batch()
                 .set("messages", chatId + "_" + msgRef.getId(), msg)
                 .set("chats", chatId, chatDoc)
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Couldn't send voice note"); return; }
-                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                     // The peer's push cannot confirm our own message; re-read locally so it
                     // appears.
@@ -1110,12 +1110,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "createdAtMs", now,
                 "createdAt", FieldValue.serverTimestamp());
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "✨ " + emoji + " sticker");
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         com.friendbook.social.core.DataRouter.batch()
                 .set("messages", chatId + "_" + msgRef.getId(), msg)
                 .set("chats", chatId, chatDoc)
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
-                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                     // The peer's push cannot confirm our own message; re-read locally so it
                     // appears.
@@ -1201,12 +1201,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         // to Firestore, so a refused commit meant the message never reached the other side and
         // the app said "Queued offline" forever. CloudflareStore.put at this point was a second,
         // unwaited copy of the same write - now there is one.
+        com.friendbook.social.core.SoundManager.action(this, "sent", me);
         com.friendbook.social.core.DataRouter.batch()
                 .set("messages", chatId + "_" + msgRef.getId(), msg)
                 .set("chats", chatId, chatDoc)
                 .commit((success, error) -> {
                     if (!success) { Ui.toast(this, "Queued offline — will sync automatically"); return; }
-                    com.friendbook.social.core.SoundManager.action(this, "sent", me);
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                     // The peer's push cannot confirm our own message; re-read locally so it
                     // appears.
@@ -1300,9 +1300,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 for (Models.Message x : adapter.all()) if (!hidden.contains(x.id)) current.add(x);
                 adapter.setData(current);
             } else if (sel.contains("Report")) {
-                Fb.db().collection("reports").add(Fb.map(
+                com.friendbook.social.core.DataRouter.add("reports", Fb.map(
                         "messageId", m.id, "chatId", chatId, "reportedBy", Fb.uid(),
-                        "createdAt", FieldValue.serverTimestamp()));
+                        "createdAt", System.currentTimeMillis()), null);
                 Ui.toast(this, "Reported");
             }
         });

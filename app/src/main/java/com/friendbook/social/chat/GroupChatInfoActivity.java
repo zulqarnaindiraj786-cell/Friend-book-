@@ -523,7 +523,7 @@ public class GroupChatInfoActivity extends Activity {
         m.put("isSeen", true);
         m.put("createdAtMs", now);
         m.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("chats").document(chatId).collection("messages").add(m);
+        com.friendbook.social.core.DataRouter.add("messages", m, null);
         com.friendbook.social.core.DataRouter.mirrorPut("chats", chatId, Fb.map(
                 "lastMessage", text,
                 "lastMessageTime", FieldValue.serverTimestamp(),

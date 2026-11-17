@@ -766,7 +766,7 @@ public class MainActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-android");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
+                    com.friendbook.social.core.DataRouter.add("feedback", m, null);
                     Ui.toast(this, "Thanks for your feedback!");
                 })
                 .setNegativeButton("Cancel", null)

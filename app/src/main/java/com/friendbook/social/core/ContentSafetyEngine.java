@@ -513,7 +513,7 @@ public final class ContentSafetyEngine {
             audit.put("reason", reason == null ? "Automated content safety deletion" : reason);
             audit.put("reportedBy", Fb.uid() != null ? Fb.uid() : "auto_safety_engine");
             audit.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(audit);
+            com.friendbook.social.core.DataRouter.add("reports", audit, null);
         } catch (Throwable ignored) {}
     }
 }

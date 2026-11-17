@@ -27,5 +27,9 @@ class PagingGuards(unittest.TestCase):
         self.assertIn('handle.query.limit(50).get()',source)
         self.assertNotIn('addSnapshotListener',source)
         self.assertIn('query.startAfter(cursor).limit(50).get()',source)
-        self.assertIn('patch.put("lastComment",commentMap)',source)
+        # The frozen commentsMap must never be expanded. The send path writes the comment document
+        # and the post's preview separately now, so the guard checks that split rather than the
+        # Firestore patch map that used to carry both.
+        self.assertIn('Fb.map("lastComment", commentMap, "commentsStorageVersion", 2)',source)
+        self.assertIn('CloudflareStore.increment("comments", 1)',source)
         self.assertNotIn('dot.put("commentsMap." + c.id + ".',source)

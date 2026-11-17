@@ -1509,9 +1509,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         s.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
         s.put("expiresAt", new com.google.firebase.Timestamp(
                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-        Fb.db().collection("stories").add(s)
-                .addOnSuccessListener(x -> Ui.toast(activity, "Shared to your story 📖"))
-                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't share: " + e.getMessage()));
+        com.friendbook.social.core.DataRouter.add("stories", s, (id, error) ->
+                Ui.toast(activity, error == null ? "Shared to your story 📖"
+                        : "Couldn't share: " + error));
     }
 
     // ---------- post overflow menu ----------
@@ -1766,7 +1766,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     "reportedBy", Fb.uid(),
                     "authorId", p.authorId,
                     "createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(m);
+            com.friendbook.social.core.DataRouter.add("reports", m, null);
             Prefs.hidePost(activity, p.id);
             removePostById(p.id);
             com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
@@ -1828,7 +1828,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "sharedFromMediaUrl", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaUrl : (p.mediaUrl == null ? "" : p.mediaUrl),
                             "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("posts").add(m);
+                    com.friendbook.social.core.DataRouter.add("posts", m, null);
                     com.friendbook.social.core.DataRouter.mirrorPut("posts", p.id, "shares", FieldValue.increment(1));
                     Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
                     Notify.send(p.authorId, "share", "shared your post", p.id);

@@ -2698,7 +2698,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     giftDoc.put("giftId", gift.id);
                     giftDoc.put("giftName", gift.name);
                     giftDoc.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("gifts").add(giftDoc);
+                    com.friendbook.social.core.DataRouter.add("gifts", giftDoc, null);
 
                     Map<String, Object> chatGift = new HashMap<>();
                     chatGift.put("type", "gift");
@@ -3270,7 +3270,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 post.put("commentsCount", 0);
                 post.put("sharesCount", 0);
                 post.put("createdAt", FieldValue.serverTimestamp());
-                Fb.db().collection("posts").add(post);
+                com.friendbook.social.core.DataRouter.add("posts", post, null);
                 Ui.toast(this, "Shared Live invite to Home Feed!");
             } else {
                 Intent s = new Intent(Intent.ACTION_SEND);
@@ -3303,7 +3303,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             rep.put("reporterId", Fb.uid());
             rep.put("reason", reasons[which]);
             rep.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(rep);
+            com.friendbook.social.core.DataRouter.add("reports", rep, null);
             Ui.toast(this, "Thank you — our moderation team received your report.");
         });
     }
@@ -4076,7 +4076,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         post.put("commentsCount", 0);
         post.put("sharesCount", 0);
         post.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("posts").add(post);
+        com.friendbook.social.core.DataRouter.add("posts", post, null);
         Ui.toast(this, "Live recap shared to Feed!");
     }
 

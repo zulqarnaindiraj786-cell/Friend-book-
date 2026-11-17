@@ -305,7 +305,7 @@ public class GroupsActivity extends Activity {
                     m.put("photoUrl", "");
                     m.put("coverUrl", "");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("groups").add(m)
+                    com.friendbook.social.core.DataRouter.add("groups", m, null)
                             .addOnSuccessListener(ref -> {
                                 Ui.toast(this, "Group created 🎉");
                                 startActivity(new Intent(this, GroupDetailActivity.class)

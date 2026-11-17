@@ -301,7 +301,7 @@ public class MarketplaceActivity extends Activity {
         m.put("shares", 0);
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("posts").add(m)
+        com.friendbook.social.core.DataRouter.add("posts", m, null)
                 .addOnSuccessListener(x -> Ui.toast(this, "Listed on Marketplace ✓"))
                 .addOnFailureListener(e -> Ui.toast(this, e.getMessage()));
     }

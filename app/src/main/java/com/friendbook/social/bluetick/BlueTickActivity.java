@@ -159,7 +159,7 @@ public class BlueTickActivity extends Activity {
         req.put("status", "pending");
         req.put("screenshotUrl", Fb.myPhoto());
         req.put("date", FieldValue.serverTimestamp());
-        Fb.db().collection("payments").add(req)
+        com.friendbook.social.core.DataRouter.add("payments", req, null)
                 .addOnSuccessListener(x -> Ui.info(this, "✓ Free Verification Submitted",
                         "Your free " + Admin.tickLabel(level) + " verification request has been submitted to our community review team."))
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't submit request right now"));

@@ -359,8 +359,17 @@ public final class ReelUploadManager {
                 });
                 return;
             }
-            Fb.db().collection("reels").add(doc).addOnSuccessListener(ref -> {
+            // Published to D1. A Firestore add() here meant a new account's Reel never became
+            // live, and the upload failed at the very last step after the video had been sent.
+            com.friendbook.social.core.DataRouter.add("reels", doc, (id, error) -> {
                 optimisticReel = null;
+                if (error != null || id == null) {
+                    //noinspection ResultOfMethodCallIgnored
+                    stagedFile.delete();
+                    emit(false, 0, 0L, 0L, "", false,
+                            error != null ? error : "Publish failed");
+                    return;
+                }
                 // Clean up staging file after seeding completes
                 MAIN.postDelayed(() -> {
                     try { //noinspection ResultOfMethodCallIgnored
@@ -369,11 +378,6 @@ public final class ReelUploadManager {
                 }, 8000L);
                 emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
                 Ui.toast(appCtx, "Your Reel is Live!");
-            }).addOnFailureListener(e -> {
-                optimisticReel = null;
-                //noinspection ResultOfMethodCallIgnored
-                stagedFile.delete();
-                emit(false, 0, 0L, 0L, "", false, e.getMessage() != null ? e.getMessage() : "Publish failed");
             });
         }).addOnFailureListener(e -> {
             optimisticReel = null;

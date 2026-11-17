@@ -146,7 +146,7 @@ public class EventsActivity extends Activity {
                     m.put("hostId", Fb.uid());
                     m.put("hostName", Fb.myName());
                     m.put("interested", Collections.singletonList(Fb.uid()));
-                    Fb.db().collection("events").add(m)
+                    com.friendbook.social.core.DataRouter.add("events", m, null)
                             .addOnSuccessListener(x -> Ui.toast(this, "Event created 📅"));
                 })
                 .setNegativeButton("Cancel", null)

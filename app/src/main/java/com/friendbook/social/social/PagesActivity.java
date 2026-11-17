@@ -154,10 +154,12 @@ public class PagesActivity extends Activity {
                     m.put("followers", Collections.singletonList(Fb.uid()));
                     m.put("tickLevel", "none");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("pages").add(m).addOnSuccessListener(ref -> {
+                    // The page is created in D1 and the screen opens with the id D1 stored.
+                    com.friendbook.social.core.DataRouter.add("pages", m, (id, error) -> {
+                        if (error != null || id == null) { Ui.toast(this, "Couldn't create page"); return; }
                         Ui.toast(this, "Page created 🚩");
                         Intent i = new Intent(this, PageDetailActivity.class);
-                        i.putExtra("page_id", ref.getId());
+                        i.putExtra("page_id", id);
                         startActivity(i);
                     });
                 })

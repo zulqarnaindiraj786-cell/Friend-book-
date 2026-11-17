@@ -473,7 +473,7 @@ public class StoryViewerActivity extends Activity {
                     rep.put("reason", reasons[w]);
                     rep.put("reporterId", Fb.uid());
                     rep.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("reports").add(rep);
+                    com.friendbook.social.core.DataRouter.add("reports", rep, null);
                     if (w == 0 || w == 1 || w == 2) {
                         com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
                                 this, "stories", s.id, s.authorId,

@@ -768,7 +768,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                 "likes", 0, "comments", 0, "shares", 0,
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(dpPost);
+                        com.friendbook.social.core.DataRouter.add("posts", dpPost, null);
                     }
                     Ui.toast(ProfileActivity.this, isAvatar
                             ? "Profile picture updated & shared in full HD ✓"
@@ -1606,8 +1606,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             } else if (t.contains("Archive & Recycle Bin")) {
                 startActivity(new Intent(this, ArchiveTrashActivity.class));
             } else if (t.contains("Report")) {
-                Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
-                        "type", "profile", "createdAt", FieldValue.serverTimestamp()));
+                com.friendbook.social.core.DataRouter.add("reports", Fb.map("uid", uid,
+                        "reportedBy", Fb.uid(), "type", "profile",
+                        "createdAt", System.currentTimeMillis()), null);
                 Ui.toast(this, "Reported");
             } else if (t.contains("Change profile photo")) {
                 pickImage(REQ_PICK_AVATAR);

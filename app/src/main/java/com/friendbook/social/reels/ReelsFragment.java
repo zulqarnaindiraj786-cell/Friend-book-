@@ -2743,7 +2743,7 @@ public class ReelsFragment extends Fragment {
                                 "likes", 0, "comments", 0, "shares", 0,
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(postMap);
+                        com.friendbook.social.core.DataRouter.add("posts", postMap, null);
                         Ui.toast(a, "Reel shared to your News Feed");
                     } else if (which == 1) {
                         Map<String, Object> s = new HashMap<>();
@@ -2757,7 +2757,7 @@ public class ReelsFragment extends Fragment {
                         s.put("createdAt", FieldValue.serverTimestamp());
                         s.put("expiresAt", new com.google.firebase.Timestamp(
                                 new java.util.Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                        Fb.db().collection("stories").add(s);
+                        com.friendbook.social.core.DataRouter.add("stories", s, null);
                         Ui.toast(a, "Added Reel to your Story");
                     } else if (which == 2) {
                         Intent i = new Intent(Intent.ACTION_SEND);
@@ -2853,13 +2853,13 @@ public class ReelsFragment extends Fragment {
                         };
                         Ui.choose(a, "Report Reel", reasons, w -> {
                             String reason = reasons[w];
-                            Fb.db().collection("reports").add(Fb.map(
+                            com.friendbook.social.core.DataRouter.add("reports", Fb.map(
                                     "reelId", reel.id,
                                     "authorId", reel.authorId,
                                     "reason", reason,
                                     "reportedBy", Fb.uid(),
                                     "type", "reel",
-                                    "createdAt", FieldValue.serverTimestamp()));
+                                    "createdAt", System.currentTimeMillis()), null);
                             Prefs.hidePost(a, reel.id);
                             if (w == 0 || w == 1 || w == 2) {
                                 ContentSafetyEngine.autoDeleteContent(

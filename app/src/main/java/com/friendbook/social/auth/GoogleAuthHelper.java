@@ -575,7 +575,7 @@ public final class GoogleAuthHelper {
             n.put("text", "joined friendbook via your invite 🎉 (referral credit +1)");
             n.put("isRead", false);
             n.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("notifications").add(n);
+            com.friendbook.social.core.DataRouter.add("notifications", n, null);
         });
     }
 

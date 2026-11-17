@@ -14,7 +14,7 @@ const ALLOWED_COLLECTIONS = new Set([
   // Written from the app but missing here: a report, a payment request and a live gift all go
   // through the same document write, and 'Unsupported collection' is a 400 the caller cannot
   // retry. Reporting therefore failed silently, and a paid request never reached the admin.
-  'reports', 'payments', 'gifts',
+  'reports', 'payments', 'gifts', 'feedback', 'events',
 ]);
 
 // Field names come from the client and are interpolated into a JSON path, so they are

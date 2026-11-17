@@ -27,7 +27,10 @@ class SoundEffectsTest(unittest.TestCase):
         # Every send path sounds immediately; the commit line that follows changed shape when
         # chat moved from a listener to a re-read, so count the sound itself, not its neighbour.
         self.assertEqual(chat.count('SoundManager.action(this, "sent", me);'),3)
-        self.assertEqual(chat.count('batch.commit()'),4)
+        # Every send commits to D1 and reports D1's answer; Firestore's commit() was the write
+        # that could be refused while the message had already sounded and the draft was cleared.
+        self.assertEqual(chat.count('.commit('),4)
+        self.assertNotIn('batch.commit()',chat)
         self.assertIn('SoundManager.playNewMessage(this)',chat)
         # A new-message sound must fire only for messages that are genuinely new to this
         # screen. Firestore used to answer that with cache/pending metadata; D1 always returns

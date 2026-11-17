@@ -431,12 +431,12 @@ public class SettingsActivity extends Activity {
                                     .setPositiveButton("Submit Priority Report", (d, which) -> {
                                         String txt = details.getText().toString().trim();
                                         if (txt.isEmpty()) { Ui.toast(this, "Please enter report details"); return; }
-                                        Fb.db().collection("reports").add(Fb.map(
+                                        com.friendbook.social.core.DataRouter.add("reports", Fb.map(
                                                 "type", "csae_priority_report",
                                                 "category", "csae",
                                                 "reason", txt,
                                                 "reportedBy", Fb.uid(),
-                                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp()));
+                                                "createdAt", System.currentTimeMillis()), null);
                                         Ui.info(this, "Priority Report Submitted",
                                                 "Thank you. Our safety team prioritizes child safety reports immediately.");
                                     })
@@ -1242,7 +1242,7 @@ public class SettingsActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
                     m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
+                    com.friendbook.social.core.DataRouter.add("feedback", m, null);
                     Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
                 })
                 .setNegativeButton("Cancel", null)

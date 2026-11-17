@@ -6,9 +6,17 @@ JAVA = Path(__file__).resolve().parents[2] / 'app/src/main/java/com/friendbook/s
 class ClientPushHooksTest(unittest.TestCase):
     def test_social_notification_after_successful_write(self):
         source = (JAVA/'core/Notify.java').read_text()
-        self.assertIn('collection("notifications").add(n).addOnSuccessListener', source)
-        self.assertIn('if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification', source)
-        self.assertIn('batch.commit().addOnSuccessListener', source)
+        # The notification is written to D1 and the push is sent from D1's answer. The guard used
+        # to name Firestore's add()/commit() listeners, which is the contract that was failing:
+        # a refused Firestore write meant no push and no notification at all.
+        self.assertIn('DataRouter.batch()\n                .set("notifications", notificationId, n)', source)
+        self.assertIn('if (me.equals(Fb.uid()))', source)
+        self.assertIn('FCMPush.notification(notificationId, n)', source)
+        # The push must not be reachable before the write is acknowledged.
+        after_commit = source[source.index('.commit((success, error) -> {'):]
+        push_at = after_commit.index('FCMPush.notification')
+        self.assertLess(after_commit.index('if (!success)'), push_at,
+                        'a failed write must return before the push is sent')
         for file in ['profile/ProfileActivity.java', 'post/FeedAdapter.java', 'reels/ReelsFragment.java', 'live/LiveActivity.java']:
             self.assertIn('Notify.follow(', (JAVA/file).read_text(), file)
 

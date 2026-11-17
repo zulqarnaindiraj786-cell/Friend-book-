@@ -214,7 +214,7 @@ public class Admin {
                                     : "The tick on your account has been removed.",
                             "isRead", false,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("notifications").add(n);
+                    com.friendbook.social.core.DataRouter.add("notifications", n, null);
                     Ui.toast(c, tickLabel(level) + " → " + displayName);
                 })
                 .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
@@ -299,7 +299,7 @@ public class Admin {
                             "text", "🎉 Congratulations! " + referralCount + " friends joined from your invite — you earned the " + tickLabel(level) + " for FREE!",
                             "isRead", false,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("notifications").add(n);
+                    com.friendbook.social.core.DataRouter.add("notifications", n, null);
                     Ui.toast(c, "🎉 You earned the " + tickLabel(level) + "!");
                 });
     }

@@ -279,7 +279,7 @@ public class AddStoryActivity extends Activity {
             m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
             String storyId = "story_" + System.currentTimeMillis();
             com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-            Fb.db().collection("stories").add(m)
+            com.friendbook.social.core.DataRouter.add("stories", m, null)
                     .addOnSuccessListener(x -> { Ui.toast(this, "Text story shared 📖"); finish(); })
                     .addOnFailureListener(e -> fail());
             return;
@@ -323,7 +323,7 @@ public class AddStoryActivity extends Activity {
                                 m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
                                 String storyId = "story_" + System.currentTimeMillis();
                                 com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
-                                Fb.db().collection("stories").add(m)
+                                com.friendbook.social.core.DataRouter.add("stories", m, null)
                                         .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
                                         .addOnFailureListener(e -> fail());
                             })

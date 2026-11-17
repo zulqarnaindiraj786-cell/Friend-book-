@@ -43,7 +43,7 @@ public final class D1Client {
                     "live_chat", "comments", "subscriptions",
                     // Kept in step with the worker's allow-list: a collection it refuses is a
                     // write the user made that never lands.
-                    "reports", "payments", "gifts")));
+                    "reports", "payments", "gifts", "feedback", "events")));
 
     /** True when this collection is eligible for D1 at all (build flag + supported collection). */
     public static boolean enabled(String collection){

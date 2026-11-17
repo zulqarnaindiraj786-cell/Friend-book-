@@ -297,7 +297,7 @@ public class CreateGroupChatActivity extends Activity {
             m.put("isSeen", true);
             m.put("createdAtMs", now);
             m.put("createdAt", FieldValue.serverTimestamp());
-            chatRef.collection("messages").add(m);
+            com.friendbook.social.core.DataRouter.add("messages", m, null);
 
             Ui.toast(this, "Group \"" + gName + "\" created! 🎉");
             Intent open = new Intent(this, ChatActivity.class);
