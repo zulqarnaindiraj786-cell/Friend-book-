@@ -86,7 +86,7 @@ class FirestoreSource:
     def __init__(self, session, sleep=time.sleep):
         self.session, self.sleep = session, sleep
 
-    def request(self, method, url, **kwargs):
+    def request(self, method, url, operation='Firebase read', **kwargs):
         while True:
             response = getattr(self.session, method)(url, timeout=90, **kwargs)
             try: data = response.json()
@@ -97,7 +97,7 @@ class FirestoreSource:
                 self.sleep(QUOTA_WAIT_SECONDS)
                 continue
             if response.status_code != 200:
-                raise CopyError(f'Firebase read failed HTTP {response.status_code}; checkpoint retained and no source writes made')
+                raise CopyError(f'{operation} failed HTTP {response.status_code}; checkpoint retained and no source writes made')
             return data
 
     def count(self, collection_path):
@@ -106,7 +106,7 @@ class FirestoreSource:
         body = {'structuredAggregationQuery': {
             'structuredQuery': {'from': [{'collectionId': collection}]},
             'aggregations': [{'alias': 'total', 'count': {}}]}}
-        rows = self.request('post', FIRESTORE + quote(parent, safe='/()') + ':runAggregationQuery', json=body)
+        rows = self.request('post', FIRESTORE + quote(parent, safe='/()') + ':runAggregationQuery', operation='Firebase aggregate count', json=body)
         results = [r for r in rows if r.get('result')]
         if len(results) != 1:
             raise CopyError('Firestore count response was not authoritative')
@@ -115,7 +115,7 @@ class FirestoreSource:
     def page(self, collection_path, token):
         params = {'pageSize': PAGE_SIZE, 'showMissing': 'true'}
         if token: params['pageToken'] = token
-        data = self.request('get', FIRESTORE + quote(collection_path, safe='/()'), params=params)
+        data = self.request('get', FIRESTORE + quote(collection_path, safe='/()'), operation='Firebase paginated collection read', params=params)
         return data.get('documents', []), data.get('nextPageToken')
 
     def child_collections(self, document_path):
@@ -124,7 +124,7 @@ class FirestoreSource:
         while True:
             body = {'pageSize': 100}
             if token: body['pageToken'] = token
-            data = self.request('post', url, json=body)
+            data = self.request('post', url, operation='Firebase child-collection listing', json=body)
             found.extend(data.get('collectionIds', []))
             token = data.get('nextPageToken')
             if not token: return found
