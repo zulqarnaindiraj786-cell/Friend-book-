@@ -202,3 +202,43 @@ test('status reports what is still pending', async () => {
   await promotePage(d, 'posts');
   assert.deepEqual((await promoteStatus(d)).posts, { pending: 0, verified: 2 });
 });
+
+// A post created by a new account: the document exists in D1 but no operator will ever mark it
+// verified, because nobody runs the migration for it. It has no reactions yet, so an empty list
+// is the correct answer - but it must be answered, not refused.
+test('a newly created post with no reactions is served empty, not refused', async () => {
+  const d = db();
+  putDocument(d, 'posts', 'fresh', {
+    id: 'fresh', authorId: 'uid_new', content: 'my first post', createdAt: Date.now(),
+  });
+
+  const response = await engagement(d, '/v1/engagement/posts/fresh/reactors');
+  assert.equal(response.status, 200, 'a post D1 holds must never 503');
+  const body = await response.json();
+  assert.deepEqual(body.reactors, []);
+  assert.equal(body.next, null);
+});
+
+test('the first reaction on a fresh post appears immediately', async () => {
+  const d = db();
+  putDocument(d, 'posts', 'fresh2', { id: 'fresh2', authorId: 'uid_new', createdAt: Date.now() });
+
+  // The new post is served once, which promotes it.
+  await engagement(d, '/v1/engagement/posts/fresh2/reactors');
+
+  // Someone reacts through the same endpoint.
+  const request = new Request('https://test.invalid/v1/engagement/posts/fresh2/reactions', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'like' }),
+  });
+  const match = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/
+    .exec(new URL(request.url).pathname);
+  const put = await interactions(request, { DB: d, D1_INTERACTIONS_ENABLED: 'true' },
+    { uid: 'uid_visitor' }, match, async () => true);
+  assert.equal(put.status, 200);
+
+  const sheet = await engagement(d, '/v1/engagement/posts/fresh2/reactors');
+  const body = await sheet.json();
+  assert.deepEqual(body.reactors.map((r) => [r.uid, r.type]), [['uid_visitor', 'like']]);
+});
