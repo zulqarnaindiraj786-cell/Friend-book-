@@ -7,3 +7,5 @@ CREATE TABLE IF NOT EXISTS friendbook_cf_social_recovery_audit (
   original_json TEXT NOT NULL CHECK(json_valid(original_json)),
   recovered_at INTEGER NOT NULL
 );
+
+-- Recovery audit migration is additive and preserves prior documents.

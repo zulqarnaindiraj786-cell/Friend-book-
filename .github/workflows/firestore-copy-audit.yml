@@ -38,3 +38,5 @@ jobs:
 # Audit is read-only and does not invoke Firebase.
 
 # Owner-requested progress check: D1 aggregate only, never a Firebase scan.
+
+# D1-only owner progress refresh; does not touch Firebase.
