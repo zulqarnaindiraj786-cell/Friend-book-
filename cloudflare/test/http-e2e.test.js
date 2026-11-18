@@ -12,7 +12,7 @@ async function scenario(t){
  const f=fixture(), originalFetch=globalThis.fetch;
  const keys=await generateKeyPair('RS256');
  const state={unexpectedNetwork:0};
- f.sql.exec('CREATE TABLE friendbook_cf_documents(path TEXT PRIMARY KEY, collection TEXT, doc_id TEXT, owner_uid TEXT, document_json TEXT, updated_at INTEGER)');
+ f.sql.exec('CREATE TABLE IF NOT EXISTS friendbook_cf_documents(path TEXT PRIMARY KEY, collection TEXT, doc_id TEXT, owner_uid TEXT, document_json TEXT, updated_at INTEGER)');
  const putDoc=(path,value)=>f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,path.split('/')[0],path.split('/').at(-1),value.authorId||value.uid||'',JSON.stringify(value),Date.now());
  putDoc('posts/p1',{authorId:'user1',privacy:'Public'});
  putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:[]});

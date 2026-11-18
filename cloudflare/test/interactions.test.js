@@ -78,6 +78,25 @@ test('comments are idempotent, reject conflicts, spoofed authors and cross-post 
   const page = await (await call(f.env, 'comments')).json();
   assert.equal(page.comments.length, 2); assert.ok(page.comments.every(c => c.uid === identity.uid));
 });
+test('legacy root app comments are merged into authorized D1 comment pages without reviving removed rows', async t => {
+  const f=fixture(); t.after(f.close);
+  await call(f.env,'comments','POST',{id:'same',text:'canonical version'});
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=(id,data)=>insert.run(`comments/${id}`,'comments',id,'user2',JSON.stringify(data),100);
+  add('same',{id:'same',postId:'p1',authorId:'user2',authorName:'Legacy',content:'stale copy',createdAt:10});
+  add('old',{id:'old',postId:'p1',authorId:'user2',authorName:'Legacy friend',content:'historical comment',createdAt:20});
+  add('blocked',{id:'blocked',postId:'p1',authorId:'blocked',content:'private from blocked author',createdAt:30});
+  const authorize=async (_identity,_collection,_id,_unused,context)=>{context.blocked=['blocked'];return true;};
+  const response=await call(f.env,'comments','GET',undefined,{authorize});
+  assert.equal(response.status,200);
+  const page=await response.json();
+  assert.deepEqual(page.comments.map(c=>c.id),['same','old']);
+  assert.equal(page.comments.find(c=>c.id==='same').content,'canonical version');
+  assert.equal(page.comments.find(c=>c.id==='old').authorName,'Legacy friend');
+  assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_comments WHERE id='old'").get().n,0,
+    'read bridge does not bulk-copy or mutate historical records');
+});
+
 test('cursor pages preserve equal-timestamp order and bound each read to twenty', async t => {
   const f = fixture(); t.after(f.close);
   const insert = f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');

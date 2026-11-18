@@ -1,3 +1,5 @@
+import { toPlainDocument } from './app-documents.js';
+
 const reply = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
 const types = new Set(['like','love','haha','wow','sad','angry']);
@@ -13,6 +15,36 @@ function dto(row, uid) {
     edited:!!row.edited,mentions:JSON.parse(row.mentions || '[]'), reactions:row.mine?{[uid]:row.mine}:{} };
 }
 export function normalized(row, uid) { return dto(row,uid); }
+function legacyMillis(value) {
+  if (Number.isFinite(value)) return Math.max(0, Math.trunc(value));
+  if (typeof value === 'string') { const parsed=Date.parse(value); return Number.isFinite(parsed)?parsed:0; }
+  if (value && typeof value === 'object') {
+    if (Number.isFinite(value.millis)) return Math.max(0,Math.trunc(value.millis));
+    const seconds=value.seconds ?? value._seconds;
+    if (Number.isFinite(seconds)) return Math.max(0,Math.trunc(seconds*1000+(Number(value.nanoseconds ?? value._nanoseconds)||0)/1e6));
+  }
+  return 0;
+}
+function legacyComment(row, uid, postId) {
+  const doc=toPlainDocument(row.document_json,row.doc_id);
+  if(!doc || (doc.postId!==postId && doc.post_id!==postId && doc.resource!==`posts/${postId}`)) return null;
+  if(doc.removed || doc.deleted || doc.isDeleted) return null;
+  const author=doc.authorId || doc.userId || doc.uid;
+  if(typeof author!=='string' || !author) return null;
+  const created=legacyMillis(doc.createdAt ?? doc.createdAtMs ?? doc.timestamp);
+  const reactions=doc.reactions && typeof doc.reactions==='object' ? doc.reactions : {};
+  const liked=Array.isArray(doc.likedBy) && doc.likedBy.includes(uid);
+  const mine=typeof reactions[uid]==='string' ? reactions[uid] : liked ? 'like' : null;
+  const rowData={
+    id:row.doc_id,uid:author,text:String(doc.content ?? doc.text ?? doc.message ?? ''),
+    parent_id:doc.parentId || doc.parent_id || null,created_at:created,created_at_known:created>0?1:0,
+    historical_unattributed:0,likes:Math.max(Number(doc.likes)||0,Object.keys(reactions).length),mine,
+    media_url:doc.imageUrl || doc.mediaUrl || '',mentions:JSON.stringify(Array.isArray(doc.mentions)?doc.mentions:[]),
+    name:doc.authorName || doc.userName || doc.name || '',photo:doc.authorPhotoUrl || doc.authorPhoto || doc.userPhoto || '',
+    edited:doc.edited?1:0,removed:0,
+  };
+  return dto(rowData,uid);
+}
 function input(data) {
   const text = data.text, media = data.mediaUrl || '', mentions=data.mentions || [];
   if(typeof text!=='string' || text.length>5000 || (!text.trim() && !media) || typeof media!=='string' || media.length>4096 ||
@@ -33,8 +65,22 @@ export async function commentsAPI(request, db, identity, resource, data, context
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
     const page=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
       AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all();
-    const last=page.results.at(-1);
-    return reply({comments:page.results.map(row=>normalized(row,uid)),pinned:await pin(),next:page.results.length===20?btoa(JSON.stringify([last.created_at,last.id])):null});
+    const postId=resource.slice(resource.indexOf('/')+1);
+    const legacy=await db.prepare(`SELECT doc_id,document_json FROM friendbook_cf_documents
+      WHERE collection='comments' AND json_valid(document_json)
+        AND (json_extract(document_json,'$.postId')=? OR json_extract(document_json,'$.post_id')=? OR json_extract(document_json,'$.resource')=?)
+      ORDER BY updated_at DESC LIMIT 1001`).bind(postId,postId,resource).all();
+    const canonicalIds=await db.prepare('SELECT id FROM friendbook_cf_comments WHERE resource=?').bind(resource).all();
+    const known=new Set((canonicalIds.results||[]).map(row=>row.id));
+    const blocked=new Set(context.blocked||[]);
+    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,postId)).filter(c=>c && !known.has(c.id) && !blocked.has(c.authorId)
+      && (c.createdAt<before[0] || (c.createdAt===before[0] && c.id<before[1])));
+    const current=page.results.map(row=>normalized(row,uid));
+    const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || b.id.localeCompare(a.id));
+    const comments=merged.slice(0,20);
+    const last=comments.at(-1);
+    const hasMore=merged.length>20 || page.results.length===20 || (legacy.results||[]).length===1001;
+    return reply({comments,pinned:await pin(),next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);
   if(request.method==='POST') {
