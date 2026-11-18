@@ -63,24 +63,26 @@ export async function commentsAPI(request, db, identity, resource, data, context
     if(single!==null){if(!validId(single))return reply({error:'Invalid ID'},400);const row=await read(single);return row&&!row.removed&&!(context.blocked||[]).includes(row.uid)?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);}
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
-    const page=await db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
-      AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all();
     const postId=resource.slice(resource.indexOf('/')+1);
-    const legacy=await db.prepare(`SELECT doc_id,document_json FROM friendbook_cf_documents
-      WHERE collection='comments' AND json_valid(document_json)
-        AND (json_extract(document_json,'$.postId')=? OR json_extract(document_json,'$.post_id')=? OR json_extract(document_json,'$.resource')=?)
-      ORDER BY updated_at DESC LIMIT 1001`).bind(postId,postId,resource).all();
-    const canonicalIds=await db.prepare('SELECT id FROM friendbook_cf_comments WHERE resource=?').bind(resource).all();
-    const known=new Set((canonicalIds.results||[]).map(row=>row.id));
+    const [page,legacy,pinned]=await Promise.all([
+      db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
+        AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all(),
+      db.prepare(`SELECT a.doc_id,a.document_json FROM friendbook_cf_documents a
+        WHERE a.collection='comments' AND json_valid(a.document_json)
+          AND (json_extract(a.document_json,'$.postId')=? OR json_extract(a.document_json,'$.post_id')=? OR json_extract(a.document_json,'$.resource')=?)
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=? AND c.id=a.doc_id)
+        ORDER BY a.updated_at DESC LIMIT 1001`).bind(postId,postId,resource,resource).all(),
+      pin(),
+    ]);
     const blocked=new Set(context.blocked||[]);
-    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,postId)).filter(c=>c && !known.has(c.id) && !blocked.has(c.authorId)
+    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,postId)).filter(c=>c && !blocked.has(c.authorId)
       && (c.createdAt<before[0] || (c.createdAt===before[0] && c.id<before[1])));
     const current=page.results.map(row=>normalized(row,uid));
     const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || b.id.localeCompare(a.id));
     const comments=merged.slice(0,20);
     const last=comments.at(-1);
     const hasMore=merged.length>20 || page.results.length===20 || (legacy.results||[]).length===1001;
-    return reply({comments,pinned:await pin(),next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
+    return reply({comments,pinned,next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);
   if(request.method==='POST') {

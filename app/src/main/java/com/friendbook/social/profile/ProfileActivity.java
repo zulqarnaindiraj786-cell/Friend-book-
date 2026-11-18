@@ -89,7 +89,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private String friendState = "none"; // none|friends|outgoing|incoming
     private String incomingRequestId = null;
     private boolean hasOut, hasIn;
-    private int userPostCount = 0;
+    private int userPostCount = -1; // unknown until an authenticated D1 count returns
+    private ListenerRegistration postCountReg;
     private String profileSearchQuery = "";
 
     private TextView topTitleTv, editTopIcon, guardBadge;
@@ -694,7 +695,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         if (!cachedPosts.isEmpty()) {
             allLoadedPosts.addAll(cachedPosts);
-            userPostCount = cachedPosts.size();
             applyPostsFilter();
             if (user != null) updateStatsLine();
         }
@@ -961,6 +961,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void startPostsWatcher() {
+        if(postCountReg!=null)postCountReg.remove();
+        final int generation=profileStartGeneration;
+        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
+            if(generation!=profileStartGeneration || isFinishing())return;
+            userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
+            if(user!=null)updateStatsLine();
+        });
         if(postPager!=null) postPager.close();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
@@ -982,8 +989,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             }
                         }
                     }
-                    // Loaded page size is not the profile total.
-                    userPostCount = Math.max(userPostCount,allLoadedPosts.size());
                     if (user != null) updateStatsLine();
                     applyPostsFilter();
 
@@ -1049,6 +1054,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         super.onStop();
         if(friendPager!=null){friendPager.close();friendPager=null;}
         if(postPager!=null){postPager.close();postPager=null;}
+        if(postCountReg!=null){postCountReg.remove();postCountReg=null;}
         if(videoPager!=null){videoPager.close();videoPager=null;}
         FastCache.removeReactionObserver(reactionObserver);
         if (userReg != null) userReg.remove();
@@ -1070,7 +1076,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         SpannableStringBuilder sb = new SpannableStringBuilder();
         appendBoldStat(sb, Format.count(followers), " followers · ");
         appendBoldStat(sb, Format.count(following), " following · ");
-        appendBoldStat(sb, Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
+        appendBoldStat(sb, userPostCount<0 ? "—" : Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
         statsT.setText(sb);
         statsT.setOnClickListener(v -> Ui.choose(this, user.displayName, new String[]{
                 "👥 Followers (" + Format.count(user.followers != null ? user.followers.size() : 0) + ")",

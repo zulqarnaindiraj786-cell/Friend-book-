@@ -15,7 +15,7 @@ import java.util.concurrent.*;
 public final class D1Client {
     private D1Client(){}
     public static boolean enabled(String collection){return BuildConfig.D1_INTERACTIONS_ENABLED && ("posts".equals(collection)||"reels".equals(collection));}
-    private static final ThreadPoolExecutor IO=new ThreadPoolExecutor(4,8,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(256));
+    private static final ThreadPoolExecutor IO=new ThreadPoolExecutor(8,8,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(256));
     private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final Map<String,List<Runnable>> OBSERVERS=new HashMap<>();
     public static String key(String collection,String id){return collection+"/"+id;}

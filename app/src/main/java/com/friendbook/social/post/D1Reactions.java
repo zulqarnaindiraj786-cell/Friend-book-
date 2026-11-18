@@ -13,22 +13,26 @@ public final class D1Reactions {
  private D1Reactions(){}
  private static String actor;
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
+ private static final android.util.LruCache<String,Long> FETCHED_AT=new android.util.LruCache<>(512);
+ private static final long REFRESH_MS=8000;
  private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
  private static final Map<String,Integer> GENERATION=new HashMap<>();
- private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();GENERATION.clear();}}
+ private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();GENERATION.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
  public static String mine(String collection,String id){JSONObject data=cached(collection,id);return data==null?null:mine(data);}
- public static void invalidate(String collection,String id){scope();FAILED.remove(D1Client.key(collection,id));java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(D1Client.key(collection,id));Models.Post post=reference==null?null:reference.get();if(post!=null)hydrate(post);}
+ public static void invalidate(String collection,String id){scope();FETCHED_AT.remove(D1Client.key(collection,id));FAILED.remove(D1Client.key(collection,id));java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(D1Client.key(collection,id));Models.Post post=reference==null?null:reference.get();if(post!=null)hydrate(post);}
  private static void remember(Context context,String collection,String id,JSONObject data){
-  CACHE.put(D1Client.key(collection,id),data);List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
+  CACHE.put(D1Client.key(collection,id),data);FETCHED_AT.put(D1Client.key(collection,id),android.os.SystemClock.elapsedRealtime());List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
   if("posts".equals(collection)){FastCache.setReactionTypes(id,types);FastCache.setReactionState(context,id,mine(data),total(data),true);}
  }
  private static void fetch(Context context,String collection,String id,Runnable ready){
-  scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){ready.run();return;}if(LOADING.contains(key)||FAILED.contains(key))return;
+  scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){
+   ready.run();Long fetched=FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
+  }if(LOADING.contains(key)||FAILED.contains(key)||WRITING.contains(key))return;
   String uid=actor;int generation=GENERATION.getOrDefault(key,0);LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
    if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);if(WRITING.contains(key)||generation!=GENERATION.getOrDefault(key,0))return;remember(context,collection,id,data);ready.run();
   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);FAILED.add(key);

@@ -214,6 +214,24 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return posts;
     }
 
+    /** Refresh only currently visible post cards; no full feed redraw or media restart. */
+    public void refreshVisibleEngagement(RecyclerView list) {
+        if(list==null || !com.friendbook.social.core.D1Client.enabled("posts"))return;
+        for(int i=0;i<list.getChildCount();i++) {
+            View child=list.getChildAt(i); RecyclerView.ViewHolder holder=list.getChildViewHolder(child);
+            if(!(holder instanceof PostVH))continue;
+            PostVH vh=(PostVH)holder;Object tag=vh.itemView.getTag();if(!(tag instanceof String))continue;
+            Models.Post post=null;for(Models.Post p:posts)if(p!=null && tag.equals(p.id)){post=p;break;}
+            if(post==null)continue; final Models.Post selected=post;
+            D1Reactions.loadPost(activity,selected,()->{
+                if(!selected.id.equals(vh.itemView.getTag()))return;
+                renderReactionBar(activity,vh,selected,Reactions.resolveCurrentUserReaction(selected),
+                        com.friendbook.social.core.FastCache.getReactionTotal(selected.id,selected.likes));
+                bindInlineComments(activity,vh,selected);
+            });
+        }
+    }
+
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
         int oldItemCount = getItemCount();

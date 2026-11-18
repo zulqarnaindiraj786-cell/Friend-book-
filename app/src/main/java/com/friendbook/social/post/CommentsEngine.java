@@ -65,18 +65,27 @@ public class CommentsEngine {
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, loading, more=true, cursorReady;
         private int legacyLoaded=50, visible=50;
-        private boolean d1Mode;private String collection,docId,key,nextD1;
-        private void d1Page(boolean first){
-            if(!active()||loading)return;loading=true;error="";emit();
+        private boolean d1Mode,loadedOlderD1;private String collection,docId,key,nextD1;
+        private final android.os.Handler d1PollHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+        private final Runnable d1Poll=new Runnable(){@Override public void run(){
+            if(!active())return;
+            if(!loading)d1Page(true,true);
+            d1PollHandler.postDelayed(this,8000);
+        }};
+        private void d1Page(boolean first){d1Page(first,false);}
+        private void d1Page(boolean first,boolean background){
+            if(!active()||loading)return;loading=true;if(!background){error="";emit();}
             String query=first||nextD1==null?null:"?before="+android.net.Uri.encode(nextD1);
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
                 if(!active())return;loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
                 try{for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);if(first)latest.put(c.id,c);else older.put(c.id,c);
 }
-                    if(!first)visible+=20;nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;pinned=data.optString("pinned");emit();
+                    if(!first){visible+=20;loadedOlderD1=true;}
+                    if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
+                    error="";pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
-            }).addOnFailureListener(e->{if(active()){loading=false;error="D1 page unavailable. Tap to retry.";emit();}});
+            }).addOnFailureListener(e->{if(active()){loading=false;if(!background){error="D1 page unavailable. Tap to retry.";emit();}}});
         }
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
@@ -114,7 +123,7 @@ public class CommentsEngine {
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true; for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;d1PollHandler.removeCallbacks(d1Poll); for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
     }
 
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
@@ -122,7 +131,8 @@ public class CommentsEngine {
         if(docId==null || docId.isEmpty()) return handle;
         if(d1(collection)){
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
-            D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);return handle;
+            D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);
+            handle.d1PollHandler.postDelayed(handle.d1Poll,8000);return handle;
         }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
         handle.query=parent.collection("comments").orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
