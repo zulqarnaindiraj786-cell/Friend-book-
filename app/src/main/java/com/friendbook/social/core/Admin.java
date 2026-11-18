@@ -32,21 +32,12 @@ public class Admin {
         return "No tick";
     }
 
-    /**
-     * Admin access: ONLY the owner email (checked straight from Firebase Auth,
-     * so it works even before the profile doc loads) or promoted admins.
-     * Normal users NEVER see the admin panel.
-     */
+    /** UI gate only; the backend independently verifies the authenticated UID. */
+    public static final String OWNER_UID = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2";
+
     public static boolean isAdmin() {
-        if (Fb.auth().getCurrentUser() == null) return false;
-        String email = Fb.auth().getCurrentUser().getEmail();
-        if (isOwnerEmail(email)) return true;
-        Models.User me = Fb.me;
-        if (me != null) {
-            if (me.email != null && isOwnerEmail(me.email)) return true;
-            return me.isAdmin;
-        }
-        return false;
+        return Fb.auth().getCurrentUser() != null
+                && OWNER_UID.equals(Fb.auth().getCurrentUser().getUid());
     }
 
     /**

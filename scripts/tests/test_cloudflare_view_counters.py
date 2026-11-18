@@ -248,16 +248,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
                         workflow.index('npm run deploy'), 'AE must be bound before the deploy')
         self.assertLess(workflow.index('npm run deploy'),
                         workflow.index('node cloudflare/report-views-ae.mjs'), 'and reported after it')
-        # A refused AE binding must never break a release, and must never cost another binding: the
-        # fallbacks remove ONE block each (the old truncation at the R2 anchor silently deleted the KV
-        # binding and the cron triggers that come after it).
-        self.assertIn("re.sub(r'# Every view is one Analytics Engine event[\\s\\S]*?\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertIn("re.sub(r'\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertIn("re.sub(r'# Existing owner-provided bucket[\\s\\S]*?\\[\\[r2_buckets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertNotIn('p.write_text(text[:idx])', workflow, 'no truncation fallback may remain')
-        for attempt in ['attempt full \"$VARS_R2_ON\"', 'attempt no-ae \"$VARS_R2_ON\"',
-                        'attempt no-r2 \"$VARS_R2_OFF\"', 'attempt no-ae-no-r2 \"$VARS_R2_OFF\"']:
-            self.assertIn(attempt, workflow)
+        # Never publish a degraded worker with missing production bindings.
+        self.assertIn('attempt full "$VARS_R2_ON" ||', workflow)
+        self.assertNotIn('attempt no-ae "$VARS_R2_ON"', workflow)
+        self.assertNotIn('attempt no-r2 "$VARS_R2_OFF"', workflow)
+        self.assertNotIn('attempt no-ae-no-r2 "$VARS_R2_OFF"', workflow)
         # Each attempt keeps its raw wrangler output for the report, and records which one shipped.
         self.assertIn('mkdir -p /tmp/deploy-logs', workflow)
         self.assertIn('echo \"DEPLOY_ATTEMPT_USED=$label\" >> \"$GITHUB_ENV\"', workflow)

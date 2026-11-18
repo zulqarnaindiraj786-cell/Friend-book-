@@ -143,6 +143,7 @@ jobs:
           retention-days: 7
 
       - name: Publish sanitized D1 diagnostics to the open PR
+        continue-on-error: true
         if: always()
         uses: actions/github-script@v7
         env:
@@ -250,16 +251,9 @@ jobs:
             return 1
           }
 
-          attempt full "$VARS_R2_ON" && exit 0
-          echo '::warning::Retrying without ONLY the Analytics Engine binding. Views then count in the snapshot + memory, still with zero D1 writes.'
-          attempt no-ae "$VARS_R2_ON" && exit 0
-          echo '::warning::Retrying without ONLY the R2 bucket binding (Analytics Engine kept).'
-          attempt no-r2 "$VARS_R2_OFF" && exit 0
-          echo '::warning::Last resort: no Analytics Engine and no R2 binding.'
-          attempt no-ae-no-r2 "$VARS_R2_OFF" && exit 0
-          cp /tmp/wrangler.toml.bak wrangler.toml
-          echo '::error::Every deploy attempt was refused. The raw wrangler output of each attempt is in the Analytics Engine report on the pull request.'
-          exit 1
+          # Do not silently remove production storage or analytics bindings.
+          # A refused binding is a release blocker, not a degraded deployment.
+          attempt full "$VARS_R2_ON" || { echo '::error::Full production bindings unavailable; deployment stopped.'; exit 1; }
 
       - name: Print exact Cloudflare Workers Builds failure and publish it to the PR
         if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]')
