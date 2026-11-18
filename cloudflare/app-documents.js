@@ -204,7 +204,9 @@ export async function appDocuments(request, env, identity) {
   }
 
   if (request.method === 'PUT') {
-    if (['friend_requests','friends','payments','groups'].includes(collection)) return json({error:'Forbidden'},403);
+    // Chat root writes use the transactional Firestore-compatible route; this
+    // older merge API cannot provide the necessary concurrent-creation guard.
+    if (['friend_requests','friends','payments','groups','chats','messages'].includes(collection)) return json({error:'Forbidden'},403);
     let incoming;
     try { incoming = await request.json(); }
     catch { return json({ error: 'Invalid JSON payload' }, 400); }

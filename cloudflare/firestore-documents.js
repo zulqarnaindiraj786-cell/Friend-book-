@@ -863,6 +863,83 @@ async function followBatch(db,uid,ops,now) {
   return json({ok:true,operations:2});
 }
 
+function chatMessageRoom(path, before, after) {
+  const parts=splitPath(path);
+  if (parts[0]==='chats' && parts.length>2) return parts[1];
+  if (parts[0]==='messages' && parts.length===2) return (before||after)?.chatId || '';
+  return null;
+}
+async function chatDocumentGuard(db,path,row) {
+  const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
+  const legacy=!canonical && isRootDocument(path) ? await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first() : null;
+  if (!row) {
+    if (canonical || legacy) throw new Error('Document changed');
+    return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path);
+  }
+  if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:collectionIdOf(path),doc_id:docIdOf(path),document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Document changed');
+  return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||'');
+}
+async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map()) {
+  const id=chatMessageRoom(path,before,after);
+  if (id===null) return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms), room:null};
+  if (!id) return {allowed:false,room:null};
+  const room=await readRow(db,`chats/${id}`);
+  const snapshot=room ? decodeValue(JSON.parse(room.document_json)) : pendingRooms.get(id);
+  return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms,snapshot || null),room,roomPath:`chats/${id}`};
+}
+async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false) {
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  if (!auth.room) return json({error:'Forbidden'},403);
+  const statements=[await chatDocumentGuard(db,auth.roomPath,auth.room),await chatDocumentGuard(db,path,existing)];
+  const id=docIdOf(path), parent=parentPath(path), coll=collectionIdOf(path);
+  if (deleted) {
+    statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
+    if (isRootDocument(path)) statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
+  } else {
+    const serialized=JSON.stringify(doc), owner=ownerOf(doc,existing?.owner_uid||uid), created=existing?.create_time||now;
+    if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,parent,coll,id,owner,serialized,created,now));
+    if (isRootDocument(path)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...doc,id}),now));
+  }
+  statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  await db.batch(statements);
+  return deleted ? json({deleted:true,path}) : json({exists:true,id,path,parent,collection:coll,data:doc,createTime:existing?.create_time||now,updateTime:now});
+}
+
+// Protect room ownership against concurrent creation/updates and prevent an
+// attacker from adopting orphaned message history under a newly created room.
+async function chatRootGuards(db,path,row) {
+  const id=docIdOf(path), statements=[];
+  if (!row) {
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND
+        (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=? OR json_extract(document_json,'$.fields.chatId.stringValue')=?))
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND
+        (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=? OR json_extract(document_json,'$.fields.chatId.stringValue')=?))
+      THEN 1 ELSE 0 END`).bind(path,path,`${path}/messages`,id.length+1,id+'_',id,id,id.length+1,id+'_',id,id));
+    return statements;
+  }
+  const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
+  const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
+  if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'chats',doc_id:id,document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Room changed');
+  statements.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||''));
+  return statements;
+}
+async function writeChatRoot(db,path,doc,now,row,uid) {
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  const guards=await chatRootGuards(db,path,row), id=docIdOf(path), data=JSON.stringify(doc);
+  if (data.length>1_800_000) return json({error:'Document too large'},413);
+  const owner=ownerOf(doc,row?.owner_uid||uid), createTime=row?.create_time||now;
+  await db.batch([...guards,
+    db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now),
+    db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now),
+    db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+  return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -914,7 +991,10 @@ export async function firestoreDocuments(request, env, identity) {
       const next = applySet(existingDoc, body.data || {}, Boolean(body.merge), body.mergeFields || null, now);
       if (splitPath(docPath)[0] === 'groups') return await writeGroup(db,uid,docPath,existing,next,now);
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
-      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
+      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
+      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
     } catch (e) {
@@ -941,7 +1021,10 @@ export async function firestoreDocuments(request, env, identity) {
       const next = applyUpdate(existingDoc, body?.fields || body?.data || body?.updates || {}, now);
       if (splitPath(docPath)[0] === 'groups') return await writeGroup(db,uid,docPath,existing,next,now);
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
-      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
+      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
+      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
     } catch {
@@ -988,7 +1071,10 @@ export async function firestoreDocuments(request, env, identity) {
       let existing;
       try { existing = await readRow(db, docPath); }
       catch { return json({ error: 'Read unavailable' }, 503); }
-      if (!existing || !notificationWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null) || !profileWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null) || !(await chatWriteAllowed(db, docPath, uid, JSON.parse(existing.document_json), null)) || !contentWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null)) return json({ error: 'Forbidden' }, 403);
+      const before=existing ? decodeValue(JSON.parse(existing.document_json)) : null;
+      const chatAuth=await authorizeChat(db,docPath,uid,before,null);
+      if (!existing || !notificationWriteAllowed(docPath, uid, before, null) || !profileWriteAllowed(docPath, uid, before, null) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, before, null)) return json({ error: 'Forbidden' }, 403);
+      if (chatAuth.roomPath) { try { return await writeChatMessage(db,docPath,null,now,existing,chatAuth,uid,true); } catch { return json({error:'Message changed or unavailable'},503); } }
     }
     await db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(docPath).run();
     if (isRootDocument(docPath)) await db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(docPath).run();
@@ -1030,7 +1116,10 @@ export async function firestoreDocuments(request, env, identity) {
         return json({exists:true,id,path:docPath,parent,collection:parent,data:next,createTime:now,updateTime:now},201);
       }
 
-      if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !(await chatWriteAllowed(db, docPath, uid, null, next)) || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
+      const chatAuth=await authorizeChat(db,docPath,uid,null,next);
+      if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
+      if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,null,chatAuth,uid);
+      if (parent === 'chats') return await writeChatRoot(db,docPath,next,now,null,uid);
       const row = await writeRow(db, docPath, next, now, null);
       return json(rowToDocument(row), 201);
     } catch {
@@ -1173,13 +1262,26 @@ export async function firestoreDocuments(request, env, identity) {
       }
     }
     // Authorize the complete batch before issuing any database writes.
+    const chatAuths=new Map();
     for (const p of order) {
       const entry = finalDocs.get(p);
       const before = entry.existingRow ? decodeValue(JSON.parse(entry.existingRow.document_json)) : null;
-      if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !(await chatWriteAllowed(db, p, uid, before, entry.deleted ? null : entry.doc, pendingRooms)) || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
+      const chatAuth=await authorizeChat(db,p,uid,before,entry.deleted ? null : entry.doc,pendingRooms);
+      chatAuths.set(p,chatAuth);
+      if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !chatAuth.allowed || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
     }
     try {
       const statements = [];
+      const roomPaths=order.filter(p=>splitPath(p).length===2 && splitPath(p)[0]==='chats');
+      const messagePaths=order.filter(p=>chatAuths.get(p).roomPath);
+      if ((roomPaths.length || messagePaths.length) && typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+      for (const roomPath of roomPaths) statements.push(...await chatRootGuards(db,roomPath,finalDocs.get(roomPath).existingRow));
+      for (const p of messagePaths) {
+        const auth=chatAuths.get(p);
+        if (auth.room) statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
+        else if (!pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
+        statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
+      }
       for (const p of order) {
         const entry = finalDocs.get(p);
       if (entry.deleted) {
@@ -1209,6 +1311,7 @@ export async function firestoreDocuments(request, env, identity) {
           }
         }
       }
+      if (roomPaths.length || messagePaths.length) statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
       if (typeof db.batch === 'function' && statements.length) {
         await db.batch(statements);
       } else {

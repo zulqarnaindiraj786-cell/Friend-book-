@@ -31,7 +31,7 @@ export async function chatReadAllowed(db,path,uid,data) {
   // authorizing its root document as well as nested messages.
   return member(await loadChat(db,id),uid);
 }
-export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = new Map()) {
+export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = new Map(), roomSnapshot = undefined) {
   const parts=path.split('/');
   const id=chatIdFor(path,before || after);
   if (id === null) return true;
@@ -40,9 +40,12 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
     if (!before) return !!after && member(after,uid) && after.participants.every(x=>typeof x==='string' && x.length>0);
     if (!member(before,uid)) return false;
     if (!after) return false; // room deletion and membership management need dedicated authorization
-    return JSON.stringify(before.participants) === JSON.stringify(after.participants);
+    // Historical room role flags were client-writable. Freeze authority-bearing
+    // fields until a trusted group-chat role transition exists.
+    const protectedFields = ['participants','adminIds','creatorId','createdBy','onlyAdminsCanSend'];
+    return protectedFields.every(k=>JSON.stringify(before[k])===JSON.stringify(after[k]));
   }
-  const room = await loadChat(db,id) || pendingRooms.get(id);
+  const room = roomSnapshot === undefined ? (await loadChat(db,id) || pendingRooms.get(id)) : roomSnapshot;
   if (!member(room,uid)) return false;
   // Creation is attributable to the authenticated sender; room cannot be re-bound.
   if (!before) return !!after && after.senderId === uid && (parts[0] !== 'messages' || after.chatId === id);

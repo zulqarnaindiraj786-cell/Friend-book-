@@ -7,6 +7,7 @@ import { hasD1Friendship } from '../app-documents.js';
 
 const resourcesSchema = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
 const schema = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
+const socialGuardSchema = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
 const appSchema = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
 const mirrorMigration = readFileSync(new URL('../migrations/0017_sync_firestore_app_documents.sql', import.meta.url), 'utf8');
 
@@ -280,7 +281,7 @@ test('database read failures are not reported as missing profiles or empty lists
 
 test('Android batch operations persist chat messages and apply update and delete operations', async () => {
   const sql = new DatabaseSync(':memory:');
-  sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
+  sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);sql.exec(socialGuardSchema);
   const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
     return { run: async () => stmt.run(...args), all: async () => ({results:stmt.all(...args)}), first: async () => stmt.get(...args) || null };
   } }; }, async batch(statements) { for (const s of statements) await s.run(); } };
@@ -338,7 +339,7 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
 });
 
 test('profiles and chats: private fields, membership and write bypasses across APIs', async () => {
-  const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
   const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){for(const s of stmts)await s.run();}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
@@ -702,5 +703,37 @@ test('follow and unfollow change only the actor and target atomically', async ()
   assert.deepEqual(data('users/alice').following,[]);assert.deepEqual(data('users/bob').followers,[]);
   assert.equal((await call('bob','/v1/firestore/document?path=users/bob','PATCH',{fields:{blocked:['alice']}})).status,200);
   assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayUnion')})).status,403);
+  sql.close();
+});
+
+test('chat atomic guards reject concurrent room and message changes and orphan adoption', async () => {
+  const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  let race=null;
+  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){
+    if(race){const fn=race;race=null;fn();}
+    sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+  }};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method,body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify(body)}),env);
+  const put=(uid,path,data)=>call(uid,'/v1/firestore/document?path='+path,'PUT',{data});
+  const insert=(path,parent,coll,id,doc)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(path,parent,coll,id,'alice',JSON.stringify(doc),1,1);
+  insert('chats/orphan/messages/old','chats/orphan/messages','messages','old',{senderId:'alice',text:'private'});
+  assert.notEqual((await put('eve','chats/orphan',{participants:['eve']})).status,200);
+  assert.equal((await put('alice','chats/room',{participants:['alice','bob']})).status,200);
+  assert.equal((await call('alice','/v1/docs/chats/room','PUT',{participants:['alice']})).status,403);
+  assert.equal((await call('alice','/v1/docs/messages/room_m','PUT',{chatId:'room',senderId:'alice'})).status,403);
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/room','PATCH',{fields:{adminIds:['bob']}})).status,403);
+  race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({participants:['eve']}),'chats/room');
+  assert.notEqual((await put('alice','chats/room/messages/m1',{senderId:'alice',text:'must not commit'})).status,200);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
+  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({participants:['alice','bob']}),'chats/room');
+  assert.equal((await put('alice','chats/room/messages/m2',{senderId:'alice',text:'original'})).status,200);
+  race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({senderId:'bob',text:'new owner'}),'chats/room/messages/m2');
+  assert.notEqual((await call('alice','/v1/firestore/document?path=chats/room/messages/m2','PATCH',{fields:{text:'overwrite'}})).status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m2').document_json).text,'new owner');
+  race=()=>insert('chats/new','chats','chats','new',{participants:['eve']});
+  const res=await call('alice','/v1/firestore/batch','POST',{operations:[{op:'set',path:'chats/new/messages/m',data:{senderId:'alice',text:'private'}},{op:'set',path:'chats/new',data:{participants:['alice','bob']}}]});
+  assert.notEqual(res.status,200);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/new/messages/m'),undefined);
   sql.close();
 });
