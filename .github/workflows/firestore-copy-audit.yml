@@ -52,3 +52,5 @@ jobs:
 # D1-only copy progress refresh; no Firebase reads.
 
 # D1-only progress of explicitly authorized extension.
+
+# Read-only archive progress refresh.
