@@ -21,3 +21,6 @@
 -dontwarn com.google.android.ump.**
 -dontwarn okhttp3.**
 -dontwarn okio.**
+# Meta Audience Network SDK references Facebook infer annotations (compile-time only)
+-dontwarn com.facebook.infer.annotation.Nullsafe
+-dontwarn com.facebook.infer.annotation.Nullsafe$Mode
