@@ -35,6 +35,11 @@ public class DocumentSnapshot {
         this.updateTime = updateTime;
     }
 
+    DocumentSnapshot asCached() {
+        return new DocumentSnapshot(firestore, path, id, data, exists,
+                new SnapshotMetadata(true, false), createTime, updateTime);
+    }
+
     public boolean exists() { return exists; }
 
     public String getId() { return id; }

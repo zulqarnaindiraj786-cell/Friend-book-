@@ -231,8 +231,22 @@ public class Query {
     }
 
     public Task<QuerySnapshot> get(Source source) {
+        final String actor = D1DocumentStore.authenticatedUid();
+        final String key = D1DocumentStore.queryCacheKey(this, actor);
+        if (source == Source.CACHE) {
+            String cached = firestore.getCachedQuery(key);
+            if (cached != null) {
+                try { return com.google.android.gms.tasks.Tasks.forResult(parseQuerySnapshot(new JSONArray(cached), true)); }
+                catch (Exception ignored) { /* Treat a corrupt cache as a miss. */ }
+            }
+            return com.google.android.gms.tasks.Tasks.forException(new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.UNAVAILABLE, "No cached query result"));
+        }
         return firestore.runAsync(() -> {
             JSONArray arr = D1DocumentTransport.query(toQueryBody());
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
+            firestore.cacheQuery(key, arr.toString());
             return parseQuerySnapshot(arr);
         });
     }

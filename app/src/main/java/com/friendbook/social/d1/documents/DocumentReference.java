@@ -52,12 +52,17 @@ public class DocumentReference {
     public Task<DocumentSnapshot> get(Source source) {
         if (source == Source.CACHE) {
             DocumentSnapshot cached = firestore.getCachedDoc(path);
-            if (cached != null) return com.google.android.gms.tasks.Tasks.forResult(cached);
+            if (cached != null) return com.google.android.gms.tasks.Tasks.forResult(cached.asCached());
+            return com.google.android.gms.tasks.Tasks.forException(new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.UNAVAILABLE, "No cached document"));
         }
+        final String actor = D1DocumentStore.authenticatedUid();
         return firestore.runAsync(() -> {
             JSONObject res = D1DocumentTransport.getDocument(path);
             DocumentSnapshot snap = parseSnapshot(res);
-            firestore.cacheDoc(path, snap);
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during document read");
+            firestore.cacheDoc(path, snap, actor);
             return snap;
         });
     }

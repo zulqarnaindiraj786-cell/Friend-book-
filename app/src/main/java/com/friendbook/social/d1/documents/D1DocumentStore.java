@@ -43,6 +43,7 @@ public class D1DocumentStore {
 
     private static final class DocListenerEntry {
         final DocumentReference ref;
+        final String actor = authenticatedUid();
         final EventListener<DocumentSnapshot> listener;
         volatile boolean active = true;
         volatile long lastUpdate = -1L;
@@ -57,6 +58,7 @@ public class D1DocumentStore {
 
     private static final class QueryListenerEntry {
         final Query query;
+        final String actor = authenticatedUid();
         final EventListener<QuerySnapshot> listener;
         volatile boolean active = true;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
@@ -142,7 +144,7 @@ public class D1DocumentStore {
         return tcs.getTask();
     }
 
-    private static String authenticatedUid() {
+    static String authenticatedUid() {
         com.google.firebase.auth.FirebaseUser user = com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
         return user == null ? "signed-out" : user.getUid();
     }
@@ -150,7 +152,10 @@ public class D1DocumentStore {
     private static String scopedCacheKey(String uid, String path) { return uid + "|" + path; }
 
     void cacheDoc(String path, DocumentSnapshot snap) {
-        if (path != null && snap != null) docCache.put(scopedCacheKey(authenticatedUid(), path), snap);
+        cacheDoc(path, snap, authenticatedUid());
+    }
+    void cacheDoc(String path, DocumentSnapshot snap, String actor) {
+        if (path != null && snap != null) docCache.put(scopedCacheKey(actor, path), snap);
     }
 
     DocumentSnapshot getCachedDoc(String path) {
@@ -165,7 +170,7 @@ public class D1DocumentStore {
         DocListenerEntry entry = new DocListenerEntry(ref, listener);
         docListeners.computeIfAbsent(ref.getPath(), k -> new CopyOnWriteArrayList<>()).add(entry);
         DocumentSnapshot cached = getCachedDoc(ref.getPath());
-        if (cached != null) mainHandler.post(() -> { if (entry.active) listener.onEvent(cached, null); });
+        if (cached != null) mainHandler.post(() -> { if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(cached.asCached(), null); });
         scheduleDocRead(entry);
         return () -> {
             entry.active = false;
@@ -177,14 +182,14 @@ public class D1DocumentStore {
     ListenerRegistration registerQueryListener(Query query, EventListener<QuerySnapshot> listener) {
         QueryListenerEntry entry = new QueryListenerEntry(query, listener);
         queryListeners.add(entry);
-        String key = queryCacheKey(query);
+        String key = queryCacheKey(query, entry.actor);
         String cachedJson = getCachedQuery(key);
         if (cachedJson != null) {
             try {
                 org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
                 entry.deliveryState.cached(cached.toString());
                 QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
-                mainHandler.post(() -> { if (entry.active) listener.onEvent(snapshot, null); });
+                mainHandler.post(() -> { if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(snapshot, null); });
             } catch (Exception ignored) { }
         }
         scheduleQueryRead(entry);
@@ -231,13 +236,13 @@ public class D1DocumentStore {
     }
 
     private void scheduleDocRead(DocListenerEntry entry) {
-        if (!entry.active || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
         try { executor.execute(() -> deliverDoc(entry)); }
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
-        if (!entry.active || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
         try { executor.execute(() -> deliverQuery(entry)); }
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
@@ -246,20 +251,21 @@ public class D1DocumentStore {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
             DocumentSnapshot snap = entry.ref.parseSnapshot(D1DocumentTransport.getDocument(entry.ref.getPath()));
-            cacheDoc(entry.ref.getPath(), snap);
+            if (!entry.actor.equals(authenticatedUid())) return;
+            cacheDoc(entry.ref.getPath(), snap, entry.actor);
             long ut = snap.getUpdateTime() != null ? snap.getUpdateTime().toDate().getTime() : 0L;
             if (entry.lastUpdate == ut && entry.lastExists == snap.exists() && entry.lastUpdate != -1L) return;
             entry.lastUpdate = ut;
             entry.lastExists = snap.exists();
             mainHandler.post(() -> {
-                if (entry.active) entry.listener.onEvent(snap, null);
+                if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
             D1DocumentStoreException ffe = ex instanceof D1DocumentStoreException
                     ? (D1DocumentStoreException) ex
                     : new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, ex.getMessage(), ex);
             mainHandler.post(() -> {
-                if (entry.active) entry.listener.onEvent(null, ffe);
+                if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(null, ffe);
             });
         } finally {
             entry.inFlight.set(false);
@@ -270,14 +276,15 @@ public class D1DocumentStore {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
+            if (!entry.actor.equals(authenticatedUid())) return;
             String fp = arr.toString();
-            cacheQuery(queryCacheKey(entry.query), fp);
+            cacheQuery(queryCacheKey(entry.query, entry.actor), fp);
             // Cached rows are not server confirmation: the first server result
             // must be delivered even when its contents match the cached snapshot.
             if (!entry.deliveryState.server(fp)) return;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
             mainHandler.post(() -> {
-                if (entry.active) entry.listener.onEvent(snap, null);
+                if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
             entry.deliveryState.error();
@@ -285,14 +292,14 @@ public class D1DocumentStore {
                     ? (D1DocumentStoreException) ex
                     : new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, ex.getMessage(), ex);
             mainHandler.post(() -> {
-                if (entry.active) entry.listener.onEvent(null, ffe);
+                if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(null, ffe);
             });
         } finally {
             entry.inFlight.set(false);
         }
     }
 
-    private String getCachedQuery(String key) {
+    String getCachedQuery(String key) {
         String cached = queryCache.get(key);
         if (cached != null) return cached;
         com.friendbook.social.App app = com.friendbook.social.App.instance;
@@ -303,7 +310,7 @@ public class D1DocumentStore {
         return cached;
     }
 
-    private void cacheQuery(String key, String json) {
+    void cacheQuery(String key, String json) {
         queryCache.put(key, json);
         while (queryCache.size() > 32) {
             String evict = queryCache.keySet().iterator().next();
@@ -339,8 +346,8 @@ public class D1DocumentStore {
         } catch (Exception impossible) { return Integer.toHexString(value.hashCode()); }
     }
 
-    private static String queryCacheKey(Query q) {
-        return authenticatedUid() + "|" + toQueryJson(q).toString();
+    static String queryCacheKey(Query q, String actor) {
+        return actor + "|" + toQueryJson(q).toString();
     }
 
     // Use the same serialization as one-shot reads: cursors must affect both the request
