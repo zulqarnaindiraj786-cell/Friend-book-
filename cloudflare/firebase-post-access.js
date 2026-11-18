@@ -17,7 +17,8 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   if (!Object.keys(me).length || me.banned?.booleanValue || me.deactivated?.booleanValue) return false;
   if (context) Object.assign(context, {
     owner, name: string(me, 'displayName'), photo: string(me, 'photoUrl'),
-    blocked: list(me, 'blocked'), moderator: !!(me.isAdmin?.booleanValue || me.isModerator?.booleanValue),
+    // Historical profile flags were client-writable and cannot confer moderation authority.
+    blocked: list(me, 'blocked'), moderator: false,
   });
 
   const groupId = string(post, 'groupId');

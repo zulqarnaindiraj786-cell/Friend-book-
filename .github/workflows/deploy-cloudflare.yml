@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book') && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
