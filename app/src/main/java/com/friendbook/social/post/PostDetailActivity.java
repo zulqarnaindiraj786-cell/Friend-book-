@@ -344,9 +344,18 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
         postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
-            if (d == null || !d.exists()) {
-                if (post != null && postId != null && postId.startsWith("sponsored_ad_")) return;
-                finish();
+            // A listener may first emit null while the D1/Firestore-compatible endpoint is
+            // connecting, or report an error during an offline/network transition. Do not close
+            // the comments screen on a transient read failure; retain cached post/comments and
+            // let the user retry via swipe-to-refresh. Only a confirmed missing server document
+            // should dismiss a post detail that has no cached copy.
+            if (e != null || d == null) {
+                if (post == null && commentSwipe != null) commentSwipe.setRefreshing(false);
+                return;
+            }
+            if (!d.exists()) {
+                if (post != null || (postId != null && postId.startsWith("sponsored_ad_"))) return;
+                if (!d.getMetadata().isFromCache()) finish();
                 return;
             }
             post = Models.Post.fromDoc(d);

@@ -560,7 +560,7 @@ export async function firestoreDocuments(request, env, identity) {
       const existing = await readRow(db, docPath);
       if (!existing) return json({ error: 'NOT_FOUND' }, 404);
       const existingDoc = decodeValue(JSON.parse(existing.document_json));
-      const next = applyUpdate(existingDoc, body?.fields || body?.data || {}, now);
+      const next = applyUpdate(existingDoc, body?.fields || body?.data || body?.updates || {}, now);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
     } catch {

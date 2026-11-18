@@ -41,9 +41,22 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   assert.equal(row.path, `users/${uid}`);
   assert.equal(row.owner_uid, uid);
   assert.match(row.document_json, /d1-only/);
+  const patch = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
+    method:'PATCH', headers:{authorization:'Bearer proof-token','content-type':'application/json'},
+    body:JSON.stringify({fields:{displayName:'Patched name'}}),
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(patch.status,200,await patch.text());
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json).displayName,'Patched name');
+  const legacyPatch = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
+    method:'PATCH', headers:{authorization:'Bearer proof-token','content-type':'application/json'},
+    body:JSON.stringify({updates:{displayName:'Patched legacy payload'}}),
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(legacyPatch.status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json).displayName,'Patched legacy payload');
   const appRow = sql.prepare('SELECT path, owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?').get(`users/${uid}`);
   assert.equal(appRow.owner_uid, uid);
   assert.match(appRow.document_json, /d1-only/);
+  assert.match(appRow.document_json, /Patched legacy payload/);
   const list = await app.fetch(new Request('https://example.test/v1/docs?collection=users&limit=10', {
     headers: {authorization: 'Bearer proof-token'},
   }), {DB: db, FIREBASE_PROJECT_ID: 'friendbook-test'});
@@ -54,7 +67,7 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
     body:JSON.stringify({data:{uid,displayName:'forged replacement'},createOnly:true}),
   }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(createOnly.status,409);
-  assert.match(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json,/D1 proof/);
+  assert.match(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json,/Patched legacy payload/);
 });
 
 test('Firestore document reads fall back to existing D1 app documents for root profiles and posts', async () => {

@@ -97,7 +97,11 @@ public class DocumentReference {
 
     public Task<Void> update(Map<String, Object> data) {
         JSONObject body = new JSONObject();
-        try { body.put("updates", D1DocumentJson.encodeMap(data)); } catch (Exception ignored) { }
+        // The Worker PATCH endpoint consumes `fields` (with `data` retained as a legacy
+        // alias). Sending `updates` here made every Android DocumentReference.update() fail
+        // against the D1-backed store: profile patches, request status changes and other
+        // Firestore-style updates never reached storage.
+        try { body.put("fields", D1DocumentJson.encodeMap(data)); } catch (Exception ignored) { }
         return firestore.runAsync(() -> {
             D1DocumentTransport.patchDocument(path, body);
             firestore.invalidateDoc(path);
