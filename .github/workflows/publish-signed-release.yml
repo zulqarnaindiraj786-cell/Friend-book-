@@ -1,0 +1,56 @@
+name: Publish Signed Binaries to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create
+        required: true
+        default: friendbook-signed-32e938b
+        type: string
+      apk_blob_sha:
+        description: Git blob SHA of the signed APK (from the build workflow)
+        required: true
+        default: 0e0f1bc5934b635f08d3a9543c7c18f4d154525a
+        type: string
+      aab_blob_sha:
+        description: Git blob SHA of the signed AAB (from the build workflow)
+        required: true
+        default: 8ae7dd5c4865b8d14b547b6f1542d02a1db92f71
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed binaries from the git blob store
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          gh api repos/$GITHUB_REPOSITORY/git/blobs/${{ inputs.apk_blob_sha }} --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook.apk
+          gh api repos/$GITHUB_REPOSITORY/git/blobs/${{ inputs.aab_blob_sha }} --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook-playstore.aab
+          ls -lh friendbook.apk friendbook-playstore.aab
+          sha256sum friendbook.apk friendbook-playstore.aab
+          test "$(sha256sum friendbook.apk | cut -d' ' -f1)" = "2f173bd7dec85f07bc7a679350961d14fc986ae037e3087671e76d3e83e1d507"
+          test "$(sha256sum friendbook-playstore.aab | cut -d' ' -f1)" = "ac1710b65029bc2bb9db0d5d140d1ebfc362aedd6c9c7176475907728822d6a5"
+
+      - name: Create release and attach signed binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" friendbook.apk friendbook-playstore.aab \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "FriendBook direct APK (signed release 2.9.0 / 123)" \
+            --prerelease \
+            --notes "Signed release build @ 32e938b.
+
+          - friendbook.apk — signed v1+v2, versionCode 123 / versionName 2.9.0
+          - friendbook-playstore.aab — signed App Bundle for Play Console
+
+          SHA-256
+          - friendbook.apk: 2f173bd7dec85f07bc7a679350961d14fc986ae037e3087671e76d3e83e1d507
+          - friendbook-playstore.aab: ac1710b65029bc2bb9db0d5d140d1ebfc362aedd6c9c7176475907728822d6a5"
