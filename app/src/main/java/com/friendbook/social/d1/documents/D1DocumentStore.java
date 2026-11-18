@@ -106,6 +106,35 @@ public class D1DocumentStore {
         return new WriteBatch(this);
     }
 
+    /** One authenticated profile header + first post page; individual listeners remain authoritative. */
+    public Task<org.json.JSONObject> fetchProfileBootstrap(String uid) {
+        final String actor=authenticatedUid();
+        return runAsync(() -> {
+            org.json.JSONObject result=D1DocumentTransport.request("GET", "/v1/firestore/profile-bootstrap?uid="
+                    + D1DocumentTransport.enc(uid), null);
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed during profile read");
+            return result;
+        });
+    }
+
+    /** Seed account-scoped caches only while the same profile request is still active. */
+    public void cacheProfileBootstrap(String uid, String actor, org.json.JSONObject result) {
+        if (result==null || !actor.equals(authenticatedUid())) return;
+        org.json.JSONObject profile=result.optJSONObject("profile"), posts=result.optJSONObject("posts");
+        if (profile!=null && profile.optInt("status")==200 && profile.optJSONObject("body")!=null) {
+            DocumentReference ref=collection("users").document(uid);
+            cacheDoc(ref.getPath(),ref.parseSnapshot(profile.optJSONObject("body")),actor);
+        }
+        if (posts!=null && posts.optInt("status")==200 && posts.optJSONObject("body")!=null) {
+            org.json.JSONArray rows=posts.optJSONObject("body").optJSONArray("documents");
+            if (rows!=null) {
+                Query query=collection("posts").whereEqualTo("authorId",uid).limit(7);
+                cacheQuery(queryCacheKey(query,actor),rows.toString());
+            }
+        }
+    }
+
     /** Server verifies the signed-in administrator; the UI is not an authorization boundary. */
     public Task<org.json.JSONObject> previewSocialRecovery(String kind, String id) {
         return runAsync(() -> D1DocumentTransport.request("GET", "/v1/admin/recover-social?kind="

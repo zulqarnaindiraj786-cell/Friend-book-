@@ -47,7 +47,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
-      const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query'
+      const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
         || path === '/v1/admin/recover-social';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';

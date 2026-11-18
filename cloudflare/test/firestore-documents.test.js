@@ -1106,3 +1106,21 @@ test('friendship reads use participant indexes without leaking or reviving stale
  const plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all('alice','alice','alice').map(x=>x.detail).join('\n');assert.match(plan,/SEARCH.*idx_cf_friend_participant_0/);assert.match(plan,/SEARCH.*idx_cf_friend_participant_1/);
  sql.close();
 });
+
+test('profile bootstrap combines first page with ordinary projection and post privacy', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const add=(coll,id,data)=>insert.run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(data),1,1);
+ add('users','alice',{uid:'alice',displayName:'Alice',email:'private'});add('users','bob',{uid:'bob'});
+ add('posts','p1',{authorId:'alice',privacy:'Public'});add('posts','p2',{authorId:'alice',privacy:'Only me'});
+ add('posts','other',{authorId:'bob',privacy:'Public'});
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const req=uid=>new Request('https://example.test/v1/firestore/profile-bootstrap?uid='+uid,{headers:{authorization:'Bearer bob'}});
+ const result=await app.fetch(req('alice'),env);assert.equal(result.status,200);const body=await result.json();
+ assert.equal(body.profile.status,200);assert.equal(body.profile.body.data.displayName,'Alice');assert.equal(body.profile.body.data.email,undefined);
+ assert.equal(body.posts.status,200);assert.deepEqual(body.posts.body.documents.map(d=>d.id),['p1']);
+ const invalid=await app.fetch(req(encodeURIComponent('a/b')),env);assert.equal(invalid.status,400);
+ const unauth=await app.fetch(new Request('https://example.test/v1/firestore/profile-bootstrap?uid=alice'),env);assert.equal(unauth.status,401);
+ sql.close();
+});

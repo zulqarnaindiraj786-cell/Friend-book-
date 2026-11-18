@@ -1164,6 +1164,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
 
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
 
+  // One authenticated round trip for the profile header and its first post page.
+  // Delegate to the same endpoints/policies so this cannot bypass projections or post privacy.
+  if (path === '/v1/firestore/profile-bootstrap' && request.method === 'GET') {
+    const target=url.searchParams.get('uid') || '';
+    if (!validSegment(target)) return json({error:'Invalid profile'},400);
+    const profileRequest=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(`users/${target}`)}`);
+    const postRequest=new Request(`${url.origin}/v1/firestore/query`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({parent:'posts',filters:[{field:'authorId',op:'==',value:target}],orderBy:[],limit:7})});
+    try {
+      const [profile,posts]=await Promise.all([firestoreDocuments(profileRequest,env,identity),firestoreDocuments(postRequest,env,identity)]);
+      return json({profile:{status:profile.status,body:await profile.json()},posts:{status:posts.status,body:await posts.json()}});
+    } catch { return json({error:'Profile bootstrap unavailable'},503); }
+  }
+
   // GET /v1/firestore/document?path=...
   if (path === '/v1/firestore/document' && request.method === 'GET') {
     const docPath = url.searchParams.get('path') || '';

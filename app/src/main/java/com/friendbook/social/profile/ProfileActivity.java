@@ -863,10 +863,33 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         return true;
     }
 
+    private int profileStartGeneration;
+
     @Override
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
+        final int generation=++profileStartGeneration;
+        final String actor=Fb.uid();
+        final java.util.concurrent.atomic.AtomicBoolean started=new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable fallback=() -> {
+            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+            if(started.compareAndSet(false,true)) startProfileListeners();
+        };
+        // Do not block the whole profile on a slow combined request. Existing listeners
+        // are the fallback and continue to refresh all changes after initial hydration.
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(fallback,1500);
+        if (actor==null || uid==null) { fallback.run(); return; }
+        Fb.db().fetchProfileBootstrap(uid).addOnSuccessListener(result -> {
+            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+            if(started.compareAndSet(false,true)) {
+                Fb.db().cacheProfileBootstrap(uid,actor,result);
+                startProfileListeners();
+            }
+        }).addOnFailureListener(error -> fallback.run());
+    }
+
+    private void startProfileListeners() {
         userReg = Fb.db().collection("users").document(uid)
                 .addSnapshotListener((d, err) -> {
                     if (d == null) {
@@ -1022,6 +1045,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     @Override
     protected void onStop() {
+        profileStartGeneration++;
         super.onStop();
         if(friendPager!=null){friendPager.close();friendPager=null;}
         if(postPager!=null){postPager.close();postPager=null;}

@@ -20,20 +20,25 @@ public final class CursorPager {
     private final Listener listener;
     private final LinkedHashMap<String,DocumentSnapshot> records=new LinkedHashMap<>();
     private DocumentSnapshot cursor;
-    private boolean more=true,loading,closed;
+    private boolean more=true,loading,closed,serverReceived;
     public CursorPager(Query query,int size,String key,Listener listener) {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
     public void start() {
         CachedPage cached=CACHE.get(key);
         if(cached!=null){for(DocumentSnapshot doc:cached.docs)records.put(doc.getId(),doc);more=cached.more;emit("");}
+        if (cached==null) query.limit(size).get(Source.CACHE).addOnSuccessListener(page -> {
+            if (!active() || serverReceived || !records.isEmpty()) return;
+            for (DocumentSnapshot doc:page) records.put(doc.getId(),doc);
+            if (!records.isEmpty()) { boolean wasLoading=loading;loading=false;emit("");loading=wasLoading; }
+        });
         more=true;next();
     }
     public void next() {
         if(closed || loading || !more || !Objects.equals(actor,Fb.uid())) return;
         loading=true;if(cursor!=null || records.isEmpty())emit("");Query page=query;if(cursor!=null)page=page.startAfter(cursor);
         page.limit(size).get().addOnSuccessListener(result -> {
-            if(!active())return;loading=false;
+            if(!active())return;loading=false;serverReceived=true;
             boolean offline=result.getMetadata().isFromCache();
             if(!offline)more=result.size()==size;
             if(cursor==null)records.clear();
