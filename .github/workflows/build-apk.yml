@@ -104,6 +104,7 @@ jobs:
             exit 1
           fi
 
+      # Decode the existing release key only on the runner; never print or upload it.
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
         env:
