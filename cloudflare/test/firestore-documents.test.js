@@ -401,5 +401,25 @@ test('post privacy and unreviewed collections fail closed on all document routes
   assert.equal((await call('bob','/v1/firestore/document?path=sessions/alice','PUT',{data:{uid:'bob'}})).status,403);
   assert.equal((await call('bob','/v1/docs?collection=groups')).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
+  // Until each policy is implemented, neither the old nor the Firestore-compatible
+  // routes may read or mutate these records, including mixed atomic batches.
+  for (const collection of ['friends','friend_requests','groups','payments']) {
+    const docPath = `${collection}/item`;
+    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`)).status,403);
+    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'PUT',{data:{userId:'bob',status:'approved'}})).status,403);
+    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'DELETE')).status,403);
+    assert.equal((await call('bob',`/v1/firestore/document?parent=${collection}`,'POST',{data:{userId:'bob'}})).status,403);
+    assert.equal((await call('bob','/v1/firestore/query','POST',{parent:collection})).status,403);
+    assert.equal((await call('bob',`/v1/firestore/count?parent=${collection}`)).status,403);
+    assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[
+      {op:'set',path:'users/bob',data:{uid:'bob',displayName:'must not persist'},merge:true},
+      {op:'set',path:docPath,data:{userId:'bob'}}
+    ]})).status,403);
+    const docsStatus = (await call('bob',`/v1/docs/${collection}/item`)).status;
+    assert.ok(docsStatus === 403 || docsStatus === 400);
+    const docsWriteStatus = (await call('bob',`/v1/docs/${collection}/item`,'PUT',{userId:'bob'})).status;
+    assert.ok(docsWriteStatus === 403 || docsWriteStatus === 400);
+  }
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').n,0);
   sql.close();
 });
