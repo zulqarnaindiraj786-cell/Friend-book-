@@ -103,6 +103,13 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         modPostBtn.setOnClickListener(this::showQuickGroupMenu);
         topBar.addView(modPostBtn);
         root.addView(topBar);
+        TextView copyId = Ui.tv(this, "Group ID: " + id + "  (tap to copy)", 11, Ui.sub(this));
+        Ui.pad(copyId, 12, 4, 12, 4);
+        copyId.setOnClickListener(v -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cb != null) { cb.setPrimaryClip(android.content.ClipData.newPlainText("Group ID", id)); Ui.toast(this, "Group ID copied"); }
+        });
+        root.addView(copyId);
         root.addView(Ui.divider(this));
 
         // Hero Card (Cover + Avatar + Title + Action Pills + Tabs)

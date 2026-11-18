@@ -75,6 +75,13 @@ public class GroupChatInfoActivity extends Activity {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "👥 Group Info & Settings"));
+        TextView copyId = Ui.tv(this, "Group chat ID: " + chatId + "  (tap to copy)", 11, Ui.sub(this));
+        Ui.pad(copyId, 12, 4, 12, 4);
+        copyId.setOnClickListener(v -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cb != null) { cb.setPrimaryClip(android.content.ClipData.newPlainText("Group chat ID", chatId)); Ui.toast(this, "Group chat ID copied"); }
+        });
+        root.addView(copyId);
         root.addView(Ui.divider(this));
 
         ScrollView sv = new ScrollView(this);

@@ -999,6 +999,47 @@ async function writeChatRoot(db,path,doc,now,row,uid) {
   return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
 }
 
+// Owner-operated review: no legacy role or roster is trusted automatically.
+// The preview and the submitted digest identify the exact record the administrator reviewed.
+async function recoverLegacySocial(request,env,uid,now) {
+  const db=env.DB, deny=()=>json({error:'Forbidden'},403);
+  if (!isPaymentAdmin(env,uid)) return deny();
+  if (!['GET','POST'].includes(request.method)) return json({error:'Method not allowed'},405);
+  let input;
+  try { input=request.method==='GET' ? Object.fromEntries(new URL(request.url).searchParams) : await request.json(); }
+  catch { return json({error:'Invalid request'},400); }
+  if (!input || !['group','chat'].includes(input.kind) || !validSegment(input.id) || input.id.length>128) return json({error:'Invalid request'},400);
+  const coll=input.kind==='group'?'groups':'chats', path=`${coll}/${input.id}`;
+  const ledgerTable=input.kind==='group'?'friendbook_cf_trusted_groups':'friendbook_cf_trusted_group_chats';
+  const ledgerPath=input.kind==='group'?'group_path':'chat_path';
+  try {
+    const row=await readRow(db,path);
+    if (!row) return json({error:'Not found'},404);
+    const old=decodeValue(JSON.parse(row.document_json));
+    const owner=input.kind==='group'?old.adminId:old.createdBy;
+    const participants=input.kind==='group'?old.members:old.participants;
+    if (!validSegment(owner) || owner.length>128 || !Array.isArray(participants) || !participants.length || participants.length>500
+        || participants.some(x=>!validSegment(x) || x.length>128) || new Set(participants).size!==participants.length || !participants.includes(owner)
+        || (input.kind==='chat' && old.isGroup!==true)) return json({error:'Record needs manual repair'},409);
+    if (await db.prepare(`SELECT owner_uid FROM ${ledgerTable} WHERE ${ledgerPath}=?`).bind(path).first()) return json({error:'Already trusted'},409);
+    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(row.document_json));
+    const revision=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
+    if (request.method==='GET') return json({kind:input.kind,id:input.id,name:input.kind==='group'?(old.name||''):(old.groupName||''),owner,participants,revision});
+    if (input.confirm!==true || input.revision!==revision || input.owner!==owner) return json({error:'Review changed or not confirmed'},409);
+    if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+    const next=input.kind==='group' ? {...old,adminId:owner,adminIds:[owner],moderatorIds:[],pendingMemberIds:[],invitedUids:[],bannedMemberIds:[],privacy:['public','private'].includes(String(old.privacy||'').toLowerCase())?old.privacy:'Private'}
+      : {...old,createdBy:owner,adminIds:[owner],onlyAdminsCanSend:old.onlyAdminsCanSend===true};
+    const guard=await chatDocumentGuard(db,path,row), id=docIdOf(path), data=JSON.stringify(next);
+    await db.batch([guard,
+      db.prepare(`INSERT INTO ${ledgerTable}(${ledgerPath},owner_uid) VALUES (?,?)`).bind(path,owner),
+      db.prepare('INSERT INTO friendbook_cf_social_recovery_audit(path,kind,admin_uid,owner_uid,original_json,recovered_at) VALUES (?,?,?,?,?,?)').bind(path,input.kind,uid,owner,row.document_json,now),
+      db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,coll,coll,id,owner,data,row.create_time||now,now),
+      db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...next,id}),now),
+      db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+    return json({ok:true,kind:input.kind,id:input.id,owner});
+  } catch { return json({error:'Recovery changed or unavailable'},409); }
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -1007,6 +1048,8 @@ export async function firestoreDocuments(request, env, identity) {
   const path = url.pathname;
   const db = env.DB;
   const now = Date.now();
+
+  if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
 
   // GET /v1/firestore/document?path=...
   if (path === '/v1/firestore/document' && request.method === 'GET') {

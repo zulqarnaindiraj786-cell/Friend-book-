@@ -101,6 +101,18 @@ public class D1DocumentStore {
         return new WriteBatch(this);
     }
 
+    /** Server verifies the signed-in administrator; the UI is not an authorization boundary. */
+    public Task<org.json.JSONObject> previewSocialRecovery(String kind, String id) {
+        return runAsync(() -> D1DocumentTransport.request("GET", "/v1/admin/recover-social?kind="
+                + D1DocumentTransport.enc(kind) + "&id=" + D1DocumentTransport.enc(id), null));
+    }
+
+    public Task<org.json.JSONObject> confirmSocialRecovery(String kind, String id, String revision, String owner) {
+        return runAsync(() -> D1DocumentTransport.request("POST", "/v1/admin/recover-social",
+                new org.json.JSONObject().put("kind", kind).put("id", id).put("revision", revision)
+                        .put("owner", owner).put("confirm", true)));
+    }
+
     public <TResult> Task<TResult> runTransaction(Transaction.Function<TResult> updateFunction) {
         return runAsync(() -> {
             Transaction tx = new Transaction(this);

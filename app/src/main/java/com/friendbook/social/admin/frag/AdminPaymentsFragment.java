@@ -68,7 +68,11 @@ public class AdminPaymentsFragment extends Fragment {
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
-                    if (snap == null || snap.isEmpty()) {
+                    if (err != null || snap == null) {
+                        countT.setText("Requests unavailable — please retry");
+                        return;
+                    }
+                    if (snap.isEmpty()) {
                         countT.setText("0 requests yet");
                         TextView empty = Ui.tv(a, "✓ Free creator badge & verification requests will appear here.",
                                 13, Ui.sub(a));
@@ -138,16 +142,25 @@ public class AdminPaymentsFragment extends Fragment {
         sp.setMargins(0, Ui.dp(a, 8), 0, 0);
         card.addView(statusT, sp);
 
-        if ("pending".equals(status)) {
+        boolean freeReview = amount == 0 && "FREE".equals(currency)
+                && ("tick_blue".equals(type) || "tick_gold".equals(type) || "tick_diamond".equals(type));
+        if ("pending".equals(status) && !freeReview) {
+            TextView warning = Ui.tv(a, "Historical paid request: payment verification is not configured; no charge or approval is performed here.", 12, Ui.sub(a));
+            Ui.pad(warning, 0, 8, 0, 0);
+            card.addView(warning);
+        }
+        if ("pending".equals(status) && freeReview) {
             LinearLayout btns = Ui.row(a);
             btns.setPadding(0, Ui.dp(a, 10), 0, 0);
             TextView approve = Ui.btn(a, "✓ Approve");
             approve.setOnClickListener(v -> confirm(a, "Approve " + typeLabel(type) + "?",
                     "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
-            reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
+            reject.setOnClickListener(v -> confirm(a, "Reject?", "The applicant may submit another free review later.",
                     () -> d.getReference().update("status", "rejected",
-                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())));
+                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())
+                            .addOnSuccessListener(x -> Ui.toast(a, "Request rejected"))
+                            .addOnFailureListener(e -> Ui.toast(a, "Couldn't reject request. Please retry."))));
             LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             b2.leftMargin = Ui.dp(a, 8);
@@ -212,15 +225,8 @@ public class AdminPaymentsFragment extends Fragment {
         if (type != null && type.startsWith("tick_"))
             text = "✓ Approved! Your " + Admin.tickLabel(type.substring(5)) + " is now live 🎉";
         else text = "⭐ Your request was approved. Enjoy!";
-        java.util.Map<String, Object> n = Fb.map(
-                "toUserId", uid,
-                "fromUserId", Ui.TEAM_USER_ID,
-                "fromUserName", "friendbook Team",
-                "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
-                "type", "payment",
-                "text", text,
-                "isRead", false,
-                "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        // Use the authenticated reviewer's identity; a synthetic team UID is not
+        // authorized to write notifications and would silently fail.
+        com.friendbook.social.core.Notify.send(uid, "payment", text);
     }
 }
