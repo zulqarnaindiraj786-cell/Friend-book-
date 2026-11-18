@@ -44,3 +44,5 @@ jobs:
 # Quota progress check: D1 aggregates only, zero Firebase calls.
 
 # D1-only progress refresh; no Firebase scan.
+
+# D1-only remaining-collections check; no Firebase reads.
