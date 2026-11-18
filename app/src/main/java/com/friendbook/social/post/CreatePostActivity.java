@@ -867,13 +867,12 @@ public class CreatePostActivity extends Activity {
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
-            if (com.friendbook.social.core.CloudflareStore.enabled()) {
-                com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
-            } else {
-                Fb.db().collection("posts").document(editId).update(m);
-            }
-            Ui.toast(this, "Post updated ✓");
-            finish();
+            Fb.db().collection("posts").document(editId).update(m)
+                    .addOnSuccessListener(v -> {
+                        Ui.toast(this, "Post updated ✓");
+                        finish();
+                    })
+                    .addOnFailureListener(e -> fail("Couldn't update post. Please try again."));
             return;
         }
         String myUid = Fb.uid();
@@ -900,41 +899,8 @@ public class CreatePostActivity extends Activity {
         m.put("savedBy", new ArrayList<String>());
         m.put("createdAt", FieldValue.serverTimestamp());
 
-        // ⚡ 0.0ms Optimistic Publish: write to local persistence + prepend to FastCache immediately!
+        // Do not display or report a post as published until D1 has accepted it.
         com.friendbook.social.d1.documents.DocumentReference docRef = Fb.db().collection("posts").document();
-        com.friendbook.social.models.Models.Post optimistic = new com.friendbook.social.models.Models.Post();
-        optimistic.id = docRef.getId();
-        optimistic.authorId = myUid;
-        optimistic.authorName = myName;
-        optimistic.authorPhoto = myPhoto;
-        optimistic.authorVerified = myVer;
-        optimistic.authorTickLevel = myTick;
-        optimistic.content = content;
-        optimistic.mentions = new java.util.ArrayList<>(submittingMentions);
-        optimistic.feeling = feeling;
-        optimistic.privacy = privacy;
-        optimistic.location = location == null ? "" : location;
-        optimistic.postType = postType;
-        optimistic.lifeEventIcon = lifeEventIcon;
-        optimistic.lifeEventTitle = lifeEventTitle;
-        optimistic.marketTitle = marketTitle;
-        optimistic.marketPrice = marketPrice;
-        optimistic.marketCategory = marketCategory;
-        optimistic.pageId = pageId;
-        optimistic.pageName = pageName;
-        optimistic.pagePhoto = pagePhoto;
-        optimistic.groupId = groupId;
-        optimistic.bgColor = bgColor;
-        optimistic.mediaUrl = uploadedUrl == null ? "" : uploadedUrl;
-        optimistic.mediaType = bgColor != 0 ? "none" : (uploadedUrl == null ? "none" : mediaType);
-        if (allUrls != null) optimistic.mediaUrls = new ArrayList<>(allUrls);
-        optimistic.taggedUids = new ArrayList<>(taggedUids);
-        optimistic.taggedNames = new ArrayList<>(taggedNames);
-        optimistic.pollOptions = new ArrayList<>(pollOptions);
-        optimistic.createdAt = System.currentTimeMillis();
-        if (groupId == null || groupId.isEmpty()) {
-            com.friendbook.social.core.FastCache.prependFeedPost(this, optimistic);
-        }
 
         Runnable afterPostSaved = () -> {
             if(com.friendbook.social.core.Mentions.hasBulk(submittingMentions)) com.friendbook.social.push.FCMPush.bulkMention(docRef.getId(), "");
@@ -942,21 +908,16 @@ public class CreatePostActivity extends Activity {
                     && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());
         };
-        if (com.friendbook.social.core.CloudflareStore.enabled()) {
-            com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
-        } else {
-            docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
-                    android.util.Log.e("CreatePost", "Background sync failed: " + e));
-        }
-        Prefs.setPostDraft(this, "");
-        if (groupId != null && groupNeedsApproval) {
-            Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");
-        } else {
-            Ui.toast(this, com.friendbook.social.core.FastCache.isOffline(this)
-                    ? "Posted offline ✓ — will sync automatically"
-                    : "Posted ✓");
-        }
-        finish();
+        docRef.set(m).addOnSuccessListener(v -> {
+            afterPostSaved.run();
+            Prefs.setPostDraft(this, "");
+            if (groupId != null && groupNeedsApproval) {
+                Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");
+            } else {
+                Ui.toast(this, "Posted ✓");
+            }
+            finish();
+        }).addOnFailureListener(e -> fail("Couldn't publish post. Please try again."));
     }
 
     private void fail(String msg) {
