@@ -63,6 +63,9 @@ jobs:
           SHA_RAW="$(printf '%s\n' "$CERT_INFO" | awk -F': ' '/certificate SHA-1 digest:/ {print toupper($2); exit}')"
           SHA1="$(printf '%s' "$SHA_RAW" | tr -d ':' | sed 's/../&:/g; s/:$//')"
           test -n "$SHA1" || { echo 'Could not extract debug APK signer SHA-1'; exit 1; }
+          mkdir -p build/debug-release-info
+          printf 'package=com.friendbook.social\nsha1=%s\n' "$SHA1" > build/debug-release-info/google-signin-sha1.txt
+          echo "::notice title=Google Sign-In SHA-1::$SHA1"
           {
             echo '### Debug APK Google Sign-In certificate'
             echo
@@ -84,5 +87,13 @@ jobs:
         with:
           name: FriendBook-D1-debug-AAB-${{ github.sha }}
           path: app/build/outputs/bundle/debug/app-debug.aab
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload debug Google Sign-In certificate separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-D1-debug-SHA1-${{ github.sha }}
+          path: build/debug-release-info/google-signin-sha1.txt
           if-no-files-found: error
           retention-days: 7
