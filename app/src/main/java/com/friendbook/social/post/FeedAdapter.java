@@ -2643,7 +2643,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             adRequestInFlight = true;
             
             // Register callback for when ad becomes ready from queue
-            com.friendbook.social.core.AdsConfig.setFeedAdReadyCallback(readyAd -> {
+            com.friendbook.social.core.AdsConfig.setFeedAdReadyCallback((readyAd, adType) -> {
                 if (mySeq != requestSeq) return;
                 adRequestInFlight = false;
                 if (readyAd == null || currentNativeAd != null) {

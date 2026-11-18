@@ -8,7 +8,6 @@ import android.util.Log;
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdValue;
 import com.google.android.gms.ads.LoadAdError;
-import com.google.android.gms.ads.MobileAds;
 import com.google.android.gms.ads.ResponseInfo;
 import com.google.android.gms.ads.nativead.NativeAd;
 import com.google.android.gms.ads.nativead.NativeAdOptions;
@@ -118,22 +117,33 @@ public final class AdQueueManager {
         
         if (context == null) return;
         appContext = context.getApplicationContext();
-        
-        // Ensure MobileAds is initialized
-        if (!MobileAds.getInitializationStatus().isInitialized()) {
-            Log.w(TAG, "MobileAds not initialized yet, waiting...");
-            MobileAds.initialize(appContext, initializationStatus -> {
-                Log.d(TAG, "MobileAds initialized, starting queue preload");
-                startPreloading();
-            });
-        } else {
-            startPreloading();
-        }
-        
+
+        // Start preloading only once the real MobileAds init callback fires (ConsentManager owns
+        // the single MobileAds.initialize and guarantees this runnable always runs, including the
+        // 4s boot fallback). Never issue ad requests into a half-booted SDK.
+        com.friendbook.social.core.ConsentManager.runWhenSdkInitialized(appContext, this::startPreloading);
+
         initialized = true;
         Log.d(TAG, "AdQueueManager initialized - will preload " + QUEUE_CAPACITY + " ads per queue");
     }
     
+    /**
+     * Fire exactly one Feed ad request right now (used by the admin "Run Real Ad Fill Check").
+     * Independent of queue capacity — always issues a genuine AdLoader request when the SDK is ready.
+     */
+    public void requestFeedAd() {
+        if (appContext == null || !AdsConfig.nativeAdsEnabled()) return;
+        loadSingleFeedAd();
+    }
+
+    /**
+     * Fire exactly one Reels ad request right now (used by the admin "Run Real Ad Fill Check").
+     */
+    public void requestReelsAd() {
+        if (appContext == null || !AdsConfig.nativeAdsEnabled()) return;
+        loadSingleReelsAd();
+    }
+
     /**
      * Start preloading both queues
      */

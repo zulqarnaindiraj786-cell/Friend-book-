@@ -462,6 +462,8 @@ public class AdsConfig {
     };
 
     private static final Map<Integer, Integer> SESSION_SLOT_TO_UNIQUE_ID = new HashMap<>();
+    /** Slot whose detail screen is currently open; its shown ad is intentionally not disposed. */
+    private static volatile int preservedDetailSlotKey = Integer.MIN_VALUE;
 
     private static final String[][] EXTRA_BRANDS = new String[][]{
             {"Toyota Land Cruiser 300 ZX V6", "Toyota Indus Flagship", "3.5L V6 Twin-Turbo 409HP with E-KDSS suspension, JBL 14-speaker system & fingerprint start.", "Book ZX V6", "PKR 9.5 Crore • Zero Meter", "FLAGSHIP 4X4 🚙", "Land Cruiser 300 ZX Twin-Turbo", "409HP V6 Twin-Turbo • 10-Speed Auto • VIP Pearl White"},
@@ -670,65 +672,6 @@ public class AdsConfig {
                     base.bannerSubTitle + " • Deal" + campaignCode,
                     pal[0], pal[1], base.stars);
         }
-    }
-
-    /** Preloads both 3-Ad Feed and 3-Ad Reels queues using new Facebook-style AdQueueManager. */
-    public static synchronized void warmUpPools(final Context context) {
-        if (context == null || !nativeAdsEnabled()) return;
-        AdQueueManager.getInstance().initialize(context);
-    }
-    
-    /**
-     * Call when Feed ad gets impression - triggers immediate refill
-     */
-    public static void onFeedAdImpression(Context context) {
-        AdQueueManager.getInstance().onFeedAdImpression();
-    }
-    
-    /**
-     * Call when Reels ad gets impression - triggers immediate refill
-     */
-    public static void onReelsAdImpression(Context context) {
-        AdQueueManager.getInstance().onReelsAdImpression();
-    }
-    
-    /**
-     * Get Feed ad from queue (non-blocking)
-     */
-    public static NativeAd pollFeedAd(Context context) {
-        return AdQueueManager.getInstance().pollFeedAd();
-    }
-    
-    /**
-     * Get Reels ad from queue (non-blocking)
-     */
-    public static NativeAd pollReelsAd(Context context) {
-        return AdQueueManager.getInstance().pollReelsAd();
-    }
-    
-    /**
-     * Check if Feed queue has ad ready
-     */
-    public static boolean hasFeedAd(Context context) {
-        return AdQueueManager.getInstance().hasFeedAd();
-    }
-    
-    /**
-     * Check if Reels queue has ad ready
-     */
-    public static boolean hasReelsAd(Context context) {
-        return AdQueueManager.getInstance().hasReelsAd();
-    }
-    
-    /**
-     * Set callbacks for when ads are ready
-     */
-    public static void setFeedAdReadyCallback(AdQueueManager.AdReadyCallback callback) {
-        AdQueueManager.getInstance().setFeedAdReadyCallback(callback);
-    }
-    
-    public static void setReelsAdReadyCallback(AdQueueManager.AdReadyCallback callback) {
-        AdQueueManager.getInstance().setReelsAdReadyCallback(callback);
     }
 
     // ------------------------------------------------------------------------

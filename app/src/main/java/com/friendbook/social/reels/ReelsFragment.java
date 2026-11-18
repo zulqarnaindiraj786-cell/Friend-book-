@@ -747,7 +747,7 @@ public class ReelsFragment extends Fragment {
     @Override public void onResume(){
         super.onResume();
         // Queue manager initialized in Application, no manual preload needed
-        AdsConfig.setReelsAdReadyCallback(() -> {
+        AdsConfig.setReelsAdReadyCallback((readyAd, adType) -> {
             if (adapter != null && pager != null) {
                 adapter.onPoolAdAvailable();
             }
@@ -1352,7 +1352,7 @@ public class ReelsFragment extends Fragment {
                 loadingBox.setVisibility(View.GONE);
                 
                 // Register callback for when ad becomes ready from queue
-                AdsConfig.setReelsAdReadyCallback(readyAd -> {
+                AdsConfig.setReelsAdReadyCallback((readyAd, adType) -> {
                     if (mySeq != requestSeq) return;
                     adRequestInFlight = false;
                     if (readyAd == null || currentNativeAd != null) {
