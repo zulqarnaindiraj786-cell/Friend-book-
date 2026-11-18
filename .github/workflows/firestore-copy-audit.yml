@@ -34,3 +34,5 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
               f.write('## D1-only migration inventory\nNo Firebase reads or data writes.\n\n```json\n'+json.dumps(inventory,indent=2,sort_keys=True)+'\n```\n')
           PY
+
+# Audit is read-only and does not invoke Firebase.
