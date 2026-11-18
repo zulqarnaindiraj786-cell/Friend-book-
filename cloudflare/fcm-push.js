@@ -337,3 +337,5 @@ async function bulkMention(body, actor, db, env) {
   }
   return json({ inbox, accepted, failed, note: 'Some eligible people may receive notifications; FCM acceptance is not delivery' }, failed ? 503 : 200);
 }
+
+// Atomic push-claim handling is validated by the FCM gateway tests.
