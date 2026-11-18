@@ -1,6 +1,5 @@
-// Building blocks for social ACLs. Not wired into the document endpoints yet:
-// accepting a request also requires an atomic, conditional server-side friendship
-// transition; caller-controlled profile flags must never grant admin privileges.
+// Social ACLs shared by the document endpoints. Server-owned ledgers determine
+// trusted friendship and group ownership; profile flags do not grant authority.
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sameExcept = (a, b, keys) => [...new Set([...Object.keys(a || {}), ...Object.keys(b || {})])]
   .every(key => keys.has(key) || same(a?.[key], b?.[key]));
@@ -62,4 +61,73 @@ export function friendshipReadView(uid, doc) {
   if (doc.createdAt !== undefined) view.createdAt = doc.createdAt;
   if (typeof doc.id === 'string') view.id = doc.id;
   return view;
+}
+
+const groupLists = ['members','adminIds','moderatorIds','pendingMemberIds','invitedUids','bannedMemberIds'];
+const groupHas = (g,key,uid) => Array.isArray(g?.[key]) && g[key].includes(uid);
+const groupArraysValid = g => groupLists.every(k => Array.isArray(g?.[k]) && g[k].every(validUid) && new Set(g[k]).size===g[k].length);
+export function canCreateGroup(uid, group) {
+  return validUid(uid) && !!group && groupArraysValid(group) && group.adminId===uid
+    && same(group.members,[uid]) && same(group.adminIds,[uid])
+    && ['moderatorIds','pendingMemberIds','invitedUids','bannedMemberIds'].every(k=>group[k].length===0)
+    && ['public','private'].includes(String(group.privacy||'').toLowerCase())
+    && typeof group.name==='string' && group.name.trim().length>0 && group.name.length<=200;
+}
+export function canManageGroup(uid, owner, group) {
+  return validUid(uid) && validUid(owner) && group?.adminId===owner && groupArraysValid(group)
+    && groupHas(group,'members',uid) && !groupHas(group,'bannedMemberIds',uid)
+    && (uid===owner || groupHas(group,'adminIds',uid));
+}
+export function canUpdateGroup(uid, owner, before, after) {
+  if (!validUid(uid) || !validUid(owner) || !before || !after || before.adminId!==owner || after.adminId!==owner
+      || !groupArraysValid(before) || !groupArraysValid(after)
+      || !groupHas(after,'members',owner) || !groupHas(after,'adminIds',owner)
+      || groupHas(after,'bannedMemberIds',owner)
+      || !after.adminIds.every(id=>after.members.includes(id))
+      || !after.moderatorIds.every(id=>after.members.includes(id))
+      || after.bannedMemberIds.some(id=>after.members.includes(id))
+      || !['public','private'].includes(String(after.privacy||'').toLowerCase())) return false;
+  if (canManageGroup(uid,owner,before)) return true;
+  // Self-service also lets a moderator remove their own role when leaving.
+  if (sameExcept(before,after,new Set(['members','pendingMemberIds','invitedUids','adminIds','moderatorIds']))
+      && ['adminIds','moderatorIds'].every(key => isSelfArrayChange(before[key],after[key],uid)
+        && (groupHas(before,key,uid) || !groupHas(after,key,uid)))) {
+    const stripped={...before,adminIds:after.adminIds,moderatorIds:after.moderatorIds};
+    if (canSelfManageGroup(uid,stripped,after)) return true;
+  }
+  if (groupHas(before,'members',uid) && groupHas(before,'moderatorIds',uid) && !groupHas(before,'bannedMemberIds',uid)) {
+    const mutable=new Set(['members','pendingMemberIds','invitedUids','bannedMemberIds']);
+    if (!sameExcept(before,after,mutable)) return false;
+    const protectedUsers=new Set([owner,...before.adminIds,...before.moderatorIds]);
+    for (const key of mutable) for (const id of protectedUsers)
+      if (groupHas(before,key,id)!==groupHas(after,key,id)) return false;
+    return true;
+  }
+  // A regular member may remove their own moderator/admin roles when leaving,
+  // but may never add them, touch somebody else's roles or edit group metadata.
+  if (!sameExcept(before,after,new Set(['members','pendingMemberIds','invitedUids','adminIds','moderatorIds']))) return false;
+  for (const key of ['adminIds','moderatorIds']) {
+    if (!isSelfArrayChange(before[key],after[key],uid) || (!groupHas(before,key,uid) && groupHas(after,key,uid))) return false;
+  }
+  const stripped={...before,adminIds:after.adminIds,moderatorIds:after.moderatorIds};
+  return canSelfManageGroup(uid,stripped,after);
+}
+
+// Discovery exposes group metadata and only the caller's own invitation/request.
+// Existing untrusted groups never acquire a privileged manager projection.
+export function groupReadView(uid,group,trustedOwner) {
+  if (!validUid(uid) || !group || groupHas(group,'bannedMemberIds',uid)) return null;
+  if (canManageGroup(uid,trustedOwner,group) || (trustedOwner && group.adminId===trustedOwner && groupHas(group,'moderatorIds',uid) && groupHas(group,'members',uid))) return group;
+  const view={};
+  const fields=['id','name','about','category','rules','privacy','requireJoinApproval','requirePostApproval','postPermission','adminId','adminIds','moderatorIds','photoUrl','coverUrl','createdAt','pinnedPostId'];
+  for (const key of fields) if (group[key]!==undefined) view[key]=group[key];
+  view.members=groupHas(group,'members',uid) && Array.isArray(group.members) ? group.members : [];
+  view.pendingMemberIds=groupHas(group,'pendingMemberIds',uid)?[uid]:[];
+  view.invitedUids=groupHas(group,'invitedUids',uid)?[uid]:[];
+  view.bannedMemberIds=[];
+  return view;
+}
+export async function trustedGroupOwner(db,path) {
+  const row=await db.prepare('SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?').bind(path).first();
+  return typeof row?.owner_uid==='string' ? row.owner_uid : null;
 }

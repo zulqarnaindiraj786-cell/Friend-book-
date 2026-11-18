@@ -400,27 +400,14 @@ test('post privacy and unreviewed collections fail closed on all document routes
   assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'posts'})).json()).documents,[]);
   assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'payments'})).json()).documents,[]);
   assert.equal((await call('bob','/v1/firestore/document?path=sessions/alice','PUT',{data:{uid:'bob'}})).status,403);
-  assert.equal((await call('bob','/v1/docs?collection=groups')).status,403);
-  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
-  // Until each policy is implemented, neither the old nor the Firestore-compatible
-  // routes may read or mutate these records, including mixed atomic batches.
-  for (const collection of ['groups']) {
-    const docPath = `${collection}/item`;
-    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`)).status,403);
-    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'PUT',{data:{userId:'bob',status:'approved'}})).status,403);
-    assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'DELETE')).status,403);
-    assert.equal((await call('bob',`/v1/firestore/document?parent=${collection}`,'POST',{data:{userId:'bob'}})).status,403);
+  for (const collection of ['sessions','stories']) {
+    assert.equal((await call('bob',`/v1/firestore/document?path=${collection}/item`)).status,403);
+    assert.equal((await call('bob',`/v1/firestore/document?parent=${collection}`,'POST',{data:{uid:'bob'}})).status,403);
     assert.equal((await call('bob','/v1/firestore/query','POST',{parent:collection})).status,403);
     assert.equal((await call('bob',`/v1/firestore/count?parent=${collection}`)).status,403);
-    assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[
-      {op:'set',path:'users/bob',data:{uid:'bob',displayName:'must not persist'},merge:true},
-      {op:'set',path:docPath,data:{userId:'bob'}}
-    ]})).status,403);
-    const docsStatus = (await call('bob',`/v1/docs/${collection}/item`)).status;
-    assert.ok(docsStatus === 403 || docsStatus === 400);
-    const docsWriteStatus = (await call('bob',`/v1/docs/${collection}/item`,'PUT',{userId:'bob'})).status;
-    assert.ok(docsWriteStatus === 403 || docsWriteStatus === 400);
+    assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:`${collection}/item`,data:{uid:'bob'}}]})).status,403);
   }
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').n,0);
   sql.close();
 });
@@ -633,5 +620,56 @@ test('only configured administrators can atomically approve or reject a free rev
   assert.equal((await call('alice',uri,'PATCH',reject)).status,403);
   assert.equal((await call('admin',uri,'PATCH',reject)).status,200);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`payments/${id2}`).document_json).status,'rejected');
+  sql.close();
+});
+
+test('trusted groups enforce role and membership changes on both document APIs', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  for(const n of ['0018_social_guards.sql','0020_trusted_groups.sql'])sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const group={name:'Private group',privacy:'Private',adminId:'alice',adminIds:['alice'],moderatorIds:[],members:['alice'],pendingMemberIds:[],invitedUids:[],bannedMemberIds:[],requireJoinApproval:true};
+  const endpoint='/v1/firestore/document?parent=groups';
+  assert.equal((await call('mallory',endpoint,'POST',{data:group})).status,403);
+  const created=await call('alice',endpoint,'POST',{data:group}); assert.equal(created.status,201,await created.clone().text());
+  const id=(await created.json()).id, uri=`/v1/firestore/document?path=groups/${id}`;
+  assert.equal((await call('mallory',uri,'PATCH',{fields:{adminIds:['alice','mallory'],members:['alice','mallory']}})).status,403);
+  assert.equal((await call('mallory',uri,'PATCH',{fields:{members:{__fieldValue:'arrayUnion',values:['mallory']}}})).status,403);
+  assert.equal((await call('bob',uri,'PATCH',{fields:{pendingMemberIds:{__fieldValue:'arrayUnion',values:['bob']}}})).status,200);
+  const outsider=await (await call('mallory',uri)).json();assert.deepEqual(outsider.data.pendingMemberIds,[]);
+  const manager=await (await call('alice',uri)).json();assert.deepEqual(manager.data.pendingMemberIds,['bob']);
+  assert.equal((await call('mallory',`/v1/docs/groups/${id}`,'PUT',{adminIds:['alice','mallory']})).status,403);
+  const actualBatch=db.batch;
+  db.batch=async stmts=>{
+    sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,\'$.about\',\'changed\') WHERE path=?').run(`groups/${id}`);
+    return actualBatch(stmts);
+  };
+  assert.notEqual((await call('alice',uri,'PATCH',{fields:{members:{__fieldValue:'arrayUnion',values:['bob']},pendingMemberIds:{__fieldValue:'arrayRemove',values:['bob']}}})).status,200);
+  db.batch=actualBatch;
+  assert.equal((await call('alice',uri,'PATCH',{fields:{members:{__fieldValue:'arrayUnion',values:['bob']},pendingMemberIds:{__fieldValue:'arrayRemove',values:['bob']}}})).status,200);
+  const joined=await (await call('bob',uri)).json();assert.ok(joined.data.members.includes('bob'));
+  assert.equal((await call('bob',uri,'PATCH',{fields:{adminIds:{__fieldValue:'arrayUnion',values:['bob']}}})).status,403);
+  assert.equal((await call('alice',uri,'PATCH',{fields:{requirePostApproval:true,members:{__fieldValue:'arrayUnion',values:['charlie']}}})).status,200);
+  for(const name of ['alice','bob','charlie','mallory']) assert.equal((await call(name,`/v1/firestore/document?path=users/${name}`,'PUT',{data:{uid:name}})).status,200);
+  const post='/v1/firestore/document?path=posts/gpost';
+  assert.equal((await call('mallory',post,'PUT',{data:{authorId:'mallory',groupId:id,privacy:'Public'}})).status,403);
+  const postCreated=await call('bob',post,'PUT',{data:{authorId:'bob',groupId:id,privacy:'Public',groupApprovalStatus:'approved',content:'hello'}});
+  assert.equal(postCreated.status,201);assert.equal((await postCreated.json()).data.groupApprovalStatus,'pending');
+  assert.equal((await call('charlie',post)).status,403);
+  assert.equal((await call('bob',post)).status,200);
+  assert.equal((await call('alice',post)).status,200);
+  assert.equal((await call('bob',post,'PATCH',{fields:{groupApprovalStatus:'approved'}})).status,403);
+  assert.equal((await call('alice',post,'PATCH',{fields:{groupApprovalStatus:'approved',content:'tampered'}})).status,403);
+  assert.equal((await call('alice',post,'PATCH',{fields:{groupApprovalStatus:'approved'}})).status,200);
+  assert.equal((await call('charlie',post)).status,200);
+  assert.equal((await call('charlie',post,'DELETE')).status,403);
+  assert.equal((await call('alice',post,'DELETE')).status,200);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'delete',path:`groups/${id}`}]})).status,403);
+  assert.equal((await call('bob',uri,'DELETE')).status,403);
+  // A historical record with a self-asserted admin cannot grant write access.
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('groups/old','groups','old','mallory',JSON.stringify({...group,adminId:'mallory',adminIds:['mallory'],members:['mallory']}),1);
+  assert.equal((await call('mallory','/v1/firestore/document?path=groups/old','PATCH',{fields:{name:'forged'}})).status,403);
+  assert.equal((await call('alice',uri,'DELETE')).status,200);
   sql.close();
 });

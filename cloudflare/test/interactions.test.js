@@ -25,6 +25,7 @@ function authDb(docs, friendship = false) {
                 return value ? { document_json: JSON.stringify(value) } : null;
               }
               if (sql.includes('friendbook_cf_trusted_friendships')) return friendship ? { friend_path: 'friends/verified' } : null;
+              if (sql.includes('friendbook_cf_trusted_groups')) return docs[args[0]]?.adminId ? {owner_uid:docs[args[0]].adminId} : null;
               return null;
             },
           };
@@ -157,7 +158,7 @@ test('blocked users and private group membership are checked from D1 only', asyn
   for (const [member, blocked, expected] of [[false,false,false],[true,false,true],[true,true,false]]) {
     const docs = { 'posts/p1': { authorId:'owner', privacy:'Public', groupId:'g1' },
       'users/user1': { blockedUsers: blocked ? ['owner'] : [] }, 'users/owner': { displayName: 'Owner' },
-      'groups/g1': { privacy:'Private', members: member ? ['user1'] : [] } };
+      'groups/g1': { adminId:'owner', privacy:'Private', members: member ? ['user1'] : [] } };
     const db = authDb(docs);
     const noNetwork = async () => { throw new Error('unexpected source fetch'); };
     assert.equal(await authorizePost({...identity,db},'posts','p1',noNetwork,{}),expected);

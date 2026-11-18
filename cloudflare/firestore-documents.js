@@ -1,5 +1,5 @@
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
-import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView } from './social-access.js';
+import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
@@ -727,6 +727,94 @@ async function reviewPayment(db,env,uid,paymentPath,update,profileOp,now) {
   return json({ok:true});
 }
 
+// Only groups created through this endpoint receive a server-owned authority record.
+async function writeGroup(db,uid,path,beforeRow,after,now) {
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  const id=docIdOf(path), before=beforeRow?decodeValue(JSON.parse(beforeRow.document_json)):null;
+  const owner=await trustedGroupOwner(db,path);
+  if (!before) {
+    if (owner || !after || !canCreateGroup(uid,after)) return json({error:'Forbidden'},403);
+  } else {
+    if (!owner || (!after ? !canManageGroup(uid,owner,before) || uid!==owner : !canUpdateGroup(uid,owner,before,after))) return json({error:'Forbidden'},403);
+  }
+  if (after && JSON.stringify(after).length>95000) return json({error:'Document too large'},413);
+  const stmts=[];
+  if (beforeRow) {
+    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
+    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
+    if ((canonical && canonical.document_json!==beforeRow.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'groups',doc_id:id,document_json:legacy.document_json})?.document_json!==beforeRow.document_json))) return json({error:'Group changed'},409);
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?)) AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ? THEN 1 ELSE 0 END').bind(canonical?1:0,path,beforeRow.document_json,canonical?1:0,path,path,legacy?.document_json||'',path,owner));
+  } else {
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path));
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES (?,?)').bind(path,uid));
+  }
+  if (!after) {
+    stmts.push(db.prepare('DELETE FROM friendbook_cf_trusted_groups WHERE group_path=?').bind(path));
+    stmts.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
+    stmts.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
+  } else {
+    const data=JSON.stringify(after), ownerUid=owner||uid;
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'groups','groups',id,ownerUid,data,beforeRow?.create_time||now,now));
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'groups',id,ownerUid,JSON.stringify({...after,id}),now));
+  }
+  stmts.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  await db.batch(stmts);
+  if (!after) return json({deleted:true,path});
+  return json({exists:true,id,path,parent:'groups',collection:'groups',data:groupReadView(uid,after,owner||uid),createTime:beforeRow?.create_time||now,updateTime:now},beforeRow?200:201);
+}
+
+// Group posts depend on current group membership and approval settings. The
+// membership snapshot is checked inside the same transaction as the post write.
+async function writeGroupPost(db,uid,path,beforeRow,after,now) {
+  const forbidden=()=>json({error:'Forbidden'},403);
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  const before=beforeRow?decodeValue(JSON.parse(beforeRow.document_json)):null;
+  const groupId=before?.groupId || after?.groupId;
+  if (!validSegment(groupId) || (before && after && before.groupId!==after.groupId)) return forbidden();
+  const groupPath=`groups/${groupId}`, groupRow=await readRow(db,groupPath);
+  if (!groupRow) return forbidden();
+  const group=decodeValue(JSON.parse(groupRow.document_json)), owner=await trustedGroupOwner(db,groupPath);
+  if (!owner || group.adminId!==owner || !Array.isArray(group.members) || !group.members.includes(uid)
+      || !Array.isArray(group.bannedMemberIds) || group.bannedMemberIds.includes(uid)) return forbidden();
+  const manager=canManageGroup(uid,owner,group) || (Array.isArray(group.moderatorIds) && group.moderatorIds.includes(uid));
+  if (!before) {
+    if (!after || after.authorId!==uid || (group.postPermission==='Admins & Moderators' && !manager)) return forbidden();
+    after={...after,groupApprovalStatus:group.requirePostApproval===true && !manager ? 'pending' : 'approved'};
+  } else if (!after) {
+    if (before.authorId!==uid && !manager) return forbidden();
+  } else {
+    if (after.authorId!==before.authorId) return forbidden();
+    const keys=new Set([...Object.keys(before),...Object.keys(after)]);
+    const onlyApproval=[...keys].every(k=>k==='groupApprovalStatus' || JSON.stringify(before[k])===JSON.stringify(after[k]));
+    if (onlyApproval && before.groupApprovalStatus==='pending' && ['approved','declined'].includes(after.groupApprovalStatus) && manager) {
+      // Group management can only perform the review transition, not edit content.
+    } else if (before.authorId!==uid || JSON.stringify(before.groupApprovalStatus)!==JSON.stringify(after.groupApprovalStatus)) return forbidden();
+  }
+  if (after && JSON.stringify(after).length>1_800_000) return json({error:'Document too large'},413);
+  const guards=[];
+  for (const row of [groupRow,...(beforeRow?[beforeRow]:[])]) {
+    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
+    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
+    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Group or post changed'},409);
+    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+  }
+  guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?)=? THEN 1 ELSE 0 END').bind(groupPath,owner));
+  if (!beforeRow) guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path));
+  const stmts=[...guards],coll=collectionIdOf(path),id=docIdOf(path);
+  if (!after) {
+    stmts.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
+    stmts.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
+  } else {
+    const data=JSON.stringify(after), author=after.authorId;
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,coll,coll,id,author,data,beforeRow?.create_time||now,now));
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,author,JSON.stringify({...after,id}),now));
+    stmts.push(db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state='verified'").bind(path));
+  }
+  stmts.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  await db.batch(stmts);
+  return after ? json({exists:true,id,path,parent:coll,collection:coll,data:after,createTime:beforeRow?.create_time||now,updateTime:now},beforeRow?200:201) : json({deleted:true,path});
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -754,7 +842,9 @@ export async function firestoreDocuments(request, env, identity) {
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
-    const view = parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data);
+    let view;
+    try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data); }
+    catch { return json({error:'Read unavailable'},503); }
     if (view === null) return json({ error: 'Forbidden' }, 403);
     document.data = view;
     return json(document);
@@ -774,6 +864,8 @@ export async function firestoreDocuments(request, env, identity) {
       if (body.createOnly === true && existing) return json({ error: 'ALREADY_EXISTS' }, 409);
       const existingDoc = existing ? decodeValue(JSON.parse(existing.document_json)) : null;
       const next = applySet(existingDoc, body.data || {}, Boolean(body.merge), body.mergeFields || null, now);
+      if (splitPath(docPath)[0] === 'groups') return await writeGroup(db,uid,docPath,existing,next,now);
+      if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
@@ -799,6 +891,8 @@ export async function firestoreDocuments(request, env, identity) {
       if (!existing) return json({ error: 'NOT_FOUND' }, 404);
       const existingDoc = decodeValue(JSON.parse(existing.document_json));
       const next = applyUpdate(existingDoc, body?.fields || body?.data || body?.updates || {}, now);
+      if (splitPath(docPath)[0] === 'groups') return await writeGroup(db,uid,docPath,existing,next,now);
+      if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
@@ -813,6 +907,10 @@ export async function firestoreDocuments(request, env, identity) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     if (['friends','payments'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (splitPath(docPath)[0] === 'groups') {
+      try { const row=await readRow(db,docPath); if (!row) return json({error:'Forbidden'},403); return await writeGroup(db,uid,docPath,row,null,now); }
+      catch { return json({error:'Group changed or unavailable'},409); }
+    }
     if (splitPath(docPath)[0] === 'friend_requests') {
       try {
         const row = await readRow(db, docPath);
@@ -833,6 +931,10 @@ export async function firestoreDocuments(request, env, identity) {
         ]);
         return json({deleted:true,path:docPath});
       } catch { return json({error:'Request changed or deletion unavailable'},409); }
+    }
+    if (['posts','reels'].includes(splitPath(docPath)[0])) {
+      try { const row=await readRow(db,docPath); if (row && decodeValue(JSON.parse(row.document_json))?.groupId) return await writeGroupPost(db,uid,docPath,row,null,now); }
+      catch { return json({error:'Post changed or unavailable'},409); }
     }
     if (['notifications','users','pushDevices','chats','messages','posts','reels'].includes(splitPath(docPath)?.[0])) {
       let existing;
@@ -857,6 +959,8 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = `${parent}/${id}`;
     try {
       const next = applySet(null, body?.data || {}, false, null, now);
+      if (parent === 'groups') return await writeGroup(db,uid,docPath,null,next,now);
+      if (['posts','reels'].includes(parent) && next.groupId) return await writeGroupPost(db,uid,docPath,null,next,now);
       if (parent === 'payments') {
         if (!canCreateFreeReview(uid,next)) return json({error:'Forbidden'},403);
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
@@ -899,10 +1003,13 @@ export async function firestoreDocuments(request, env, identity) {
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(doc => {
-      const view = parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
-      return view === null ? null : { ...doc, data: view };
-    }).filter(Boolean);
+    let docs;
+    try {
+      docs = (await Promise.all(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(async doc => {
+        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
+        return view === null ? null : { ...doc, data: view };
+      }))).filter(Boolean);
+    } catch { return json({error:'Read unavailable'},503); }
     const visible = [];
     for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
     const result = applyQuery(visible, body || {});
@@ -922,10 +1029,13 @@ export async function firestoreDocuments(request, env, identity) {
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(doc => {
-      const view = parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
-      return view === null ? null : { ...doc, data: view };
-    }).filter(Boolean);
+    let docs;
+    try {
+      docs = (await Promise.all(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(async doc => {
+        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
+        return view === null ? null : { ...doc, data: view };
+      }))).filter(Boolean);
+    } catch { return json({error:'Read unavailable'},503); }
     const visible = [];
     for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
     const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
@@ -967,7 +1077,7 @@ export async function firestoreDocuments(request, env, identity) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
-      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
+      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments','groups'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;

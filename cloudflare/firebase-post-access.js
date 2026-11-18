@@ -1,4 +1,5 @@
 import { readD1DocumentFields, hasD1Friendship } from './app-documents.js';
+import { trustedGroupOwner } from './social-access.js';
 
 // D1-only authorization. Firebase is used to verify the caller's Auth token in
 // worker.js; no source-data request is made to Firestore from this module.
@@ -23,8 +24,14 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   if (groupId) {
     const group = await fields(`groups/${groupId}`);
     if (!Object.keys(group).length || list(group, 'bannedMemberIds').includes(uid)) return false;
-    const manager = string(group, 'adminId') === uid || list(group, 'adminIds').includes(uid) || list(group, 'moderatorIds').includes(uid);
+    let trustedOwner;
+    try { trustedOwner = await trustedGroupOwner(db, `groups/${groupId}`); } catch { return false; }
+    if (!trustedOwner || string(group, 'adminId') !== trustedOwner) return false;
+    const member = list(group, 'members').includes(uid);
+    const manager = member && (trustedOwner === uid || list(group, 'adminIds').includes(uid) || list(group, 'moderatorIds').includes(uid));
     if (context && manager) context.moderator = true;
+    const approval = string(post, 'groupApprovalStatus');
+    if (approval && approval !== 'approved' && uid !== owner && !manager) return false;
     const privacy = (string(group, 'privacy') || '').toLowerCase();
     if (privacy !== 'public' && !(privacy === 'private' && (manager || list(group, 'members').includes(uid)))) return false;
   }
