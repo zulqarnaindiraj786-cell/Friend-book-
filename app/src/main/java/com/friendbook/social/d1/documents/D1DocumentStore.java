@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -22,7 +23,12 @@ import java.util.concurrent.TimeUnit;
  */
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    // Keep network work bounded: a cached pool can create one thread per slow request on flaky
+    // mobile networks, which starves the UI and battery. Polls use the same bounded pool and each
+    // listener has an in-flight guard so a slow response cannot pile up every five seconds.
+    private final ExecutorService executor = new java.util.concurrent.ThreadPoolExecutor(
+            4, 8, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(256),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, DocumentSnapshot> docCache = new ConcurrentHashMap<>();
@@ -38,6 +44,7 @@ public class D1DocumentStore {
         volatile boolean active = true;
         volatile long lastUpdate = -1L;
         volatile boolean lastExists = false;
+        final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
             this.ref = ref;
@@ -50,6 +57,7 @@ public class D1DocumentStore {
         final EventListener<QuerySnapshot> listener;
         volatile boolean active = true;
         volatile String lastFingerprint = "";
+        final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         QueryListenerEntry(Query query, EventListener<QuerySnapshot> listener) {
             this.query = query;
@@ -92,13 +100,18 @@ public class D1DocumentStore {
 
     <T> Task<T> runAsync(Callable<T> task) {
         TaskCompletionSource<T> tcs = new TaskCompletionSource<>();
-        executor.execute(() -> {
-            try {
-                tcs.setResult(task.call());
-            } catch (Exception e) {
-                tcs.setException(e);
-            }
-        });
+        try {
+            executor.execute(() -> {
+                try {
+                    tcs.setResult(task.call());
+                } catch (Exception e) {
+                    tcs.setException(e);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            tcs.setException(new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE,
+                    "Too many requests are already in progress", rejected));
+        }
         return tcs.getTask();
     }
 
@@ -126,7 +139,7 @@ public class D1DocumentStore {
         docListeners.computeIfAbsent(ref.getPath(), k -> new CopyOnWriteArrayList<>()).add(entry);
         DocumentSnapshot cached = getCachedDoc(ref.getPath());
         if (cached != null) mainHandler.post(() -> { if (entry.active) listener.onEvent(cached, null); });
-        executor.execute(() -> deliverDoc(entry));
+        scheduleDocRead(entry);
         return () -> {
             entry.active = false;
             CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(ref.getPath());
@@ -147,7 +160,7 @@ public class D1DocumentStore {
                 mainHandler.post(() -> { if (entry.active) listener.onEvent(snapshot, null); });
             } catch (Exception ignored) { }
         }
-        executor.execute(() -> deliverQuery(entry));
+        scheduleQueryRead(entry);
         return () -> {
             entry.active = false;
             queryListeners.remove(entry);
@@ -158,7 +171,7 @@ public class D1DocumentStore {
         CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(path);
         if (list != null) {
             for (DocListenerEntry e : list) {
-                if (e.active) executor.execute(() -> deliverDoc(e));
+                scheduleDocRead(e);
             }
         }
         int idx = path.lastIndexOf('/');
@@ -168,24 +181,34 @@ public class D1DocumentStore {
     void notifyCollectionListeners(String parentPath) {
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
-                executor.execute(() -> deliverQuery(e));
+                scheduleQueryRead(e);
             }
         }
     }
 
     private void pollActiveListeners() {
+        // Never perform HTTP on the single scheduled executor. A slow request there used to block
+        // every remaining listener (and the next poll cycle), making unrelated screens appear hung.
         for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
-            for (DocListenerEntry e : list) {
-                if (e.active) deliverDoc(e);
-            }
+            for (DocListenerEntry e : list) scheduleDocRead(e);
         }
-        for (QueryListenerEntry e : queryListeners) {
-            if (e.active) deliverQuery(e);
-        }
+        for (QueryListenerEntry e : queryListeners) scheduleQueryRead(e);
+    }
+
+    private void scheduleDocRead(DocListenerEntry entry) {
+        if (!entry.active || !entry.inFlight.compareAndSet(false, true)) return;
+        try { executor.execute(() -> deliverDoc(entry)); }
+        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
+    }
+
+    private void scheduleQueryRead(QueryListenerEntry entry) {
+        if (!entry.active || !entry.inFlight.compareAndSet(false, true)) return;
+        try { executor.execute(() -> deliverQuery(entry)); }
+        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
 
     private void deliverDoc(DocListenerEntry entry) {
-        if (!entry.active) return;
+        if (!entry.active) { entry.inFlight.set(false); return; }
         try {
             DocumentSnapshot snap = entry.ref.parseSnapshot(D1DocumentTransport.getDocument(entry.ref.getPath()));
             cacheDoc(entry.ref.getPath(), snap);
@@ -203,11 +226,13 @@ public class D1DocumentStore {
             mainHandler.post(() -> {
                 if (entry.active) entry.listener.onEvent(null, ffe);
             });
+        } finally {
+            entry.inFlight.set(false);
         }
     }
 
     private void deliverQuery(QueryListenerEntry entry) {
-        if (!entry.active) return;
+        if (!entry.active) { entry.inFlight.set(false); return; }
         try {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
             String fp = arr.toString();
@@ -225,6 +250,8 @@ public class D1DocumentStore {
             mainHandler.post(() -> {
                 if (entry.active) entry.listener.onEvent(null, ffe);
             });
+        } finally {
+            entry.inFlight.set(false);
         }
     }
 
