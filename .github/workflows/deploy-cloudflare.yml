@@ -401,6 +401,8 @@ jobs:
               health = json.load(f)
               assert health.get('ok') is True, 'Worker/D1 health check failed'
               assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
+              views = health.get('views') or {}
+              assert views.get('kv') is True, 'Live Worker VIEWS KV binding is not active'
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
               assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
