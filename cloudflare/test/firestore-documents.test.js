@@ -1031,3 +1031,45 @@ test('inbox narrowing preserves canonical precedence and private legacy compatib
  assert.match(sql.prepare('EXPLAIN QUERY PLAN '+query).all('alice').map(x=>x.detail).join(),/idx_cf_firestore_inbox_recipient/);
  sql.close();
 });
+
+test('indexed profile and request reads preserve privacy and canonical precedence', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ sql.exec(readFileSync(new URL('../migrations/0026_profile_request_indexes.sql',import.meta.url),'utf8'));
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const legacy=(collection,id,data)=>a.run(`${collection}/${id}`,collection,id,'',JSON.stringify(data),1);
+ const canon=(collection,id,data)=>f.run(`${collection}/${id}`,collection,collection,id,'',JSON.stringify(data),1,1);
+ for(const uid of ['alice','bob','eve'])legacy('users',uid,{uid});
+ canon('posts','p1',{authorId:'alice',privacy:'Public'});canon('posts','private',{authorId:'alice',privacy:'Only me'});
+ canon('posts','stale',{authorId:'bob',privacy:'Public'});legacy('posts','stale',{authorId:'alice',privacy:'Public'});
+ legacy('posts','old',{fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}});
+ canon('friend_requests','r1',{fromUid:'alice',toUid:'bob',status:'pending'});
+ canon('friend_requests','r2',{fromUid:'eve',toUid:'bob',status:'pending'});legacy('friend_requests','r2',{fromUid:'alice',toUid:'bob'});
+ legacy('friend_requests','old',{fields:{fromUid:{stringValue:'alice'},toUid:{stringValue:'eve'}}});
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const query=async(uid,parent,filters=[])=>{const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({parent,filters})}),env);assert.equal(r.status,200);return (await r.json()).documents.map(d=>d.id).sort();};
+ assert.deepEqual(await query('bob','posts',[{field:'authorId',op:'==',value:'alice'}]),['old','p1']);
+ assert.deepEqual(await query('alice','posts',[{field:'authorId',op:'==',value:'alice'}]),['old','p1','private']);
+ assert.deepEqual(await query('alice','friend_requests'),['old','r1']);
+ assert.deepEqual(await query('eve','friend_requests'),['old','r2']);
+ const q="SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=? UNION ALL SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?";
+ const plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all('alice','alice','alice').map(x=>x.detail).join('\n');assert.match(plan,/SEARCH.*idx_cf_request_fromUid/);assert.match(plan,/SEARCH.*idx_cf_request_toUid/);
+ sql.close();
+});
+
+test('comments and reactions authorize parent once while enforcing post privacy', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ for(const uid of ['alice','bob'])a.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
+ a.run('posts/p','posts','p','alice',JSON.stringify({authorId:'alice',privacy:'Public'}),1);
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ for(let i=0;i<30;i++)f.run(`posts/p/comments/c${i}`,'posts/p/comments','comments',`c${i}`,'alice',JSON.stringify({content:'x'}),1,1);
+ let postReads=0;const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>{if(q.includes('SELECT document_json') && args[0]==='posts/p')postReads++;return s.get(...args)||null;}};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'posts/p/comments',limit:10})}),env);
+ let r=await query();assert.equal((await r.json()).documents.length,10);assert.equal(postReads,2); // canonical then legacy
+ a.run('posts/other','posts','other','alice',JSON.stringify({authorId:'alice'}),1);
+ sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Only me'}),'posts/p');
+ r=await query();assert.deepEqual((await r.json()).documents,[]);
+ sql.close();
+});

@@ -284,7 +284,35 @@ async function readRow(db, path) {
   return appDocumentToFirestoreRow(appRow);
 }
 
-async function readCollectionRows(db, parent, uid) {
+async function readCollectionRows(db, parent, uid, filters) {
+  if (parent === 'friend_requests') {
+    // Only participants can read requests, regardless of query filter supplied by the client.
+    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=?
+      UNION ALL
+      SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?`).bind(uid,uid,uid).all();
+    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END)=?
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+      UNION ALL
+      SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.toUid.stringValue') ELSE json_extract(a.document_json,'$.toUid') END)=?
+        AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END) IS NOT ?
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all();
+    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+  }
+  const authorFilter=Array.isArray(filters) && filters.find(f=>f?.field==='authorId' && f.op==='==' && typeof f.value==='string');
+  if (authorFilter && (parent==='posts' || parent==='reels')) {
+    // Only known constant SQL collection names are interpolated; values stay bound.
+    // Apply remaining filters, authorization and paging in the existing query engine.
+    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
+      WHERE parent_path='${parent}' AND json_extract(document_json,'$.authorId')=?`).bind(authorFilter.value).all();
+    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      WHERE a.collection='${parent}' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.authorId.stringValue') ELSE json_extract(a.document_json,'$.authorId') END)=?
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(authorFilter.value).all();
+    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+  }
   if (parent === 'notifications') {
     // Authorization itself narrows the inbox before loading rows. Keep canonical
     // path precedence even when its recipient differs from a stale legacy mirror.
@@ -556,6 +584,11 @@ function prefilterRaw(docs,parent,filters) {
 }
 async function visibleDocuments(db,uid,parent,docs) {
   const parts=splitPath(parent), nestedChat=parts?.length===3 && parts[0]==='chats' && parts[2]==='messages';
+  // All comments/reactions in a nested collection share the same parent post.
+  // Authorize that parent once per request, not once per child row.
+  if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
+    return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`) ? docs : [];
+  }
   const allowed=new Array(docs.length).fill(false);
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
@@ -1339,7 +1372,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let rows;
-    try { rows = await readCollectionRows(db, parent, uid); }
+    try { rows = await readCollectionRows(db, parent, uid, body?.filters); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
@@ -1366,7 +1399,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
     let rows;
-    try { rows = await readCollectionRows(db, parent, uid); }
+    try { rows = await readCollectionRows(db, parent, uid, filters); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
