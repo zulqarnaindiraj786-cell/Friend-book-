@@ -52,6 +52,9 @@ jobs:
       - name: Verify Firebase client configuration (Auth only)
         run: test -s app/google-services.json
 
+      - name: Run Android unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon --console=plain
+
       - name: Build debug APK with D1 interactions enabled
         run: |
           grep -q "D1_INTERACTIONS_ENABLED', 'true'" app/build.gradle
