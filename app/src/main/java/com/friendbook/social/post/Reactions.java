@@ -772,7 +772,7 @@ public class Reactions {
             LinearLayout nameRow = Ui.row(activity);
             nameRow.setGravity(Gravity.CENTER_VERTICAL);
             final TextView nameTv = Ui.tvBold(activity,
-                    (r.name != null && !r.name.isEmpty()) ? r.name : "Loading…", 14, Ui.txt(activity));
+                    (r.name != null && !r.name.isEmpty()) ? r.name : "friendbook User", 14, Ui.txt(activity));
             nameRow.addView(nameTv);
             final ImageView tickIv = new ImageView(activity);
             int ts = Ui.dp(activity, 15);
@@ -808,7 +808,7 @@ public class Reactions {
                     r.name = cached.displayName;
                     r.photo = cached.photoUrl;
                     r.tickLevel = cached.tickLevel;
-                    nameTv.setText(r.name);
+                    nameTv.setText(r.name != null && !r.name.isEmpty() ? r.name : "friendbook User");
                     Ui.avatar(activity, av, r.photo);
                     Icons.setTickBadge(tickIv, r.tickLevel, false);
                 } else {

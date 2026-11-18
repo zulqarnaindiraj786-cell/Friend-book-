@@ -882,6 +882,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
+                    if (postsAdapter != null) postsAdapter.notifyDataSetChanged();
                     if(activeTab==3 && friendPager==null)startFriendPages();
                 });
         watchSubscription();
@@ -1039,7 +1040,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void updateStatsLine() {
         if (user == null) return;
-        int followers = Math.max(user.followers != null ? user.followers.size() : 0, user.friendsCount);
+        int followers = user.followers != null ? user.followers.size() : 0;
         int following = user.following != null ? user.following.size() : 0;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();

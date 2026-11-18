@@ -851,7 +851,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         })
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't send voice note"));
+                .addOnFailureListener(e -> {
+                    if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
+                    Ui.toast(this, "Voice note not confirmed. Check the conversation before retrying.");
+                });
     }
 
     // ---------- chat theme ----------
@@ -947,7 +950,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .addOnSuccessListener(x -> {
                     com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                 })
-                .addOnFailureListener(e -> { Ui.toast(this, "Queued offline — will sync automatically"); });
+                .addOnFailureListener(e -> {
+                    if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
+                    Ui.toast(this, "Sticker not confirmed. Check the conversation before retrying.");
+                });
     }
 
     private void send(String text, String imageUrl, String rawOverride) {
@@ -1015,17 +1021,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "image".equals(type) ? "📷 Photo" : finalText);
-        com.friendbook.social.core.CloudflareStore.put("chats", chatId, chatDoc);
-        com.friendbook.social.core.CloudflareStore.put("messages", chatId + "_" + msgRef.getId(), msg);
-
+        // The D1 batch is the authoritative write; separate fire-and-forget mirrors can race
+        // the room merge and replace its participants or message data.
         WriteBatch batch = Fb.db().batch();
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
             com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
-        }).addOnFailureListener(e ->
-                Ui.toast(this, "Queued offline — will sync automatically"));
+        }).addOnFailureListener(e -> {
+            if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
+            if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
+            if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);
+            Ui.toast(this, "Message not confirmed. Check the conversation before retrying.");
+        });
     }
 
     @Override

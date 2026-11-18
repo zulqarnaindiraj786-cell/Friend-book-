@@ -834,7 +834,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean pagePost = p.isPagePost();
         Ui.avatar(c, vh.avatar, pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto : p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
-        String baseAuthor = pagePost ? ("🚩 " + p.pageName) : (p.authorName == null ? "User" : p.authorName);
+        Models.User author = pagePost || p.authorId == null ? null
+                : com.friendbook.social.core.FastCache.getUser(p.authorId);
+        String currentName = author != null && author.displayName != null && !author.displayName.isEmpty()
+                ? author.displayName : p.authorName;
+        String baseAuthor = pagePost ? ("🚩 " + p.pageName) : (currentName == null || currentName.isEmpty() ? "User" : currentName);
         String nameLine = baseAuthor + (hasFeeling ? " is feeling " + p.feeling : "");
         if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
             nameLine += " — with " + p.taggedNames.get(0)
@@ -1173,6 +1177,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
+        if (com.friendbook.social.core.D1Client.enabled("posts")) {
+            D1Reactions.loadPost(c, p, () -> {
+                if (!p.id.equals(vh.itemView.getTag())) return;
+                renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),
+                        com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
+                bindInlineComments(c, vh, p);
+            });
+        }
 
         // Render post counters/embedded own reaction without a 250-document reconciliation per bind.
         // Explicit reaction-detail screens retain their bounded lookups.

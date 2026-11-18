@@ -156,9 +156,10 @@ public class NotificationsFragment extends Fragment {
         super.onHiddenChanged(hidden);
         if (!hidden) {
             MainActivity.clearNotificationsBadgeNow();
-            if (adapter != null && (!initialLoaded || !java.util.Objects.equals(loadedActor, Fb.uid()))) {
-                startPages();
-            }
+            if (adapter != null) startPages();
+        } else if (reg != null) {
+            reg.remove();
+            reg = null;
         }
     }
 
@@ -180,6 +181,17 @@ public class NotificationsFragment extends Fragment {
         initialLoaded = true;
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
+        query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
+        if (reg == null) {
+            // Watch the latest page while the tab is open; the pager itself is one-shot.
+            final boolean[] first = {true};
+            reg = query.limit(20).addSnapshotListener((snapshot, error) -> {
+                if (snapshot == null) return;
+                if (first[0]) { first[0] = false; return; }
+                if (snapshot.getMetadata().isFromCache()) return;
+                if (!isHidden() && java.util.Objects.equals(me, Fb.uid())) startPages();
+            });
+        }
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
@@ -187,8 +199,11 @@ public class NotificationsFragment extends Fragment {
             data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
             Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
             if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
-            adapter.notifyDataSetChanged();empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
-            moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");moreButton.setEnabled(!loading && more);
+            adapter.notifyDataSetChanged();
+            empty.setText(error.isEmpty() ? "No notifications yet.\nLikes, comments and friend requests appear here." : error);
+            empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+            moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
+            moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });pager.start();
     }
 
@@ -232,8 +247,9 @@ public class NotificationsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove(); reg = null; }
         if(pager!=null){pager.close();pager=null;}
+        initialLoaded = false;
     }
 
     private void open(Models.Notif n) {

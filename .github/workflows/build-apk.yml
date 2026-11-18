@@ -106,7 +106,23 @@ jobs:
 
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
+        env:
+          FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
+          FRIENDBOOK_RELEASE_STORE_PASSWORD: ${{ secrets.FRIENDBOOK_RELEASE_STORE_PASSWORD || secrets.FB_KEYSTORE_PASSWORD }}
+          FRIENDBOOK_RELEASE_KEY_ALIAS: ${{ secrets.FRIENDBOOK_RELEASE_KEY_ALIAS || secrets.FB_KEY_ALIAS }}
+          FRIENDBOOK_RELEASE_KEY_PASSWORD: ${{ secrets.FRIENDBOOK_RELEASE_KEY_PASSWORD || secrets.FB_KEY_PASSWORD }}
         run: |
+          set +x
+          set -e
+          if [ -z "$FB_KEYSTORE_B64" ] || [ -z "$FRIENDBOOK_RELEASE_STORE_PASSWORD" ] || [ -z "$FRIENDBOOK_RELEASE_KEY_ALIAS" ] || [ -z "$FRIENDBOOK_RELEASE_KEY_PASSWORD" ]; then
+            echo '::error::Release signing secrets are missing; configure the keystore, store password, key alias and key password in GitHub Actions.'
+            exit 1
+          fi
+          export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-release.p12"
+          umask 077
+          printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          unset FB_KEYSTORE_B64
+          trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
           set +e
           for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
             DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"

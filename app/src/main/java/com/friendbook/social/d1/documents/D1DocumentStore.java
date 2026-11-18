@@ -67,6 +67,18 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
+        // Only active chat message queries need the shorter interval. Keep other listeners at
+        // five seconds so a faster chat does not multiply traffic for the whole app.
+        poller.scheduleWithFixedDelay(this::pollChatMessages, 2, 2, TimeUnit.SECONDS);
+    }
+
+    private void pollChatMessages() {
+        for (QueryListenerEntry e : queryListeners) {
+            String path = e.query.parentPath;
+            if (e.active && path.startsWith("chats/") && path.endsWith("/messages")) {
+                scheduleQueryRead(e);
+            }
+        }
     }
 
     public static D1DocumentStore getInstance() {

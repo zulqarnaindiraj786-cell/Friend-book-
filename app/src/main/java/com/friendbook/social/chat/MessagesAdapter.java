@@ -116,6 +116,12 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         next.add(m); setData(next);
     }
 
+    public void removeOptimistic(String id) {
+        List<Models.Message> next = new ArrayList<>(data);
+        next.removeIf(message -> java.util.Objects.equals(id, message.id));
+        setData(next);
+    }
+
     public List<Models.Message> all() { return new ArrayList<>(data); }
 
     @Override

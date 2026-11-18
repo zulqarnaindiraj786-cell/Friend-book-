@@ -15,7 +15,8 @@ public final class D1Reactions {
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
  private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
- private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();}}
+ private static final Map<String,Integer> GENERATION=new HashMap<>();
+ private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();GENERATION.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
@@ -28,9 +29,15 @@ public final class D1Reactions {
  }
  private static void fetch(Context context,String collection,String id,Runnable ready){
   scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){ready.run();return;}if(LOADING.contains(key)||FAILED.contains(key))return;
-  String uid=actor;LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
-   if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);remember(context,collection,id,data);ready.run();
-  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);FAILED.add(key);});
+  String uid=actor;int generation=GENERATION.getOrDefault(key,0);LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
+   if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);if(WRITING.contains(key)||generation!=GENERATION.getOrDefault(key,0))return;remember(context,collection,id,data);ready.run();
+  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);FAILED.add(key);
+   new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(Objects.equals(uid,Fb.uid()))FAILED.remove(key);},10000);});
+ }
+ public static void loadPost(Context context,Models.Post post,Runnable render){
+  if(post==null || post.id==null)return;
+  hydrate(post);
+  fetch(context.getApplicationContext(),"posts",post.id,()->{hydrate(post);render.run();});
  }
  public static void hydrate(Models.Post post){
   scope();POSTS.put(D1Client.key("posts",post.id),new java.lang.ref.WeakReference<>(post));
@@ -42,11 +49,19 @@ public final class D1Reactions {
  public static void reel(Context context,Models.Reel reel,Runnable render){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
   if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
+  else fetch(context.getApplicationContext(),collection,reel.id,()->{reel(context,reel,render);render.run();});
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){
   scope();String key=D1Client.key(collection,id);FAILED.remove(key);LOADING.remove(key);
   if(WRITING.contains(key))return;
-  if(CACHE.get(key)==null){remember(context.getApplicationContext(),collection,id,D1Client.object("types",new JSONArray()));}
+  if(CACHE.get(key)==null){
+   String uid=Fb.uid();WRITING.add(key);
+   D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
+    if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);apply(context,collection,id,requested,onlyAdd,render);
+   }).addOnFailureListener(e->{if(Objects.equals(uid,Fb.uid())){WRITING.remove(key);Ui.toast(context,"Couldn't load reaction. Check connection and try again.");}});
+   return;
+  }
+  GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);
   JSONObject previous=CACHE.get(key);String old=mine(previous);if(onlyAdd&&old!=null){render.run();return;}
   String next=Objects.equals(old,requested)?null:requested;String uid=Fb.uid();WRITING.add(key);
   try{JSONObject optimistic=new JSONObject(previous.toString());JSONArray adjusted=new JSONArray();Set<String> all=new LinkedHashSet<>(Arrays.asList(Reactions.TYPES));

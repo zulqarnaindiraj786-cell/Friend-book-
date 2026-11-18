@@ -63,7 +63,13 @@ public class DocumentReference {
     }
 
     DocumentSnapshot parseSnapshot(JSONObject res) {
-        boolean exists = res != null && res.optBoolean("exists", false);
+        // The Worker returns {exists:false, data:null} for a miss and a document payload for a
+        // hit. Older Worker builds omitted the `exists` flag on hits, which made every single
+        // document read (profile, post detail, user lookup) report "not found" even though the
+        // record existed. Treat a present, non-null `data` object as proof of existence so the
+        // app stays correct against both Worker versions.
+        boolean exists = res != null && (res.has("exists")
+                ? res.optBoolean("exists", false) : res.optJSONObject("data") != null);
         Map<String, Object> data = exists ? D1DocumentJson.decodeMap(res.optJSONObject("data")) : null;
         long ct = res != null ? res.optLong("createTime", 0L) : 0L;
         long ut = res != null ? res.optLong("updateTime", 0L) : 0L;
