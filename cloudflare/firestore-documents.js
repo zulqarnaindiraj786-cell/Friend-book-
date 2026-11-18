@@ -284,7 +284,54 @@ async function readRow(db, path) {
   return appDocumentToFirestoreRow(appRow);
 }
 
-async function readCollectionRows(db, parent, uid, filters) {
+// A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
+// formats, legacy mirrors, filters and complex cursors deliberately use the old merge.
+const chatRank = `CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
+const chatTime = `CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') ELSE json_extract(document_json,'$.createdAt.millis') END`;
+async function boundedChatRows(db,parent,spec) {
+  const parts=splitPath(parent), orders=spec?.orderBy;
+  if (parts?.length!==3 || parts[0]!=='chats' || parts[2]!=='messages'
+      || !Array.isArray(orders) || orders.length!==1 || orders[0]?.field!=='createdAt'
+      || !['ASCENDING','DESCENDING'].includes(orders[0]?.direction)
+      || (Array.isArray(spec?.filters) && spec.filters.length) || spec?.startAt || spec?.endAt || spec?.endBefore
+      || !Number.isInteger(spec?.limit) || spec.limit<=0 || spec.limit>1000
+      || (spec.limitToLast!==undefined && spec.limitToLast!==true && spec.limitToLast!==false)) return null;
+  let cursor=null;
+  if (spec.startAfter) {
+    const c=spec.startAfter;
+    if (spec.limitToLast || !Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
+    const value=c[0], rank=typeof value==='number'?2:value?.__type==='timestamp'?4:0;
+    const time=rank===2?value:value?.millis;
+    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
+    cursor=[rank,time,c[1]];
+  }
+  const prefix=`${parts[1]}_`, upper=`${parts[1]}\``;
+  const legacy=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<?
+    UNION ALL SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first();
+  if (legacy) return null;
+  // Ensure SQLite's ordering matches the existing JS comparator exactly. Older or
+  // malformed records must never be dropped simply to make the page smaller.
+  const bad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND (
+    doc_id GLOB '*[^ -~]*' OR COALESCE((
+      (json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
+      OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+        AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)
+    ),0)=0) LIMIT 1`).bind(parent).first();
+  if (bad) return null;
+  const descending=orders[0].direction==='DESCENDING';
+  const takeLast=spec.limitToLast===true;
+  const direction=(descending !== takeLast)?'DESC':'ASC';
+  const boundary=cursor?` AND (${chatRank},${chatTime},doc_id) ${descending?'<':'>'} (?,?,?)`:'';
+  const statement=db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    FROM friendbook_cf_firestore_documents WHERE parent_path=?${boundary}
+    ORDER BY ${chatRank} ${direction}, ${chatTime} ${direction}, doc_id ${direction} LIMIT ?`);
+  const result=await statement.bind(parent,...(cursor||[]),spec.limit).all();
+  return result?.results || [];
+}
+
+async function readCollectionRows(db, parent, uid, filters, spec) {
+  const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
+  if (bounded!==null) return bounded;
   if (parent === 'friends') {
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
@@ -1403,7 +1450,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let rows;
-    try { rows = await readCollectionRows(db, parent, uid, body?.filters); }
+    try { rows = await readCollectionRows(db, parent, uid, body?.filters, body); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
