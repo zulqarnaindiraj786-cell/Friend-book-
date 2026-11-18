@@ -83,3 +83,25 @@ class Tests(unittest.TestCase):
         self.assertEqual(db.query("SELECT status FROM friendbook_cf_fullcopy_queue WHERE path=?",(q.PREFIX+'/users',))[0]['status'],'pending')
         self.assertEqual(q.copy_queue(FakeSource(),db)['pending'],0)
         self.assertEqual(db.query('SELECT count(*) n FROM friendbook_cf_fullcopy_archive')[0]['n'],2)
+
+class ExtensionTests(unittest.TestCase):
+    def test_one_time_extension_only_for_exhausted_current_pacific_day(self):
+        db=LocalD1();now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        base=q.Budget(db,10000,now);base.reserve(10000)
+        day=q.extend_exhausted_budget_today(db,now)
+        self.assertEqual(day,'2026-11-18')
+        self.assertEqual(q.extend_exhausted_budget_today(db,now),day)  # idempotent, never 20k
+        self.assertEqual(db.query('SELECT cap FROM friendbook_cf_copy_read_budget')[0]['cap'],15000)
+        with self.assertRaises(q.CopyError):q.Budget(db,15000,now)
+        ext=q.Budget(db,15000,now,allowed_day=day)
+        self.assertEqual(ext.reserve(5000)['reserved'],15000)
+        with self.assertRaises(q.BudgetExhausted):ext.reserve(1)
+        next_day=q.Budget(db,15000,lambda:datetime(2026,11,19,12,tzinfo=timezone.utc),allowed_day=day)
+        with self.assertRaises(q.BudgetExhausted):next_day.reserve(1)
+        self.assertEqual(len(db.query('SELECT * FROM friendbook_cf_copy_read_budget')),1)
+    def test_extension_rejects_nonexhausted_or_another_day_without_network(self):
+        db=LocalD1();now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        q.Budget(db,10000,now).reserve(9999)
+        with self.assertRaises(q.CopyError):q.extend_exhausted_budget_today(db,now)
+        with self.assertRaises(q.CopyError):q.extend_exhausted_budget_today(db,lambda:datetime(2026,11,19,12,tzinfo=timezone.utc))
+        self.assertEqual(db.query('SELECT cap FROM friendbook_cf_copy_read_budget')[0]['cap'],10000)
