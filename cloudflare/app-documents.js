@@ -1,5 +1,9 @@
+import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
+import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
+import { profileReadView, profileWriteAllowed } from './profile-access.js';
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
 import { authorizePost } from './firebase-post-access.js';
+import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -92,24 +96,15 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
-const LIST_CACHE_TTL_MS = 60_000;
-const listCache = new WeakMap();
-
-function getDbMap(store, db) {
-  let map = store.get(db);
-  if (!map) {
-    map = new Map();
-    store.set(db, map);
-  }
-  return map;
-}
-
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   // Authorization and privacy fields must reflect the current D1 row, not a
   // stale per-isolate cache after another device changes a block or ban.
   try {
-    const row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
+    // Canonical Firestore-compatible records take precedence over an older app mirror. Using
+    // a stale public mirror to authorize a newer private post would leak the private document.
+    const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first()
+      || await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
     return row?.document_json ? toFirestoreFields(row.document_json) : null;
   } catch {
     return null;
@@ -129,6 +124,11 @@ export async function hasD1Friendship(db, uidA, uidB) {
   }
 }
 
+async function canonicalRoot(db, path, fallback) {
+  const row = await db.prepare('SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
+  return row || fallback;
+}
+
 export async function appDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -140,29 +140,27 @@ export async function appDocuments(request, env, identity) {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
     const collection = url.searchParams.get('collection') || '';
     if (!ALLOWED_COLLECTIONS.has(collection)) return json({ error: 'Unsupported collection' }, 400);
+    if (!supportedCollectionPath(collection)) return json({error:'Forbidden'},403);
     const rawLimit = Number(url.searchParams.get('limit') || '20');
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
-    const now = Date.now();
-    const lCache = getDbMap(listCache, env.DB);
-    const cacheKey = `${uid}:${collection}:${limit}`;
-    const cached = lCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return json({ collection, documents: cached.documents, cached: true });
-    }
+    // Membership and privacy may change through another isolate or API: reauthorize every read.
     try {
       const rows = await env.DB.prepare(
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
       ).bind(collection, limit).all();
       let documents = [];
       for (const row of rows?.results || []) {
-        const doc = toPlainDocument(row.document_json, row.doc_id);
-        if (doc) documents.push(doc);
+        const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
+        const doc = toPlainDocument(current.document_json, row.doc_id);
+        if (doc && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
+          const view = profileReadView(`${collection}/${row.doc_id}`, uid, doc);
+          if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
+        }
       }
       if (collection === 'posts' || collection === 'reels') {
         const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id)));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
-      lCache.set(cacheKey, { documents, expiresAt: now + LIST_CACHE_TTL_MS });
       return json({ collection, documents });
     } catch {
       return json({ error: 'Document listing unavailable' }, 503);
@@ -182,14 +180,22 @@ export async function appDocuments(request, env, identity) {
     return json({ error: 'Invalid collection or document ID' }, 400);
   }
   const docPath = `${collection}/${docId}`;
+  if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
 
   if (request.method === 'GET') {
     try {
       const row = await env.DB.prepare(
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
       ).bind(docPath).first();
-      if (!row) return json({ error: 'Not found' }, 404);
-      return json({ id: docId, document: toPlainDocument(row.document_json, docId) });
+      const current = await canonicalRoot(env.DB, docPath, row);
+      if (!current) return json({ error: 'Not found' }, 404);
+      const document = toPlainDocument(current.document_json, docId);
+      if (!(await contentReadAllowed(env.DB, uid, docPath))) return json({error:'Forbidden'},403);
+      if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
+      if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
+      const view = profileReadView(docPath, uid, document);
+      if (view === null) return json({ error: 'Forbidden' }, 403);
+      return json({ id: docId, document: view });
     } catch {
       return json({ error: 'Document read unavailable' }, 503);
     }
@@ -207,11 +213,13 @@ export async function appDocuments(request, env, identity) {
       const existingRow = await env.DB.prepare(
         'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'
       ).bind(docPath).first();
-      const existingPlain = existingRow ? (toPlainDocument(existingRow.document_json, docId) || {}) : {};
+      const currentRow = await canonicalRoot(env.DB, docPath, existingRow);
+      const existingPlain = currentRow ? (toPlainDocument(currentRow.document_json, docId) || {}) : {};
       const merged = { ...existingPlain, ...incoming, id: docId };
+      if (!notificationWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !profileWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !(await chatWriteAllowed(env.DB, docPath, uid, currentRow ? existingPlain : null, merged)) || !contentWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged)) return json({ error: 'Forbidden' }, 403);
       if (!merged.createdAt) merged.createdAt = now;
       merged.updatedAt = now;
-      const ownerUid = String(merged.authorId || merged.uid || merged.senderId || existingRow?.owner_uid || uid);
+      const ownerUid = String(merged.authorId || merged.uid || merged.senderId || currentRow?.owner_uid || uid);
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       const appWrite = env.DB.prepare(
@@ -232,8 +240,6 @@ export async function appDocuments(request, env, identity) {
         Number(firestoreDoc.createdAt) || now, now);
       if (typeof env.DB.batch === 'function') await env.DB.batch([appWrite, firestoreWrite]);
       else { await appWrite.run(); await firestoreWrite.run(); }
-      getDbMap(listCache, env.DB).clear();
-
       if (collection === 'posts' || collection === 'reels') {
         await env.DB.prepare(
           "INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state = 'verified'"

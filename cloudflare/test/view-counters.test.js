@@ -437,13 +437,9 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
   };
 
   const counted = await fetchWith('/v1/views/reels/r1', 'POST');
-  assert.equal(counted.body.views, 13);
-  assert.equal(counted.body.counted, true);
-  assert.equal(counted.body.storage, 'ae+kv+memory');
-  assert.equal(f.ae.events.length, 1);
-  const repeat = await fetchWith('/v1/views/reels/r1', 'POST');
-  assert.equal(repeat.body.counted, false, 'the same user watching again does not count again');
-  assert.equal(repeat.body.views, 13);
+  assert.equal(counted.status, 503);
+  assert.equal((await fetchWith('/v1/views?collection=reels&top=10', 'GET')).status, 503);
+  assert.equal(f.ae.events.length, 0);
 
   const health = await fetchWith('/health', 'GET', null);
   assert.equal(health.status, 200);
@@ -453,7 +449,7 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
 
   resetViewState();
   assert.equal((await fetchWith('/v1/views/reels/r1', 'POST', null)).status, 401, 'no token, no view');
-  assert.equal(f.ae.events.length, 2, 'an unauthenticated request recorded nothing new');
+  assert.equal(f.ae.events.length, 0, 'an unauthenticated request recorded nothing new');
 });
 
 test('when Workers KV is not bound, the R2 snapshot keeps the counts across isolates', async t => {

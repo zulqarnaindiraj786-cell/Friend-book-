@@ -1,3 +1,7 @@
+import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
+import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
+import { profileReadView, profileWriteAllowed } from './profile-access.js';
+import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
 // Cloudflare D1 document API (/v1/d1/*). Android uses a D1-backed document adapter
 // authenticated with Firebase Auth tokens; Firebase stores Auth + FCM only.
 
@@ -544,17 +548,29 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'GET') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
+    if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    const parts = splitPath(docPath);
+    if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages'
+        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let row;
     try { row = await readRow(db, docPath); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
-    return json(rowToDocument(row));
+    const document = rowToDocument(row);
+    if (!(await contentReadAllowed(db, uid, docPath))) return json({error:'Forbidden'},403);
+    if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
+    if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
+    const view = profileReadView(docPath, uid, document.data);
+    if (view === null) return json({ error: 'Forbidden' }, 403);
+    document.data = view;
+    return json(document);
   }
 
   // PUT /v1/firestore/document?path=...  {data, merge, mergeFields}
   if (path === '/v1/firestore/document' && request.method === 'PUT') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
+    if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
@@ -563,6 +579,7 @@ export async function firestoreDocuments(request, env, identity) {
       if (body.createOnly === true && existing) return json({ error: 'ALREADY_EXISTS' }, 409);
       const existingDoc = existing ? decodeValue(JSON.parse(existing.document_json)) : null;
       const next = applySet(existingDoc, body.data || {}, Boolean(body.merge), body.mergeFields || null, now);
+      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
     } catch (e) {
@@ -574,6 +591,7 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'PATCH') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
+    if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     try {
@@ -581,6 +599,7 @@ export async function firestoreDocuments(request, env, identity) {
       if (!existing) return json({ error: 'NOT_FOUND' }, 404);
       const existingDoc = decodeValue(JSON.parse(existing.document_json));
       const next = applyUpdate(existingDoc, body?.fields || body?.data || body?.updates || {}, now);
+      if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !(await chatWriteAllowed(db, docPath, uid, existingDoc, next)) || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, existing);
       return json(rowToDocument(row));
     } catch {
@@ -592,6 +611,13 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'DELETE') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
+    if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    if (['notifications','users','pushDevices','chats','messages','posts','reels'].includes(splitPath(docPath)?.[0])) {
+      let existing;
+      try { existing = await readRow(db, docPath); }
+      catch { return json({ error: 'Read unavailable' }, 503); }
+      if (!existing || !notificationWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null) || !profileWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null) || !(await chatWriteAllowed(db, docPath, uid, JSON.parse(existing.document_json), null)) || !contentWriteAllowed(docPath, uid, JSON.parse(existing.document_json), null)) return json({ error: 'Forbidden' }, 403);
+    }
     await db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(docPath).run();
     if (isRootDocument(docPath)) await db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(docPath).run();
     return json({ deleted: true, path: docPath });
@@ -601,12 +627,14 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'POST') {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
+    if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const id = autoId();
     const docPath = `${parent}/${id}`;
     try {
       const next = applySet(null, body?.data || {}, false, null, now);
+      if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !(await chatWriteAllowed(db, docPath, uid, null, next)) || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, null);
       return json(rowToDocument(row), 201);
     } catch {
@@ -620,14 +648,20 @@ export async function firestoreDocuments(request, env, identity) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
+    if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(Boolean);
-    const result = applyQuery(docs, body || {});
+    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data)).map(doc => {
+      const view = profileReadView(doc.path, uid, doc.data);
+      return view === null ? null : { ...doc, data: view };
+    }).filter(Boolean);
+    const visible = [];
+    for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
+    const result = applyQuery(visible, body || {});
     return json({ parent, documents: result });
   }
 
@@ -635,13 +669,22 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/count' && request.method === 'GET') {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
+    if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
+    const parts = splitPath(parent);
+    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
+        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(Boolean);
-    const filtered = docs.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
+    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data)).map(doc => {
+      const view = profileReadView(doc.path, uid, doc.data);
+      return view === null ? null : { ...doc, data: view };
+    }).filter(Boolean);
+    const visible = [];
+    for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
+    const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });
   }
 
@@ -665,6 +708,7 @@ export async function firestoreDocuments(request, env, identity) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
+      if (!supportedDocumentPath(p)) return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;
@@ -695,6 +739,22 @@ export async function firestoreDocuments(request, env, identity) {
       }
       entry.doc = applySet(entry.doc, op.data || {}, Boolean(op.merge), op.mergeFields || null, now);
       entry.deleted = false;
+    }
+    // Rooms created in this batch can authorize a first message, but only after the room's
+    // own write has passed membership validation; existing membership always wins.
+    const pendingRooms = new Map();
+    for (const p of order) {
+      const parts = splitPath(p), entry = finalDocs.get(p);
+      if (parts.length === 2 && parts[0] === 'chats' && !entry.existingRow && !entry.deleted) {
+        if (!(await chatWriteAllowed(db,p,uid,null,entry.doc))) return json({error:'Forbidden'},403);
+        pendingRooms.set(parts[1],entry.doc);
+      }
+    }
+    // Authorize the complete batch before issuing any database writes.
+    for (const p of order) {
+      const entry = finalDocs.get(p);
+      const before = entry.existingRow ? decodeValue(JSON.parse(entry.existingRow.document_json)) : null;
+      if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !(await chatWriteAllowed(db, p, uid, before, entry.deleted ? null : entry.doc, pendingRooms)) || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
     }
     try {
       const statements = [];

@@ -78,8 +78,13 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
 test('realtime presence routes require verified Firebase identity and return fresh online state', async () => {
   const now = Date.now();
   const app = createWorker(async () => 'verified-user');
-  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare() {
-    return { bind(uid) { return { first: async () => ({ online: 1, visible: 1, last_seen: now - 5000 }) }; } };
+  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare(sql) {
+    return { bind(id) { return { first: async () => {
+      if (sql.includes('friendbook_cf_presence')) return {online:1,visible:1,last_seen:now-5000};
+      if (sql.includes('path IN')) return {path:'friends/verified-user_peer-1'};
+      if (sql.includes('document_json')) return {document_json:JSON.stringify(id.startsWith('chats/') ? {participants:['verified-user','peer-1']} : {displayName:'User'})};
+      return null;
+    } }; } };
   } } };
   assert.equal((await call('/v1/presence/me', env)).status, 401);
   const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
@@ -90,5 +95,8 @@ test('realtime presence routes require verified Firebase identity and return fre
   const contact = await call('/v1/presence/contact/peer-1', env, { Authorization: 'Bearer test' }, 'GET', app);
   assert.equal(contact.status, 200);
   assert.equal((await contact.json()).uid, 'peer-1');
+  assert.equal((await call('/v1/presence/typing/room', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 200);
+  const outsider = createWorker(async () => 'outsider');
+  assert.equal((await call('/v1/presence/typing/room', env, { Authorization: 'Bearer test' }, 'GET', outsider)).status, 403);
   assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
 });

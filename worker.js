@@ -5,7 +5,6 @@ import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { firestoreDocuments } from './cloudflare/firestore-documents.js';
 import { fcmGateway } from './cloudflare/fcm-push.js';
-import { viewCounters } from './cloudflare/view-counters.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const googleKeys = createRemoteJWKSet(new URL(
@@ -93,9 +92,9 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (firestore) return firestoreDocuments(request, env, { uid, token: bearer[1] });
       if (fcm) return fcmGateway(request, env, { uid, token: bearer[1] });
       if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
-      // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
-      // KV aggregate write happen after the response is already sent.
-      if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);
+      // The legacy counter API exposes IDs and counts without per-post authorization. Keep it
+      // closed during the privacy rollout rather than leak private post/reel activity.
+      if (views) return json({ error: 'View counters temporarily unavailable' }, 503);
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
       try {

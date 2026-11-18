@@ -1,4 +1,6 @@
 // Authenticated Cloudflare Realtime Presence & Typing over WebSockets + D1.
+import { loadChat } from './chat-access.js';
+import { readD1DocumentFields, hasD1Friendship } from './app-documents.js';
 export const PRESENCE_TTL_MS = 300_000; // 5 minutes (300 seconds)
 export const WRITE_COALESCE_MS = 30_000; // Write every 30s (matches heartbeat)
 export const TYPING_TTL_MS = 8_000;
@@ -63,8 +65,19 @@ export async function presenceRealtime(request, env, identity) {
     let target;
     try { target = decodeURIComponent(contact[1]); } catch { return json({ error: 'Invalid target' }, 400); }
     if (!validId(target)) return json({ error: 'Invalid target' }, 400);
-    try { return json(await readPresence(env.DB, target, Date.now())); }
-    catch { return json({ error: 'Presence unavailable' }, 503); }
+    try {
+      if (target !== uid) {
+        const me = await readD1DocumentFields(env.DB, `users/${uid}`);
+        const peer = await readD1DocumentFields(env.DB, `users/${target}`);
+        const blocked = (fields, id) => ['blocked','blockedUsers'].some(key =>
+          (fields?.[key]?.arrayValue?.values || []).some(value => value.stringValue === id));
+        if (!me || !peer || me.banned?.booleanValue || peer.banned?.booleanValue
+            || me.deactivated?.booleanValue || peer.deactivated?.booleanValue
+            || peer.showActiveStatus?.booleanValue === false || blocked(me,target) || blocked(peer,uid)
+            || await hasD1Friendship(env.DB, uid, target) !== true) return json({ error: 'Forbidden' }, 403);
+      }
+      return json(await readPresence(env.DB, target, Date.now()));
+    } catch { return json({ error: 'Presence unavailable' }, 503); }
   }
 
   const typing = /^\/v1\/presence\/typing\/([^/]+)$/.exec(path);
@@ -72,6 +85,10 @@ export async function presenceRealtime(request, env, identity) {
     let chatId;
     try { chatId = decodeURIComponent(typing[1]); } catch { return json({ error: 'Invalid chat' }, 400); }
     if (!validId(chatId)) return json({ error: 'Invalid chat' }, 400);
+    try {
+      const room = await loadChat(env.DB, chatId);
+      if (!Array.isArray(room?.participants) || !room.participants.includes(uid)) return json({ error: 'Forbidden' }, 403);
+    } catch { return json({ error: 'Presence unavailable' }, 503); }
     const now = Date.now();
     if (request.method === 'PUT') {
       let body;

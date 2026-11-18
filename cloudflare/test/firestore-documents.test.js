@@ -104,6 +104,7 @@ test('Firestore collection queries and counts include historical root app docume
   sql.exec(appSchema);
   sql.exec(schema);
   const addApp = sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  addApp.run('users/u1','users','u1','u1',JSON.stringify({uid:'u1',displayName:'User'}),1);
   addApp.run('posts/old1','posts','old1','u1',JSON.stringify({authorId:'u1',content:'legacy post',privacy:'public',createdAt:10}),10);
   addApp.run('posts/shared','posts','shared','u1',JSON.stringify({authorId:'u1',content:'stale copy',privacy:'public',createdAt:20}),20);
   sql.prepare(`INSERT INTO friendbook_cf_firestore_documents
@@ -133,6 +134,7 @@ test('Firestore-style query cursors preserve equal-timestamp ordering across pag
   const sql=new DatabaseSync(':memory:');
   sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  add.run('users/u1','users','u1','u1',JSON.stringify({uid:'u1',displayName:'User'}),1);
   for (const id of ['a','b','c']) add.run(`posts/${id}`,'posts',id,'u1',JSON.stringify({authorId:'u1',createdAt:100}),100);
   add.run('posts/d','posts','d','u1',JSON.stringify({authorId:'u1',createdAt:90}),90);
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
@@ -177,6 +179,14 @@ test('nested chat queries bridge legacy D1 messages and require chat membership'
   const outsiderWorker=createWorker(async()=> 'u9');
   const denied=await outsiderWorker.fetch(req(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(denied.status,403);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
+    .run('chats/c1/messages/private','chats/c1/messages','messages','private','u1',JSON.stringify({text:'secret'}),1,1);
+  const direct = () => new Request('https://example.test/v1/firestore/document?path=chats/c1/messages/private',{headers:{authorization:'Bearer token'}});
+  const count = () => new Request('https://example.test/v1/firestore/count?parent=chats/c1/messages',{headers:{authorization:'Bearer token'}});
+  assert.equal((await memberWorker.fetch(direct(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'})).status,200);
+  assert.equal((await memberWorker.fetch(count(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'})).status,200);
+  assert.equal((await outsiderWorker.fetch(direct(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'})).status,403);
+  assert.equal((await outsiderWorker.fetch(count(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'})).status,403);
   sql.close();
 });
 
@@ -291,5 +301,105 @@ test('Android batch operations persist chat messages and apply update and delete
   res=await post([{op:'delete',path:'chats/room/messages/m1'}]);
   assert.equal(res.status,200);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
+  sql.close();
+});
+
+test('notification inbox is scoped across document APIs and batch cannot reassign a recipient', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
+  const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
+    return { run: async () => stmt.run(...args), all: async () => ({results:stmt.all(...args)}), first: async () => stmt.get(...args) || null };
+  } }; }, async batch(statements) { for (const s of statements) await s.run(); } };
+  const app=createWorker(async token => token);
+  const env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body) => app.fetch(new Request('https://example.test'+path,{
+    method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})
+  }),env);
+  const write=await call('u1','/v1/firestore/document?path=notifications/n1','PUT', {data:{fromUserId:'u1',toUserId:'u2',isRead:false,text:'private'}});
+  assert.equal(write.status,200);
+  assert.equal((await call('u1','/v1/firestore/document?path=notifications/n1')).status,403);
+  assert.equal((await call('u1','/v1/docs/notifications/n1')).status,403);
+  assert.equal((await call('u2','/v1/firestore/document?path=notifications/n1')).status,200);
+  let list=await call('u1','/v1/firestore/query','POST',{parent:'notifications'});
+  assert.deepEqual((await list.json()).documents,[]);
+  list=await call('u1','/v1/docs?collection=notifications');
+  assert.deepEqual((await list.json()).documents,[]);
+  const count=await call('u1','/v1/firestore/count?parent=notifications');
+  assert.equal((await count.json()).count,0);
+  assert.equal((await call('u1','/v1/firestore/document?path=notifications/n1','PATCH',{fields:{toUserId:'u1'}})).status,403);
+  assert.equal((await call('u1','/v1/docs/notifications/n1','PUT',{toUserId:'u1'})).status,403);
+  assert.equal((await call('u1','/v1/firestore/batch','POST',{operations:[{op:'update',path:'notifications/n1',updates:{toUserId:'u1'}}]})).status,403);
+  assert.equal((await call('u1','/v1/firestore/document?path=notifications/n1','DELETE')).status,403);
+  assert.equal((await call('u2','/v1/firestore/batch','POST',{operations:[{op:'update',path:'notifications/n1',updates:{isRead:true}}]})).status,200);
+  assert.equal((await call('u2','/v1/firestore/document?path=notifications/n1','PATCH',{fields:{text:'tampered'}})).status,403);
+  assert.equal((await call('u3','/v1/firestore/document?parent=notifications','POST',{data:{fromUserId:'u1',toUserId:'u2',isRead:false}})).status,403);
+  sql.close();
+});
+
+test('profiles and chats: private fields, membership and write bypasses across APIs', async () => {
+  const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){for(const s of stmts)await s.run();}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const put=(uid,path,data)=>call(uid,'/v1/firestore/document?path='+path,'PUT',{data});
+  assert.equal((await put('alice','users/alice',{uid:'alice',displayName:'Alice',email:'private@example.test',twoFactorPin:'1234',isAdmin:false})).status,200);
+  const profile=await (await call('bob','/v1/firestore/document?path=users/alice')).json();
+  assert.equal(profile.data.displayName,'Alice');assert.equal(profile.data.email,undefined);assert.equal(profile.data.twoFactorPin,undefined);
+  const other=await (await call('bob','/v1/docs/users/alice')).json();assert.equal(other.document.email,undefined);
+  const list=await (await call('bob','/v1/firestore/query','POST',{parent:'users',filters:[{field:'email',op:'==',value:'private@example.test'}]})).json();assert.deepEqual(list.documents,[]);
+  assert.equal((await put('bob','users/alice',{displayName:'forged'})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{isAdmin:true}})).status,403);
+  assert.equal((await call('bob','/v1/docs/users/alice','PUT',{displayName:'forged'})).status,403);
+  const batch=ops=>({operations:ops});
+  assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'users/alice',updates:{email:'stolen'}}]))).status,403);
+  assert.equal((await call('bob','/v1/firestore/document?path=users/alice','DELETE')).status,403);
+  assert.equal((await call('alice','/v1/firestore/batch','POST',batch([
+    {op:'set',path:'chats/c1/messages/m1',data:{senderId:'alice',text:'secret'}},
+    {op:'set',path:'chats/c1',data:{participants:['alice','bob']}}
+  ]))).status,200);
+  assert.equal((await call('eve','/v1/firestore/document?path=chats/c1')).status,403);
+  assert.equal((await call('eve','/v1/docs/chats/c1')).status,403);
+  assert.equal((await call('eve','/v1/firestore/document?path=chats/c1/messages/m1')).status,403);
+  const chats=await (await call('eve','/v1/firestore/query','POST',{parent:'chats'})).json();assert.deepEqual(chats.documents,[]);
+  assert.equal((await call('eve','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','eve']}})).status,403);
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','bob','eve']}})).status,403);
+  assert.equal((await call('eve','/v1/firestore/batch','POST',batch([{op:'set',path:'chats/c1/messages/m2',data:{senderId:'eve',text:'spoof'}}]))).status,403);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{text:'tamper'}}]))).status,403);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{isSeen:true}}]))).status,200);
+  assert.equal((await call('bob','/v1/docs/chats/c1','PUT',{participants:['eve']})).status,403);
+  // A stale legacy mirror cannot grant membership or overwrite the canonical room.
+  sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?')
+    .run(JSON.stringify({participants:['alice','bob','eve']}),'chats/c1');
+  assert.equal((await call('eve','/v1/docs/chats/c1')).status,403);
+  assert.equal((await call('eve','/v1/docs/chats/c1','PUT',{participants:['alice','bob','eve']})).status,403);
+  const leaked = await (await call('eve','/v1/docs?collection=chats')).json();
+  assert.deepEqual(leaked.documents,[]);
+  assert.equal((await call('eve','/v1/docs?collection=messages')).status,200);
+  sql.close();
+});
+
+test('post privacy and unreviewed collections fail closed on all document routes', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){for(const s of stmts)await s.run();}};
+  const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  add.run('users/alice','users','alice','alice',JSON.stringify({uid:'alice'}),1);
+  add.run('users/bob','users','bob','bob',JSON.stringify({uid:'bob'}),1);
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  assert.equal((await call('alice','/v1/firestore/document?path=posts/p1','PUT',{data:{authorId:'alice',privacy:'Only me',content:'secret'}})).status,200);
+  assert.equal((await call('bob','/v1/firestore/document?path=posts/p1')).status,403);
+  assert.equal((await call('bob','/v1/docs/posts/p1')).status,403);
+  // A stale public mirror cannot authorize the newer private canonical record.
+  sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Public',content:'stale'}),'posts/p1');
+  assert.equal((await call('bob','/v1/firestore/document?path=posts/p1')).status,403);
+  assert.equal((await call('bob','/v1/docs/posts/p1')).status,403);
+  assert.equal((await call('bob','/v1/firestore/document?path=posts/p1','PATCH',{fields:{privacy:'Public'}})).status,403);
+  assert.equal((await call('bob','/v1/docs/posts/p1','PUT',{privacy:'Public'})).status,403);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'delete',path:'posts/p1'}]})).status,403);
+  assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'posts'})).json()).documents,[]);
+  assert.equal((await call('bob','/v1/firestore/query','POST',{parent:'payments'})).status,403);
+  assert.equal((await call('bob','/v1/firestore/document?path=sessions/alice','PUT',{data:{uid:'bob'}})).status,403);
+  assert.equal((await call('bob','/v1/docs?collection=groups')).status,403);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
   sql.close();
 });
