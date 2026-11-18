@@ -285,6 +285,23 @@ async function readRow(db, path) {
 }
 
 async function readCollectionRows(db, parent, uid, filters) {
+  if (parent === 'friends') {
+    // Only a participant can see a friendship. Index the two positions instead
+    // of loading every user's relationships and projecting them in JavaScript.
+    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?
+      UNION ALL SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=?
+        AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all();
+    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END)=?
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+      UNION ALL SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[1].stringValue') ELSE json_extract(a.document_json,'$.participants[1]') END)=?
+      AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END) IS NOT ?
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all();
+    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+  }
   if (parent === 'friend_requests') {
     // Only participants can read requests, regardless of query filter supplied by the client.
     const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time

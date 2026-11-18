@@ -1,0 +1,5 @@
+-- Participant-scoped relationship reads; no historical rows are modified.
+CREATE INDEX IF NOT EXISTS idx_cf_friend_participant_0 ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.participants[0]')) WHERE parent_path='friends';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_friend_participant_0 ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(document_json,'$.participants[0]') END)) WHERE collection='friends';
+CREATE INDEX IF NOT EXISTS idx_cf_friend_participant_1 ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.participants[1]')) WHERE parent_path='friends';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_friend_participant_1 ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue') ELSE json_extract(document_json,'$.participants[1]') END)) WHERE collection='friends';

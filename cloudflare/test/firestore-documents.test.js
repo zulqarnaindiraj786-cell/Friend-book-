@@ -1088,3 +1088,21 @@ test('feed coalesces repeated author and viewer checks per request but refreshes
  response=await query();assert.deepEqual((await response.json()).documents,[]);assert.equal(reads['users/bob'],2);assert.equal(reads['users/alice'],2);
  sql.close();
 });
+
+test('friendship reads use participant indexes without leaking or reviving stale mirrors', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0027_friend_participant_indexes.sql',import.meta.url),'utf8'));
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)'),f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const legacy=(id,data)=>a.run(`friends/${id}`,'friends',id,'',JSON.stringify(data),1);
+ const canonical=(id,data)=>f.run(`friends/${id}`,'friends','friends',id,'',JSON.stringify(data),1,1);
+ canonical('first',{participants:['alice','bob'],secret:'hide'});canonical('second',{participants:['carol','alice']});
+ canonical('shadow',{participants:['bob','carol']});legacy('shadow',{participants:['alice','bob']});
+ legacy('wrapped',{fields:{participants:{arrayValue:{values:[{stringValue:'bob'},{stringValue:'alice'}]}}}});
+ legacy('malformed',{participants:['alice','alice']});legacy('other',{participants:['bob','carol']});
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'friends'})}),env);
+ assert.equal(r.status,200);const docs=(await r.json()).documents;assert.deepEqual(docs.map(x=>x.id).sort(),['first','second','wrapped']);assert.equal(docs.find(d=>d.id==='first').data.secret,undefined);
+ const q="SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=? UNION ALL SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=? AND json_extract(document_json,'$.participants[0]') IS NOT ?";
+ const plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all('alice','alice','alice').map(x=>x.detail).join('\n');assert.match(plan,/SEARCH.*idx_cf_friend_participant_0/);assert.match(plan,/SEARCH.*idx_cf_friend_participant_1/);
+ sql.close();
+});
