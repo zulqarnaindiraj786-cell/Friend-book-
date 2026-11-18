@@ -175,7 +175,7 @@ public class Query {
         return arr;
     }
 
-    private JSONObject toQueryBody() {
+    JSONObject toQueryBody() {
         JSONObject body = new JSONObject();
         try {
             body.put("parent", parentPath);

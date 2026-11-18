@@ -330,22 +330,9 @@ public class D1DocumentStore {
         return authenticatedUid() + "|" + toQueryJson(q).toString();
     }
 
-    private static org.json.JSONObject toQueryJson(Query q) {
-        org.json.JSONObject body = new org.json.JSONObject();
-        try {
-            body.put("parent", q.parentPath);
-            body.put("filters", q.filtersJson());
-            org.json.JSONArray ord = new org.json.JSONArray();
-            for (Query.OrderSpec os : q.orders) {
-                org.json.JSONObject o = new org.json.JSONObject();
-                o.put("field", os.field);
-                o.put("direction", os.dir == Query.Direction.DESCENDING ? "DESCENDING" : "ASCENDING");
-                ord.put(o);
-            }
-            body.put("orderBy", ord);
-            if (q.limitValue != null) body.put("limit", q.limitValue);
-            if (q.limitToLastFlag) body.put("limitToLast", true);
-        } catch (Exception ignored) { }
-        return body;
+    // Use the same serialization as one-shot reads: cursors must affect both the request
+    // and cache key, otherwise a listener for a later page replays the first page.
+    static org.json.JSONObject toQueryJson(Query q) {
+        return q.toQueryBody();
     }
 }
