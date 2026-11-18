@@ -437,8 +437,8 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
   };
 
   const counted = await fetchWith('/v1/views/reels/r1', 'POST');
-  assert.equal(counted.status, 503);
-  assert.equal((await fetchWith('/v1/views?collection=reels&top=10', 'GET')).status, 503);
+  assert.equal(counted.status, 403);
+  assert.equal((await fetchWith('/v1/views?collection=reels&top=10', 'GET')).status, 400);
   assert.equal(f.ae.events.length, 0);
 
   const health = await fetchWith('/health', 'GET', null);

@@ -834,3 +834,26 @@ test('administrator must explicitly review exact legacy group and chat snapshots
   assert.deepEqual(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/old').document_json).adminIds,['bob']);
   sql.close();
 });
+
+test('view counts enforce post privacy, filter batches and forbid unscoped top lists', async () => {
+  const {resetViewState}=await import('../view-counters.js');resetViewState();
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const add=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  for(const uid of ['alice','bob']) add.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
+  add.run('posts/public','posts','posts','public','alice',JSON.stringify({authorId:'alice',privacy:'Public'}),1,1);
+  add.run('posts/secret','posts','posts','secret','alice',JSON.stringify({authorId:'alice',privacy:'Only me'}),1,1);
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  const events=[],env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',ANALYTICS_ENGINE:{writeDataPoint:e=>events.push(e)}};
+  const app=createWorker(async t=>t);
+  const call=(uid,path,method='GET')=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid}}),env,{waitUntil:()=>{}});
+  assert.equal((await call('bob','/v1/views/posts/secret','POST')).status,403);
+  assert.equal((await call('bob','/v1/views/posts/missing')).status,403);
+  assert.equal(events.length,0);
+  assert.equal((await call('bob','/v1/views/posts/public','POST')).status,200);
+  assert.equal(events.length,1);
+  const batch=await (await call('bob','/v1/views?collection=posts&ids=public,secret,missing')).json();
+  assert.deepEqual(Object.keys(batch.views),['public']);
+  assert.equal((await call('bob','/v1/views?collection=posts&top=10')).status,400);
+  assert.equal((await call('alice','/v1/views/posts/secret')).status,200);
+  resetViewState();sql.close();
+});

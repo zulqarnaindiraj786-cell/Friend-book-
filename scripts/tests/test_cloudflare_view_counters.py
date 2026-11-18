@@ -23,13 +23,14 @@ def absent(test, token, source, where):
 
 
 class CloudflareViewCounterGuards(unittest.TestCase):
-    def test_worker_keeps_legacy_view_route_closed_during_privacy_rollout(self):
+    def test_worker_view_route_enforces_resource_privacy(self):
         worker = (ROOT / 'worker.js').read_text()
         self.assertIn(r'/^\/v1\/views\/(posts|reels)\/([^/]+)$/', worker)
         self.assertIn('!docs && !views', worker)
         # Do not expose resource IDs or counts until per-resource authorization exists.
-        self.assertIn("if (views) return json({ error: 'View counters temporarily unavailable' }, 503);", worker)
-        self.assertLess(worker.index('uid = await verify('), worker.index('if (views) return json('))
+        self.assertIn('contentReadAllowed(env.DB,uid', worker)
+        self.assertIn('Top lists disclose resource IDs', worker)
+        self.assertLess(worker.index('uid = await verify('), worker.index('if (views) {'))
 
     def test_no_view_counter_is_written_to_firestore(self):
         for path in sorted(JAVA.rglob('*.java')):
