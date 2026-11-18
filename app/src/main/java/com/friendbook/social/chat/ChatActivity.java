@@ -855,10 +855,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         })
                 .addOnFailureListener(e -> {
-                    if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
-                    pendingMessages.fail(msgRef.getId());
-                    if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
-                    Ui.toast(this, "Voice note not confirmed. Check the conversation before retrying.");
+                    reconcileUncertainSend(msgRef, me, e, "Voice note", null);
                 });
     }
 
@@ -957,10 +954,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                 })
                 .addOnFailureListener(e -> {
-                    if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
-                    pendingMessages.fail(msgRef.getId());
-                    if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
-                    Ui.toast(this, "Sticker not confirmed. Check the conversation before retrying.");
+                    reconcileUncertainSend(msgRef, me, e, "Sticker", null);
                 });
     }
 
@@ -1039,11 +1033,39 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.commit().addOnSuccessListener(x -> {
             if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         }).addOnFailureListener(e -> {
-            if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
-            pendingMessages.fail(msgRef.getId());
-            if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
-            if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);
-            Ui.toast(this, "Message not confirmed. Check the conversation before retrying.");
+            reconcileUncertainSend(msgRef, me, e, "Message", () -> {
+                if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);
+            });
+        });
+    }
+
+    /** A failed response can mean the write committed but the acknowledgement was lost.
+     * Never automatically resend or discard an uncertain message: verify its stable ID first. */
+    private void reconcileUncertainSend(com.friendbook.social.d1.documents.DocumentReference ref,
+                                        String actor, Exception failure, String label, Runnable restore) {
+        if (!java.util.Objects.equals(actor, Fb.uid()) || isFinishing()) return;
+        if (ChatSendRecovery.failure(failure) == ChatSendRecovery.State.DENIED) {
+            pendingMessages.fail(ref.getId());
+            if (!messageSnapshots.containsKey(ref.getId())) adapter.removeOptimistic(ref.getId());
+            if (restore != null) restore.run();
+            Ui.toast(this, label + " could not be sent: permission denied.");
+            return;
+        }
+        ref.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(snapshot -> {
+            if (!java.util.Objects.equals(actor, Fb.uid()) || isFinishing()) return;
+            if (ChatSendRecovery.read(snapshot.exists(), snapshot.getString("senderId"), actor)
+                    == ChatSendRecovery.State.CONFIRMED) {
+                // It committed despite the failed response. Push is an idempotent hint;
+                // the normal authenticated listener remains authoritative for display.
+                com.friendbook.social.push.FCMPush.message(chatId, ref.getId());
+                Fb.db().refreshChatFromPush(chatId);
+            } else {
+                // A still-running server transaction can commit after this read.
+                Ui.toast(this, label + " status unknown. Check the chat before sending again.");
+            }
+        }).addOnFailureListener(readError -> {
+            if (java.util.Objects.equals(actor, Fb.uid()) && !isFinishing())
+                Ui.toast(this, label + " status unknown. Reconnect and check before sending again.");
         });
     }
 
