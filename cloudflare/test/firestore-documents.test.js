@@ -128,7 +128,8 @@ test('nested chat queries bridge legacy D1 messages and require chat membership'
   const appDoc = sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   appDoc.run('chats/c1','chats','c1','u1',JSON.stringify({id:'c1',participants:['u1','u2']}),1);
   appDoc.run('messages/c1_m1','messages','c1_m1','u1',JSON.stringify({senderId:'u1',receiverId:'u2',text:'old chat message',createdAtMs:10,createdAt:10}),10);
-  appDoc.run('messages/c2_m2','messages','c2_m2','u1',JSON.stringify({senderId:'u1',receiverId:'u3',text:'other chat secret',createdAtMs:11,createdAt:11}),11);
+  appDoc.run('messages/old-id','messages','old-id','u1',JSON.stringify({chatId:'c1',senderId:'u2',receiverId:'u1',text:'chatId-keyed legacy message',createdAtMs:9,createdAt:9}),9);
+  appDoc.run('messages/c2_m2','messages','c2_m2','u1',JSON.stringify({chatId:'c2',senderId:'u1',receiverId:'u3',text:'other chat secret',createdAtMs:11,createdAt:11}),11);
   const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
     return { run: async () => stmt.run(...args), all: async () => ({results: stmt.all(...args)}), first: async () => stmt.get(...args) || null };
   } }; } };
@@ -140,9 +141,11 @@ test('nested chat queries bridge legacy D1 messages and require chat membership'
   const memberResult=await memberWorker.fetch(req(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(memberResult.status,200);
   const rows=(await memberResult.json()).documents;
-  assert.equal(rows.length,1);
-  assert.equal(rows[0].id,'m1');
-  assert.equal(rows[0].data.text,'old chat message');
+  assert.equal(rows.length,2);
+  assert.equal(rows[0].id,'old-id');
+  assert.equal(rows[0].data.text,'chatId-keyed legacy message');
+  assert.equal(rows[1].id,'m1');
+  assert.equal(rows[1].data.text,'old chat message');
   const outsiderWorker=createWorker(async()=> 'u9');
   const denied=await outsiderWorker.fetch(req(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(denied.status,403);

@@ -298,16 +298,17 @@ async function readCollectionRows(db, parent) {
       if (row) byPath.set(row.path, row);
     }
   } else if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
-    // The legacy CloudflareStore stored messages at messages/{chatId}_{messageId}, while the
-    // app reads chats/{chatId}/messages/{messageId}. Bridge only the exact chatId_ prefix into
-    // that chat's nested query; Firestore-native nested rows remain canonical on path collisions.
+    // Legacy CloudflareStore messages use either messages/{chatId}_{messageId} IDs or a chatId
+    // field, while Android reads chats/{chatId}/messages/{messageId}. Restrict this bridge to
+    // exact ID-prefix/chatId matches and a participant-checked chat query; native nested rows win.
     const prefix = `${parts[1]}_`;
     const appRows = await db.prepare(
       `SELECT path, collection, doc_id, owner_uid, document_json, updated_at
-       FROM friendbook_cf_documents WHERE collection='messages' AND substr(doc_id,1,?)=?`
-    ).bind(prefix.length, prefix).all();
+       FROM friendbook_cf_documents
+       WHERE collection='messages' AND (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=?)`
+    ).bind(prefix.length, prefix, parts[1]).all();
     for (const appRow of appRows?.results || []) {
-      const messageId = appRow.doc_id.slice(prefix.length);
+      const messageId = appRow.doc_id.startsWith(prefix) ? appRow.doc_id.slice(prefix.length) : appRow.doc_id;
       if (!validSegment(messageId)) continue;
       const nestedPath = `${parent}/${messageId}`;
       if (byPath.has(nestedPath)) continue;
