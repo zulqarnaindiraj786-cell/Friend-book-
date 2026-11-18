@@ -8,6 +8,9 @@ on:
       - 'gradle.properties'
       - 'build.gradle'
       - 'settings.gradle'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'gradle/wrapper/**'
       - '.github/workflows/debug-apk.yml'
   workflow_dispatch:
 
