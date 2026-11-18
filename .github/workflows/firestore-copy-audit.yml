@@ -72,3 +72,5 @@ jobs:
 # D1-only progress refresh requested by owner.
 
 # Verify owner-authorized 30k cap with D1 aggregate only.
+
+# Owner-requested latest archive inventory; D1-only read.
