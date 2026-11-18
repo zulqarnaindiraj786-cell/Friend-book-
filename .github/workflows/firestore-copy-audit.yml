@@ -46,3 +46,5 @@ jobs:
 # D1-only progress refresh; no Firebase scan.
 
 # D1-only remaining-collections check; no Firebase reads.
+
+# D1 aggregate-only progress refresh; no Firebase requests.
