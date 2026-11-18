@@ -737,3 +737,31 @@ test('chat atomic guards reject concurrent room and message changes and orphan a
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/new/messages/m'),undefined);
   sql.close();
 });
+
+test('trusted group chats support admin management, member leave, transfer and admin-only sending', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  sql.exec(readFileSync(new URL('../migrations/0021_trusted_group_chats.sql',import.meta.url),'utf8'));
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method,body)=>app.fetch(new Request('https://example.test/v1/firestore/document?path='+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify(body)}),env);
+  const room={isGroup:true,createdBy:'alice',adminIds:['alice'],participants:['alice','bob','carol'],onlyAdminsCanSend:false,groupName:'Group'};
+  assert.equal((await call('alice','chats/g','PUT',{data:{...room,adminIds:['alice','bob']}})).status,403);
+  assert.equal((await call('alice','chats/g','PUT',{data:room})).status,200);
+  assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g').owner_uid,'alice');
+  assert.equal((await call('bob','chats/g','PATCH',{fields:{adminIds:['alice','bob']}})).status,403);
+  assert.equal((await call('bob','chats/g','PATCH',{fields:{participants:['alice','bob','carol','eve']}})).status,403);
+  assert.equal((await call('alice','chats/g','PATCH',{fields:{adminIds:['alice','bob'],onlyAdminsCanSend:true}})).status,200);
+  assert.equal((await call('carol','chats/g/messages/m','PUT',{data:{senderId:'carol',text:'blocked'}})).status,403);
+  assert.equal((await call('bob','chats/g/messages/m','PUT',{data:{senderId:'bob',text:'allowed'}})).status,200);
+  assert.equal((await call('carol','chats/g','PATCH',{fields:{participants:['alice','bob']}})).status,200);
+  assert.equal((await call('alice','chats/g','PATCH',{fields:{participants:['bob'],adminIds:['bob'],createdBy:'bob'}})).status,200);
+  assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g').owner_uid,'bob');
+  assert.equal((await call('alice','chats/g','PATCH',{fields:{adminIds:['alice']}})).status,403);
+  assert.equal((await call('bob','chats/g','PATCH',{fields:{onlyAdminsCanSend:false}})).status,200);
+  assert.equal((await call('alice','chats/g','DELETE',{})).status,403);
+  assert.equal((await call('bob','chats/g','DELETE',{})).status,200);
+  assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g'),undefined);
+  // Messages remain inaccessible rather than being adopted by a new room owner.
+  assert.notEqual((await call('eve','chats/g','PUT',{data:{participants:['eve']}})).status,200);
+  sql.close();
+});

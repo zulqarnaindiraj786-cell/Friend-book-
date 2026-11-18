@@ -31,22 +31,63 @@ export async function chatReadAllowed(db,path,uid,data) {
   // authorizing its root document as well as nested messages.
   return member(await loadChat(db,id),uid);
 }
+const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const validId=x=>typeof x==='string' && x.length>0 && x.length<=128 && !/[\/\x00-\x1f]/.test(x);
+const validList=a=>Array.isArray(a) && a.every(validId) && new Set(a).size===a.length;
+async function groupChatOwner(db,path) {
+  const row=await db.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').bind(path).first();
+  return row?.owner_uid || null;
+}
+function validGroupRoom(room) {
+  return room?.isGroup===true && validId(room.createdBy) && validList(room.participants) && validList(room.adminIds)
+    && room.participants.includes(room.createdBy) && room.adminIds.includes(room.createdBy)
+    && room.adminIds.every(id=>room.participants.includes(id)) && typeof room.onlyAdminsCanSend==='boolean';
+}
+function sameExcept(a,b,keys) {
+  return [...new Set([...Object.keys(a),...Object.keys(b)])].every(k=>keys.has(k) || equal(a[k],b[k]));
+}
 export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = new Map(), roomSnapshot = undefined) {
   const parts=path.split('/');
   const id=chatIdFor(path,before || after);
   if (id === null) return true;
   if (!id) return false;
   if (parts[0] === 'chats' && parts.length === 2) {
-    if (!before) return !!after && member(after,uid) && after.participants.every(x=>typeof x==='string' && x.length>0);
+    if (!before) {
+      if (!after || !member(after,uid) || !validList(after.participants)) return false;
+      if (after.isGroup===true) return validGroupRoom(after) && after.createdBy===uid && equal(after.adminIds,[uid]);
+      return !after.createdBy && !after.creatorId && !after.adminIds && !after.onlyAdminsCanSend;
+    }
     if (!member(before,uid)) return false;
-    if (!after) return false; // room deletion and membership management need dedicated authorization
-    // Historical room role flags were client-writable. Freeze authority-bearing
-    // fields until a trusted group-chat role transition exists.
+    if (!after) return before.isGroup===true && validGroupRoom(before) && before.createdBy===uid && await groupChatOwner(db,path)===uid;
+    if (before.isGroup!==after.isGroup) return false;
     const protectedFields = ['participants','adminIds','creatorId','createdBy','onlyAdminsCanSend'];
-    return protectedFields.every(k=>JSON.stringify(before[k])===JSON.stringify(after[k]));
+    if (before.isGroup!==true) return protectedFields.every(k=>equal(before[k],after[k]));
+    const owner=await groupChatOwner(db,path);
+    // Never grant authority based solely on a historically client-writable role.
+    if (!owner || owner!==before.createdBy || !validGroupRoom(before) || !validGroupRoom(after))
+      return protectedFields.every(k=>equal(before[k],after[k]));
+    if (before.creatorId!==after.creatorId) return false;
+    const isAdmin=before.adminIds.includes(uid);
+    if (!isAdmin) {
+      // Members may leave themselves; they cannot add others or alter roles/settings.
+      const leaving=before.participants.includes(uid) && !after.participants.includes(uid);
+      if (!sameExcept(before,after,new Set(['participants','adminIds','unreadCount','lastMessage','lastMessageTime','lastMessageTimeMs']))) return false;
+      const remaining=before.participants.filter(x=>x!==uid);
+      return equal(after.adminIds,before.adminIds) && (equal(after.participants,before.participants) || (leaving && equal(after.participants,remaining)));
+    }
+    // Ownership transfer is only possible when the creator leaves, to an existing member.
+    if (after.createdBy!==owner && (uid!==owner || after.participants.includes(owner)
+        || !before.participants.includes(after.createdBy))) return false;
+    if (after.createdBy===owner && !after.participants.includes(owner)) return false;
+    return true;
   }
+
   const room = roomSnapshot === undefined ? (await loadChat(db,id) || pendingRooms.get(id)) : roomSnapshot;
   if (!member(room,uid)) return false;
+  if (!before && room.isGroup===true && room.onlyAdminsCanSend===true) {
+    const owner=await groupChatOwner(db,`chats/${id}`);
+    if (!owner || owner!==room.createdBy || !validGroupRoom(room) || !room.adminIds.includes(uid)) return false;
+  }
   // Creation is attributable to the authenticated sender; room cannot be re-bound.
   if (!before) return !!after && after.senderId === uid && (parts[0] !== 'messages' || after.chatId === id);
   if (!after) return before.senderId === uid;

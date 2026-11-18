@@ -470,17 +470,22 @@ public class GroupChatInfoActivity extends Activity {
                 "You won't receive new messages from this group.", "Leave", () -> {
                     Map<String, Object> up = new HashMap<>();
                     up.put("participants", FieldValue.arrayRemove(me));
-                    up.put("adminIds", FieldValue.arrayRemove(me));
-                    // If creator leaves and no other admin exists, promote next remaining member!
+                    java.util.ArrayList<String> remainingAdmins = new java.util.ArrayList<>(room.adminIds);
+                    remainingAdmins.remove(me);
+                    // Transfer ownership and remove the departing creator in one update.
                     if (me.equals(room.createdBy)) {
+                        String successor = null;
                         for (String p : room.participants) {
-                            if (!p.equals(me)) {
-                                up.put("createdBy", p);
-                                up.put("adminIds", FieldValue.arrayUnion(p));
-                                break;
-                            }
+                            if (!p.equals(me)) { successor = p; break; }
                         }
+                        if (successor == null) {
+                            Ui.toast(this, "Delete the group instead of leaving as its last member");
+                            return;
+                        }
+                        up.put("createdBy", successor);
+                        if (!remainingAdmins.contains(successor)) remainingAdmins.add(successor);
                     }
+                    up.put("adminIds", remainingAdmins);
                     postSystemMessage("🚪 " + Fb.myName() + " left the group");
                     Fb.db().collection("chats").document(chatId).update(up)
                             .addOnSuccessListener(x -> {
