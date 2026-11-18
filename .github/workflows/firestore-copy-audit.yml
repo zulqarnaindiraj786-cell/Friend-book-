@@ -1,0 +1,36 @@
+name: Read-only D1 migration inventory
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/firestore-copy-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Aggregate D1 inventory only (zero Firebase reads and no data writes)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          SQL="SELECT json_object('archive_snapshot_documents',(SELECT COUNT(*) FROM friendbook_cf_copy_staging WHERE batch_id='006ee816-4b8e-47a2-8677-ec1e881caf15'),'archive_missing_canonical',(SELECT COUNT(*) FROM friendbook_cf_copy_staging s WHERE s.batch_id='006ee816-4b8e-47a2-8677-ec1e881caf15' AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents d WHERE d.path=s.path)),'canonical_documents',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents),'app_documents',(SELECT COUNT(*) FROM friendbook_cf_documents),'checkpoint_collections',(SELECT COUNT(*) FROM friendbook_cf_firestore_migration_progress),'checkpoint_complete',(SELECT COUNT(*) FROM friendbook_cf_firestore_migration_progress WHERE status='complete'),'checkpoint_pending',(SELECT COUNT(*) FROM friendbook_cf_firestore_migration_progress WHERE status!='complete'),'checkpoint_documents_read',(SELECT COALESCE(SUM(documents_read),0) FROM friendbook_cf_firestore_migration_progress),'checkpoint_documents_written',(SELECT COALESCE(SUM(documents_written),0) FROM friendbook_cf_firestore_migration_progress),'users_count',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE parent_path='users'),'root_collections_known',(SELECT COUNT(*) FROM friendbook_cf_firestore_migration_progress WHERE parent_path='projects/friendbook-17551/databases/(default)/documents')) AS inventory;"
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --command "$SQL" --json > "$RUNNER_TEMP/inventory.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['RUNNER_TEMP'] + '/inventory.json') as f: data=json.load(f)
+          rows=[r for result in data for r in result.get('results',[]) if 'inventory' in r]
+          if len(rows)!=1: raise SystemExit('Expected one aggregate inventory row')
+          inventory=json.loads(rows[0]['inventory'])
+          print('D1_AGGREGATE_INVENTORY='+json.dumps(inventory,sort_keys=True))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## D1-only migration inventory\nNo Firebase reads or data writes.\n\n```json\n'+json.dumps(inventory,indent=2,sort_keys=True)+'\n```\n')
+          PY
