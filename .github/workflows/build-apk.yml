@@ -71,11 +71,25 @@ jobs:
           python3 scripts/ci/report_android_failure.py app/build/test-results gradle.log || true
           python3 - <<'PY'
           from pathlib import Path
+          for candidate in [
+              'app/build/outputs/mapping/release/missing_rules.txt',
+              'app/build/outputs/mapping/nonMinified/release/missing_rules.txt',
+          ]:
+              p = Path(candidate)
+              if p.exists():
+                  lines = [l.rstrip() for l in p.read_text(errors='replace').splitlines() if l.strip()]
+                  print(f'::notice::missing_rules.txt at {candidate} has {len(lines)} lines')
+                  for line in lines[:60]:
+                      print('::error title=R8 missing rule::' + line.replace('%', '%25').replace('\r', '%0D')[:500])
+                  break
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
           import re
           p = Path('gradle.log')
           if p.exists():
               hits = [l for l in p.read_text(errors='replace').splitlines()
-                      if re.search(r'\.(java|kt):[0-9]+:|Execution failed for task|Duplicate class|Missing classes', l)]
+                      if re.search(r'\.(java|kt):[0-9]+:|Execution failed for task|Duplicate class|Missing classes|missing rules', l, re.IGNORECASE)]
               if hits:
                   msg = '\n'.join(hits[:25]).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
                   print(f'::error title=Java/R8 compiler details::{msg}')
