@@ -673,3 +673,34 @@ test('trusted groups enforce role and membership changes on both document APIs',
   assert.equal((await call('alice',uri,'DELETE')).status,200);
   sql.close();
 });
+
+test('follow and unfollow change only the actor and target atomically', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'));
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  for (const uid of ['alice','bob','mallory']) assert.equal((await call(uid,`/v1/firestore/document?path=users/${uid}`,'PUT',{data:{uid,followers:[],following:[]}})).status,200);
+  const ops=(kind)=>[{op:'set',path:'users/bob',merge:true,data:{followers:{__fieldValue:kind,values:['alice']}}},{op:'set',path:'users/alice',merge:true,data:{following:{__fieldValue:kind,values:['bob']}}}];
+  assert.equal((await call('mallory','/v1/firestore/batch','POST',{operations:ops('arrayUnion')})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=users/bob','PATCH',{fields:{followers:['alice']}})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{following:['bob']}})).status,403);
+  assert.equal((await call('alice','/v1/docs/users/bob','PUT',{followers:['alice']})).status,403);
+  const forged=ops('arrayUnion');forged[0].data.followers.values=['mallory'];
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:forged})).status,403);
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayUnion')})).status,200);
+  const data=path=>JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(path).document_json);
+  assert.deepEqual(data('users/alice').following,['bob']);assert.deepEqual(data('users/bob').followers,['alice']);
+  assert.deepEqual((await (await call('mallory','/v1/firestore/document?path=users/bob')).json()).data.followers,['alice']);
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayUnion')})).status,200);
+  assert.deepEqual(data('users/bob').followers,['alice']);
+  const actualBatch=db.batch;
+  db.batch=async statements=>{sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.bio','changed') WHERE path=?").run('users/bob');return actualBatch(statements);};
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayRemove')})).status,409);
+  assert.deepEqual(data('users/alice').following,['bob']);
+  db.batch=actualBatch;
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayRemove')})).status,200);
+  assert.deepEqual(data('users/alice').following,[]);assert.deepEqual(data('users/bob').followers,[]);
+  assert.equal((await call('bob','/v1/firestore/document?path=users/bob','PATCH',{fields:{blocked:['alice']}})).status,200);
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops('arrayUnion')})).status,403);
+  sql.close();
+});

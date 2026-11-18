@@ -2,12 +2,12 @@
 const PUBLIC_FIELDS = new Set([
   'uid','id','displayName','photoUrl','coverUrl','bio','professionalMode',
   'isVerified','tickLevel','profileLocked','profilePicGuard','createdAt',
-  'pinnedPostId','friendsCount'
+  'pinnedPostId','friendsCount','followers','following'
 ]);
 const SERVER_FIELDS = new Set([
   'isAdmin','isModerator','banned','deactivated','isVerified','tickLevel',
   'suspendedUntil','suspendedLifetime','stars','dailyStreak','lastBonusAt',
-  'verificationStatus','admin','role','friendsCount'
+  'verificationStatus','admin','role','friendsCount','followers','following'
 ]);
 export function profileReadView(path, uid, data) {
   const parts=path.split('/');
@@ -16,7 +16,7 @@ export function profileReadView(path, uid, data) {
   if (parts[0] !== 'users' || parts.length !== 2 || !data || data.deactivated === true || data.banned === true) return null;
   const result={};
   for (const [k,v] of Object.entries(data)) {
-    if (PUBLIC_FIELDS.has(k) && !(data.profileLocked === true && ['bio','coverUrl','pinnedPostId'].includes(k))) result[k]=v;
+    if (PUBLIC_FIELDS.has(k) && !(data.profileLocked === true && ['bio','coverUrl','pinnedPostId','followers','following'].includes(k))) result[k]=v;
   }
   return result;
 }
@@ -30,7 +30,7 @@ export function profileWriteAllowed(path, uid, before, after) {
     const old=before?.[key], value=after[key];
     if (before) {
       if (JSON.stringify(old) !== JSON.stringify(value)) return false;
-    } else if (value !== undefined && value !== null && value !== false && value !== 0 && value !== '' && !(key === 'tickLevel' && value === 'none')) return false;
+    } else if (value !== undefined && value !== null && value !== false && value !== 0 && value !== '' && !(key === 'tickLevel' && value === 'none') && !(['followers','following'].includes(key) && Array.isArray(value) && value.length === 0)) return false;
   }
   return true;
 }

@@ -815,6 +815,54 @@ async function writeGroupPost(db,uid,path,beforeRow,after,now) {
   return after ? json({exists:true,id,path,parent:coll,collection:coll,data:after,createTime:beforeRow?.create_time||now,updateTime:now},beforeRow?200:201) : json({deleted:true,path});
 }
 
+// A follow is a two-profile transition, authorized only for the actor and
+// committed conditionally against both current profiles.
+async function followBatch(db,uid,ops,now) {
+  const forbidden=()=>json({error:'Forbidden'},403);
+  if (ops.length!==2 || typeof db.batch!=='function') return forbidden();
+  const own=ops.find(o=>o.path===`users/${uid}`), targetOp=ops.find(o=>o!==own);
+  if (!own || !targetOp || !isDocumentPath(targetOp.path) || splitPath(targetOp.path).length!==2 || splitPath(targetOp.path)[0]!=='users') return forbidden();
+  const peer=splitPath(targetOp.path)[1];
+  if (!validSegment(peer) || peer.length>128 || peer===uid) return forbidden();
+  for (const o of ops) if ((o.op||o.type)!=='set' || o.merge!==true || o.mergeFields || !o.data || Object.keys(o.data).length!==1) return forbidden();
+  const a=own.data.following, b=targetOp.data.followers;
+  if (!a || !b || !['arrayUnion','arrayRemove'].includes(a.__fieldValue) || b.__fieldValue!==a.__fieldValue
+      || Object.keys(a).some(k=>!['__fieldValue','values'].includes(k)) || Object.keys(b).some(k=>!['__fieldValue','values'].includes(k))
+      || !Array.isArray(a.values) || a.values.length!==1 || a.values[0]!==peer
+      || !Array.isArray(b.values) || b.values.length!==1 || b.values[0]!==uid) return forbidden();
+  const rows=await Promise.all([readRow(db,own.path),readRow(db,targetOp.path)]);
+  if (rows.some(r=>!r)) return forbidden();
+  const docs=rows.map(row=>decodeValue(JSON.parse(row.document_json)));
+  const follow=a.__fieldValue==='arrayUnion';
+  if (follow) for (let i=0;i<2;i++) {
+    const doc=docs[i], other=i===0?peer:uid;
+    if (doc.banned===true || doc.deactivated===true) return forbidden();
+    for(const k of ['blocked','blockedUsers']) if ((doc[k]!==undefined && !Array.isArray(doc[k])) || doc[k]?.includes(other)) return forbidden();
+  }
+  for (const [i,key] of [[0,'following'],[1,'followers']]) {
+    const list=docs[i][key];
+    if (list!==undefined && (!Array.isArray(list) || list.some(v=>!validSegment(v)) || new Set(list).size!==list.length)) return forbidden();
+    const value=i===0?peer:uid, next=(list||[]).filter(v=>v!==value);
+    if (follow) next.push(value);
+    docs[i]={...docs[i],[key]:next};
+  }
+  const stmts=[];
+  for (const row of rows) {
+    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
+    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
+    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Follow state changed'},409);
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+  }
+  for(let i=0;i<2;i++) {
+    const row=rows[i], id=docIdOf(row.path), doc=docs[i], owner=row.owner_uid||id;
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(row.path,'users','users',id,owner,JSON.stringify(doc),row.create_time||now,now));
+    stmts.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(row.path,'users',id,owner,JSON.stringify({...doc,id}),now));
+  }
+  stmts.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  await db.batch(stmts);
+  return json({ok:true,operations:2});
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -1048,6 +1096,11 @@ export async function firestoreDocuments(request, env, identity) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const ops = Array.isArray(body?.operations) ? body.operations : [];
     if (ops.length === 0 || ops.length > 500) return json({ error: 'Invalid operations' }, 400);
+    if (ops.some(op=>splitPath(op?.path)?.[0]==='users' && ['followers','following'].some(k=>Object.prototype.hasOwnProperty.call(op.data||op.fields||op.updates||{},k)))) {
+      try { return await followBatch(db,uid,ops,now); }
+      catch { return json({error:'Follow state changed or unavailable'},409); }
+    }
+
     if (ops.some(op=>splitPath(op?.path)?.[0]==='payments')) {
       const payments=ops.filter(op=>splitPath(op?.path)?.[0]==='payments');
       if (ops.length!==2 || payments.length!==1 || (payments[0].op||payments[0].type)!=='update') return json({error:'Forbidden'},403);
