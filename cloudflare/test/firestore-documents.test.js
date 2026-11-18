@@ -57,6 +57,25 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   assert.match(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json,/D1 proof/);
 });
 
+test('Firestore document reads fall back to existing D1 app documents for root profiles and posts', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema);
+  sql.exec(appSchema);
+  sql.exec(schema);
+  sql.prepare(`INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)`)
+    .run('users/new_uid','users','new_uid','new_uid',JSON.stringify({uid:'new_uid',displayName:'New account'}),1234);
+  const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
+    return { run: async () => stmt.run(...args), all: async () => ({results: stmt.all(...args)}), first: async () => stmt.get(...args) || null };
+  } }; } };
+  const app = createWorker(async () => 'new_uid');
+  const profile = await app.fetch(new Request('https://example.test/v1/firestore/document?path=users/new_uid', {
+    headers: {authorization:'Bearer test-token'},
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(profile.status,200);
+  assert.equal((await profile.json()).data.displayName,'New account');
+  sql.close();
+});
+
 test('additive mirror migration copies existing root app documents and preserves newer feed rows', () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(resourcesSchema);
@@ -77,6 +96,33 @@ test('additive mirror migration copies existing root app documents and preserves
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('posts/p1').document_json).content,'Post');
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE path LIKE ?').get('posts/p1/comments/%').n,0);
   assert.equal(sql.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource=?').get('posts/p1').state,'verified');
+  sql.close();
+});
+
+test('cleanup migration removes only synthetic D1 proof profiles', () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema);
+  sql.exec(appSchema);
+  sql.exec(schema);
+  sql.exec('CREATE TABLE friendbook_cf_profiles (uid TEXT PRIMARY KEY, display_name TEXT, cloudinary_avatar_url TEXT)');
+  const cleanup = readFileSync(new URL('../migrations/0018_remove_d1_proof_profiles.sql', import.meta.url), 'utf8');
+  const proof = JSON.stringify({displayName:'Cloudflare D1 migration proof',proofMarker:'d1-only'});
+  const real = JSON.stringify({displayName:'Real user',proofMarker:'normal'});
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/proof','users','proof','proof',proof,1);
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/real','users','real','real',real,1);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
+    .run('users/proof','users','users','proof','proof',proof,1,1);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
+    .run('users/real','users','users','real','real',real,1,1);
+  sql.prepare('INSERT INTO friendbook_cf_profiles VALUES (?,?,?)').run('proof','Cloudflare D1 migration proof','');
+  sql.prepare('INSERT INTO friendbook_cf_profiles VALUES (?,?,?)').run('real','Real user','');
+  sql.exec(cleanup);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE doc_id=?').get('proof').n,0);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE doc_id=?').get('proof').n,0);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_profiles WHERE uid=?').get('proof').n,0);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE doc_id=?').get('real').n,1);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE doc_id=?').get('real').n,1);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_profiles WHERE uid=?').get('real').n,1);
   sql.close();
 });
 

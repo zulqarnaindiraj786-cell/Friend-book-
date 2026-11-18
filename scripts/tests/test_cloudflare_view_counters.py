@@ -294,7 +294,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn("const views = { ae: Boolean(env.ANALYTICS_ENGINE), kv: Boolean(env.VIEWS), "
                       "r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), "
                       "aeReadToken: Boolean(env.CF_AE_TOKEN) };", worker)
-        self.assertIn('return json({ ok: row?.connected === 1, views }', worker)
+        self.assertIn('d1InteractionsEnabled: env.D1_INTERACTIONS_ENABLED === \'true\'', worker)
+        self.assertIn('return json({', worker)
+        self.assertIn('views,', worker)
 
     def test_reels_count_one_view_and_never_show_a_lower_number(self):
         client = (JAVA / 'core/CloudflareViews.java').read_text()

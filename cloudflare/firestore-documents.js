@@ -230,11 +230,52 @@ function ownerOf(doc, fallback) {
 }
 
 // ---------- D1 helpers ----------
+function appDocumentToFirestoreRow(row) {
+  if (!row) return null;
+  let doc;
+  try { doc = JSON.parse(row.document_json); } catch { return null; }
+  // Historical app-document rows can contain Firestore REST value envelopes. Normalize those
+  // into the same plain JSON shape used by current D1DocumentStore writes.
+  const decodeStored = value => {
+    if (value === null || value === undefined) return null;
+    if (Array.isArray(value)) return value.map(decodeStored);
+    if (typeof value !== 'object') return value;
+    if ('stringValue' in value) return String(value.stringValue);
+    if ('booleanValue' in value) return Boolean(value.booleanValue);
+    if ('integerValue' in value) return Number(value.integerValue);
+    if ('doubleValue' in value) return Number(value.doubleValue);
+    if ('timestampValue' in value) return { __type: 'timestamp', millis: Date.parse(value.timestampValue) || 0 };
+    if ('nullValue' in value) return null;
+    if ('arrayValue' in value) return (value.arrayValue?.values || []).map(decodeStored);
+    if ('mapValue' in value) return decodeFields(value.mapValue?.fields || {});
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeStored(item)]));
+  };
+  const decodeFields = fields => Object.fromEntries(Object.entries(fields || {}).map(([key, value]) => [key, decodeStored(value)]));
+  if (doc?.fields && typeof doc.fields === 'object' && !Array.isArray(doc.fields)) doc = decodeFields(doc.fields);
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  const parts = String(row.path || '').split('/');
+  if (parts.length !== 2) return null;
+  delete doc.id; // Firestore document identity is its path/ID, not an extra payload field.
+  return {
+    path: row.path, parent_path: parts[0], collection_id: row.collection,
+    doc_id: row.doc_id, owner_uid: row.owner_uid || '', document_json: JSON.stringify(doc),
+    create_time: Number(doc.createdAt) || 0, update_time: Number(row.updated_at) || 0,
+  };
+}
+
 async function readRow(db, path) {
   const row = await db.prepare(
     'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?'
   ).bind(path).first();
-  return row || null;
+  if (row) return row;
+  // Read-through compatibility for root records written by the app-document API or CloudflareStore.
+  // Both stores are D1, but older app versions wrote only friendbook_cf_documents. Without this,
+  // ProfileActivity and PostDetailActivity report "User/Post not found" despite a valid D1 record.
+  if (!isRootDocument(path)) return null;
+  const appRow = await db.prepare(
+    'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
+  ).bind(path).first();
+  return appDocumentToFirestoreRow(appRow);
 }
 async function writeRow(db, path, doc, now, existing) {
   const parent = parentPath(path);

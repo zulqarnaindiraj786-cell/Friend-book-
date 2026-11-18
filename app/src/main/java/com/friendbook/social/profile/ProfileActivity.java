@@ -85,6 +85,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private boolean mine;
     private boolean viewAsPublic = false;
     private Models.User user;
+    private String attemptedProfileRepairUid = "";
     private String friendState = "none"; // none|friends|outgoing|incoming
     private String incomingRequestId = null;
     private boolean hasOut, hasIn;
@@ -815,13 +816,65 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (idx == 4) renderAbout();
     }
 
+    private boolean showAndRepairOwnProfile() {
+        com.google.firebase.auth.FirebaseUser authUser = Fb.auth().getCurrentUser();
+        if (!mine || authUser == null || !uid.equals(authUser.getUid())) return false;
+        Models.User fallback = new Models.User();
+        fallback.uid = uid;
+        fallback.email = authUser.getEmail() == null ? "" : authUser.getEmail();
+        String authName = authUser.getDisplayName();
+        fallback.displayName = authName == null || authName.trim().isEmpty()
+                ? (!fallback.email.isEmpty() && fallback.email.contains("@") ? fallback.email.substring(0, fallback.email.indexOf('@')) : "friendbook User")
+                : authName.trim();
+        fallback.photoUrl = authUser.getPhotoUrl() == null ? "" : authUser.getPhotoUrl().toString();
+        fallback.bio = "";
+        fallback.coverUrl = "";
+        fallback.createdAt = System.currentTimeMillis();
+        user = fallback;
+        FastCache.putUser(fallback);
+        FastCache.saveMe(this, fallback);
+        bindUser();
+
+        if (!uid.equals(attemptedProfileRepairUid)) {
+            attemptedProfileRepairUid = uid;
+            Map<String,Object> profile = new HashMap<>();
+            profile.put("displayName", fallback.displayName);
+            profile.put("email", fallback.email);
+            profile.put("photoUrl", fallback.photoUrl);
+            profile.put("bio", "");
+            profile.put("coverUrl", "");
+            profile.put("authProvider", authUser.getProviderId());
+            profile.put("emailPrivacy", "Only me");
+            profile.put("contactPrivacy", "Only me");
+            profile.put("contactInfoPrivacy", "Only me");
+            profile.put("friendsListPrivacy", "Public");
+            profile.put("lookupPrivacy", "Everyone");
+            profile.put("isOnline", true);
+            profile.put("friendsCount", 0);
+            profile.put("followers", new ArrayList<String>());
+            profile.put("following", new ArrayList<String>());
+            profile.put("blockedUsers", new ArrayList<String>());
+            profile.put("createdAt", FieldValue.serverTimestamp());
+            Fb.db().collection("users").document(uid).set(profile, SetOptions.merge())
+                    .addOnFailureListener(error -> {
+                        if (uid.equals(Fb.uid())) Ui.toast(this, "Profile sync failed. Check internet and reopen Profile.");
+                    });
+        }
+        return true;
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
         userReg = Fb.db().collection("users").document(uid)
                 .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) {
+                    if (d == null) {
+                        nameT.setText(err == null ? "Loading profile…" : "Profile unavailable — pull to retry");
+                        return;
+                    }
+                    if (!d.exists()) {
+                        if (showAndRepairOwnProfile()) return;
                         nameT.setText("User not found");
                         return;
                     }

@@ -81,7 +81,9 @@ public final class D1Reactions {
    String query="?"+(commentId==null?"":"commentId="+android.net.Uri.encode(commentId)+"&")+(after[0]==null?"":"after="+android.net.Uri.encode(after[0]));
    D1Client.request(collection,id,"reactors","GET",null,query).addOnSuccessListener(data->{if(!dialog.isShowing()||!Objects.equals(uid,Fb.uid()))return;busy[0]=false;
     JSONArray list=data.optJSONArray("reactors");if(list!=null)for(int i=0;i<list.length();i++){JSONObject r=list.optJSONObject(i);if(r==null||!seen.add(r.optString("uid")))continue;
-     Reactions.ReactorEntry entry=new Reactions.ReactorEntry();entry.uid=r.optString("uid");entry.type=r.optString("type");entry.createdAt=r.optLong("createdAt");entries.add(entry);
+     Reactions.ReactorEntry entry=new Reactions.ReactorEntry();entry.uid=r.optString("uid");entry.type=r.optString("type");entry.createdAt=r.optLong("createdAt");
+     if(entry.uid.equals(uid)){entry.name=Fb.myName();entry.photo=Fb.myPhoto();entry.tickLevel=Fb.me!=null?Fb.me.tickLevel:"none";}
+     entries.add(entry);
     }Map<String,Integer> counts=new LinkedHashMap<>();for(String type:Reactions.TYPES)counts.put(type,0);for(Reactions.ReactorEntry entry:entries)counts.put(entry.type,counts.getOrDefault(entry.type,0)+1);
     Reactions.renderReactorView(activity,dialog,filter,rows,entries,counts,"all");historicalNotice(activity,history,filter,rows,Math.max(0,data.optInt("historicalUnattributed")),!entries.isEmpty());after[0]=data.isNull("next")?null:data.optString("next",null);done[0]=after[0]==null;more.setText(done[0]?"All loaded":"Load 30 more reactions");
    }).addOnFailureListener(e->{busy[0]=false;if(dialog.isShowing()&&Objects.equals(uid,Fb.uid()))more.setText("Retry reactions");});

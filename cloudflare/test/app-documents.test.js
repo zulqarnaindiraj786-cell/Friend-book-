@@ -89,6 +89,13 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     env,
   );
   assert.equal(userPutRes.status, 200);
+  const mirroredProfile = await w.fetch(
+    new Request('https://example.com/v1/firestore/document?path=users/uid_new', {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env,
+  );
+  assert.equal(mirroredProfile.status, 200);
+  assert.equal((await mirroredProfile.json()).data.displayName, 'Updated User');
 
   const putRes = await w.fetch(
     new Request('https://example.com/v1/docs/posts/new_cf_post_1', {
