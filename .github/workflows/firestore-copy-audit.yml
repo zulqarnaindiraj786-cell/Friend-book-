@@ -6,8 +6,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  issues: write
-  pull-requests: read
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -32,19 +30,7 @@ jobs:
           rows=[r for result in data for r in result.get('results',[]) if 'inventory' in r]
           if len(rows)!=1: raise SystemExit('Expected one aggregate inventory row')
           inventory=json.loads(rows[0]['inventory'])
-          print('D1_AGGREGATE_INVENTORY='+json.dumps(inventory,sort_keys=True))
+          print('::notice::D1_AGGREGATE_INVENTORY='+json.dumps(inventory,sort_keys=True))
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
               f.write('## D1-only migration inventory\nNo Firebase reads or data writes.\n\n```json\n'+json.dumps(inventory,indent=2,sort_keys=True)+'\n```\n')
           PY
-      - name: Publish aggregate inventory to open PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs=require('fs');
-            const data=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/inventory.json','utf8'));
-            const rows=data.flatMap(x=>x.results||[]).filter(x=>x.inventory);
-            if(rows.length!==1) throw new Error('Unexpected aggregate response');
-            const inventory=JSON.parse(rows[0].inventory);
-            const prs=await github.rest.pulls.list({owner:context.repo.owner,repo:context.repo.repo,state:'open',head:context.repo.owner+':'+context.ref.replace('refs/heads/','')});
-            if(!prs.data.length) throw new Error('No open PR for inventory report');
-            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:prs.data[0].number,body:'D1-only aggregate migration inventory (zero Firebase reads, zero data writes), run '+context.runId+':\n\n```json\n'+JSON.stringify(inventory,null,2)+'\n```'});
