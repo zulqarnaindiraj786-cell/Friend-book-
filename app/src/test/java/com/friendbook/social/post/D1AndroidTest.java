@@ -32,6 +32,12 @@ public class D1AndroidTest {
   assertEquals(9,D1Reactions.total(data));assertEquals("love",D1Reactions.mine(data));
   assertNull(D1Reactions.mine(D1Client.object("types",new JSONArray())));
  }
+ @Test public void feedParsesCloudflareTimestampMaps(){
+  Map<String,Object> timestamp=new HashMap<>();timestamp.put("__type","timestamp");timestamp.put("millis",1700000000123L);
+  Map<String,Object> post=new HashMap<>();post.put("createdAt",timestamp);
+  assertEquals(1700000000123L,Models.Post.fromMap("p1",post).createdAt);
+  timestamp.put("__type","reference");assertEquals(0L,Models.Post.fromMap("p1",post).createdAt);
+ }
  @Test public void removingLifecycleObserverStopsLaterCallbacks(){
   int[] events={0};Runnable close=D1Client.observe("posts/p1",()->events[0]++);
   D1Client.changed("posts/p1");assertEquals(1,events[0]);close.run();D1Client.changed("posts/p1");assertEquals(1,events[0]);

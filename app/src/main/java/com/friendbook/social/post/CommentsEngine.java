@@ -232,6 +232,11 @@ public class CommentsEngine {
         if(d1(collection)){
             org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
             if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
+            // Keep the optimistic comment in each active handle as well as the screen.
+            // An in-flight page response must not erase it before the POST resolves.
+            for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && docId.equals(h.docId)){
+                h.deleted.remove(local.id);h.latest.put(local.id,local);
+            }
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
                 if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);
             }).addOnFailureListener(e->{if(!java.util.Objects.equals(me,Fb.uid()))return;

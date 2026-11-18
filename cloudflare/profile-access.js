@@ -11,6 +11,10 @@ const SERVER_FIELDS = new Set([
 ]);
 export function profileReadView(path, uid, data) {
   const parts=path.split('/');
+  if (parts[0] === 'stories' && data && data.authorId !== uid) {
+    const {viewedBy, reactions, ...publicStory}=data;
+    return publicStory;
+  }
   if (parts[0] !== 'users' && parts[0] !== 'pushDevices') return data;
   if (parts[1] === uid) return data;
   if (parts[0] !== 'users' || parts.length !== 2 || !data || data.deactivated === true || data.banned === true) return null;

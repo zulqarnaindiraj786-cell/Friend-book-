@@ -401,7 +401,7 @@ test('post privacy and unreviewed collections fail closed on all document routes
   assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'posts'})).json()).documents,[]);
   assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'payments'})).json()).documents,[]);
   assert.equal((await call('bob','/v1/firestore/document?path=sessions/alice','PUT',{data:{uid:'bob'}})).status,403);
-  for (const collection of ['sessions','stories']) {
+  for (const collection of ['sessions']) {
     assert.equal((await call('bob',`/v1/firestore/document?path=${collection}/item`)).status,403);
     assert.equal((await call('bob',`/v1/firestore/document?parent=${collection}`,'POST',{data:{uid:'bob'}})).status,403);
     assert.equal((await call('bob','/v1/firestore/query','POST',{parent:collection})).status,403);
@@ -931,5 +931,30 @@ test('query cursor bounds work for prefixes, ties and deleted page anchors', asy
   sql.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').run('users/u3');
   assert.deepEqual(await query({startAfter:['Bob','u3']}),['u6','u4','u5']);
   assert.deepEqual(await query({startAt:['ZZZ']}),[]);
+  sql.close();
+});
+
+
+test('stories load with owner and privacy checks without exposing viewers', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for(const uid of ['alice','bob'])add.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const story={authorId:'alice',privacy:'Public',caption:'hello',viewedBy:['bob'],reactions:{bob:'heart'},expiresAt:{__type:'timestamp',millis:2000000000000}};
+  assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','PUT',{data:story})).status,200);
+  assert.equal((await call('bob','/v1/firestore/document?path=stories/s1','PATCH',{fields:{caption:'forged'}})).status,403);
+  assert.equal((await call('bob','/v1/docs/stories/s1','PUT',{caption:'forged'})).status,403);
+  const read=await call('bob','/v1/firestore/document?path=stories/s1');assert.equal(read.status,200);
+  const data=(await read.json()).data;assert.equal(data.caption,'hello');assert.equal(data.viewedBy,undefined);assert.equal(data.reactions,undefined);
+  const query=await call('bob','/v1/firestore/query','POST',{parent:'stories',filters:[{field:'expiresAt',op:'>',value:{__type:'timestamp',millis:1}}]});
+  assert.equal(query.status,200);assert.equal((await query.json()).documents.length,1);
+  const listing=await call('bob','/v1/docs?collection=stories');assert.equal((await listing.json()).documents[0].viewedBy,undefined);
+  assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','PATCH',{fields:{privacy:'Only me'}})).status,200);
+  assert.equal((await call('bob','/v1/firestore/document?path=stories/s1')).status,403);
+  assert.equal((await (await call('bob','/v1/firestore/query','POST',{parent:'stories'})).json()).documents.length,0);
+  assert.equal((await (await call('bob','/v1/docs?collection=stories')).json()).documents.length,0);
+  assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','DELETE')).status,200);
   sql.close();
 });

@@ -277,8 +277,6 @@ public class AddStoryActivity extends Activity {
             m.put("viewedBy", new ArrayList<String>());
             m.put("createdAt", FieldValue.serverTimestamp());
             m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-            String storyId = "story_" + System.currentTimeMillis();
-            com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
             Fb.db().collection("stories").add(m)
                     .addOnSuccessListener(x -> { Ui.toast(this, "Text story shared 📖"); finish(); })
                     .addOnFailureListener(e -> fail());
@@ -321,8 +319,6 @@ public class AddStoryActivity extends Activity {
                                 m.put("viewedBy", new ArrayList<String>());
                                 m.put("createdAt", FieldValue.serverTimestamp());
                                 m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                                String storyId = "story_" + System.currentTimeMillis();
-                                com.friendbook.social.core.CloudflareStore.put("stories", storyId, m);
                                 Fb.db().collection("stories").add(m)
                                         .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
                                         .addOnFailureListener(e -> fail());

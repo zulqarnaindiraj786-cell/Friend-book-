@@ -157,7 +157,7 @@ export async function appDocuments(request, env, identity) {
           if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
         }
       }
-      if (collection === 'posts' || collection === 'reels') {
+      if (collection === 'posts' || collection === 'reels' || collection === 'stories') {
         const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id)));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
@@ -206,7 +206,7 @@ export async function appDocuments(request, env, identity) {
   if (request.method === 'PUT') {
     // Chat root writes use the transactional Firestore-compatible route; this
     // older merge API cannot provide the necessary concurrent-creation guard.
-    if (['friend_requests','friends','payments','groups','chats','messages'].includes(collection)) return json({error:'Forbidden'},403);
+    if (['friend_requests','friends','payments','groups','chats','messages','stories'].includes(collection)) return json({error:'Forbidden'},403);
     let incoming;
     try { incoming = await request.json(); }
     catch { return json({ error: 'Invalid JSON payload' }, 400); }
