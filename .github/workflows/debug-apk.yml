@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: friendbook-d1-debug-apk
@@ -97,3 +97,25 @@ jobs:
           path: build/debug-release-info/google-signin-sha1.txt
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish a public direct APK download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="friendbook-debug-${GITHUB_SHA:0:8}"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "FriendBook direct APK (debug build)" \
+              --notes "Package: com.friendbook.social. Debug/test-signed APK; not a Play Store production-signed release." \
+              --prerelease
+          fi
+          ASSET_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/app-debug.apk"
+          echo "Direct APK download: $ASSET_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Direct APK download::$ASSET_URL"
