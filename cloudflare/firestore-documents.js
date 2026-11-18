@@ -303,7 +303,7 @@ async function boundedChatRows(db,parent,spec) {
     const value=c[0], rank=typeof value==='number'?2:value?.__type==='timestamp'?4:0;
     const time=rank===2?value:value?.millis;
     if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
-    cursor=[rank,time,c[1]];
+    cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
   }
   const prefix=`${parts[1]}_`, upper=`${parts[1]}\``;
   const legacy=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<?
@@ -315,7 +315,7 @@ async function boundedChatRows(db,parent,spec) {
     doc_id GLOB '*[^ -~]*' OR COALESCE((
       (json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
       OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
-        AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)
+        AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)
     ),0)=0) LIMIT 1`).bind(parent).first();
   if (bad) return null;
   const descending=orders[0].direction==='DESCENDING';
@@ -646,14 +646,13 @@ function prefilterRaw(docs,parent,filters) {
   if (!['posts','reels','chats','messages','notifications','friend_requests'].includes(root) || !Array.isArray(filters)) return docs;
   return docs.filter(d=>filters.every(f=>matchesFilter(d.data,f,d.id)));
 }
-async function visibleDocuments(db,uid,parent,docs) {
+async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map()) {
   const parts=splitPath(parent), nestedChat=parts?.length===3 && parts[0]==='chats' && parts[2]==='messages';
   // All comments/reactions in a nested collection share the same parent post.
   // Authorize that parent once per request, not once per child row.
   if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
     return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`) ? docs : [];
   }
-  const requestUserReads = new Map();
   const allowed=new Array(docs.length).fill(false);
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
@@ -664,6 +663,62 @@ async function visibleDocuments(db,uid,parent,docs) {
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
+}
+
+// Feed fast path: fetch small indexed batches from each store, then authorize each
+// candidate before filling the visible page. Never LIMIT before privacy filtering.
+// Anything not provably equivalent falls back to the compatibility query engine.
+async function boundedFeedPage(db,uid,spec) {
+  if (spec?.parent!=='posts' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
+      || (Array.isArray(spec.filters) && spec.filters.length) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
+  let cursor=null;
+  if (spec.startAfter) {
+    const c=spec.startAfter;
+    if (!Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
+    const rank=typeof c[0]==='number'?2:c[0]?.__type==='timestamp'?4:0;
+    const time=rank===2?c[0]:c[0]?.millis;
+    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
+    cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
+  }
+  const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
+    OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
+  const canonicalBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='posts'
+    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard}) LIMIT 1`).bind().first();
+  const legacyBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='posts'
+    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard}) LIMIT 1`).bind().first();
+  if (canonicalBad || legacyBad) return null;
+  const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
+  const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
+  const chunk=Math.min(100,Math.max(20,spec.limit*2));
+  const visible=[], requestUserReads=new Map();
+  for (;;) {
+    const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
+    const args=[...(cursor||[]),chunk];
+    const [canonical,legacy]=await Promise.all([
+      db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${bound}
+        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+        FROM friendbook_cf_documents a WHERE a.collection='posts'${bound}
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+    ]);
+    const rows=[...(canonical?.results || []),...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    const docs=sortDocuments(rows.map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    if (!docs.length) break;
+    // The same checks used by the normal document query; privacy is never inferred
+    // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
+    const allowed=await visibleDocuments(db,uid,'posts',docs,requestUserReads);
+    visible.push(...allowed);
+    if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
+    const last=docs[docs.length-1], value=last.data.createdAt;
+    cursor=[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id];
+    if (docs.length<chunk) break;
+  }
+  return visible;
 }
 
 // ---------- operations ----------
@@ -1450,7 +1505,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let rows;
-    try { rows = await readCollectionRows(db, parent, uid, body?.filters, body); }
+    try {
+      const page=await boundedFeedPage(db,uid,body);
+      if (page!==null) return json({parent,documents:page});
+      rows = await readCollectionRows(db, parent, uid, body?.filters, body);
+    }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
