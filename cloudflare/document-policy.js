@@ -16,10 +16,10 @@ export function supportedCollectionPath(path) {
   if (['posts','reels'].includes(p[0])) return p.length===1 || (p.length===3 && ['comments','reactions'].includes(p[2]));
   return true;
 }
-export async function contentReadAllowed(db, uid, path) {
+export async function contentReadAllowed(db, uid, path, requestUserReads) {
   const p=path.split('/');
   if (!['posts','reels','stories'].includes(p[0])) return true;
-  return authorizePost({uid,db},p[0],p[1]);
+  return authorizePost({uid,db},p[0],p[1],undefined,undefined,requestUserReads);
 }
 export function contentWriteAllowed(path, uid, before, after) {
   const p=path.split('/');

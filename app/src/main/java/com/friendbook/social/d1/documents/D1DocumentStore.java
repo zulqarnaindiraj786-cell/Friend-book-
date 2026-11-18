@@ -59,7 +59,7 @@ public class D1DocumentStore {
         final Query query;
         final EventListener<QuerySnapshot> listener;
         volatile boolean active = true;
-        volatile String lastFingerprint = "";
+        final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         QueryListenerEntry(Query query, EventListener<QuerySnapshot> listener) {
@@ -182,7 +182,7 @@ public class D1DocumentStore {
         if (cachedJson != null) {
             try {
                 org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
-                entry.lastFingerprint = cached.toString();
+                entry.deliveryState.cached(cached.toString());
                 QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
                 mainHandler.post(() -> { if (entry.active) listener.onEvent(snapshot, null); });
             } catch (Exception ignored) { }
@@ -272,13 +272,15 @@ public class D1DocumentStore {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
             String fp = arr.toString();
             cacheQuery(queryCacheKey(entry.query), fp);
-            if (fp.equals(entry.lastFingerprint)) return;
-            entry.lastFingerprint = fp;
+            // Cached rows are not server confirmation: the first server result
+            // must be delivered even when its contents match the cached snapshot.
+            if (!entry.deliveryState.server(fp)) return;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
             mainHandler.post(() -> {
                 if (entry.active) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
+            entry.deliveryState.error();
             D1DocumentStoreException ffe = ex instanceof D1DocumentStoreException
                     ? (D1DocumentStoreException) ex
                     : new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, ex.getMessage(), ex);

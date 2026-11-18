@@ -3,9 +3,17 @@ import { trustedGroupOwner } from './social-access.js';
 
 // D1-only authorization. Firebase is used to verify the caller's Auth token in
 // worker.js; no source-data request is made to Firestore from this module.
-export async function authorizePost({ uid, db }, collection, id, _unused, context) {
+export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads) {
   if (!db || typeof uid !== 'string' || !uid) return false;
-  const fields = async path => await readD1DocumentFields(db, path) || {};
+  // Coalesce repeated user-profile checks only within this one query request.
+  // Never share authorization state across requests or Worker isolates.
+  const fields = async path => {
+    if (requestUserReads && path.startsWith('users/')) {
+      if (!requestUserReads.has(path)) requestUserReads.set(path, readD1DocumentFields(db, path));
+      return await requestUserReads.get(path) || {};
+    }
+    return await readD1DocumentFields(db, path) || {};
+  };
   const string = (f, key) => typeof f[key]?.stringValue === 'string' ? f[key].stringValue : '';
   const list = (f, key) => [...(f[key]?.arrayValue?.values || []), ...(key === 'blocked' ? (f.blockedUsers?.arrayValue?.values || []) : [])]
     .map(v => v.stringValue).filter(v => typeof v === 'string');

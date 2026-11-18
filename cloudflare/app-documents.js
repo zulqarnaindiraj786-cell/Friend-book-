@@ -158,7 +158,8 @@ export async function appDocuments(request, env, identity) {
         }
       }
       if (collection === 'posts' || collection === 'reels' || collection === 'stories') {
-        const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id)));
+        const userReads = new Map(); // scoped to this response; never cache privacy across requests
+        const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id, undefined, undefined, userReads)));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
       return json({ collection, documents });

@@ -589,13 +589,14 @@ async function visibleDocuments(db,uid,parent,docs) {
   if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
     return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`) ? docs : [];
   }
+  const requestUserReads = new Map();
   const allowed=new Array(docs.length).fill(false);
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
     for (;;) {
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
-      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path);
+      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path,requestUserReads);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
