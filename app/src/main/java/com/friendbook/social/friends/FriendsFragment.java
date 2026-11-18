@@ -153,7 +153,9 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
         boolean pullRefresh=swipe!=null && swipe.isRefreshing();
         if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
-        if(!pullRefresh && loadedSections.contains(section)){
+        // Requests, sent state and friendships change on other devices. Revalidate on
+        // every visit (including failure recovery) rather than pinning stale tab data.
+        if(!pullRefresh && section==SEC_SUGGESTIONS && loadedSections.contains(section)){
             pageLoading=false;suggestionLoading=false;render();return;
         }
         closePage();

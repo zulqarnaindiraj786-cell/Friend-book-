@@ -58,6 +58,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private String messageActor;
     private final Set<String> receiptInFlight=new HashSet<>(),receiptFailed=new HashSet<>();
     private final Map<String,Models.Message> historyMessages=new HashMap<>();
+    private final PendingMessages pendingMessages = new PendingMessages();
 
     private String peerId, peerName = "", peerPhoto = "", chatId;
     private boolean isGroupChat = false;
@@ -561,7 +562,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
         if(!java.util.Objects.equals(messageActor,Fb.uid())){
-            messageSnapshots.clear();historyMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;messageActor=Fb.uid();
+            messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;messageActor=Fb.uid();
         }
         historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
         final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
@@ -630,6 +631,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     if (incomingSound) com.friendbook.social.core.SoundManager.playNewMessage(this);
                     Map<String,Models.Message> combined=new HashMap<>(historyMessages);
                     for(Models.Message message:list) combined.put(message.id,message);
+                    pendingMessages.mergeInto(combined);
                     list=new ArrayList<>(combined.values()); list.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id));
                     list.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
                     adapter.setData(list);
@@ -662,7 +664,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     int top=anchor==null?0:anchor.getTop();
                     String anchorId=adapter.idAt(first);
                     for(DocumentSnapshot doc:page) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
-                    Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots);
+                    Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots); pendingMessages.mergeInto(combined);
                     Set<String> hidden=hiddenMsgs(); List<Models.Message> rows=new ArrayList<>(combined.values());
                     rows.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id)); rows.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
                     adapter.setData(rows);int restored=-1;
@@ -840,6 +842,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         optimistic.id = msgRef.getId(); optimistic.senderId = me; optimistic.receiverId = peerId;
         optimistic.type = "voice"; optimistic.voiceUrl = url; optimistic.voiceDurationSec = durSec;
         optimistic.createdAt = now; optimistic.text = "";
+        pendingMessages.add(optimistic);
         adapter.appendOptimistic(optimistic);
         rv.scrollToPosition(adapter.getItemCount() - 1);
         Map<String, Object> chatDoc = buildChatRoomDoc(me, "🎤 Voice note · " + Format.duration(durSec));
@@ -849,9 +852,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         })
                 .addOnFailureListener(e -> {
+                    if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
+                    pendingMessages.fail(msgRef.getId());
                     if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
                     Ui.toast(this, "Voice note not confirmed. Check the conversation before retrying.");
                 });
@@ -925,6 +930,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         opt.type = "sticker";
         opt.createdAt = now;
         forceScrollBottom = true;
+        pendingMessages.add(opt);
         adapter.appendOptimistic(opt);
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
@@ -948,9 +954,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit()
                 .addOnSuccessListener(x -> {
-                    com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                    if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
                 })
                 .addOnFailureListener(e -> {
+                    if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
+                    pendingMessages.fail(msgRef.getId());
                     if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
                     Ui.toast(this, "Sticker not confirmed. Check the conversation before retrying.");
                 });
@@ -1017,6 +1025,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
 
         forceScrollBottom = true;
+        pendingMessages.add(opt);
         adapter.appendOptimistic(opt);
         rv.scrollToPosition(adapter.getItemCount() - 1);
 
@@ -1028,9 +1037,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commit().addOnSuccessListener(x -> {
-            com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
         }).addOnFailureListener(e -> {
             if (!java.util.Objects.equals(me, Fb.uid()) || isFinishing()) return;
+            pendingMessages.fail(msgRef.getId());
             if (!messageSnapshots.containsKey(msgRef.getId())) adapter.removeOptimistic(msgRef.getId());
             if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);
             Ui.toast(this, "Message not confirmed. Check the conversation before retrying.");

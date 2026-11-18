@@ -202,6 +202,12 @@ public class D1DocumentStore {
         if (idx > 0) notifyCollectionListeners(path.substring(0, idx));
     }
 
+    /** FCM is only an invalidation hint; the authenticated D1 query stays authoritative. */
+    public void refreshChatFromPush(String chatId) {
+        if (chatId == null || !chatId.matches("[A-Za-z0-9_-]{1,128}")) return;
+        notifyCollectionListeners("chats/" + chatId + "/messages");
+    }
+
     void notifyCollectionListeners(String parentPath) {
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
