@@ -441,10 +441,25 @@ function sortDocuments(docs, orderBy) {
       const cmp = compareValues(av, bv);
       if (cmp !== 0) return o.direction === 'DESCENDING' ? -cmp : cmp;
     }
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    const tie = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    return tie && orders.length && orders[orders.length - 1].direction === 'DESCENDING' ? -tie : tie;
   });
 }
-function cursorIndex(sorted, cursor) {
+function cursorIndex(sorted, cursor, orderBy) {
+  if (Array.isArray(cursor)) {
+    const orders = Array.isArray(orderBy) && orderBy.length ? orderBy : [{field:'__name__',direction:'ASCENDING'}];
+    const values = cursor.map(decodeValue);
+    const hasIdTieBreaker = values.length === orders.length + 1;
+    const id = hasIdTieBreaker ? String(values.pop()) : null;
+    if (id) {
+      const index = sorted.findIndex(d => d.id === id);
+      if (index >= 0) return index;
+    }
+    return sorted.findIndex(doc => values.every((value,index) => {
+      const field = orders[index]?.field || '__name__';
+      return valuesEqual(field === '__name__' ? doc.id : getField(doc.data,field),value);
+    }));
+  }
   if (!cursor || typeof cursor !== 'object') return -1;
   const id = cursor.docId || cursor.id || (cursor.path ? docIdOf(cursor.path) : null);
   if (!id) return -1;
@@ -457,24 +472,25 @@ function applyQuery(docs, spec) {
   let start = 0;
   let end = sorted.length;
   if (spec?.startAfter) {
-    const idx = cursorIndex(sorted, spec.startAfter);
+    const idx = cursorIndex(sorted, spec.startAfter, spec.orderBy);
     if (idx >= 0) start = Math.max(start, idx + 1);
   }
   if (spec?.startAt) {
-    const idx = cursorIndex(sorted, spec.startAt);
+    const idx = cursorIndex(sorted, spec.startAt, spec.orderBy);
     if (idx >= 0) start = Math.max(start, idx);
   }
   if (spec?.endBefore) {
-    const idx = cursorIndex(sorted, spec.endBefore);
+    const idx = cursorIndex(sorted, spec.endBefore, spec.orderBy);
     if (idx >= 0) end = Math.min(end, idx);
   }
   if (spec?.endAt) {
-    const idx = cursorIndex(sorted, spec.endAt);
+    const idx = cursorIndex(sorted, spec.endAt, spec.orderBy);
     if (idx >= 0) end = Math.min(end, idx + 1);
   }
   let sliced = sorted.slice(start, end);
   const limit = Number.isFinite(spec?.limit) ? Math.trunc(spec.limit) : null;
-  const limitToLast = Number.isFinite(spec?.limitToLast) ? Math.trunc(spec.limitToLast) : null;
+  const limitToLast = spec?.limitToLast === true ? limit
+    : Number.isFinite(spec?.limitToLast) ? Math.trunc(spec.limitToLast) : null;
   if (limitToLast !== null && limitToLast > 0) {
     sliced = sliced.slice(-limitToLast);
   } else if (limit !== null && limit > 0) {

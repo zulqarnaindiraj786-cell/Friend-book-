@@ -113,11 +113,15 @@ public class Query {
     private Object[] extractCursor(DocumentSnapshot snapshot) {
         if (snapshot == null) return new Object[0];
         if (orders.isEmpty()) return new Object[]{snapshot.getId()};
-        Object[] vals = new Object[orders.size()];
+        boolean hasDocumentId = orders.stream().anyMatch(order -> "__name__".equals(order.field));
+        Object[] vals = new Object[orders.size() + (hasDocumentId ? 0 : 1)];
         for (int i = 0; i < orders.size(); i++) {
             String f = orders.get(i).field;
             vals[i] = "__name__".equals(f) ? snapshot.getId() : snapshot.get(f);
         }
+        // Firestore implicitly adds document ID as the final stable tie-breaker. Carry it in
+        // cursors so equal timestamps paginate without repeats or skipped rows.
+        if (!hasDocumentId) vals[orders.size()] = snapshot.getId();
         return vals;
     }
 

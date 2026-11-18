@@ -120,6 +120,25 @@ test('Firestore collection queries and counts include historical root app docume
   sql.close();
 });
 
+test('Firestore-style query cursors preserve equal-timestamp ordering across pages', async () => {
+  const sql=new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
+  const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for (const id of ['a','b','c']) add.run(`posts/${id}`,'posts',id,'u1',JSON.stringify({authorId:'u1',createdAt:100}),100);
+  add.run('posts/d','posts','d','u1',JSON.stringify({authorId:'u1',createdAt:90}),90);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  const app=createWorker(async()=> 'u1');
+  const query=(cursor)=>new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,...(cursor?{startAfter:cursor}:{})})});
+  const first=await app.fetch(query(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  const firstRows=(await first.json()).documents;
+  assert.deepEqual(firstRows.map(row=>row.id),['c','b']);
+  const next=await app.fetch(query([100,'b']),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.deepEqual((await next.json()).documents.map(row=>row.id),['a','d']);
+  const lastPage=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'ASCENDING'}],limit:2,limitToLast:true})}),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.deepEqual((await lastPage.json()).documents.map(row=>row.id),['b','c']);
+  sql.close();
+});
+
 test('nested chat queries bridge legacy D1 messages and require chat membership', async () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(resourcesSchema);
