@@ -70,3 +70,5 @@ jobs:
 # D1-only progress check requested by owner.
 
 # D1-only progress refresh requested by owner.
+
+# Verify owner-authorized 30k cap with D1 aggregate only.
