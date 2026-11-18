@@ -76,6 +76,37 @@ test('Firestore document reads fall back to existing D1 app documents for root p
   sql.close();
 });
 
+test('Firestore collection queries and counts include historical root app documents without duplicates', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema);
+  sql.exec(appSchema);
+  sql.exec(schema);
+  const addApp = sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  addApp.run('posts/old1','posts','old1','u1',JSON.stringify({authorId:'u1',content:'legacy post',privacy:'public',createdAt:10}),10);
+  addApp.run('posts/shared','posts','shared','u1',JSON.stringify({authorId:'u1',content:'stale copy',privacy:'public',createdAt:20}),20);
+  sql.prepare(`INSERT INTO friendbook_cf_firestore_documents
+    (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+    VALUES (?,?,?,?,?,?,?,?)`).run('posts/shared','posts','posts','shared','u1',JSON.stringify({authorId:'u1',content:'canonical copy',privacy:'public',createdAt:21}),21,21);
+  const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
+    return { run: async () => stmt.run(...args), all: async () => ({results: stmt.all(...args)}), first: async () => stmt.get(...args) || null };
+  } }; } };
+  const app = createWorker(async () => 'u1');
+  const query = await app.fetch(new Request('https://example.test/v1/firestore/query', {
+    method:'POST', headers:{authorization:'Bearer token','content-type':'application/json'},
+    body:JSON.stringify({parent:'posts',filters:[{field:'privacy',op:'==',value:'public'}],orderBy:[{field:'createdAt',direction:'ASCENDING'}],limit:10}),
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test',D1_INTERACTIONS_ENABLED:'false'});
+  assert.equal(query.status,200);
+  const documents=(await query.json()).documents;
+  assert.deepEqual(documents.map(d=>d.id),['old1','shared']);
+  assert.equal(documents.find(d=>d.id==='shared').data.content,'canonical copy');
+  const count = await app.fetch(new Request('https://example.test/v1/firestore/count?parent=posts&filters='+encodeURIComponent(JSON.stringify([{field:'privacy',op:'==',value:'public'}])), {
+    headers:{authorization:'Bearer token'},
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(count.status,200);
+  assert.equal((await count.json()).count,2);
+  sql.close();
+});
+
 test('additive mirror migration copies existing root app documents and preserves newer feed rows', () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(resourcesSchema);

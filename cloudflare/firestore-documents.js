@@ -277,6 +277,30 @@ async function readRow(db, path) {
   ).bind(path).first();
   return appDocumentToFirestoreRow(appRow);
 }
+
+async function readCollectionRows(db, parent) {
+  const firestoreRows = await db.prepare(
+    'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
+  ).bind(parent).all();
+  const byPath = new Map((firestoreRows?.results || []).map(row => [row.path, row]));
+  // The older app-document API owns most historical top-level posts/chats/friends. Firestore
+  // compatibility queries previously ignored those rows, so feed and list screens appeared empty
+  // even though production D1 had hundreds of valid documents. Merge only root collections, and
+  // let the Firestore-compatible row win where both stores contain the same path.
+  const parts = splitPath(parent);
+  if (parts?.length === 1) {
+    const appRows = await db.prepare(
+      'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ?'
+    ).bind(parent).all();
+    for (const appRow of appRows?.results || []) {
+      if (byPath.has(appRow.path)) continue;
+      const row = appDocumentToFirestoreRow(appRow);
+      if (row) byPath.set(row.path, row);
+    }
+  }
+  return [...byPath.values()];
+}
+
 async function writeRow(db, path, doc, now, existing) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
@@ -550,13 +574,7 @@ export async function firestoreDocuments(request, env, identity) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
-    const fetchDocs = async () => {
-      const rows = await db.prepare(
-        'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
-      ).bind(parent).all();
-      return (rows?.results || []).map(rowToDocument).filter(Boolean);
-    };
-    const docs = await fetchDocs().catch(() => []);
+    const docs = (await readCollectionRows(db, parent).catch(() => [])).map(rowToDocument).filter(Boolean);
     const result = applyQuery(docs, body || {});
     return json({ parent, documents: result });
   }
@@ -567,10 +585,8 @@ export async function firestoreDocuments(request, env, identity) {
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
-    const rows = await db.prepare(
-      'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
-    ).bind(parent).all().catch(() => ({ results: [] }));
-    const docs = (rows?.results || []).map(rowToDocument).filter(Boolean);
+    const rows = await readCollectionRows(db, parent).catch(() => []);
+    const docs = rows.map(rowToDocument).filter(Boolean);
     const filtered = docs.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });
   }
