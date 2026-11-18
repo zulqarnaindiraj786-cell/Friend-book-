@@ -12,7 +12,7 @@
   ],
   "simulated_pages": 240000,
   "duplicate_or_missing_records": 0,
-  "elapsed_model_seconds": 0.532,
+  "elapsed_model_seconds": 0.439,
   "real_backend_requests": 0,
   "real_devices": 0,
   "certified_5000_users": false

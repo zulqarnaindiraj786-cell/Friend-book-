@@ -29,21 +29,32 @@ android {
         ]
     }
 
-    signingConfigs {
-        release {
-            storeFile file('friendbook-release.p12')
-            storeType 'PKCS12'
-            storePassword 'friendbook2026'
-            keyAlias 'friendbook'
-            keyPassword 'friendbook2026'
-            v1SigningEnabled true
-            v2SigningEnabled true
+    def releaseStorePath = System.getenv('FRIENDBOOK_RELEASE_STORE_FILE')
+    def releaseStorePassword = System.getenv('FRIENDBOOK_RELEASE_STORE_PASSWORD')
+    def releaseKeyAlias = System.getenv('FRIENDBOOK_RELEASE_KEY_ALIAS')
+    def releaseKeyPassword = System.getenv('FRIENDBOOK_RELEASE_KEY_PASSWORD')
+    def releaseSigningConfigured = [releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && !it.trim().isEmpty() }
+    project.ext.friendbookReleaseSigningConfigured = releaseSigningConfigured
+
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            release {
+                storeFile file(releaseStorePath)
+                storeType 'PKCS12'
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                v1SigningEnabled true
+                v2SigningEnabled true
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled true
             shrinkResources true
             debuggable false
@@ -64,6 +75,13 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def signedReleaseTasks = graph.allTasks.any { it.name in ['assembleRelease', 'bundleRelease'] }
+    if (signedReleaseTasks && !project.ext.friendbookReleaseSigningConfigured) {
+        throw new GradleException('Release APK/AAB signing is not configured. Supply FRIENDBOOK_RELEASE_STORE_FILE, FRIENDBOOK_RELEASE_STORE_PASSWORD, FRIENDBOOK_RELEASE_KEY_ALIAS, and FRIENDBOOK_RELEASE_KEY_PASSWORD through the CI secret store.')
     }
 }
 
