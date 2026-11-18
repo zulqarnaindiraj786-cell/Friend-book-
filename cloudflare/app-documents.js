@@ -1,4 +1,6 @@
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
+import { readRawDoc, getAuthoritativeFriendUids } from './cfdb.js';
+
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -91,8 +93,8 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
-const DOC_CACHE_TTL_MS = 600_000;
-const LIST_CACHE_TTL_MS = 600_000;
+const DOC_CACHE_TTL_MS = 3_000;
+const LIST_CACHE_TTL_MS = 5_000;
 const docCache = new WeakMap();
 const listCache = new WeakMap();
 
@@ -110,11 +112,19 @@ export async function readD1DocumentFields(db, path) {
   const now = Date.now();
   const cache = getDbMap(docCache, db);
   const hit = cache.get(path);
-  if (hit && hit.expiresAt > now) return hit.fields;
+  if (hit && hit.fields && hit.expiresAt > now) return hit.fields;
   try {
     const row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
-    const fields = row?.document_json ? toFirestoreFields(row.document_json) : null;
-    cache.set(path, { fields, expiresAt: now + DOC_CACHE_TTL_MS });
+    let fields = row?.document_json ? toFirestoreFields(row.document_json) : null;
+    if (!fields) {
+      const decoded = decodeURIComponent(path);
+      const slash = decoded.lastIndexOf('/');
+      if (slash > 0) {
+        const fallback = await readRawDoc(db, decoded.slice(0, slash), decoded.slice(slash + 1));
+        if (fallback) fields = toFirestoreFields(fallback);
+      }
+    }
+    if (fields) cache.set(path, { fields, expiresAt: now + DOC_CACHE_TTL_MS });
     return fields;
   } catch {
     return null;
@@ -128,7 +138,10 @@ export async function hasD1Friendship(db, uidA, uidB) {
     const byKey = await db.prepare(
       'SELECT path FROM friendbook_cf_documents WHERE path IN (?, ?) LIMIT 1'
     ).bind(p1, p2).first();
-    return byKey ? true : null;
+    if (byKey) return true;
+    const authFriends = await getAuthoritativeFriendUids(db, uidA);
+    if (authFriends.includes(uidB)) return true;
+    return null;
   } catch {
     return null;
   }

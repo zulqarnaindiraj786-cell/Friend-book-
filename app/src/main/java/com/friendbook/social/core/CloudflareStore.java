@@ -35,7 +35,7 @@ public final class CloudflareStore {
     private static final android.util.LruCache<String, Long> LIST_CACHE_AT = new android.util.LruCache<>(16);
 
     public static boolean enabled() {
-        return BuildConfig.D1_INTERACTIONS_ENABLED;
+        return BuildConfig.D1_INTERACTIONS_ENABLED && !BuildConfig.CLOUDFLARE_DATA_ENABLED;
     }
 
     public static JSONObject toJson(Map<String, Object> map) {

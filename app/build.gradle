@@ -10,19 +10,19 @@ android {
 
     defaultConfig {
         applicationId 'com.friendbook.social'
-        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'false'
+        buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'true'
         buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
         // Real view counters live in Cloudflare Analytics Engine (one event per view, uniq(uid) = one
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
         // D1, no KV. Firebase is auth only.
         buildConfigField 'boolean', 'CLOUDFLARE_VIEWS_ENABLED', 'true'
-        // Cloudflare Data API (Firestore/RTDB replacement) - enable after migration verified
-        buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'false'
+        // Cloudflare Data API (Firestore/RTDB replacement)
+        buildConfigField 'boolean', 'CLOUDFLARE_DATA_ENABLED', 'true'
         buildConfigField 'String', 'SUPABASE_URL', '"https://iqtccjgpbtnfavbkbogr.supabase.co"'
         minSdk 24
         targetSdk 36
-        versionCode 122
-        versionName '2.8.90'
+        versionCode 123
+        versionName '2.9.0'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -76,9 +76,8 @@ dependencies {
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     testImplementation 'org.robolectric:robolectric:4.14.1'
     implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-common'
     implementation 'com.google.firebase:firebase-auth'
-    implementation 'com.google.firebase:firebase-firestore'
-    implementation 'com.google.firebase:firebase-database'
     implementation 'com.google.firebase:firebase-config'
     implementation 'com.google.firebase:firebase-messaging'
     // 🔐 App Check with Play Integrity (production) — MONITOR mode first, then ENFORCE

@@ -867,13 +867,17 @@ public class CreatePostActivity extends Activity {
         }
         if (editId != null) {
             m.put("editedAt", FieldValue.serverTimestamp());
-            if (com.friendbook.social.core.CloudflareStore.enabled()) {
-                com.friendbook.social.core.CloudflareStore.put("posts", editId, m);
-            } else {
-                Fb.db().collection("posts").document(editId).update(m);
-            }
-            Ui.toast(this, "Post updated ✓");
-            finish();
+            postBtn.setText("SAVING…");
+            Fb.db().collection("posts").document(editId).update(m)
+                    .addOnSuccessListener(v -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        Ui.toast(this, "Post updated ✓");
+                        finish();
+                    })
+                    .addOnFailureListener(e -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        fail("Could not update post. Check connection & retry.");
+                    });
             return;
         }
         String myUid = Fb.uid();
@@ -932,31 +936,34 @@ public class CreatePostActivity extends Activity {
         optimistic.taggedNames = new ArrayList<>(taggedNames);
         optimistic.pollOptions = new ArrayList<>(pollOptions);
         optimistic.createdAt = System.currentTimeMillis();
-        if (groupId == null || groupId.isEmpty()) {
-            com.friendbook.social.core.FastCache.prependFeedPost(this, optimistic);
-        }
 
         Runnable afterPostSaved = () -> {
+            if (groupId == null || groupId.isEmpty()) {
+                com.friendbook.social.core.FastCache.prependFeedPost(this, optimistic);
+            }
             if(com.friendbook.social.core.Mentions.hasBulk(submittingMentions)) com.friendbook.social.push.FCMPush.bulkMention(docRef.getId(), "");
             if ((groupId == null || groupId.isEmpty()) && (pageId == null || pageId.isEmpty())
                     && ("Public".equalsIgnoreCase(privacy) || "Friends".equalsIgnoreCase(privacy)))
                 com.friendbook.social.push.FCMPush.friendPost(docRef.getId());
         };
-        if (com.friendbook.social.core.CloudflareStore.enabled()) {
-            com.friendbook.social.core.CloudflareStore.put("posts", docRef.getId(), m, afterPostSaved);
-        } else {
-            docRef.set(m).addOnSuccessListener(v -> afterPostSaved.run()).addOnFailureListener(e ->
-                    android.util.Log.e("CreatePost", "Background sync failed: " + e));
-        }
-        Prefs.setPostDraft(this, "");
-        if (groupId != null && groupNeedsApproval) {
-            Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");
-        } else {
-            Ui.toast(this, com.friendbook.social.core.FastCache.isOffline(this)
-                    ? "Posted offline ✓ — will sync automatically"
-                    : "Posted ✓");
-        }
-        finish();
+        postBtn.setText("POSTING…");
+        docRef.set(m)
+                .addOnSuccessListener(v -> {
+                    afterPostSaved.run();
+                    Prefs.setPostDraft(this, "");
+                    if (isFinishing() || isDestroyed()) return;
+                    if (groupId != null && groupNeedsApproval) {
+                        Ui.toast(this, "⏳ Post submitted for Group Admin/Moderator approval!");
+                    } else {
+                        Ui.toast(this, "Posted ✓");
+                    }
+                    finish();
+                })
+                .addOnFailureListener(e -> {
+                    android.util.Log.e("CreatePost", "D1 post save failed: " + e);
+                    if (isFinishing() || isDestroyed()) return;
+                    fail("Could not save post. Check your connection and try again.");
+                });
     }
 
     private void fail(String msg) {

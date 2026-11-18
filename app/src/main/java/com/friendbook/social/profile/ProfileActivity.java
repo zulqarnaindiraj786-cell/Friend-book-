@@ -89,6 +89,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private String incomingRequestId = null;
     private boolean hasOut, hasIn;
     private int userPostCount = 0;
+    private boolean postsLoadedOnce = false;
+    private boolean hasMoreProfilePosts = false;
     private String profileSearchQuery = "";
 
     private TextView topTitleTv, editTopIcon, guardBadge;
@@ -828,8 +830,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     user = Models.User.fromDoc(d);
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
+                    if (!postsLoadedOnce && user.postsCount > 0) {
+                        userPostCount = user.postsCount;
+                    }
                     bindUser();
-                    if(activeTab==3 && friendPager==null)startFriendPages();
+                    if (friendPager == null) startFriendPages();
                 });
         watchSubscription();
         String me = Fb.uid();
@@ -865,7 +870,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 }
             });
         }
-        if(activeTab==3)startFriendPages();
+        startFriendPages();
         startPostsWatcher();
         if(activeTab==1) startReelsWatcher();
     }
@@ -879,14 +884,17 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             if(busy){moreProfileFriends.setText("Loading…");moreProfileFriends.setEnabled(false);return;}
             ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
+            if (user != null) updateStatsLine();
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
         });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
     }
 
     private void startPostsWatcher() {
         if(postPager!=null) postPager.close();
-        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid).orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
+                    postsLoadedOnce = true;
+                    hasMoreProfilePosts = more;
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
@@ -905,10 +913,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                             }
                         }
                     }
-                    // Loaded page size is not the profile total.
-                    userPostCount = Math.max(userPostCount,allLoadedPosts.size());
-                    if (user != null) updateStatsLine();
                     applyPostsFilter();
+                    if (user != null) updateStatsLine();
+                    if (more && error.isEmpty() && allLoadedPosts.size() < 42 && postPager != null) {
+                        postPager.next();
+                    }
 
             if(!error.isEmpty())Ui.toast(this,error);
         });
@@ -918,11 +927,18 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void applyPostsFilter() {
         List<Models.Post> shown = new ArrayList<>();
         String q = profileSearchQuery == null ? "" : profileSearchQuery.trim().toLowerCase();
+        int totalVisible = 0;
         for (Models.Post p : allLoadedPosts) {
             if(!canSee(p))continue;
+            totalVisible++;
             if (q.isEmpty() || (p.content != null && p.content.toLowerCase().contains(q))) {
                 shown.add(p);
             }
+        }
+        if (postsLoadedOnce) {
+            userPostCount = hasMoreProfilePosts
+                    ? Math.max(user != null ? user.postsCount : 0, totalVisible)
+                    : totalVisible;
         }
         if (!q.isEmpty()) {
             searchFilterBanner.setText("🔍 Filtering by \"" + profileSearchQuery + "\" (" + shown.size() + ") · Tap to clear ✕");
@@ -986,8 +1002,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void updateStatsLine() {
         if (user == null) return;
-        int followers = Math.max(user.followers != null ? user.followers.size() : 0, user.friendsCount);
-        int following = user.following != null ? user.following.size() : 0;
+        int friends = Math.max(user.friendsCount, ownerFriendIds.size());
+        int followers = Math.max(user.followers != null ? user.followers.size() : 0, friends);
+        int following = Math.max(user.following != null ? user.following.size() : 0, friends);
 
         SpannableStringBuilder sb = new SpannableStringBuilder();
         appendBoldStat(sb, Format.count(followers), " followers · ");
@@ -995,9 +1012,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         appendBoldStat(sb, Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
         statsT.setText(sb);
         statsT.setOnClickListener(v -> Ui.choose(this, user.displayName, new String[]{
-                "👥 Followers (" + Format.count(user.followers != null ? user.followers.size() : 0) + ")",
+                "👥 Followers (" + Format.count(followers) + ")",
                 "🚶 Following (" + Format.count(following) + ")",
-                "🤝 Friends (" + Format.count(user.friendsCount) + ")"
+                "🤝 Friends (" + Format.count(friends) + ")"
         }, w -> {
             if (w == 2) {
                 showTab(3);
@@ -1705,8 +1722,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.hometown != null && !user.hometown.isEmpty()) addAboutRow(card, "🏠", "From " + user.hometown);
         if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "💞", user.relationship);
         if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
-        addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
-        addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
+        int aboutFriends = Math.max(user.friendsCount, ownerFriendIds.size());
+        int aboutFollowers = Math.max(user.followers != null ? user.followers.size() : 0, aboutFriends);
+        int aboutFollowing = Math.max(user.following != null ? user.following.size() : 0, aboutFriends);
+        addAboutRow(card, "👥", Format.count(aboutFriends) + " friends");
+        addAboutRow(card, "🚶", Format.count(aboutFollowers) + " followers · " + Format.count(aboutFollowing) + " following");
 
         boolean canSeeContact = (mine && !viewAsPublic)
                 || "Public".equalsIgnoreCase(user.contactInfoPrivacy)

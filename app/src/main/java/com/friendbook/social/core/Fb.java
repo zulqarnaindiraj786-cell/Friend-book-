@@ -160,7 +160,14 @@ public class Fb {
         return "User";
     }
 
-    public static String myPhoto() { return me != null && me.photoUrl != null ? me.photoUrl : ""; }
+    public static String myPhoto() {
+        if (me != null && me.photoUrl != null && !me.photoUrl.isEmpty()) return me.photoUrl;
+        com.google.firebase.auth.FirebaseUser cu = auth().getCurrentUser();
+        if (cu != null && cu.getPhotoUrl() != null) {
+            return cu.getPhotoUrl().toString().replace("=s96-c", "=s400-c");
+        }
+        return "";
+    }
 
     /** Am I blocking this user? */
     public static boolean iBlocked(String otherUid) {

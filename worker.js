@@ -4,6 +4,7 @@ import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { viewCounters } from './cloudflare/view-counters.js';
+import { handleCfDb, handleCfRtdb, handleCfRestUser } from './cloudflare/cfdb.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const googleKeys = createRemoteJWKSet(new URL(
@@ -44,13 +45,16 @@ export function createWorker(verify = verifyFirebaseToken) {
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
+      const cfdb = path === '/v1/cfdb/get' || path === '/v1/cfdb/query' || path === '/v1/cfdb/write';
+      const rtdb = path.startsWith('/v1/rtdb/');
+      const restUsers = /^\/v1\/users\/[^/]+(\/friends)?$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
         || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !cfdb && !rtdb && !restUsers) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -80,12 +84,15 @@ export function createWorker(verify = verifyFirebaseToken) {
       catch { return json({ error: 'Unauthorized' }, 401); }
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
+      if (cfdb) return handleCfDb(request, env, { uid, token: bearer[1] });
+      if (rtdb) return handleCfRtdb(request, env, { uid, token: bearer[1] });
+      if (restUsers) return handleCfRestUser(request, env, { uid, token: bearer[1] });
       if (docs) return appDocuments(request, env, { uid, token: bearer[1] });
       // View counters run on memory/KV (zero D1 row reads); ctx lets the hourly D1 flush and the
       // KV aggregate write happen after the response is already sent.
       if (views) return viewCounters(request, env, { uid, token: bearer[1] }, viewsMatch, new URL(request.url), Date.now, ctx);
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
-      if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
+      if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB, cloudflareOnly: env.CLOUDFLARE_ONLY === 'true' }, engagement);
       try {
         if (request.method === 'PUT') {
           let body = {};

@@ -15,108 +15,113 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Reject private credentials in Android sources
+        run: |
+          if grep -rn "CLOUDFLARE_API_TOKEN\|CLOUDINARY_API_SECRET\|R2_SECRET_ACCESS_KEY" app/src/main/; then
+            echo "::error::Private server secret found in Android client source!"
+            exit 1
+          fi
 
-    - name: Ensure Android SDK 36
-      run: |
-        echo "ANDROID_HOME=$ANDROID_HOME"
-        ls "$ANDROID_HOME/platforms" || true
-        SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
-        if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
-          echo "android-36 platform already installed"
-        elif [ -n "$SDKM" ]; then
-          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
-          "$SDKM" "platforms;android-36" "build-tools;36.0.0" || echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
-        else
-          echo "::warning::sdkmanager not found; using preinstalled SDK"
-        fi
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.11.1'
-        cache-disabled: true
+      - name: Ensure Android SDK 36
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          SDKM="$(command -v sdkmanager || ls "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 2>/dev/null || true)"
+          if [ -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "android-36 platform already installed"
+          elif [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-36" "build-tools;36.0.0" || echo "::warning::sdkmanager install failed; trying to continue with preinstalled SDK"
+          else
+            echo "::warning::sdkmanager not found; using preinstalled SDK"
+          fi
 
-    - name: Generate Gradle Wrapper
-      run: |
-        gradle wrapper --gradle-version 8.11.1 --distribution-type all
-        chmod +x gradlew
-        ./gradlew --version
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.11.1'
+          cache-disabled: true
 
-    - name: Build Debug APK
-      run: ./gradlew :app:assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build-debug.log
-    - name: Build Release AAB
-      run: ./gradlew :app:bundleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.11.1 --distribution-type all
+          chmod +x gradlew
+          ./gradlew --version
 
-    - name: Get Version Info
-      id: version
-      run: |
-        VERSION_NAME=$(grep -oP "versionName\s+['\"]\K[^'\"]+" app/build.gradle | head -1)
-        VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1)
-        TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-        echo "version_name=${VERSION_NAME:-2.8.90}" >> $GITHUB_OUTPUT
-        echo "version_code=${VERSION_CODE:-122}" >> $GITHUB_OUTPUT
-        echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-        echo "tag=v${VERSION_NAME:-2.8.90}-${VERSION_CODE:-122}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+      - name: Build Signed Release APK, Play Store AAB & PresenceSocketControllerCheck
+        run: |
+          ./gradlew testReleaseUnitTest bundleRelease assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle.log
+          python3 scripts/ci/verify_presence_android_tests.py
 
-    - name: Verify Build Outputs
-      run: |
-        echo "=== Checking Debug APK ==="
-        find app/build/outputs -name "*.apk" -type f 2>/dev/null | head -20
-        echo "=== Checking Release AAB ==="
-        find app/build/outputs -name "*.aab" -type f 2>/dev/null | head -20
-        # Find actual paths
-        DEBUG_APK=$(find app/build/outputs -name "app-debug.apk" -type f 2>/dev/null | head -1)
-        RELEASE_AAB=$(find app/build/outputs -name "app-release.aab" -type f 2>/dev/null | head -1)
-        echo "Debug APK: $DEBUG_APK"
-        echo "Release AAB: $RELEASE_AAB"
-        # Don't fail - the release step will fail if files don't exist
-        [ -n "$DEBUG_APK" ] && echo "✓ Debug APK found" || echo "✗ Debug APK not found"
-        [ -n "$RELEASE_AAB" ] && echo "✓ Release AAB found" || echo "✗ Release AAB not found"
+      - name: Verify Signed Release APK & AAB Signatures
+        run: |
+          RELEASE_APK=$(find app/build/outputs/apk/release -name "*-release.apk" -o -name "app-release.apk" | head -1)
+          RELEASE_AAB=$(find app/build/outputs/bundle/release -name "*-release.aab" -o -name "app-release.aab" | head -1)
+          MAPPING_TXT=$(find app/build/outputs/mapping/release -name "mapping.txt" | head -1)
+          test -n "$RELEASE_APK" && test -f "$RELEASE_APK"
+          test -n "$RELEASE_AAB" && test -f "$RELEASE_AAB"
+          cp "$RELEASE_APK" friendbook.apk
+          cp "$RELEASE_AAB" friendbook-playstore.aab
+          if [ -n "$MAPPING_TXT" ] && [ -f "$MAPPING_TXT" ]; then
+            cp "$MAPPING_TXT" friendbook-mapping.txt
+          else
+            touch friendbook-mapping.txt
+          fi
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose friendbook.apk
+          fi
+          jarsigner -verify friendbook-playstore.aab | tail -5
+          ls -lh friendbook.apk friendbook-playstore.aab friendbook-mapping.txt
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/arena/')
-      with:
-        tag_name: ${{ steps.version.outputs.tag }}
-        name: friendbook ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.timestamp }})
-        body: |
-          ## friendbook ${{ steps.version.outputs.version_name }} - Build ${{ steps.version.outputs.version_code }}
+      - name: Upload Signed APK & AAB Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: friendbook-signed-release
+          path: |
+            friendbook.apk
+            friendbook-playstore.aab
+          if-no-files-found: error
 
-          **Build Date:** ${{ steps.version.outputs.timestamp }}
-          **Branch:** ${{ github.ref_name }}
-          **Commit:** ${{ github.sha }}
+      - name: Upload R8 Mapping Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-release-mapping
+          path: friendbook-mapping.txt
 
-          ### Changes in this build:
-          - Story Viewer: Fixed black screen, timer starts after media loads
-          - Reel Tap: Full container clickable, no view interception
-          - Ad Queue: Refresh preserves unseen ads, only fills empty slots
-          - Meta Mediation: Audience Network SDK + Adapter (Placement ID: 4871960679794940_4871960806461594)
-          - Universal Play Store Link: ALL copy/share → Play Store link
+      - name: Get Version Info
+        id: version
+        run: |
+          VERSION_NAME=$(grep -oP "versionName\s+['\"]\K[^'\"]+" app/build.gradle | head -1)
+          VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle | head -1)
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "version_name=${VERSION_NAME:-2.9.0}" >> $GITHUB_OUTPUT
+          echo "version_code=${VERSION_CODE:-123}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION_NAME:-2.9.0}-${VERSION_CODE:-123}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-          ### Downloads:
-          - **Debug APK** (installable): `app-debug.apk`
-          - **Release AAB** (for Play Store): `app-release.aab`
-
-        draft: false
-        prerelease: false
-        files: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/bundle/release/app-release.aab
-        make_latest: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Print Release URL
-      run: |
-        echo "Release created at: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
-        echo "Direct APK download: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/app-debug.apk"
+      - name: Publish Signed Release APK + Play Store AAB
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: friendbook ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.timestamp }})
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            friendbook.apk
+            friendbook-playstore.aab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

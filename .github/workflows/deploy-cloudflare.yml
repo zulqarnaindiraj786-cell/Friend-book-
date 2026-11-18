@@ -1,7 +1,7 @@
-name: Deploy existing Cloudflare Worker (D1 OFF)
+name: Deploy Cloudflare Worker + D1
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/99ebbf43-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/99ebbf43-friend-book'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -111,8 +111,8 @@ jobs:
           mkdir -p /tmp/deploy-logs
           rm -f /tmp/deploy-logs/*.log /tmp/wrangler.toml.shipped
           cp wrangler.toml /tmp/wrangler.toml.bak
-          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
-          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
+          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var CLOUDFLARE_ONLY:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
+          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var CLOUDFLARE_ONLY:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
 
           # Removes ONLY the Analytics Engine block. D1, R2, KV, crons and vars all stay, so a refused
           # AE binding can never cost another binding the way the old truncation fallback did.
@@ -201,7 +201,13 @@ jobs:
           vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
           test "$vcode" = 401
-          echo 'Unauthenticated profile, presence, and video requests rejected (401).'
+          cfdb_code=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-cfdb.json -w '%{http_code}' \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/cfdb/get)
+          test "$cfdb_code" = 401
+          rtdb_code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-rtdb.json -w '%{http_code}' \
+            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/rtdb/test)
+          test "$rtdb_code" = 401
+          echo 'Unauthenticated profile, presence, video, cfdb, and rtdb requests rejected (401).'
           echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify public Android-only release metadata
         run: |

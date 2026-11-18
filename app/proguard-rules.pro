@@ -9,6 +9,8 @@
 # Glide Generated API / Module entry points (AAR consumer rules handle internal classes)
 -keep public class * implements com.bumptech.glide.module.GlideModule
 -keep public class * extends com.bumptech.glide.module.AppGlideModule
+-keep class com.google.firebase.firestore.** { *; }
+-keep class com.google.firebase.database.** { *; }
 
 # Suppress benign optional library warnings while allowing R8 to obfuscate & shrink all unused library code
 -dontwarn com.google.firebase.**

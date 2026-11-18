@@ -2,12 +2,14 @@ import { readD1DocumentFields, hasD1Friendship } from './app-documents.js';
 
 // D1-first authorization (`friendbook_cf_documents`) with source fallback.
 // Never trust an author/visibility/UID supplied by an Android request.
-export async function authorizePost({ project, token, uid, db }, collection, id, fetcher = fetch, context) {
+export async function authorizePost({ project, token, uid, db, cloudflareOnly = false }, collection, id, fetcher = fetch, context) {
   const root = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(project)}/databases/(default)/documents`;
   const headers = { Authorization: `Bearer ${token}` };
+  const cfAuthoritative = Boolean(db && cloudflareOnly);
   async function fields(path) {
     const d1Fields = await readD1DocumentFields(db, path);
     if (d1Fields) return d1Fields;
+    if (cfAuthoritative) return {};
     const r = await fetcher(`${root}/${path}`, { headers, signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw Error('Source access unavailable');
     return (await r.json()).fields || {};
@@ -37,6 +39,7 @@ export async function authorizePost({ project, token, uid, db }, collection, id,
   if (privacy !== 'friends') return false;
   const d1Friend = await hasD1Friendship(db, uid, owner);
   if (d1Friend === true) return true;
+  if (cfAuthoritative) return false;
   const array = values => ({ arrayValue: { values: values.map(stringValue => ({ stringValue })) } });
   const r = await fetcher(`${root}:runQuery`, {
     method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(8000),

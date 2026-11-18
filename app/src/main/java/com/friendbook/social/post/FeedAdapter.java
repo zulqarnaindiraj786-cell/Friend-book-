@@ -822,6 +822,32 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     // ================= POST BIND =================
 
+    private String formatPostHeaderLine(String baseAuthor, Models.Post p) {
+        String f = p.feeling == null ? "" : p.feeling.trim();
+        String nameLine = baseAuthor;
+        if (!f.isEmpty()) {
+            String lower = f.toLowerCase(java.util.Locale.US);
+            boolean actionPhrase = lower.startsWith("updated ")
+                    || lower.startsWith("changed ")
+                    || lower.startsWith("added ")
+                    || lower.startsWith("shared ")
+                    || lower.startsWith("created ")
+                    || lower.startsWith("posted ")
+                    || lower.startsWith("was ")
+                    || lower.startsWith("is ");
+            nameLine += actionPhrase ? (" " + f) : (" is feeling " + f);
+        }
+        if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
+            nameLine += " — with " + p.taggedNames.get(0)
+                    + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
+                    : p.taggedNames.size() == 2 ? " and " + p.taggedNames.get(1) : "");
+        }
+        if (Fb.me != null && Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(p.authorId)) {
+            nameLine = "⭐ " + nameLine;
+        }
+        return nameLine;
+    }
+
     private void bindPost(PostVH vh, Models.Post p) {
         Context c = activity;
         if (showHeader && p != null && p.id != null) {
@@ -834,17 +860,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // ---------- header: 40dp circular avatar · bold name · gray time below · ⋮ ----------
         boolean pagePost = p.isPagePost();
         Ui.avatar(c, vh.avatar, pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto : p.authorPhoto);
-        boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
-        String baseAuthor = pagePost ? ("🚩 " + p.pageName) : (p.authorName == null ? "User" : p.authorName);
-        String nameLine = baseAuthor + (hasFeeling ? " is feeling " + p.feeling : "");
-        if (p.taggedNames != null && !p.taggedNames.isEmpty()) {
-            nameLine += " — with " + p.taggedNames.get(0)
-                    + (p.taggedNames.size() > 2 ? " and " + (p.taggedNames.size() - 1) + " others"
-                    : p.taggedNames.size() == 2 ? " and " + p.taggedNames.get(1) : "");
-        }
-        if (Fb.me != null && Fb.me.favoriteUids != null && Fb.me.favoriteUids.contains(p.authorId))
-            nameLine = "⭐ " + nameLine; // favorite friends stand out (they also sort first)
-        vh.name.setText(nameLine);
+        String rawAuthor = p.authorName == null ? "" : p.authorName.trim();
+        boolean missingAuthor = !pagePost && (rawAuthor.isEmpty()
+                || "User".equalsIgnoreCase(rawAuthor)
+                || "friendbook User".equalsIgnoreCase(rawAuthor)
+                || "Someone".equalsIgnoreCase(rawAuthor));
+        String baseAuthor = pagePost
+                ? ("🚩 " + (p.pageName == null || p.pageName.trim().isEmpty() ? "Page" : p.pageName.trim()))
+                : (missingAuthor ? "friendbook User" : rawAuthor);
+        vh.name.setText(formatPostHeaderLine(baseAuthor, p));
         vh.tick.setImageDrawable(null);
         if (p.authorTickLevel != null && !"none".equals(p.authorTickLevel)) {
             vh.tick.setVisibility(View.VISIBLE);
@@ -852,6 +876,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else {
             vh.tick.setVisibility(p.authorVerified ? View.VISIBLE : View.GONE);
             if (p.authorVerified) vh.tick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
+        }
+
+        if (!pagePost && p.authorId != null && !p.authorId.isEmpty()
+                && (missingAuthor || p.authorPhoto == null || p.authorPhoto.isEmpty())) {
+            final String bindPostId = p.id;
+            vh.name.setTag(bindPostId);
+            Fb.getUser(p.authorId).addOnSuccessListener(u -> {
+                if (u == null || !java.util.Objects.equals(bindPostId, vh.name.getTag())) return;
+                if (u.displayName != null && !u.displayName.trim().isEmpty()) {
+                    p.authorName = u.displayName.trim();
+                }
+                if (u.photoUrl != null && !u.photoUrl.isEmpty()) {
+                    p.authorPhoto = u.photoUrl;
+                    Ui.avatar(c, vh.avatar, p.authorPhoto);
+                }
+                p.authorVerified = p.authorVerified || u.isVerified;
+                if (u.tickLevel != null && !"none".equals(u.tickLevel)) {
+                    p.authorTickLevel = u.tickLevel;
+                }
+                String resolvedAuthor = (p.authorName == null || p.authorName.trim().isEmpty())
+                        ? "friendbook User" : p.authorName.trim();
+                vh.name.setText(formatPostHeaderLine(resolvedAuthor, p));
+                if (p.authorTickLevel != null && !"none".equals(p.authorTickLevel)) {
+                    vh.tick.setVisibility(View.VISIBLE);
+                    vh.tick.setImageResource(com.friendbook.social.core.Icons.badgeFor(p.authorTickLevel));
+                } else if (p.authorVerified) {
+                    vh.tick.setVisibility(View.VISIBLE);
+                    vh.tick.setImageResource(com.friendbook.social.R.drawable.ic_verified);
+                }
+            });
         }
 
         String icon = "🌐";

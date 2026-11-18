@@ -94,9 +94,9 @@ public final class CreatorDashboardDialog {
         row2.setPadding(0, Ui.dp(a, 8), 0, 0);
         final TextView vComments = statValueView(a);
         final TextView vFollowers = statValueView(a);
-        int followerCount = u != null && u.followers != null ? u.followers.size() : 0;
         int friendCount = u != null ? u.friendsCount : 0;
-        vFollowers.setText(Format.count(followerCount + friendCount));
+        int followerCount = Math.max(u != null && u.followers != null ? u.followers.size() : 0, friendCount);
+        vFollowers.setText(Format.count(followerCount));
         row2.addView(statBox(a, "Engagement", vComments, "Comments & shares"), new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout.LayoutParams r2Right = new LinearLayout.LayoutParams(0, -2, 1);
         r2Right.leftMargin = Ui.dp(a, 8);

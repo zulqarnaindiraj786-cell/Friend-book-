@@ -39,6 +39,7 @@ public class Models {
         public boolean showActiveStatus = true;
         public long lastSeen, createdAt;
         public int friendsCount;
+        public int postsCount;
         public int stars;     // Stars balance (monetization)
         public String tickLevel = "none"; // none | blue | gold | diamond
         public boolean subscriptionsEnabled;
@@ -129,6 +130,7 @@ public class Models {
                     rawOnline, u.lastSeen, com.friendbook.social.core.Presence.now());
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
+            u.postsCount = Format.intOf(m, "postsCount");
             u.stars = Format.intOf(m, "stars");
             u.tickLevel = Format.strOr(m, "tickLevel", u.isVerified ? "blue" : "none");
             u.subscriptionsEnabled = Format.boolOf(m, "subscriptionsEnabled");
@@ -160,7 +162,16 @@ public class Models {
             u.lastBonusAt = lb instanceof Number ? ((Number) lb).longValue() : Format.ts(lb);
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
+            List<String> friendList = Format.listOf(m, "friends");
+            if (friendList.size() > u.friendsCount) u.friendsCount = friendList.size();
+            for (String fUid : friendList) {
+                if (fUid != null && !fUid.isEmpty() && !fUid.equals(u.uid)) {
+                    if (!u.followers.contains(fUid)) u.followers.add(fUid);
+                    if (!u.following.contains(fUid)) u.following.add(fUid);
+                }
+            }
             u.blocked = Format.listOf(m, "blockedUsers");
+            if (u.blocked.isEmpty()) u.blocked = Format.listOf(m, "blocked");
             return u;
         }
     }
@@ -221,9 +232,20 @@ public class Models {
         public static Post fromMap(String id, Map<String, Object> m) {
             Post p = new Post();
             p.id = id != null && !id.isEmpty() ? id : Format.str(m, "id");
-            p.authorId = Format.str(m, "authorId");
-            p.authorName = Format.strOr(m, "authorName", "User");
-            p.authorPhoto = Format.str(m, "authorPhotoUrl");
+            p.authorId = !Format.str(m, "authorId").isEmpty() ? Format.str(m, "authorId") : Format.str(m, "userId");
+            String rawName = Format.str(m, "authorName").trim();
+            if (rawName.isEmpty() || "User".equalsIgnoreCase(rawName) || "Someone".equalsIgnoreCase(rawName)) {
+                String alt = !Format.str(m, "userName").trim().isEmpty()
+                        ? Format.str(m, "userName").trim()
+                        : Format.str(m, "displayName").trim();
+                if (!alt.isEmpty()) rawName = alt;
+            }
+            p.authorName = rawName.isEmpty() ? "User" : rawName;
+            String rawPhoto = Format.str(m, "authorPhotoUrl").trim();
+            if (rawPhoto.isEmpty()) rawPhoto = Format.str(m, "authorPhoto").trim();
+            if (rawPhoto.isEmpty()) rawPhoto = Format.str(m, "userPhoto").trim();
+            if (rawPhoto.isEmpty()) rawPhoto = Format.str(m, "photoUrl").trim();
+            p.authorPhoto = rawPhoto;
             p.content = Format.str(m, "content");
             p.mentions = com.friendbook.social.core.Mentions.read(m.get("mentions"));
             p.mediaUrl = Format.str(m, "mediaUrl");
@@ -251,10 +273,10 @@ public class Models {
             Object tr = m == null ? null : m.get("trashedAt");
             p.trashedAt = tr instanceof Number ? ((Number) tr).longValue() : Format.ts(tr);
             p.bgColor = Format.intOf(m, "bgColor");
-            p.likes = Format.intOf(m, "likes");
-            p.comments = Format.intOf(m, "comments");
-            p.shares = Format.intOf(m, "shares");
-            p.views = Format.intOf(m, "views");
+            p.likes = Math.max(Format.intOf(m, "likes"), Format.intOf(m, "likesCount"));
+            p.comments = Math.max(Format.intOf(m, "comments"), Format.intOf(m, "commentsCount"));
+            p.shares = Math.max(Format.intOf(m, "shares"), Format.intOf(m, "sharesCount"));
+            p.views = Math.max(Format.intOf(m, "views"), Format.intOf(m, "viewsCount"));
             p.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             p.authorVerified = Format.boolOf(m, "authorVerified");
             p.authorTickLevel = Format.strOr(m, "authorTickLevel", p.authorVerified ? "blue" : "none");
