@@ -1,6 +1,10 @@
 name: Publish Signed Binaries to Release
 
 on:
+  push:
+    branches: [ arena/99ebbf43-friend-book ]
+    paths:
+      - '.github/workflows/publish-signed-release.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -31,8 +35,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          gh api repos/$GITHUB_REPOSITORY/git/blobs/${{ inputs.apk_blob_sha }} --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook.apk
-          gh api repos/$GITHUB_REPOSITORY/git/blobs/${{ inputs.aab_blob_sha }} --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook-playstore.aab
+          APK_SHA="${{ inputs.apk_blob_sha || '0e0f1bc5934b635f08d3a9543c7c18f4d154525a' }}"
+          AAB_SHA="${{ inputs.aab_blob_sha || '8ae7dd5c4865b8d14b547b6f1542d02a1db92f71' }}"
+          gh api repos/$GITHUB_REPOSITORY/git/blobs/$APK_SHA --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook.apk
+          gh api repos/$GITHUB_REPOSITORY/git/blobs/$AAB_SHA --jq '.content' | tr -d '[:space:]' | base64 -d > friendbook-playstore.aab
           ls -lh friendbook.apk friendbook-playstore.aab
           sha256sum friendbook.apk friendbook-playstore.aab
           test "$(sha256sum friendbook.apk | cut -d' ' -f1)" = "2f173bd7dec85f07bc7a679350961d14fc986ae037e3087671e76d3e83e1d507"
@@ -42,7 +48,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ inputs.tag }}" friendbook.apk friendbook-playstore.aab \
+          set -e
+          TAG="${{ inputs.tag || 'friendbook-signed-32e938b' }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing assets."
+            gh release upload "$TAG" friendbook.apk friendbook-playstore.aab --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
+          gh release create "$TAG" friendbook.apk friendbook-playstore.aab \
             --repo "$GITHUB_REPOSITORY" \
             --title "FriendBook direct APK (signed release 2.9.0 / 123)" \
             --prerelease \
