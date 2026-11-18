@@ -363,6 +363,7 @@ function rowToDocument(row) {
   try { data = JSON.parse(row.document_json); } catch { data = null; }
   if (!data || typeof data !== 'object') data = {};
   return {
+    exists: true,
     id: row.doc_id,
     path: row.path,
     parent: row.parent_path,
@@ -543,7 +544,9 @@ export async function firestoreDocuments(request, env, identity) {
   if (path === '/v1/firestore/document' && request.method === 'GET') {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
-    const row = await readRow(db, docPath).catch(() => null);
+    let row;
+    try { row = await readRow(db, docPath); }
+    catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     return json(rowToDocument(row));
   }
@@ -620,7 +623,10 @@ export async function firestoreDocuments(request, env, identity) {
     const parts = splitPath(parent);
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
-    const docs = (await readCollectionRows(db, parent).catch(() => [])).map(rowToDocument).filter(Boolean);
+    let rows;
+    try { rows = await readCollectionRows(db, parent); }
+    catch { return json({ error: 'Read unavailable' }, 503); }
+    const docs = rows.map(rowToDocument).filter(Boolean);
     const result = applyQuery(docs, body || {});
     return json({ parent, documents: result });
   }
@@ -631,7 +637,9 @@ export async function firestoreDocuments(request, env, identity) {
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
-    const rows = await readCollectionRows(db, parent).catch(() => []);
+    let rows;
+    try { rows = await readCollectionRows(db, parent); }
+    catch { return json({ error: 'Read unavailable' }, 503); }
     const docs = rows.map(rowToDocument).filter(Boolean);
     const filtered = docs.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });
@@ -647,7 +655,8 @@ export async function firestoreDocuments(request, env, identity) {
     const cache = new Map();
     for (const op of ops) {
       if (op?.path && !cache.has(op.path)) {
-        try { cache.set(op.path, await readRow(db, op.path)); } catch { cache.set(op.path, null); }
+        try { cache.set(op.path, await readRow(db, op.path)); }
+        catch { return json({ error: 'Read unavailable' }, 503); }
       }
     }
     // Compute final docs in memory, then write atomically via D1 batch.
@@ -663,7 +672,7 @@ export async function firestoreDocuments(request, env, identity) {
         order.push(p);
       }
       const entry = finalDocs.get(p);
-      const type = op.type || 'set';
+      const type = op.type || op.op || 'set';
       if (type === 'delete') {
         entry.deleted = true;
         entry.doc = null;
@@ -671,7 +680,7 @@ export async function firestoreDocuments(request, env, identity) {
       }
       if (type === 'update') {
         if (!entry.existingRow && !entry.doc) return json({ error: 'NOT_FOUND' }, 404);
-        entry.doc = applyUpdate(entry.doc, op.fields || op.data || {}, now);
+        entry.doc = applyUpdate(entry.doc, op.fields || op.updates || op.data || {}, now);
         entry.deleted = false;
         continue;
       }

@@ -41,6 +41,13 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   assert.equal(row.path, `users/${uid}`);
   assert.equal(row.owner_uid, uid);
   assert.match(row.document_json, /d1-only/);
+  const read = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
+    headers: {authorization: 'Bearer proof-token'},
+  }), {DB: db, FIREBASE_PROJECT_ID: 'friendbook-test'});
+  assert.equal(read.status, 200);
+  const document = await read.json();
+  assert.equal(document.exists, true);
+  assert.equal(document.data.displayName, 'D1 proof');
   const patch = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
     method:'PATCH', headers:{authorization:'Bearer proof-token','content-type':'application/json'},
     body:JSON.stringify({fields:{displayName:'Patched name'}}),
@@ -85,7 +92,9 @@ test('Firestore document reads fall back to existing D1 app documents for root p
     headers: {authorization:'Bearer test-token'},
   }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(profile.status,200);
-  assert.equal((await profile.json()).data.displayName,'New account');
+  const profileDoc = await profile.json();
+  assert.equal(profileDoc.exists, true);
+  assert.equal(profileDoc.data.displayName,'New account');
   sql.close();
 });
 
@@ -224,6 +233,7 @@ test('cleanup migration removes only synthetic D1 proof profiles', () => {
 test('D1 document misses never fall back to reading the Firebase Firestore API', async () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(schema);
+  sql.exec(appSchema);
   const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
     return { run: async () => stmt.run(...args), all: async () => ({results: stmt.all(...args)}), first: async () => stmt.get(...args) || null };
   } }; } };
@@ -242,4 +252,44 @@ test('D1 document misses never fall back to reading the Firebase Firestore API',
     assert.deepEqual((await query.json()).documents, []);
     assert.equal(externalCalls, 0);
   } finally { globalThis.fetch = originalFetch; sql.close(); }
+});
+
+test('database read failures are not reported as missing profiles or empty lists', async () => {
+  const app = createWorker(async () => 'uid1');
+  const db = { prepare() { throw new Error('database offline'); } };
+  const env = {DB:db, FIREBASE_PROJECT_ID:'friendbook-test'};
+  const headers = {authorization:'Bearer token', 'content-type':'application/json'};
+  const doc = await app.fetch(new Request('https://example.test/v1/firestore/document?path=users/uid1',{headers}), env);
+  assert.equal(doc.status, 503);
+  const query = await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers,body:JSON.stringify({parent:'notifications'})}),env);
+  assert.equal(query.status, 503);
+  const count = await app.fetch(new Request('https://example.test/v1/firestore/count?parent=posts',{headers}),env);
+  assert.equal(count.status, 503);
+});
+
+test('Android batch operations persist chat messages and apply update and delete operations', async () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
+  const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
+    return { run: async () => stmt.run(...args), all: async () => ({results:stmt.all(...args)}), first: async () => stmt.get(...args) || null };
+  } }; }, async batch(statements) { for (const s of statements) await s.run(); } };
+  const app=createWorker(async()=> 'u1');
+  const env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const headers={authorization:'Bearer token','content-type':'application/json'};
+  const post = async operations => app.fetch(new Request('https://example.test/v1/firestore/batch', {method:'POST',headers,body:JSON.stringify({operations})}),env);
+  let res=await post([
+    {op:'set',path:'chats/room/messages/m1',data:{senderId:'u1',text:'hello',createdAt:{__fieldValue:'serverTimestamp'}}},
+    {op:'set',path:'chats/room',merge:true,data:{participants:['u1','u2']}}
+  ]);
+  assert.equal(res.status,200);
+  res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers,body:JSON.stringify({parent:'chats/room/messages'})}),env);
+  assert.equal(res.status,200); assert.equal((await res.json()).documents[0].data.text,'hello');
+  res=await post([{op:'update',path:'chats/room/messages/m1',updates:{isSeen:true}}]);
+  assert.equal(res.status,200);
+  let doc=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1').document_json);
+  assert.equal(doc.isSeen,true); assert.equal(doc.text,'hello');
+  res=await post([{op:'delete',path:'chats/room/messages/m1'}]);
+  assert.equal(res.status,200);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
+  sql.close();
 });
