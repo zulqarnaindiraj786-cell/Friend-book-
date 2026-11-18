@@ -101,6 +101,23 @@ public class DocumentReference {
         });
     }
 
+    /** Atomically create a notification; existing notifications are never overwritten. */
+    @SuppressWarnings("unchecked")
+    public Task<Void> create(Object data) {
+        if (!path.startsWith("notifications/") || path.substring("notifications/".length()).contains("/"))
+            return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Create-only is supported for notifications"));
+        Map<String,Object> map=data instanceof Map ? (Map<String,Object>) data : new HashMap<>();
+        JSONObject body = new JSONObject();
+        try { body.put("data", D1DocumentJson.encodeMap(map)); body.put("createOnly", true); }
+        catch (Exception e) { return com.google.android.gms.tasks.Tasks.forException(e); }
+        return firestore.runAsync(() -> {
+            D1DocumentTransport.putDocument(path, body);
+            firestore.invalidateDoc(path);
+            firestore.notifyDocListeners(path);
+            return null;
+        });
+    }
+
     public Task<Void> update(Map<String, Object> data) {
         JSONObject body = new JSONObject();
         // The Worker PATCH endpoint consumes `fields` (with `data` retained as a legacy

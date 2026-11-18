@@ -758,6 +758,8 @@ test('trusted group chats support admin management, member leave, transfer and a
   assert.equal((await call('alice','chats/g','PATCH',{fields:{adminIds:['alice','bob'],onlyAdminsCanSend:true}})).status,200);
   assert.equal((await call('carol','chats/g/messages/m','PUT',{data:{senderId:'carol',text:'blocked'}})).status,403);
   assert.equal((await call('bob','chats/g/messages/m','PUT',{data:{senderId:'bob',text:'allowed'}})).status,200);
+  assert.equal((await call('carol','chats/g','PATCH',{fields:{participantNames:{carol:'Carol'}}})).status,200);
+  assert.equal((await call('carol','chats/g','PATCH',{fields:{participantNames:{carol:'Carol',alice:'Impostor'}}})).status,403);
   assert.equal((await call('carol','chats/g','PATCH',{fields:{participants:['alice','bob']}})).status,200);
   assert.equal((await call('alice','chats/g','PATCH',{fields:{participants:['bob'],adminIds:['bob'],createdBy:'bob'}})).status,200);
   assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g').owner_uid,'bob');
@@ -856,4 +858,49 @@ test('view counts enforce post privacy, filter batches and forbid unscoped top l
   assert.equal((await call('bob','/v1/views?collection=posts&top=10')).status,400);
   assert.equal((await call('alice','/v1/views/posts/secret')).status,200);
   resetViewState();sql.close();
+});
+
+test('direct chat replies accept reversed participant order without adding a new member', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const batch=(uid,ops)=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({operations:ops})}),env);
+  const send=(uid,other,msg)=>[{op:'set',path:`chats/direct/messages/${msg}`,data:{senderId:uid,text:msg}},{op:'set',path:'chats/direct',merge:true,data:{participants:[uid,other],lastMessage:msg}}];
+  assert.equal((await batch('alice',send('alice','bob','hello'))).status,200);
+  assert.equal((await batch('bob',send('bob','alice','reply'))).status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/direct/messages/reply').document_json).text,'reply');
+  assert.equal((await batch('bob',send('bob','eve','forged'))).status,403);
+  sql.close();
+});
+
+test('sender create-only notifications are atomic and never overwrite recipient read state', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  let race=false;
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){if(race){race=false;sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('notifications/race','notifications','race','alice',JSON.stringify({fromUserId:'alice',toUserId:'bob',isRead:true,text:'winner'}),1);}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const req=(uid,id,method,body)=>app.fetch(new Request('https://example.test/v1/firestore/document?path=notifications/'+id,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const data={fromUserId:'alice',toUserId:'bob',isRead:false,text:'hello'};
+  assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,200);
+  assert.equal((await req('alice','n','GET')).status,403);
+  assert.equal((await req('bob','n','PATCH',{fields:{isRead:true}})).status,200);
+  assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,409);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/n').document_json).isRead,true);
+  race=true;assert.equal((await req('alice','race','PUT',{data,createOnly:true})).status,409);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race'),undefined);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('notifications/race').document_json).text,'winner');
+  sql.close();
+});
+
+test('chat message query checks room membership once, not once per message', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  insert.run('chats/room','chats','chats','room','alice',JSON.stringify({participants:['alice','bob']}),1,1);
+  for(let i=0;i<25;i++)insert.run(`chats/room/messages/m${i}`,'chats/room/messages','messages',`m${i}`,'alice',JSON.stringify({senderId:'alice',text:'x'}),1,1);
+  let lookups=0;
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>{if(q.includes('WHERE path = ?') && a[0]==='chats/room')lookups++;return s.get(...a)||null;}};}};}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const query=uid=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({parent:'chats/room/messages',limit:10})}),env);
+  const res=await query('bob');assert.equal(res.status,200);assert.equal((await res.json()).documents.length,10);assert.equal(lookups,1);
+  assert.equal((await query('eve')).status,403);
+  sql.close();
 });

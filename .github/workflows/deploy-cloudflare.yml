@@ -101,6 +101,16 @@ jobs:
             echo '::warning::Could not store CF_AE_TOKEN; AE counts will be served from KV + memory instead (still zero D1 writes).'
           fi
 
+      - name: Configure private FCM server credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: |
+          set +x
+          python3 -c 'import json,os,sys; d=json.loads(os.environ["FIREBASE_ADMIN_SERVICE_ACCOUNT"]); sys.exit(0 if d.get("type")=="service_account" and d.get("project_id")=="friendbook-17551" and d.get("private_key") and d.get("client_email") else 1)'
+          printf '%s' "$FIREBASE_ADMIN_SERVICE_ACCOUNT" | npx wrangler secret put FIREBASE_ADMIN_SERVICE_ACCOUNT
+
       - name: Diagnose Cloudflare auth and apply pending D1 migrations
         id: d1_diagnostics
         env:

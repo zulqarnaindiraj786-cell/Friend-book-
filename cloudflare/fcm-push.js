@@ -112,21 +112,14 @@ async function sendToDevices(env, db, actor, target, data, event) {
   let accepted = 0, duplicate = 0, invalid = 0, failed = 0;
   for (const device of devices) {
     const claimKey = `fcm:${event}:${device.device_id}`;
-    const claimed = await db.prepare(
-      'INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at) VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING'
-    ).bind(claimKey, actor, Date.now()).run().then(() => true).catch(() => false);
-    // D1 INSERT ... ON CONFLICT DO NOTHING still succeeds; check existence instead.
-    const exists = await db.prepare('SELECT event_key FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).first().catch(() => null);
-    if (!exists) { failed++; continue; }
-    // If this claim was just created by us, proceed; if it existed before, dedupe.
-    // We detect "just created" by checking created_at recency is unreliable, so use
-    // a deterministic approach: try to detect duplicate via a second marker.
-    // Simpler: if the row's actor matches and we just inserted, the INSERT above
-    // created it; duplicates are rows created earlier. We approximate by allowing
-    // the first send per process via in-memory set.
-    if (sendToDevices.seen?.has(claimKey)) { duplicate++; continue; }
-    if (!sendToDevices.seen) sendToDevices.seen = new Set();
-    sendToDevices.seen.add(claimKey);
+    // RETURNING identifies the sole winning insert across Worker isolates.
+    // Never use isolate-local memory to decide whether a persisted claim is new.
+    let claim;
+    try {
+      claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
+        VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
+    } catch { failed++; continue; }
+    if (!claim) { duplicate++; continue; }
     try {
       const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
         method: 'POST',
@@ -144,12 +137,10 @@ async function sendToDevices(env, db, actor, target, data, event) {
         if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
         failed++;
         await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
-        sendToDevices.seen.delete(claimKey);
       }
     } catch {
       failed++;
       await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
-      sendToDevices.seen.delete(claimKey);
     }
   }
   if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid } };

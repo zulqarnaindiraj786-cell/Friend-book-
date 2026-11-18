@@ -61,7 +61,14 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
     if (!after) return before.isGroup===true && validGroupRoom(before) && before.createdBy===uid && await groupChatOwner(db,path)===uid;
     if (before.isGroup!==after.isGroup) return false;
     const protectedFields = ['participants','adminIds','creatorId','createdBy','onlyAdminsCanSend'];
-    if (before.isGroup!==true) return protectedFields.every(k=>equal(before[k],after[k]));
+    if (before.isGroup!==true) {
+      // Direct-chat clients serialize [sender, recipient], so the same two
+      // participants can legitimately appear in opposite order on replies.
+      if (!validList(before.participants) || !validList(after.participants)
+          || before.participants.length!==after.participants.length
+          || !before.participants.every(id=>after.participants.includes(id))) return false;
+      return protectedFields.filter(k=>k!=='participants').every(k=>equal(before[k],after[k]));
+    }
     const owner=await groupChatOwner(db,path);
     // Never grant authority based solely on a historically client-writable role.
     if (!owner || owner!==before.createdBy || !validGroupRoom(before) || !validGroupRoom(after))
@@ -71,7 +78,13 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
     if (!isAdmin) {
       // Members may leave themselves; they cannot add others or alter roles/settings.
       const leaving=before.participants.includes(uid) && !after.participants.includes(uid);
-      if (!sameExcept(before,after,new Set(['participants','adminIds','unreadCount','lastMessage','lastMessageTime','lastMessageTimeMs']))) return false;
+      if (!sameExcept(before,after,new Set(['participants','adminIds','unreadCount','lastMessage','lastMessageTime','lastMessageTimeMs','participantNames','participantPhotos']))) return false;
+      // A member may refresh only their own name/photo, not impersonate another member.
+      for (const key of ['participantNames','participantPhotos']) {
+        const a=before[key]||{}, b=after[key]||{};
+        if (!a || !b || typeof a!=='object' || typeof b!=='object' || Array.isArray(a) || Array.isArray(b)
+            || !sameExcept(a,b,new Set([uid]))) return false;
+      }
       const remaining=before.participants.filter(x=>x!==uid);
       return equal(after.adminIds,before.adminIds) && (equal(after.participants,before.participants) || (leaving && equal(after.participants,remaining)));
     }

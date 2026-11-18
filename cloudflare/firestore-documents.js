@@ -506,6 +506,27 @@ function applyQuery(docs, spec) {
   return sliced;
 }
 
+// Apply unchanged-data filters before expensive authorization; projected user,
+// friend and group fields must still be filtered only after projection.
+function prefilterRaw(docs,parent,filters) {
+  const root=splitPath(parent)?.[0];
+  if (!['posts','reels','chats','messages','notifications','friend_requests'].includes(root) || !Array.isArray(filters)) return docs;
+  return docs.filter(d=>filters.every(f=>matchesFilter(d.data,f,d.id)));
+}
+async function visibleDocuments(db,uid,parent,docs) {
+  const parts=splitPath(parent), nestedChat=parts?.length===3 && parts[0]==='chats' && parts[2]==='messages';
+  const allowed=new Array(docs.length).fill(false);
+  let next=0;
+  await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
+    for (;;) {
+      const i=next++; if (i>=docs.length) return;
+      const doc=docs[i];
+      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path);
+    }
+  }));
+  return docs.filter((_,i)=>allowed[i]);
+}
+
 // ---------- operations ----------
 async function applyOperation(db, op, uid, now, existingCache) {
   const path = op.path;
@@ -1095,6 +1116,23 @@ export async function firestoreDocuments(request, env, identity) {
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      if (body.createOnly===true && splitPath(docPath)[0]==='notifications') {
+        if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+        const id=docIdOf(docPath), serialized=JSON.stringify(next);
+        if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+        try {
+          await db.batch([
+            await chatDocumentGuard(db,docPath,null),
+            db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,'notifications','notifications',id,uid,serialized,now,now),
+            db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,'notifications',id,uid,JSON.stringify({...next,id}),now),
+            db.prepare('DELETE FROM friendbook_cf_social_guards').bind()
+          ]);
+          return json({exists:true,id,path:docPath,parent:'notifications',collection:'notifications',data:next,createTime:now,updateTime:now});
+        } catch(e) {
+          if (/constraint|document changed/i.test(String(e?.message||''))) return json({error:'ALREADY_EXISTS'},409);
+          return json({error:'Write unavailable'},503);
+        }
+      }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
       const row = await writeRow(db, docPath, next, now, existing);
@@ -1245,13 +1283,14 @@ export async function firestoreDocuments(request, env, identity) {
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
-      docs = (await Promise.all(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(async doc => {
+      docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,body?.filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
-    const visible = [];
-    for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
+    let visible;
+    try { visible=await visibleDocuments(db,uid,parent,docs); }
+    catch { return json({error:'Read unavailable'},503); }
     const result = applyQuery(visible, body || {});
     return json({ parent, documents: result });
   }
@@ -1271,13 +1310,14 @@ export async function firestoreDocuments(request, env, identity) {
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
-      docs = (await Promise.all(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))).map(async doc => {
+      docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
-    const visible = [];
-    for (const doc of docs) if (await chatReadAllowed(db, doc.path, uid, doc.data) && await contentReadAllowed(db, uid, doc.path)) visible.push(doc);
+    let visible;
+    try { visible=await visibleDocuments(db,uid,parent,docs); }
+    catch { return json({error:'Read unavailable'},503); }
     const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });
   }
