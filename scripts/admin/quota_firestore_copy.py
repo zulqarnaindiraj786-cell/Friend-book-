@@ -15,9 +15,10 @@ from zoneinfo import ZoneInfo
 
 from migrate_firestore_to_d1 import D1, FirestoreSource, CopyError, PREFIX, PROJECT, FIRESTORE
 
-# Default tool budget; an explicitly authorized, one-day extension adds at most 5,000.
+# Default budget and separately authorized, one-day extensions.
 DAILY_LIMIT = 10000
 EXTENDED_LIMIT = 15000
+SECOND_EXTENDED_LIMIT = 20000
 PAGE_SIZE = 10
 BATCH = 'budgeted-firestore-v1'
 
@@ -26,7 +27,7 @@ class BudgetExhausted(CopyError):
 
 class Budget:
     def __init__(self, d1, cap=DAILY_LIMIT, clock=None, allowed_day=None):
-        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1 or cap > EXTENDED_LIMIT or (cap > DAILY_LIMIT and not allowed_day):
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1 or cap > SECOND_EXTENDED_LIMIT or (cap > DAILY_LIMIT and not allowed_day):
             raise CopyError('Invalid daily budget')
         self.d1, self.cap = d1, cap
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -63,6 +64,22 @@ def extend_exhausted_budget_today(d1, clock=None):
         current=d1.query('SELECT reserved,cap FROM friendbook_cf_copy_read_budget WHERE quota_day=?',(day,))
         if len(current)!=1 or current[0]['cap']!=EXTENDED_LIMIT or not DAILY_LIMIT<=current[0]['reserved']<=EXTENDED_LIMIT:
             raise CopyError('Today does not have the exhausted base budget; no source request made')
+    return day
+
+def extend_15k_budget_on_day(d1, authorized_day, clock=None):
+    """Add 5k to the existing 15k cap only on the explicitly authorized Pacific date."""
+    now=(clock or (lambda: datetime.now(timezone.utc)))()
+    if now.tzinfo is None: raise CopyError('Budget clock must be timezone aware')
+    day=now.astimezone(ZoneInfo('America/Los_Angeles')).date().isoformat()
+    if day != authorized_day:
+        raise CopyError('Authorized day has passed or not begun; no source request made')
+    rows=d1.query("""UPDATE friendbook_cf_copy_read_budget SET cap=?
+      WHERE quota_day=? AND cap=? AND reserved BETWEEN ? AND ? RETURNING quota_day""",
+      (SECOND_EXTENDED_LIMIT,day,EXTENDED_LIMIT,DAILY_LIMIT,EXTENDED_LIMIT))
+    if len(rows)!=1:
+        current=d1.query('SELECT reserved,cap FROM friendbook_cf_copy_read_budget WHERE quota_day=?',(day,))
+        if len(current)!=1 or current[0]['cap']!=SECOND_EXTENDED_LIMIT or not DAILY_LIMIT<=current[0]['reserved']<=SECOND_EXTENDED_LIMIT:
+            raise CopyError('Expected existing 15k budget; no source request made')
     return day
 
 class CappedSource(FirestoreSource):
@@ -169,10 +186,13 @@ def main():
     p.add_argument('--execute',action='store_true')
     p.add_argument('--daily-budget',type=int,default=DAILY_LIMIT)
     p.add_argument('--extend-exhausted-today',action='store_true')
+    p.add_argument('--extend-15k-on',help='Explicit Pacific date authorized for the 15k to 20k extension')
     args=p.parse_args()
     if not args.execute:
         print('NOT EXECUTED: no provider contacted'); return 2
-    if args.daily_budget < 1 or args.daily_budget > EXTENDED_LIMIT or (args.daily_budget > DAILY_LIMIT and (args.daily_budget != EXTENDED_LIMIT or not args.extend_exhausted_today)) or (args.extend_exhausted_today and args.daily_budget != EXTENDED_LIMIT):
+    if (args.daily_budget < 1 or args.daily_budget > SECOND_EXTENDED_LIMIT or
+        (args.daily_budget > DAILY_LIMIT and not ((args.daily_budget == EXTENDED_LIMIT and args.extend_exhausted_today and not args.extend_15k_on) or (args.daily_budget == SECOND_EXTENDED_LIMIT and args.extend_15k_on and not args.extend_exhausted_today))) or
+        (args.daily_budget <= DAILY_LIMIT and (args.extend_exhausted_today or args.extend_15k_on))):
         print('Invalid daily budget; no provider contacted'); return 2
     d1=None
     try:
@@ -188,7 +208,8 @@ def main():
             session.headers['Authorization']='Bearer '+token
             d1=D1(session)
             for sql in SCHEMAS: d1.query(sql)
-            extended_day=extend_exhausted_budget_today(d1) if args.extend_exhausted_today else None
+            extended_day=(extend_15k_budget_on_day(d1,args.extend_15k_on) if args.extend_15k_on
+                          else extend_exhausted_budget_today(d1) if args.extend_exhausted_today else None)
             budget=Budget(d1,args.daily_budget,allowed_day=extended_day)
             credentials=service_account.Credentials.from_service_account_info(firebase,scopes=['https://www.googleapis.com/auth/datastore'])
             with AuthorizedSession(credentials) as firebase_session:

@@ -105,3 +105,24 @@ class ExtensionTests(unittest.TestCase):
         with self.assertRaises(q.CopyError):q.extend_exhausted_budget_today(db,now)
         with self.assertRaises(q.CopyError):q.extend_exhausted_budget_today(db,lambda:datetime(2026,11,19,12,tzinfo=timezone.utc))
         self.assertEqual(db.query('SELECT cap FROM friendbook_cf_copy_read_budget')[0]['cap'],10000)
+
+    def test_second_extension_preserves_usage_is_idempotent_and_limited_to_authorized_day(self):
+        db=LocalD1(); now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        q.Budget(db,10000,now).reserve(10000)
+        day=q.extend_exhausted_budget_today(db,now)
+        q.Budget(db,15000,now,allowed_day=day).reserve(4995)
+        self.assertEqual(q.extend_15k_budget_on_day(db,'2026-11-18',now),day)
+        self.assertEqual(q.extend_15k_budget_on_day(db,'2026-11-18',now),day)
+        budget=q.Budget(db,20000,now,allowed_day=day)
+        self.assertEqual(budget.reserve(5005)['reserved'],20000)
+        with self.assertRaises(q.BudgetExhausted):budget.reserve(1)
+        with self.assertRaises(q.CopyError):q.extend_15k_budget_on_day(db,'2026-11-18',lambda:datetime(2026,11,19,12,tzinfo=timezone.utc))
+        with self.assertRaises(q.BudgetExhausted):q.Budget(db,20000,lambda:datetime(2026,11,19,12,tzinfo=timezone.utc),allowed_day=day).reserve(1)
+        self.assertEqual(len(db.query('SELECT * FROM friendbook_cf_copy_read_budget')),1)
+
+    def test_second_extension_rejects_wrong_budget_and_date_without_source_requests(self):
+        db=LocalD1(); now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        q.Budget(db,10000,now).reserve(10000)
+        with self.assertRaises(q.CopyError):q.extend_15k_budget_on_day(db,'2026-11-18',now)
+        with self.assertRaises(q.CopyError):q.extend_15k_budget_on_day(db,'2026-11-17',now)
+        self.assertEqual(db.query('SELECT cap FROM friendbook_cf_copy_read_budget')[0]['cap'],10000)
