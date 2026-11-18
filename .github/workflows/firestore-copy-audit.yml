@@ -42,3 +42,5 @@ jobs:
 # D1-only owner progress refresh; does not touch Firebase.
 
 # Quota progress check: D1 aggregates only, zero Firebase calls.
+
+# D1-only progress refresh; no Firebase scan.
