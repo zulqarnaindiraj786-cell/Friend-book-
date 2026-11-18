@@ -1,3 +1,4 @@
+import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
@@ -558,6 +559,7 @@ export async function firestoreDocuments(request, env, identity) {
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
     if (!(await contentReadAllowed(db, uid, docPath))) return json({error:'Forbidden'},403);
+    if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
     const view = profileReadView(docPath, uid, document.data);
@@ -571,6 +573,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    if (splitPath(docPath)[0] === 'friend_requests') return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
@@ -592,6 +595,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    if (splitPath(docPath)[0] === 'friend_requests') return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     try {
@@ -612,6 +616,27 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    if (splitPath(docPath)[0] === 'friend_requests') {
+      try {
+        const row = await readRow(db, docPath);
+        if (!row || !canDeleteFriendRequest(uid, decodeValue(JSON.parse(row.document_json)))) return json({error:'Forbidden'},403);
+        // A conditional assertion and deletion are committed together. Never delete a request
+        // which changed after authorization, even across concurrent Worker isolates.
+        if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
+        const canonical = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(docPath).first();
+        const legacy = canonical ? null : await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(docPath).first();
+        // Verify the exact authorized snapshot, including the absence of a canonical row
+        // when authorization used a historical mirror.
+        if ((canonical && canonical.document_json !== row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:docPath,collection:'friend_requests',doc_id:docIdOf(docPath),document_json:legacy.document_json})?.document_json !== row.document_json))) return json({error:'Request changed'},409);
+        await db.batch([
+          db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical ? 1:0,docPath,row.document_json,canonical ? 1:0,docPath,docPath,legacy?.document_json || ''),
+          db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(docPath),
+          db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(docPath),
+          db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
+        ]);
+        return json({deleted:true,path:docPath});
+      } catch { return json({error:'Request changed or deletion unavailable'},409); }
+    }
     if (['notifications','users','pushDevices','chats','messages','posts','reels'].includes(splitPath(docPath)?.[0])) {
       let existing;
       try { existing = await readRow(db, docPath); }
@@ -634,6 +659,17 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = `${parent}/${id}`;
     try {
       const next = applySet(null, body?.data || {}, false, null, now);
+      if (parent === 'friend_requests') {
+        if (!canCreateFriendRequest(uid, next)) return json({error:'Forbidden'},403);
+        if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
+        const serialized=JSON.stringify(next);
+        await db.batch([
+          db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,parent,parent,id,uid,serialized,now,now),
+          db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,parent,id,uid,JSON.stringify({...next,id}),now),
+        ]);
+        return json({exists:true,id,path:docPath,parent,collection:parent,data:next,createTime:now,updateTime:now},201);
+      }
+
       if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !(await chatWriteAllowed(db, docPath, uid, null, next)) || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
       const row = await writeRow(db, docPath, next, now, null);
       return json(rowToDocument(row), 201);
@@ -655,7 +691,7 @@ export async function firestoreDocuments(request, env, identity) {
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data)).map(doc => {
+    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data))).map(doc => {
       const view = profileReadView(doc.path, uid, doc.data);
       return view === null ? null : { ...doc, data: view };
     }).filter(Boolean);
@@ -678,7 +714,7 @@ export async function firestoreDocuments(request, env, identity) {
     let rows;
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
-    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data)).map(doc => {
+    const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data))).map(doc => {
       const view = profileReadView(doc.path, uid, doc.data);
       return view === null ? null : { ...doc, data: view };
     }).filter(Boolean);
@@ -708,7 +744,7 @@ export async function firestoreDocuments(request, env, identity) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
-      if (!supportedDocumentPath(p)) return json({error:'Forbidden'},403);
+      if (!supportedDocumentPath(p) || splitPath(p)[0] === 'friend_requests') return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;

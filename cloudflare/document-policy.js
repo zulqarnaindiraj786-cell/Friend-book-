@@ -1,18 +1,18 @@
 import { authorizePost } from './firebase-post-access.js';
 
 // Access is denied by default: add a collection only after its read and write policy exists.
-const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels']);
+const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels','friend_requests']);
 export function supportedDocumentPath(path) {
   const p=path.split('/');
   if (!SUPPORTED.has(p[0])) return false;
-  if (['messages','notifications'].includes(p[0])) return p.length===2;
+  if (['messages','notifications','friend_requests'].includes(p[0])) return p.length===2;
   if (['posts','reels'].includes(p[0])) return p.length===2 || (p.length===4 && ['comments','reactions'].includes(p[2]));
   return true;
 }
 export function supportedCollectionPath(path) {
   const p=path.split('/');
   if (!SUPPORTED.has(p[0])) return false;
-  if (['messages','notifications'].includes(p[0])) return p.length===1;
+  if (['messages','notifications','friend_requests'].includes(p[0])) return p.length===1;
   if (['posts','reels'].includes(p[0])) return p.length===1 || (p.length===3 && ['comments','reactions'].includes(p[2]));
   return true;
 }

@@ -1,3 +1,4 @@
+import { canReadFriendRequest } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
@@ -152,7 +153,7 @@ export async function appDocuments(request, env, identity) {
       for (const row of rows?.results || []) {
         const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
-        if (doc && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
+        if (doc && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = profileReadView(`${collection}/${row.doc_id}`, uid, doc);
           if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
         }
@@ -191,6 +192,7 @@ export async function appDocuments(request, env, identity) {
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
       if (!(await contentReadAllowed(env.DB, uid, docPath))) return json({error:'Forbidden'},403);
+      if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
       if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
       const view = profileReadView(docPath, uid, document);
@@ -202,6 +204,7 @@ export async function appDocuments(request, env, identity) {
   }
 
   if (request.method === 'PUT') {
+    if (collection === 'friend_requests') return json({error:'Forbidden'},403);
     let incoming;
     try { incoming = await request.json(); }
     catch { return json({ error: 'Invalid JSON payload' }, 400); }

@@ -403,7 +403,7 @@ test('post privacy and unreviewed collections fail closed on all document routes
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
   // Until each policy is implemented, neither the old nor the Firestore-compatible
   // routes may read or mutate these records, including mixed atomic batches.
-  for (const collection of ['friends','friend_requests','groups','payments']) {
+  for (const collection of ['friends','groups','payments']) {
     const docPath = `${collection}/item`;
     assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`)).status,403);
     assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'PUT',{data:{userId:'bob',status:'approved'}})).status,403);
@@ -421,5 +421,43 @@ test('post privacy and unreviewed collections fail closed on all document routes
     assert.ok(docsWriteStatus === 403 || docsWriteStatus === 400);
   }
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').n,0);
+  sql.close();
+});
+
+test('friend requests restrict reads and pending creation, and reject forged acceptance on every route', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  sql.exec(readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'));
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const path='/v1/firestore/document?parent=friend_requests';
+  assert.equal((await call('mallory',path,'POST',{data:{fromUid:'alice',toUid:'bob',status:'pending'}})).status,403);
+  assert.equal((await call('alice',path,'POST',{data:{fromUid:'alice',toUid:'bob',status:'accepted'}})).status,403);
+  const create=await call('alice',path,'POST',{data:{fromUid:'alice',toUid:'bob',status:'pending',fromUserName:'Alice'}});
+  assert.equal(create.status,201,await create.clone().text());
+  const {id}=await create.json();
+  const uri=`/v1/firestore/document?path=friend_requests/${id}`;
+  assert.equal((await call('alice',uri)).status,200);
+  assert.equal((await call('bob',uri)).status,200);
+  assert.equal((await call('mallory',uri)).status,403);
+  assert.equal((await call('mallory',`/v1/docs/friend_requests/${id}`)).status,403);
+  assert.equal((await call('bob',`/v1/docs/friend_requests/${id}`)).status,200);
+  assert.equal((await (await call('mallory','/v1/firestore/query','POST',{parent:'friend_requests'})).json()).documents.length,0);
+  assert.equal((await (await call('bob','/v1/firestore/count?parent=friend_requests')).json()).count,1);
+  assert.equal((await call('bob',uri,'PATCH',{fields:{status:'accepted'}})).status,403);
+  assert.equal((await call('bob',`/v1/docs/friend_requests/${id}`,'PUT',{status:'accepted'})).status,403);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'update',path:`friend_requests/${id}`,fields:{status:'accepted'}}]})).status,403);
+  assert.equal((await call('mallory',uri,'DELETE')).status,403);
+  const realBatch=db.batch;
+  db.batch=async stmts=>{
+    sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({fromUid:'alice',toUid:'carol',status:'pending'}),`friend_requests/${id}`);
+    return realBatch(stmts);
+  };
+  assert.equal((await call('bob',uri,'DELETE')).status,409);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`friend_requests/${id}`).document_json).toUid,'carol');
+  db.batch=realBatch;
+  assert.equal((await call('carol',uri,'DELETE')).status,200);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_documents WHERE path=?').get(`friend_requests/${id}`).n,0);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_firestore_documents WHERE path=?').get(`friend_requests/${id}`).n,0);
   sql.close();
 });
