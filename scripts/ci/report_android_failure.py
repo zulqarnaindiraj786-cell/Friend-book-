@@ -37,14 +37,12 @@ def report(root, log):
                 if context:
                     print('::error title=Gradle failure cause::' + escaped('\n'.join(context)[:6000]))
                     return
-        for line in lines:
-            if re.search(r'FAILED|FAILURE:|Exception|[Ee]rror|daemon disappeared|What went wrong|OutOfMemory', line):
-                print('::error::' + escaped(line[:500]))
-                emitted += 1
-                if emitted == 8:
-                    break
-    if not emitted:
+        # Fallback: emit the last 25 non-empty lines so the true cause is always visible.
+        for line in [l for l in lines if l.strip()][-25:]:
+            print('::error title=Gradle log tail::' + escaped(line[:500]))
+    else:
         print('::error::Build failed without a parsed test failure; inspect the build log in GitHub.')
 
 if __name__ == '__main__':
-    report('app/build/test-results', 'build-release.log')
+    log = sys.argv[2] if len(sys.argv) > 2 else 'gradle.log'
+    report(sys.argv[1] if len(sys.argv) > 1 else 'app/build/test-results', log)
