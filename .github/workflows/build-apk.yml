@@ -140,7 +140,7 @@ jobs:
             if [ ! -s "$JAR" ]; then
               mkdir -p "$DIR"
               curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
-                "https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
+                "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
                 -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
             fi
           done
