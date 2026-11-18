@@ -538,6 +538,13 @@ test('friend acceptance commits only a recipient-authorized pending request once
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,409);
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_trusted_friendships').get().n,1);
   sql.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').run('friends/duplicate');
+  db.batch=async statements=>{
+    sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,\'$.bio\',\'changed\') WHERE path=?').run('users/alice');
+    return actualBatch(statements);
+  };
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,409);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_trusted_friendships').get().n,1);
+  db.batch=actualBatch;
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,200);
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_trusted_friendships').get().n,0);
   assert.equal(await hasD1Friendship(db,'bob','alice'),null);
@@ -545,5 +552,26 @@ test('friend acceptance commits only a recipient-authorized pending request once
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/alice').document_json).friendsCount,0);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').document_json).friendsCount,0);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,403);
+  sql.close();
+});
+
+test('legacy friendship duplicates require one atomic removal with the exact counter delta', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  for (const name of ['0018_social_guards.sql','0019_trusted_friendships.sql']) sql.exec(readFileSync(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for(const uid of ['alice','bob']) add.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid,friendsCount:2}),1);
+  add.run('friends/old1','friends','old1','alice',JSON.stringify({id:'old1',participants:['alice','bob']}),1);
+  add.run('friends/old2','friends','old2','bob',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'bob'},{stringValue:'alice'}]}}}}),1);
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,operations)=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({operations})}),env);
+  const counts=n=>['alice','bob'].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:-n}}}));
+  const one=[{op:'delete',path:'friends/old1'},...counts(1)];
+  assert.equal((await call('alice',one)).status,409);
+  const both=[{op:'delete',path:'friends/old1'},{op:'delete',path:'friends/old2'},...counts(2)];
+  assert.equal((await call('mallory',both)).status,403);
+  assert.equal((await call('alice',both)).status,200);
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_documents WHERE collection='friends'").get().n,0);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').document_json).friendsCount,0);
   sql.close();
 });
