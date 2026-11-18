@@ -1,4 +1,4 @@
-name: Deploy existing Cloudflare Worker (D1 OFF)
+name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
     branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book']
@@ -398,7 +398,9 @@ jobs:
           python3 - <<'PY'
           import json
           with open('/tmp/friendbook-health.json') as f:
-              assert json.load(f).get('ok') is True, 'Worker/D1 health check failed'
+              health = json.load(f)
+              assert health.get('ok') is True, 'Worker/D1 health check failed'
+              assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
               assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
@@ -414,7 +416,7 @@ jobs:
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
           test "$vcode" = 401
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
-          echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Deployment passed; D1 interactions are explicitly verified ON, with Realtime Presence + R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
       - name: Copy Firebase Firestore to D1 with per-collection checkpoints
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
         env:

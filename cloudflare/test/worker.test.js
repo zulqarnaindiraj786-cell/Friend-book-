@@ -9,10 +9,10 @@ test('health executes only a constant read and never exposes data', async () => 
     assert.equal(sql, 'SELECT 1 AS connected'); return { first: async () => ({ connected: 1 }) };
   } } });
   assert.equal(response.status, 200);
-  // Binding flags only: it proves which view-counter bindings a deploy actually shipped (Analytics
-  // Engine, the KV snapshot, or the R2 snapshot fallback), and exposes no counter, no id and no data.
+  // Safe feature/binding flags only: confirms the D1 interaction gate and view-counter bindings,
+  // without returning any records, counts, IDs or user data.
   assert.deepEqual(await response.json(),
-    { ok: true, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+    { ok: true, d1InteractionsEnabled: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 test('missing binding and failed DB return no internal details', async () => {
@@ -20,14 +20,21 @@ test('missing binding and failed DB return no internal details', async () => {
   const response = await call('/health', { DB: { prepare() { throw Error('secret'); } } });
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(),
-    { ok: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+    { ok: false, d1InteractionsEnabled: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+});
+test('health reports D1 interactions enabled without exposing data', async () => {
+  const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
+  const response = await call('/health', { DB: db, D1_INTERACTIONS_ENABLED: 'true' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(),
+    { ok: true, d1InteractionsEnabled: true, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
 });
 test('health reports the R2 snapshot fallback when Workers KV is not bound', async () => {
   const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
   const response = await call('/health', { DB: db, ANALYTICS_ENGINE: {}, VIDEO_BUCKET: {}, CF_AE_TOKEN: 'tok' });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(),
-    { ok: true, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
+    { ok: true, d1InteractionsEnabled: false, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
 });
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);

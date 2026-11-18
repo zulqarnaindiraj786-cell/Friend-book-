@@ -75,8 +75,12 @@ export function createWorker(verify = verifyFirebaseToken) {
         const views = { ae: Boolean(env.ANALYTICS_ENGINE), kv: Boolean(env.VIEWS), r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), aeReadToken: Boolean(env.CF_AE_TOKEN) };
         try {
           const row = await env.DB.prepare('SELECT 1 AS connected').first();
-          return json({ ok: row?.connected === 1, views }, row?.connected === 1 ? 200 : 503);
-        } catch { return json({ ok: false, views }, 503); }
+          return json({
+            ok: row?.connected === 1,
+            d1InteractionsEnabled: env.D1_INTERACTIONS_ENABLED === 'true',
+            views,
+          }, row?.connected === 1 ? 200 : 503);
+        } catch { return json({ ok: false, d1InteractionsEnabled: env.D1_INTERACTIONS_ENABLED === 'true', views }, 503); }
       }
       if (!env.FIREBASE_PROJECT_ID) return json({ error: 'Service unavailable' }, 503);
       const bearer = /^Bearer ([^\s]+)$/i.exec(request.headers.get('Authorization') || '');
