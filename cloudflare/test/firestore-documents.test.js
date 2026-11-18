@@ -958,3 +958,35 @@ test('stories load with owner and privacy checks without exposing viewers', asyn
   assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','DELETE')).status,200);
   sql.close();
 });
+
+test('chat send retries rolled-back room metadata conflicts without duplicating a message', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  let race=false;
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null};}};},async batch(stmts){
+    if(race){race=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.otherUpdate','new') WHERE path='chats/room'").run();}
+    sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+  }};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,ops)=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({operations:ops})}),env);
+  const send=[{op:'set',path:'chats/room/messages/m1',data:{senderId:'alice',text:'hello'}},{op:'set',path:'chats/room',merge:true,data:{participants:['alice','bob'],unreadCount:{bob:{__fieldValue:'increment',value:1}}}}];
+  assert.equal((await call('alice',[{op:'set',path:'chats/room',data:{participants:['alice','bob'],unreadCount:{bob:0}}}])).status,200);
+  race=true;const sent=await call('alice',send);assert.equal(sent.status,200,await sent.text());
+  assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/m1'").get().n,1);
+  const room=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json);
+  assert.equal(room.unreadCount.bob,1);assert.equal(room.otherUpdate,'new');
+  sql.close();
+});
+
+test('pending friend requests are atomically unique per sender and recipient', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ sql.exec(readFileSync(new URL('../migrations/0023_friend_request_lookup_indexes.sql',import.meta.url),'utf8'));
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const send=to=>app.fetch(new Request('https://example.test/v1/firestore/document?parent=friend_requests',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({data:{fromUid:'alice',toUid:to,status:'pending'}})}),env);
+ const first=await send('bob');assert.equal(first.status,201);const id=(await first.json()).id;
+ assert.equal((await send('bob')).status,409);assert.equal((await send('carol')).status,201);
+ assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests'").get().n,2);
+ const remove=await app.fetch(new Request(`https://example.test/v1/firestore/document?path=friend_requests/${id}`,{method:'DELETE',headers:{authorization:'Bearer bob'}}),env);
+ assert.equal(remove.status,200);assert.equal((await send('bob')).status,201);
+ sql.close();
+});

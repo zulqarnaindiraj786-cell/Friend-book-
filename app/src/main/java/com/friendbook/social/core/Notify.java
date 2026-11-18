@@ -57,7 +57,18 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+        String eventKey=NotificationEventKey.forAction(me,toUid,type,postId);
+        if (eventKey != null) {
+            DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
+            ref.create(n).addOnSuccessListener(v -> {
+                if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
+            }).addOnFailureListener(e -> {
+                if (!(e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException)
+                        || ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                        != com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS)
+                    com.friendbook.social.push.PushTrace.failure("notification_write_failed", e);
+            });
+        } else Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
             com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
                     + com.friendbook.social.push.PushTrace.id(ref.getId()));
             if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);

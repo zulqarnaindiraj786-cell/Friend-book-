@@ -1081,7 +1081,7 @@ async function recoverLegacySocial(request,env,uid,now) {
   } catch { return json({error:'Recovery changed or unavailable'},409); }
 }
 
-export async function firestoreDocuments(request, env, identity) {
+export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
   if (!validSegment(uid)) return json({ error: 'Unauthorized' }, 401);
@@ -1270,10 +1270,29 @@ export async function firestoreDocuments(request, env, identity) {
         if (!canCreateFriendRequest(uid, next)) return json({error:'Forbidden'},403);
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
         const serialized=JSON.stringify(next);
-        await db.batch([
-          db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,parent,parent,id,uid,serialized,now,now),
-          db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,parent,id,uid,JSON.stringify({...next,id}),now),
-        ]);
+        // The existence check and writes must share a D1 transaction. A client-side
+        // read-before-create alone allows two devices to create the same request.
+        const guard=db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
+          NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests'
+            AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
+            AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
+            AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending')
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='friend_requests'
+            AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
+            AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
+            AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending')
+          THEN 1 ELSE 0 END`).bind(uid,next.toUid,uid,next.toUid);
+        try {
+          await db.batch([
+            guard,
+            db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,parent,parent,id,uid,serialized,now,now),
+            db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,parent,id,uid,JSON.stringify({...next,id}),now),
+            db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
+          ]);
+        } catch (error) {
+          if (/CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Request already pending'},409);
+          throw error;
+        }
         return json({exists:true,id,path:docPath,parent,collection:parent,data:next,createTime:now,updateTime:now},201);
       }
 
@@ -1486,7 +1505,18 @@ export async function firestoreDocuments(request, env, identity) {
         for (const s of statements) await s.run();
       }
       return json({ ok: true, operations: ops.length });
-    } catch {
+    } catch (error) {
+      // Retry only a definitely rolled-back optimistic guard conflict, and only the
+      // two-operation chat send shape. Re-run all reads, transforms and ACL checks;
+      // never retry ambiguous network/storage failures or a potentially committed batch.
+      const messages=ops.filter(op => splitPath(op.path)?.length===4 && splitPath(op.path)?.[0]==='chats' && splitPath(op.path)?.[2]==='messages' && (op.op||op.type)==='set');
+      const rooms=ops.filter(op => splitPath(op.path)?.length===2 && splitPath(op.path)?.[0]==='chats' && (op.op||op.type)==='set');
+      const guardConflict=/CHECK constraint failed: ok\s*=\s*1|^Room changed$|^Document changed$/i.test(String(error?.message||''));
+      if (chatRetry<2 && guardConflict && ops.length===2 && messages.length===1 && rooms.length===1
+          && parentPath(parentPath(messages[0].path))===rooms[0].path) {
+        const replay=new Request(request.url,{method:'POST',headers:request.headers,body:JSON.stringify(body)});
+        return firestoreDocuments(replay,env,identity,chatRetry+1);
+      }
       return json({ error: 'Batch unavailable' }, 503);
     }
   }
