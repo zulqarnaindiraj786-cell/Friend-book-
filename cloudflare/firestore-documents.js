@@ -579,7 +579,7 @@ async function acceptFriendBatch(db, uid, ops, now) {
     }
     if (u.friendsCount !== undefined && (!Number.isSafeInteger(u.friendsCount) || u.friendsCount < 0 || u.friendsCount >= Number.MAX_SAFE_INTEGER)) return forbidden();
   }
-  // A fresh, recipient-accepted request can reconfirm a legacy friendship.
+  // A fresh, recipient-accepted request can safely reconfirm a legacy friendship.
   // Reuse the existing row and counters: neither legacy fields nor a one-sided
   // action alone grants access to friends-only content.
   const existingPair = await db.prepare(`SELECT path FROM (
