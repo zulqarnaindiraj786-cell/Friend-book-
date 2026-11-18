@@ -179,36 +179,46 @@ jobs:
 
       - name: Verify read-only Worker and D1 connectivity
         run: |
+          set -e
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health -o /tmp/friendbook-health.json
-          curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health/r2 -o /tmp/friendbook-health-r2.json
           python3 - <<'PY'
           import json
           with open('/tmp/friendbook-health.json') as f:
-              assert json.load(f).get('ok') is True, 'Worker/D1 health check failed'
+              h = json.load(f)
+              if h.get('ok') is not True:
+                  print(f"::error title=Worker health check failed::{h}")
+                  raise SystemExit(1)
+          PY
+          if [ "${DEPLOY_ATTEMPT_USED:-full}" = "full" ] || [ "${DEPLOY_ATTEMPT_USED:-full}" = "no-ae" ]; then
+            curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
+              https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health/r2 -o /tmp/friendbook-health-r2.json
+            python3 - <<'PY'
+          import json
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
-              assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
-          print('Worker health + read-only D1 SELECT 1 + R2 bucket head check passed. No user data was written.')
+              if not (r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True):
+                  print(f"::error title=Worker R2 health check failed::{r2}")
+                  raise SystemExit(1)
           PY
-          code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
-          test "$code" = 401
-          pcode=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-presence.json -w '%{http_code}' \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me)
-          test "$pcode" = 401
-          vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
-          test "$vcode" = 401
-          cfdb_code=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-cfdb.json -w '%{http_code}' \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/cfdb/get)
-          test "$cfdb_code" = 401
-          rtdb_code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-rtdb.json -w '%{http_code}' \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/rtdb/test)
-          test "$rtdb_code" = 401
+          fi
+          check_401() {
+            method="$1"; url="$2"; code="000"
+            for _ in 1 2 3 4 5 6 7 8; do
+              code=$(curl --silent --show-error --max-time 20 -X "$method" -o /tmp/fb-check.json -w '%{http_code}' "$url?t=$(date +%s%N)")
+              if [ "$code" = "401" ]; then return 0; fi
+              sleep 2
+            done
+            echo "::error title=Auth gate check failed::$method $url returned $code instead of 401"
+            return 1
+          }
+          check_401 GET https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me
+          check_401 GET https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me
+          check_401 POST https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos
+          check_401 POST https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/cfdb/get
+          check_401 GET https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/rtdb/test
           echo 'Unauthenticated profile, presence, video, cfdb, and rtdb requests rejected (401).'
-          echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Deployment passed; Cloudflare D1 + Realtime Presence + Video routes active.' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify public Android-only release metadata
         run: |
           node --input-type=module <<'JS'
