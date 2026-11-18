@@ -66,3 +66,5 @@ jobs:
 # Verify the authorized one-day budget and checkpoint in D1 only.
 
 # Read-only owner-requested copy progress.
+
+# D1-only progress check requested by owner.
