@@ -64,3 +64,5 @@ jobs:
 # Read-only progress refresh requested by owner.
 
 # Verify the authorized one-day budget and checkpoint in D1 only.
+
+# Read-only owner-requested copy progress.
