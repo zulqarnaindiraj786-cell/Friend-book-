@@ -1417,10 +1417,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             case "outgoing":
-                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () ->
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("friend_requests")
-                                .whereEqualTo("fromUid",Fb.uid()).whereEqualTo("toUid",uid))
-                                .addOnFailureListener(e->Ui.toast(this,"Couldn't cancel. Please retry.")));
+                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () -> {
+                    String actor = Fb.uid();
+                    if (actor == null) return;
+                    Fb.db().collection("friend_requests").whereEqualTo("fromUid",actor)
+                            .whereEqualTo("toUid",uid).whereEqualTo("status","pending").limit(20).get()
+                            .addOnSuccessListener(page -> {
+                                if (!actor.equals(Fb.uid())) return;
+                                if (page.getMetadata().isFromCache() || page.size() == 20) {
+                                    Ui.toast(this,"Couldn't verify requests. Please retry online."); return;
+                                }
+                                java.util.List<com.google.android.gms.tasks.Task<Void>> deletes = new java.util.ArrayList<>();
+                                for (DocumentSnapshot doc : page) deletes.add(doc.getReference().delete());
+                                com.google.android.gms.tasks.Tasks.whenAll(deletes)
+                                        .addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
+                            }).addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
+                });
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1436,9 +1448,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         batch.commit().addOnSuccessListener(x -> {
                             Notify.send(uid, "friend_accept", "accepted your friend request");
                             Ui.toast(this, "You're now friends 🎉");
-                        });
+                        }).addOnFailureListener(e -> Ui.toast(this, "Couldn't confirm request. Please retry."));
                     } else {
-                        Fb.db().collection("friend_requests").document(incomingRequestId).delete();
+                        Fb.db().collection("friend_requests").document(incomingRequestId).delete()
+                                .addOnFailureListener(e -> Ui.toast(this, "Couldn't remove request. Please retry."));
                     }
                 });
                 break;

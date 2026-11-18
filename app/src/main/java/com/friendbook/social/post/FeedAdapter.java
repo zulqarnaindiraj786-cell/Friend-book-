@@ -1867,13 +1867,29 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 "fromUserPhotoUrl", Fb.myPhoto(),
                 "status", "pending",
                 "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("friend_requests").document(me + "_" + target.uid)
-                .set(req)
-                .addOnSuccessListener(x -> {
-                    btn.setText("Requested ✓");
-                    btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
-                    btn.setTextColor(Ui.sub(activity));
-                    Notify.send(target.uid, "friend_request", "sent you a friend request", "");
+        btn.setEnabled(false);
+        Fb.db().collection("friend_requests").whereEqualTo("fromUid", me)
+                .whereEqualTo("toUid", target.uid).whereEqualTo("status", "pending").limit(1).get()
+                .addOnSuccessListener(page -> {
+                    if (!me.equals(Fb.uid())) return;
+                    if (page.getMetadata().isFromCache()) {
+                        btn.setEnabled(true);
+                        Ui.toast(activity, "Reconnect to check requests");
+                    } else if (!page.isEmpty()) {
+                        btn.setText("Requested ✓");
+                    } else {
+                        Fb.db().collection("friend_requests").add(req).addOnSuccessListener(x -> {
+                            if (!me.equals(Fb.uid())) return;
+                            btn.setText("Requested ✓");
+                            btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
+                            btn.setTextColor(Ui.sub(activity));
+                            Notify.send(target.uid, "friend_request", "sent you a friend request", "");
+                        }).addOnFailureListener(error -> {
+                            if (me.equals(Fb.uid())) { btn.setEnabled(true); Ui.toast(activity, "Couldn't send request"); }
+                        });
+                    }
+                }).addOnFailureListener(error -> {
+                    if (me.equals(Fb.uid())) { btn.setEnabled(true); Ui.toast(activity, "Couldn't check request"); }
                 });
     }
 
