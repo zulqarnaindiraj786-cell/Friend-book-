@@ -364,6 +364,7 @@ public final class AdQueueManager {
                         return;
                     }
                     
+                    AdsConfig.recordNativeAdLoaded(appContext);
                     // Log which network served the ad (AdMob vs Meta via Mediation)
                     logAdSource(nativeAd, "Feed");
                     
@@ -398,8 +399,10 @@ public final class AdQueueManager {
                         feedInFlight.decrementAndGet();
                         feedLoading.set(false);
                         lastFeedFailTime = System.currentTimeMillis();
-                        Log.w(TAG, "Feed ad load failed: " + adError.getCode() + " - " + adError.getMessage());
-                        
+                        String detail = adError.getDomain() + ": " + adError.getMessage();
+                        Log.w(TAG, "Feed ad load failed: " + adError.getCode() + " - " + detail);
+                        AdsConfig.onNativeAdFailed(appContext, adError.getCode(), detail);
+
                         // Short cooldown then retry
                         mainHandler.postDelayed(() -> {
                             if (feedQueue.size() < QUEUE_CAPACITY) {
@@ -407,11 +410,17 @@ public final class AdQueueManager {
                             }
                         }, FAIL_COOLDOWN_MS);
                     }
-                    
+
                     @Override
                     public void onAdImpression() {
+                        AdsConfig.recordAdImpression(appContext);
                         // Ad was shown - trigger refill
                         onFeedAdImpression();
+                    }
+
+                    @Override
+                    public void onAdClicked() {
+                        AdsConfig.recordAdClick(appContext);
                     }
                 })
                 .withNativeAdOptions(new NativeAdOptions.Builder()
@@ -424,6 +433,7 @@ public final class AdQueueManager {
                 .build();
         
         // Load exactly 1 ad
+        AdsConfig.recordNativeAdRequest(appContext);
         adLoader.loadAd(new AdRequest.Builder().build());
     }
     
@@ -455,6 +465,7 @@ public final class AdQueueManager {
                         return;
                     }
                     
+                    AdsConfig.recordNativeAdLoaded(appContext);
                     // Log which network served the ad
                     logAdSource(nativeAd, "Reels");
                     
@@ -485,18 +496,26 @@ public final class AdQueueManager {
                         reelsInFlight.decrementAndGet();
                         reelsLoading.set(false);
                         lastReelsFailTime = System.currentTimeMillis();
-                        Log.w(TAG, "Reels ad load failed: " + adError.getCode() + " - " + adError.getMessage());
-                        
+                        String detail = adError.getDomain() + ": " + adError.getMessage();
+                        Log.w(TAG, "Reels ad load failed: " + adError.getCode() + " - " + detail);
+                        AdsConfig.onNativeAdFailed(appContext, adError.getCode(), detail);
+
                         mainHandler.postDelayed(() -> {
                             if (reelsQueue.size() < QUEUE_CAPACITY) {
                                 preloadReelsQueue();
                             }
                         }, FAIL_COOLDOWN_MS);
                     }
-                    
+
                     @Override
                     public void onAdImpression() {
+                        AdsConfig.recordAdImpression(appContext);
                         onReelsAdImpression();
+                    }
+
+                    @Override
+                    public void onAdClicked() {
+                        AdsConfig.recordAdClick(appContext);
                     }
                 })
                 .withNativeAdOptions(new NativeAdOptions.Builder()
@@ -507,10 +526,11 @@ public final class AdQueueManager {
                                 .build())
                         .build())
                 .build();
-        
+
+        AdsConfig.recordNativeAdRequest(appContext);
         adLoader.loadAd(new AdRequest.Builder().build());
     }
-    
+
     // ============ CLEANUP ============
     
     /**

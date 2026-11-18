@@ -188,6 +188,20 @@ public class AdsConfig {
 
     public static synchronized int reelsPoolSize() { return AdQueueManager.getInstance().getReelsQueueSize(); }
 
+    /** Increments the "real ad requests issued" counter shown on the Admin fill-check screen. */
+    public static void recordNativeAdRequest(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putLong(KEY_REQUESTS, sp.getLong(KEY_REQUESTS, 0L) + 1L).apply();
+    }
+
+    /** Increments the "real ads loaded" counter shown on the Admin fill-check screen. */
+    public static void recordNativeAdLoaded(Context c) {
+        if (c == null) return;
+        SharedPreferences sp = prefs(c);
+        sp.edit().putLong(KEY_LOADS, sp.getLong(KEY_LOADS, 0L) + 1L).apply();
+    }
+
     public static void recordAdImpression(Context c) {
         if (c == null) return;
         SharedPreferences sp = prefs(c);

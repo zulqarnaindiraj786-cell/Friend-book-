@@ -2726,6 +2726,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
 
             nativeAdView.setNativeAd(ad);
+            ad.setOnPaidEventListener(adValue -> com.friendbook.social.core.AdsConfig.recordPaidEvent(c, adValue));
             // Trigger queue refill on impression (Facebook-style: keep 3 ads always ready)
             com.friendbook.social.core.AdsConfig.onFeedAdImpression(itemView.getContext());
         }

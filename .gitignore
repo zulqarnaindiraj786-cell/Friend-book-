@@ -33,3 +33,5 @@ __pycache__/
 
 # Private migration exports, generated SQL, counts and verification reports.
 migration-artifacts/
+release-binaries/
+*.aab

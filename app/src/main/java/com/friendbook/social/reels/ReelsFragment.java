@@ -1451,6 +1451,7 @@ public class ReelsFragment extends Fragment {
                 }
 
                 nativeAdView.setNativeAd(ad);
+                ad.setOnPaidEventListener(adValue -> AdsConfig.recordPaidEvent(c, adValue));
                 // Trigger queue refill on impression (Facebook-style: keep 3 ads always ready)
                 com.friendbook.social.core.AdsConfig.onReelsAdImpression(itemView.getContext());
             }
