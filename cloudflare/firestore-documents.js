@@ -616,6 +616,72 @@ async function acceptFriendBatch(db, uid, ops, now) {
   return json({ok:true,operations:ops.length});
 }
 
+// Remove all records for one pair and adjust both counters together. A caller may
+// never supply another pair, an arbitrary counter delta, or a partial duplicate set.
+async function unfriendBatch(db,uid,ops,now) {
+  const forbidden=()=>json({error:'Forbidden'},403);
+  if (typeof db.batch!=='function' || ops.length<3 || ops.length>21) return forbidden();
+  const type=o=>o.op || o.type || 'set';
+  const friendOps=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friends');
+  const userOps=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='users');
+  if (!friendOps.length || friendOps.length+2!==ops.length || userOps.length!==2
+      || new Set(friendOps.map(o=>o.path)).size!==friendOps.length
+      || friendOps.some(o=>type(o)!=='delete') || new Set(userOps.map(o=>o.path)).size!==2) return forbidden();
+  const friendRows=await Promise.all(friendOps.map(o=>readRow(db,o.path)));
+  if (friendRows.some(r=>!r)) return forbidden();
+  const views=friendRows.map(r=>friendshipReadView(uid,decodeValue(JSON.parse(r.document_json))));
+  if (views.some(v=>!v)) return forbidden();
+  const other=views[0].participants.find(x=>x!==uid);
+  if (!validSegment(other) || views.some(v=>!v.participants.includes(other))) return forbidden();
+  if (!userOps.some(o=>o.path===`users/${uid}`) || !userOps.some(o=>o.path===`users/${other}`)) return forbidden();
+  for (const o of userOps) {
+    const f=o.fields||o.updates||o.data||{}, v=f.friendsCount;
+    if (type(o)!=='update' || Object.keys(f).length!==1 || v?.__fieldValue!=='increment'
+        || v.value!==-friendOps.length || Object.keys(v).some(k=>!['__fieldValue','value'].includes(k))) return forbidden();
+  }
+  const userRows=await Promise.all([readRow(db,`users/${uid}`),readRow(db,`users/${other}`)]);
+  if (userRows.some(r=>!r)) return forbidden();
+  const users=userRows.map(r=>decodeValue(JSON.parse(r.document_json)));
+  if (users.some(u=>u.friendsCount!==undefined && (!Number.isSafeInteger(u.friendsCount) || u.friendsCount<0))) return forbidden();
+  const guards=[];
+  for (const row of [...friendRows,...userRows]) {
+    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
+    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
+    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Friendship changed'},409);
+    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+  }
+  // Refuse a partial removal if duplicate friendship rows exist. Test both native
+  // JSON and historical Firestore envelopes, ignoring stale legacy mirrors.
+  const countSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT count(*) FROM (
+    SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
+    UNION ALL SELECT a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+  ) d WHERE (
+    (json_array_length(d.document_json,'$.participants')=2 AND
+     ((json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?) OR
+      (json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?))) OR
+    (json_array_length(d.document_json,'$.fields.participants.arrayValue.values')=2 AND
+     ((json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
+      (json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?)))
+  ))=? THEN 1 ELSE 0 END`;
+  guards.push(db.prepare(countSql).bind(uid,other,other,uid,uid,other,other,uid,friendRows.length));
+  const statements=[...guards];
+  for (const row of friendRows) {
+    statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path));
+    statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(row.path));
+  }
+  const [low,high]=[uid,other].sort();
+  statements.push(db.prepare('DELETE FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high));
+  for (let i=0;i<2;i++) {
+    const row=userRows[i], id=docIdOf(row.path), doc={...users[i],friendsCount:Math.max(0,(users[i].friendsCount||0)-friendRows.length)}, data=JSON.stringify(doc);
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(row.path,'users','users',id,row.owner_uid||id,data,row.create_time||now,now));
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(row.path,'users',id,row.owner_uid||id,JSON.stringify({...doc,id}),now));
+  }
+  statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  await db.batch(statements);
+  return json({ok:true,operations:ops.length});
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -813,7 +879,10 @@ export async function firestoreDocuments(request, env, identity) {
     const ops = Array.isArray(body?.operations) ? body.operations : [];
     if (ops.length === 0 || ops.length > 500) return json({ error: 'Invalid operations' }, 400);
     if (ops.some(op=>splitPath(op?.path)?.[0]==='friends')) {
-      try { return await acceptFriendBatch(db,uid,ops,now); }
+      try {
+        const friendOp=ops.find(op=>splitPath(op?.path)?.[0]==='friends');
+        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now) : await acceptFriendBatch(db,uid,ops,now);
+      }
       catch { return json({error:'Friendship changed or unavailable'},409); }
     }
     // Pre-read existing docs so FieldValue transforms resolve against current state.

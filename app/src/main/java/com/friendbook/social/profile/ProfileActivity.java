@@ -1477,16 +1477,26 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void unfriend() {
         Ui.confirm(this, "Unfriend " + user.displayName + "?", "", "Unfriend", () -> {
             String me = Fb.uid();
+            if (me == null || uid == null) return;
             Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me)))
-                    .limit(1).get().addOnSuccessListener(snap -> {
-                        for (DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                            if (parts.contains(uid)) {
-                                d.getReference().delete();
-                                Fb.db().collection("users").document(me).update("friendsCount", FieldValue.increment(-1));
-                                Fb.db().collection("users").document(uid).update("friendsCount", FieldValue.increment(-1));
-                            }
+                    .limit(20).get().addOnSuccessListener(snap -> {
+                        if (!me.equals(Fb.uid())) return;
+                        if (snap.getMetadata().isFromCache() || snap.size() == 20) {
+                            Ui.toast(this, "Couldn't verify all friendship records. Please retry online.");
+                            return;
                         }
+                        if (snap.isEmpty()) { Ui.toast(this, "Friendship not found"); return; }
+                        WriteBatch batch = Fb.db().batch();
+                        for (DocumentSnapshot d : snap) batch.delete(d.getReference());
+                        batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(-snap.size()));
+                        batch.update(Fb.db().collection("users").document(uid), "friendsCount", FieldValue.increment(-snap.size()));
+                        batch.commit().addOnSuccessListener(x -> {
+                            if (me.equals(Fb.uid())) Ui.toast(this, "Unfriended");
+                        }).addOnFailureListener(error -> {
+                            if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't unfriend. Please retry.");
+                        });
+                    }).addOnFailureListener(error -> {
+                        if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't check friendship. Please retry.");
                     });
         });
     }
