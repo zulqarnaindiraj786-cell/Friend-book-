@@ -297,8 +297,34 @@ async function readCollectionRows(db, parent) {
       const row = appDocumentToFirestoreRow(appRow);
       if (row) byPath.set(row.path, row);
     }
+  } else if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
+    // The legacy CloudflareStore stored messages at messages/{chatId}_{messageId}, while the
+    // app reads chats/{chatId}/messages/{messageId}. Bridge only the exact chatId_ prefix into
+    // that chat's nested query; Firestore-native nested rows remain canonical on path collisions.
+    const prefix = `${parts[1]}_`;
+    const appRows = await db.prepare(
+      `SELECT path, collection, doc_id, owner_uid, document_json, updated_at
+       FROM friendbook_cf_documents WHERE collection='messages' AND substr(doc_id,1,?)=?`
+    ).bind(prefix.length, prefix).all();
+    for (const appRow of appRows?.results || []) {
+      const messageId = appRow.doc_id.slice(prefix.length);
+      if (!validSegment(messageId)) continue;
+      const nestedPath = `${parent}/${messageId}`;
+      if (byPath.has(nestedPath)) continue;
+      const row = appDocumentToFirestoreRow(appRow);
+      if (row) byPath.set(nestedPath, { ...row, path:nestedPath, parent_path:parent, collection_id:'messages', doc_id:messageId });
+    }
   }
   return [...byPath.values()];
+}
+
+async function canReadChatMessages(db, chatId, uid) {
+  const room = await readRow(db, `chats/${chatId}`).catch(() => null);
+  if (!room) return false;
+  try {
+    const data = decodeValue(JSON.parse(room.document_json));
+    return Array.isArray(data?.participants) && data.participants.includes(uid);
+  } catch { return false; }
 }
 
 async function writeRow(db, path, doc, now, existing) {
@@ -574,6 +600,9 @@ export async function firestoreDocuments(request, env, identity) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
+    const parts = splitPath(parent);
+    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
+        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     const docs = (await readCollectionRows(db, parent).catch(() => [])).map(rowToDocument).filter(Boolean);
     const result = applyQuery(docs, body || {});
     return json({ parent, documents: result });
