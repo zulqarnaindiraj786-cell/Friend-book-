@@ -1,3 +1,4 @@
+import { canReadPayment } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
@@ -12,7 +13,7 @@ const json = (body, status = 200) => Response.json(body, {
 const ALLOWED_COLLECTIONS = new Set([
   'users', 'posts', 'reels', 'stories', 'chats', 'messages',
   'friends', 'friend_requests', 'follows', 'groups', 'pages',
-  'notifications', 'official_broadcasts', 'lives', 'pokes',
+  'notifications', 'official_broadcasts', 'lives', 'pokes', 'payments',
 ]);
 
 function validSegment(value) {
@@ -151,7 +152,7 @@ export async function appDocuments(request, env, identity) {
       for (const row of rows?.results || []) {
         const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
-        if (doc && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
+        if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc);
           if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
         }
@@ -190,6 +191,7 @@ export async function appDocuments(request, env, identity) {
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
       if (!(await contentReadAllowed(env.DB, uid, docPath))) return json({error:'Forbidden'},403);
+      if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
       if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
@@ -202,7 +204,7 @@ export async function appDocuments(request, env, identity) {
   }
 
   if (request.method === 'PUT') {
-    if (['friend_requests','friends'].includes(collection)) return json({error:'Forbidden'},403);
+    if (['friend_requests','friends','payments'].includes(collection)) return json({error:'Forbidden'},403);
     let incoming;
     try { incoming = await request.json(); }
     catch { return json({ error: 'Invalid JSON payload' }, 400); }

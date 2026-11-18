@@ -398,13 +398,13 @@ test('post privacy and unreviewed collections fail closed on all document routes
   assert.equal((await call('bob','/v1/docs/posts/p1','PUT',{privacy:'Public'})).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'delete',path:'posts/p1'}]})).status,403);
   assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'posts'})).json()).documents,[]);
-  assert.equal((await call('bob','/v1/firestore/query','POST',{parent:'payments'})).status,403);
+  assert.deepEqual((await (await call('bob','/v1/firestore/query','POST',{parent:'payments'})).json()).documents,[]);
   assert.equal((await call('bob','/v1/firestore/document?path=sessions/alice','PUT',{data:{uid:'bob'}})).status,403);
   assert.equal((await call('bob','/v1/docs?collection=groups')).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'set',path:'friends/alice_bob',data:{participants:['alice','bob']}}]})).status,403);
   // Until each policy is implemented, neither the old nor the Firestore-compatible
   // routes may read or mutate these records, including mixed atomic batches.
-  for (const collection of ['groups','payments']) {
+  for (const collection of ['groups']) {
     const docPath = `${collection}/item`;
     assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`)).status,403);
     assert.equal((await call('bob',`/v1/firestore/document?path=${docPath}`,'PUT',{data:{userId:'bob',status:'approved'}})).status,403);
@@ -573,5 +573,65 @@ test('legacy friendship duplicates require one atomic removal with the exact cou
   assert.equal((await call('alice',both)).status,200);
   assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_documents WHERE collection='friends'").get().n,0);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').document_json).friendsCount,0);
+  sql.close();
+});
+
+test('free verification requests are owner-private and cannot be self-approved', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const req={userId:'alice',userEmail:'alice@example.test',type:'tick_blue',amount:0,currency:'FREE',status:'pending',date:{__fieldValue:'serverTimestamp'}};
+  const endpoint='/v1/firestore/document?parent=payments';
+  assert.equal((await call('bob',endpoint,'POST',{data:req})).status,403);
+  assert.equal((await call('alice',endpoint,'POST',{data:{...req,status:'approved'}})).status,403);
+  assert.equal((await call('alice',endpoint,'POST',{data:{...req,amount:10}})).status,403);
+  const created=await call('alice',endpoint,'POST',{data:req});assert.equal(created.status,201);
+  const id=(await created.json()).id,uri=`/v1/firestore/document?path=payments/${id}`;
+  assert.equal((await call('alice',uri)).status,200);
+  assert.equal((await call('bob',uri)).status,403);
+  assert.equal((await call('admin',uri)).status,200);
+  assert.equal((await call('bob',`/v1/docs/payments/${id}`)).status,403);
+  assert.equal((await call('admin',`/v1/docs/payments/${id}`)).status,200);
+  assert.equal((await (await call('bob','/v1/firestore/query','POST',{parent:'payments'})).json()).documents.length,0);
+  assert.equal((await (await call('alice','/v1/firestore/count?parent=payments')).json()).count,1);
+  assert.equal((await (await call('admin','/v1/firestore/count?parent=payments')).json()).count,1);
+  assert.equal((await call('alice',uri,'PATCH',{fields:{status:'approved'}})).status,403);
+  assert.equal((await call('alice',uri,'DELETE')).status,403);
+  assert.equal((await call('alice',`/v1/docs/payments/${id}`,'PUT',{status:'approved'})).status,403);
+  assert.equal((await call('admin','/v1/firestore/batch','POST',{operations:[{op:'update',path:`payments/${id}`,updates:{status:'approved'}}]})).status,403);
+  sql.close();
+});
+
+test('only configured administrators can atomically approve or reject a free review', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'));
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PUT',{data:{uid:'alice'}})).status,200);
+  const make=async()=>{const res=await call('alice','/v1/firestore/document?parent=payments','POST',{data:{userId:'alice',type:'tick_blue',amount:0,currency:'FREE',status:'pending'}});return (await res.json()).id;};
+  const id=await make(), path=`payments/${id}`;
+  const ops=[{op:'update',path,updates:{status:'approved',approvedBy:'admin',approvedAt:{__fieldValue:'serverTimestamp'}}},
+    {op:'set',path:'users/alice',merge:true,data:{tickLevel:'blue',isVerified:true}}];
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops})).status,403);
+  const wrong=structuredClone(ops);wrong[1].path='users/bob';
+  assert.equal((await call('admin','/v1/firestore/batch','POST',{operations:wrong})).status,403);
+  const actualBatch=db.batch;
+  db.batch=async statements=>{
+    sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,\'$.bio\',\'changed\') WHERE path=?').run('users/alice');
+    return actualBatch(statements);
+  };
+  assert.equal((await call('admin','/v1/firestore/batch','POST',{operations:ops})).status,409);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(path).document_json).status,'pending');
+  db.batch=actualBatch;
+  assert.equal((await call('admin','/v1/firestore/batch','POST',{operations:ops})).status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/alice').document_json).tickLevel,'blue');
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(path).document_json).status,'approved');
+  assert.equal((await call('admin','/v1/firestore/batch','POST',{operations:ops})).status,403);
+  const id2=await make(),uri=`/v1/firestore/document?path=payments/${id2}`;
+  const reject={updates:{status:'rejected',rejectedBy:'admin',rejectedAt:{__fieldValue:'serverTimestamp'}}};
+  assert.equal((await call('alice',uri,'PATCH',reject)).status,403);
+  assert.equal((await call('admin',uri,'PATCH',reject)).status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`payments/${id2}`).document_json).status,'rejected');
   sql.close();
 });
