@@ -2,12 +2,12 @@
 const PUBLIC_FIELDS = new Set([
   'uid','id','displayName','photoUrl','coverUrl','bio','professionalMode',
   'isVerified','tickLevel','profileLocked','profilePicGuard','createdAt',
-  'pinnedPostId'
+  'pinnedPostId','friendsCount'
 ]);
 const SERVER_FIELDS = new Set([
   'isAdmin','isModerator','banned','deactivated','isVerified','tickLevel',
   'suspendedUntil','suspendedLifetime','stars','dailyStreak','lastBonusAt',
-  'verificationStatus','admin','role'
+  'verificationStatus','admin','role','friendsCount'
 ]);
 export function profileReadView(path, uid, data) {
   const parts=path.split('/');

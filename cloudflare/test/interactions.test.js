@@ -24,7 +24,7 @@ function authDb(docs, friendship = false) {
                 const value = docs[args[0]];
                 return value ? { document_json: JSON.stringify(value) } : null;
               }
-              if (sql.includes('SELECT path FROM friendbook_cf_documents')) return friendship ? { path: 'friends/user1_owner' } : null;
+              if (sql.includes('friendbook_cf_trusted_friendships')) return friendship ? { friend_path: 'friends/verified' } : null;
               return null;
             },
           };

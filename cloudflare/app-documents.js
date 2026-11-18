@@ -112,17 +112,15 @@ export async function readD1DocumentFields(db, path) {
   }
 }
 
+// Only server-verified friendship transitions can authorize private content or presence.
+// Legacy records are not trusted merely because their document ID looks correct.
 export async function hasD1Friendship(db, uidA, uidB) {
-  if (!db) return null;
+  if (!db || !validSegment(uidA) || !validSegment(uidB) || uidA===uidB) return null;
   try {
-    const p1 = `friends/${uidA}_${uidB}`, p2 = `friends/${uidB}_${uidA}`;
-    const byKey = await db.prepare(
-      'SELECT path FROM friendbook_cf_documents WHERE path IN (?, ?) LIMIT 1'
-    ).bind(p1, p2).first();
-    return byKey ? true : null;
-  } catch {
-    return null;
-  }
+    const [low,high]=[uidA,uidB].sort();
+    const row=await db.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high).first();
+    return row ? true : null;
+  } catch { return null; }
 }
 
 async function canonicalRoot(db, path, fallback) {

@@ -81,7 +81,7 @@ test('realtime presence routes require verified Firebase identity and return fre
   const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare(sql) {
     return { bind(id) { return { first: async () => {
       if (sql.includes('friendbook_cf_presence')) return {online:1,visible:1,last_seen:now-5000};
-      if (sql.includes('path IN')) return {path:'friends/verified-user_peer-1'};
+      if (sql.includes('friendbook_cf_trusted_friendships')) return {friend_path:'friends/verified'};
       if (sql.includes('document_json')) return {document_json:JSON.stringify(id.startsWith('chats/') ? {participants:['verified-user','peer-1']} : {displayName:'User'})};
       return null;
     } }; } };

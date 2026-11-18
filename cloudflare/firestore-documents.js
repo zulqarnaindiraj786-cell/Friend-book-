@@ -536,6 +536,86 @@ async function applyOperation(db, op, uid, now, existingCache) {
   return rowToDocument(row);
 }
 
+// The legacy Android acceptance batch is recognized as one strictly defined operation.
+// All authorization snapshots, duplicate checks and writes run in a single D1 batch.
+async function acceptFriendBatch(db, uid, ops, now) {
+  const forbidden = () => json({error:'Forbidden'},403);
+  if (ops.length !== 4 || typeof db.batch !== 'function') return forbidden();
+  const requests=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friend_requests');
+  const friends=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friends');
+  if (requests.length!==1 || friends.length!==1) return forbidden();
+  const reqOp=requests[0], friendOp=friends[0];
+  const type=o=>o.op || o.type || 'set';
+  const fields=o=>o.fields || o.updates || o.data || {};
+  if (type(reqOp)!=='update' || JSON.stringify(fields(reqOp))!==JSON.stringify({status:'accepted'})
+      || type(friendOp)!=='set' || friendOp.merge || friendOp.mergeFields || !isDocumentPath(friendOp.path)) return forbidden();
+  const reqRow=await readRow(db,reqOp.path);
+  if (!reqRow || await readRow(db,friendOp.path)) return forbidden();
+  const request=decodeValue(JSON.parse(reqRow.document_json));
+  const other=request.fromUid;
+  if (!validSegment(other) || other.length>128 || other===uid || request.toUid!==uid || request.status!=='pending') return forbidden();
+  const userOps=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='users');
+  if (userOps.length!==2 || new Set(userOps.map(o=>o.path)).size!==2
+      || !userOps.some(o=>o.path===`users/${uid}`) || !userOps.some(o=>o.path===`users/${other}`)) return forbidden();
+  for (const o of userOps) {
+    const f=fields(o), v=f.friendsCount;
+    if (type(o)!=='update' || Object.keys(f).length!==1 || !v || v.__fieldValue!=='increment' || v.value!==1 || Object.keys(v).some(k=>!['__fieldValue','value'].includes(k))) return forbidden();
+  }
+  const input=friendOp.data;
+  if (!input || Object.keys(input).some(k=>!['participants','createdAt'].includes(k))
+      || !Array.isArray(input.participants) || input.participants.length!==2
+      || !input.participants.includes(uid) || !input.participants.includes(other)
+      || input.createdAt?.__fieldValue!=='serverTimestamp' || Object.keys(input.createdAt).length!==1) return forbidden();
+  const userRows=await Promise.all([readRow(db,`users/${uid}`),readRow(db,`users/${other}`)]);
+  if (userRows.some(r=>!r)) return forbidden();
+  const users=userRows.map(r=>decodeValue(JSON.parse(r.document_json)));
+  for (let i=0;i<2;i++) {
+    const u=users[i], peer=i===0?other:uid;
+    if (u.banned===true || u.deactivated===true) return forbidden();
+    for (const key of ['blocked','blockedUsers']) {
+      if (u[key] !== undefined && !Array.isArray(u[key])) return forbidden();
+      if (u[key]?.includes(peer)) return forbidden();
+    }
+    if (u.friendsCount !== undefined && (!Number.isSafeInteger(u.friendsCount) || u.friendsCount < 0 || u.friendsCount >= Number.MAX_SAFE_INTEGER)) return forbidden();
+  }
+  const snapshots=[reqRow,...userRows];
+  const guards=[];
+  for (const row of snapshots) {
+    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
+    const legacy=canonical ? null : await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
+    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Request changed'},409);
+    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json || ''));
+  }
+  // Check both native and historical array envelopes, with canonical rows winning over mirrors.
+  const duplicateSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM (
+      SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
+      UNION ALL SELECT a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+    ) d WHERE (
+      (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?)
+       AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?))
+      OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?)
+       AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?))
+    )) THEN 1 ELSE 0 END`;
+  guards.push(db.prepare(duplicateSql).bind(uid,other,uid,other));
+  // A create must not overwrite either table, even if the caller guesses an ID.
+  guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(friendOp.path,friendOp.path));
+  const next=[{...request,status:'accepted'},...users.map(u=>({...u,friendsCount:(u.friendsCount || 0)+1})),{participants:[uid,other],createdAt:{__type:'timestamp',millis:now}}];
+  const paths=[reqOp.path,`users/${uid}`,`users/${other}`,friendOp.path];
+  const writes=[];
+  for (let i=0;i<paths.length;i++) {
+    const p=paths[i], coll=collectionIdOf(p), id=docIdOf(p), data=JSON.stringify(next[i]);
+    const owner=ownerOf(next[i],i===3?uid:(snapshots[i]?.owner_uid || uid));
+    writes.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(p,coll,coll,id,owner,data,snapshots[i]?.create_time||now,now));
+    writes.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(p,coll,id,owner,JSON.stringify({...next[i],id}),now));
+  }
+  const [low,high]=[uid,other].sort();
+  const ledger=db.prepare('INSERT INTO friendbook_cf_trusted_friendships(uid_low,uid_high,friend_path) VALUES (?,?,?)').bind(low,high,friendOp.path);
+  await db.batch([...guards,ledger,...writes,db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+  return json({ok:true,operations:ops.length});
+}
+
 export async function firestoreDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -732,6 +812,10 @@ export async function firestoreDocuments(request, env, identity) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const ops = Array.isArray(body?.operations) ? body.operations : [];
     if (ops.length === 0 || ops.length > 500) return json({ error: 'Invalid operations' }, 400);
+    if (ops.some(op=>splitPath(op?.path)?.[0]==='friends')) {
+      try { return await acceptFriendBatch(db,uid,ops,now); }
+      catch { return json({error:'Friendship changed or unavailable'},409); }
+    }
     // Pre-read existing docs so FieldValue transforms resolve against current state.
     const cache = new Map();
     for (const op of ops) {
