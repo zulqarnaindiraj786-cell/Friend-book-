@@ -1,4 +1,4 @@
-import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest } from './social-access.js';
+import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
@@ -562,7 +562,7 @@ export async function firestoreDocuments(request, env, identity) {
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
-    const view = profileReadView(docPath, uid, document.data);
+    const view = parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data);
     if (view === null) return json({ error: 'Forbidden' }, 403);
     document.data = view;
     return json(document);
@@ -573,7 +573,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (splitPath(docPath)[0] === 'friend_requests') return json({error:'Forbidden'},403);
+    if (['friend_requests','friends'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
@@ -595,7 +595,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (splitPath(docPath)[0] === 'friend_requests') return json({error:'Forbidden'},403);
+    if (['friend_requests','friends'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     try {
@@ -616,6 +616,7 @@ export async function firestoreDocuments(request, env, identity) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
+    if (splitPath(docPath)[0] === 'friends') return json({error:'Forbidden'},403);
     if (splitPath(docPath)[0] === 'friend_requests') {
       try {
         const row = await readRow(db, docPath);
@@ -655,6 +656,7 @@ export async function firestoreDocuments(request, env, identity) {
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
+    if (parent === 'friends') return json({error:'Forbidden'},403);
     const id = autoId();
     const docPath = `${parent}/${id}`;
     try {
@@ -692,7 +694,7 @@ export async function firestoreDocuments(request, env, identity) {
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data))).map(doc => {
-      const view = profileReadView(doc.path, uid, doc.data);
+      const view = parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
       return view === null ? null : { ...doc, data: view };
     }).filter(Boolean);
     const visible = [];
@@ -715,7 +717,7 @@ export async function firestoreDocuments(request, env, identity) {
     try { rows = await readCollectionRows(db, parent); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     const docs = rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data))).map(doc => {
-      const view = profileReadView(doc.path, uid, doc.data);
+      const view = parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
       return view === null ? null : { ...doc, data: view };
     }).filter(Boolean);
     const visible = [];
@@ -744,7 +746,7 @@ export async function firestoreDocuments(request, env, identity) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
-      if (!supportedDocumentPath(p) || splitPath(p)[0] === 'friend_requests') return json({error:'Forbidden'},403);
+      if (!supportedDocumentPath(p) || ['friend_requests','friends'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;

@@ -51,3 +51,15 @@ export function canSelfManageGroup(uid, before, after) {
   if (!wasPending && pending && (wasMember || member)) return false;
   return true;
 }
+
+// Existing relationship documents are visible only to their participants.
+// Return a narrow projection: historical records may contain private extra fields.
+export function friendshipReadView(uid, doc) {
+  if (!validUid(uid) || !doc || !Array.isArray(doc.participants) || doc.participants.length !== 2
+      || !doc.participants.every(validUid) || doc.participants[0] === doc.participants[1]
+      || !doc.participants.includes(uid)) return null;
+  const view = {participants: doc.participants};
+  if (doc.createdAt !== undefined) view.createdAt = doc.createdAt;
+  if (typeof doc.id === 'string') view.id = doc.id;
+  return view;
+}
