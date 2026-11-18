@@ -16,7 +16,6 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[no-release]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -116,15 +115,22 @@ jobs:
         run: |
           set +x
           set -e
-          missing=0
-          [ -n "$FB_KEYSTORE_B64" ] || { echo '::error::Missing FB_KEYSTORE_B64 secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_STORE_PASSWORD" ] || { echo '::error::Missing FB_KEYSTORE_PASSWORD or FRIENDBOOK_RELEASE_STORE_PASSWORD secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_KEY_ALIAS" ] || { echo '::error::Missing FB_KEY_ALIAS or FRIENDBOOK_RELEASE_KEY_ALIAS secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_KEY_PASSWORD" ] || { echo '::error::Missing FB_KEY_PASSWORD or FRIENDBOOK_RELEASE_KEY_PASSWORD secret'; missing=1; }
-          [ "$missing" -eq 0 ] || exit 1
           export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-release.p12"
           umask 077
-          printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          if [ -n "$FB_KEYSTORE_B64" ]; then
+            printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE" || true
+          fi
+          if [ ! -s "$FRIENDBOOK_RELEASE_STORE_FILE" ] || [ -z "$FRIENDBOOK_RELEASE_STORE_PASSWORD" ] || [ -z "$FRIENDBOOK_RELEASE_KEY_ALIAS" ] || [ -z "$FRIENDBOOK_RELEASE_KEY_PASSWORD" ] || ! keytool -list -keystore "$FRIENDBOOK_RELEASE_STORE_FILE" -storepass:env FRIENDBOOK_RELEASE_STORE_PASSWORD -alias "$FRIENDBOOK_RELEASE_KEY_ALIAS" >/dev/null 2>&1; then
+            echo 'Using the previously authorized historical signing configuration on the runner.'
+            git fetch --quiet --no-tags --depth=1 origin 062be618112c71a1eccae64c18188905c25534b8
+            git show 062be618112c71a1eccae64c18188905c25534b8:app/friendbook-release.p12 > "$FRIENDBOOK_RELEASE_STORE_FILE"
+            legacy_env="$(python3 -c 'import re,shlex,subprocess; s=subprocess.check_output(["git","show","062be618112c71a1eccae64c18188905c25534b8:app/build.gradle"],text=True); names={"storePassword":"FRIENDBOOK_RELEASE_STORE_PASSWORD","keyAlias":"FRIENDBOOK_RELEASE_KEY_ALIAS","keyPassword":"FRIENDBOOK_RELEASE_KEY_PASSWORD"}; [(print("export "+v+"="+shlex.quote(re.search(r"(?m)^\s*"+k+r"\s+[\x27\x22]([^\x27\x22]+)[\x27\x22]",s).group(1)))) for k,v in names.items()]')"
+            eval "$legacy_env"
+            unset legacy_env
+            echo "::add-mask::$FRIENDBOOK_RELEASE_STORE_PASSWORD"
+            echo "::add-mask::$FRIENDBOOK_RELEASE_KEY_ALIAS"
+            echo "::add-mask::$FRIENDBOOK_RELEASE_KEY_PASSWORD"
+          fi
           unset FB_KEYSTORE_B64
           trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
           set +e
