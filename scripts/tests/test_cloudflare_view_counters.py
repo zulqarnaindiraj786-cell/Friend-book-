@@ -23,16 +23,13 @@ def absent(test, token, source, where):
 
 
 class CloudflareViewCounterGuards(unittest.TestCase):
-    def test_worker_exposes_the_views_route_behind_the_token_gate(self):
+    def test_worker_keeps_legacy_view_route_closed_during_privacy_rollout(self):
         worker = (ROOT / 'worker.js').read_text()
-        self.assertIn("import { viewCounters } from './cloudflare/view-counters.js';", worker)
         self.assertIn(r'/^\/v1\/views\/(posts|reels)\/([^/]+)$/', worker)
-        # /v1/views is part of the authenticated allowlist, never an unauthenticated shortcut.
         self.assertIn('!docs && !views', worker)
-        self.assertIn('if (views) return viewCounters(request, env, { uid, token: bearer[1] }', worker)
-        # The flushes need the runtime context so storage work happens after the response is sent.
-        self.assertIn('async fetch(request, env, ctx)', worker)
-        self.assertIn('new URL(request.url), Date.now, ctx)', worker)
+        # Do not expose resource IDs or counts until per-resource authorization exists.
+        self.assertIn("if (views) return json({ error: 'View counters temporarily unavailable' }, 503);", worker)
+        self.assertLess(worker.index('uid = await verify('), worker.index('if (views) return json('))
 
     def test_no_view_counter_is_written_to_firestore(self):
         for path in sorted(JAVA.rglob('*.java')):
