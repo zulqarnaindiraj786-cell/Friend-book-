@@ -391,7 +391,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         Map<String, Object> friendDoc = Fb.map(
                 "participants", java.util.Arrays.asList(me, from),
                 "createdAt", FieldValue.serverTimestamp());
-        com.friendbook.social.core.CloudflareStore.put("friends", friendDocRef.getId(), friendDoc);
+        // The server authorizes and commits the relationship and counters together.
         batch.set(friendDocRef, friendDoc);
         batch.update(Fb.db().collection("users").document(me), "friendsCount", FieldValue.increment(1));
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));

@@ -1383,9 +1383,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void computeFriendState() {
         if (mine) return;
-        if (friendIds.contains(uid)) friendState = "friends";
+        if (hasIn) friendState = "incoming";
         else if (hasOut) friendState = "outgoing";
-        else if (hasIn) friendState = "incoming";
+        else if (friendIds.contains(uid)) friendState = "friends";
         else friendState = "none";
         refreshButtons();
         if (user != null) bindUser();
@@ -1411,8 +1411,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         switch (friendState) {
             case "friends":
-                Ui.choose(this, user.displayName, new String[]{"💬 Message", "Unfriend"}, w -> {
+                Ui.choose(this, user.displayName, new String[]{"💬 Message", "Reconfirm friendship", "Unfriend"}, w -> {
                     if (w == 0) message();
+                    else if (w == 1) reconfirmFriendship();
                     else unfriend();
                 });
                 break;
@@ -1466,6 +1467,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
         }
+    }
+
+    private void reconfirmFriendship() {
+        Ui.confirm(this, "Reconfirm friendship?",
+                "Send a request to restore friends-only access. Your friend must accept it.", "Send", () -> {
+                    String actor = Fb.uid();
+                    if (actor == null || uid == null || actor.equals(uid)) return;
+                    Fb.db().collection("friend_requests").whereEqualTo("fromUid", actor)
+                            .whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1).get()
+                            .addOnSuccessListener(page -> {
+                                if (!actor.equals(Fb.uid())) return;
+                                if (page.getMetadata().isFromCache()) { Ui.toast(this, "Reconnect and try again"); return; }
+                                if (!page.isEmpty()) { Ui.toast(this, "Request already sent"); return; }
+                                Map<String, Object> request = Fb.map("fromUid", actor, "toUid", uid,
+                                        "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
+                                        "status", "pending", "createdAt", FieldValue.serverTimestamp());
+                                Fb.db().collection("friend_requests").add(request).addOnSuccessListener(ref -> {
+                                    if (!actor.equals(Fb.uid())) return;
+                                    Notify.send(uid, "friend_request", "wants to reconfirm your friendship");
+                                    Ui.toast(this, "Reconfirmation request sent");
+                                }).addOnFailureListener(e -> Ui.toast(this, "Couldn't send request. Please retry."));
+                            }).addOnFailureListener(e -> Ui.toast(this, "Couldn't check requests. Please retry."));
+                });
     }
 
     private void secondary() {

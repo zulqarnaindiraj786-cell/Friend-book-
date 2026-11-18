@@ -1,5 +1,5 @@
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
-import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, groupReadView, trustedGroupOwner } from './social-access.js';
+import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
@@ -579,7 +579,22 @@ async function acceptFriendBatch(db, uid, ops, now) {
     }
     if (u.friendsCount !== undefined && (!Number.isSafeInteger(u.friendsCount) || u.friendsCount < 0 || u.friendsCount >= Number.MAX_SAFE_INTEGER)) return forbidden();
   }
-  const snapshots=[reqRow,...userRows];
+  // A fresh, recipient-accepted request can reconfirm a legacy friendship.
+  // Reuse the existing row and counters: neither legacy fields nor a one-sided
+  // action alone grants access to friends-only content.
+  const existingPair = await db.prepare(`SELECT path FROM (
+    SELECT path,document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
+    UNION ALL SELECT a.path,a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+  ) d WHERE (json_array_length(document_json,'$.participants')=2 AND
+    ((json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?) OR
+     (json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?))) OR
+    (json_array_length(document_json,'$.fields.participants.arrayValue.values')=2 AND
+    ((json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
+     (json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?))) ORDER BY path LIMIT 1`).bind(uid,other,other,uid,uid,other,other,uid).first();
+  const prior=existingPair ? await readRow(db,existingPair.path) : null;
+  if (existingPair && (!prior || !friendshipReadView(uid,decodeValue(JSON.parse(prior.document_json)))?.participants.includes(other))) return json({error:'Friendship changed'},409);
+  const snapshots=[reqRow,...userRows,...(prior?[prior]:[])];
   const guards=[];
   for (const row of snapshots) {
     const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
@@ -599,11 +614,11 @@ async function acceptFriendBatch(db, uid, ops, now) {
       OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?)
        AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?))
     )) THEN 1 ELSE 0 END`;
-  guards.push(db.prepare(duplicateSql).bind(uid,other,uid,other));
+  if (!prior) guards.push(db.prepare(duplicateSql).bind(uid,other,uid,other));
   // A create must not overwrite either table, even if the caller guesses an ID.
   guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(friendOp.path,friendOp.path));
-  const next=[{...request,status:'accepted'},...users.map(u=>({...u,friendsCount:(u.friendsCount || 0)+1})),{participants:[uid,other],createdAt:{__type:'timestamp',millis:now}}];
-  const paths=[reqOp.path,`users/${uid}`,`users/${other}`,friendOp.path];
+  const next=[{...request,status:'accepted'},...users.map(u=>({...u,friendsCount:(u.friendsCount || 0)+(prior?0:1)})),...(prior?[]:[{participants:[uid,other],createdAt:{__type:'timestamp',millis:now}}])];
+  const paths=[reqOp.path,`users/${uid}`,`users/${other}`,...(prior?[]:[friendOp.path])];
   const writes=[];
   for (let i=0;i<paths.length;i++) {
     const p=paths[i], coll=collectionIdOf(p), id=docIdOf(p), data=JSON.stringify(next[i]);
@@ -612,7 +627,7 @@ async function acceptFriendBatch(db, uid, ops, now) {
     writes.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(p,coll,id,owner,JSON.stringify({...next[i],id}),now));
   }
   const [low,high]=[uid,other].sort();
-  const ledger=db.prepare('INSERT INTO friendbook_cf_trusted_friendships(uid_low,uid_high,friend_path) VALUES (?,?,?)').bind(low,high,friendOp.path);
+  const ledger=db.prepare('INSERT INTO friendbook_cf_trusted_friendships(uid_low,uid_high,friend_path) VALUES (?,?,?)').bind(low,high,prior?.path||friendOp.path);
   await db.batch([...guards,ledger,...writes,db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
   return json({ok:true,operations:ops.length});
 }
@@ -734,8 +749,21 @@ async function writeGroup(db,uid,path,beforeRow,after,now) {
   const owner=await trustedGroupOwner(db,path);
   if (!before) {
     if (owner || !after || !canCreateGroup(uid,after)) return json({error:'Forbidden'},403);
+  } else if (!owner) {
+    // Historical ownership and invites are untrusted. Only self-service array
+    // changes are allowed; this does not grant access to private group content.
+    if (!after) return json({error:'Forbidden'},403);
+    const wasMember=Array.isArray(before.members) && before.members.includes(uid);
+    const isMember=Array.isArray(after.members) && after.members.includes(uid);
+    if (!wasMember && isMember && (String(before.privacy||'').toLowerCase()!=='public' || before.requireJoinApproval===true)) return json({error:'Forbidden'},403);
+    const roles=['adminIds','moderatorIds'];
+    for (const key of roles) {
+      const a=before[key]||[], b=after[key]||[];
+      if (!isSelfArrayChange(a,b,uid) || (!a.includes(uid) && b.includes(uid))) return json({error:'Forbidden'},403);
+    }
+    if (!canSelfManageGroup(uid,{...before,adminIds:after.adminIds,moderatorIds:after.moderatorIds},after)) return json({error:'Forbidden'},403);
   } else {
-    if (!owner || (!after ? !canManageGroup(uid,owner,before) || uid!==owner : !canUpdateGroup(uid,owner,before,after))) return json({error:'Forbidden'},403);
+    if (!after ? !canManageGroup(uid,owner,before) || uid!==owner : !canUpdateGroup(uid,owner,before,after)) return json({error:'Forbidden'},403);
   }
   if (after && JSON.stringify(after).length>95000) return json({error:'Document too large'},413);
   const stmts=[];
@@ -743,7 +771,7 @@ async function writeGroup(db,uid,path,beforeRow,after,now) {
     const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
     const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
     if ((canonical && canonical.document_json!==beforeRow.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'groups',doc_id:id,document_json:legacy.document_json})?.document_json!==beforeRow.document_json))) return json({error:'Group changed'},409);
-    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?)) AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ? THEN 1 ELSE 0 END').bind(canonical?1:0,path,beforeRow.document_json,canonical?1:0,path,path,legacy?.document_json||'',path,owner));
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?)) AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM friendbook_cf_trusted_groups WHERE group_path=?)) OR (? IS NOT NULL AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ?)) THEN 1 ELSE 0 END').bind(canonical?1:0,path,beforeRow.document_json,canonical?1:0,path,path,legacy?.document_json||'',owner,path,owner,path,owner));
   } else {
     stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path));
     stmts.push(db.prepare('INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES (?,?)').bind(path,uid));
@@ -753,14 +781,14 @@ async function writeGroup(db,uid,path,beforeRow,after,now) {
     stmts.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
     stmts.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
   } else {
-    const data=JSON.stringify(after), ownerUid=owner||uid;
+    const data=JSON.stringify(after), ownerUid=owner||beforeRow?.owner_uid||uid;
     stmts.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'groups','groups',id,ownerUid,data,beforeRow?.create_time||now,now));
     stmts.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'groups',id,ownerUid,JSON.stringify({...after,id}),now));
   }
   stmts.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
   await db.batch(stmts);
   if (!after) return json({deleted:true,path});
-  return json({exists:true,id,path,parent:'groups',collection:'groups',data:groupReadView(uid,after,owner||uid),createTime:beforeRow?.create_time||now,updateTime:now},beforeRow?200:201);
+  return json({exists:true,id,path,parent:'groups',collection:'groups',data:groupReadView(uid,after,beforeRow ? owner : uid),createTime:beforeRow?.create_time||now,updateTime:now},beforeRow?200:201);
 }
 
 // Group posts depend on current group membership and approval settings. The

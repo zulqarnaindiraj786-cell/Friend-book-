@@ -670,7 +670,12 @@ test('trusted groups enforce role and membership changes on both document APIs',
   assert.equal((await call('bob',uri,'DELETE')).status,403);
   // A historical record with a self-asserted admin cannot grant write access.
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('groups/old','groups','old','mallory',JSON.stringify({...group,adminId:'mallory',adminIds:['mallory'],members:['mallory']}),1);
-  assert.equal((await call('mallory','/v1/firestore/document?path=groups/old','PATCH',{fields:{name:'forged'}})).status,403);
+  const oldUri='/v1/firestore/document?path=groups/old';
+  assert.equal((await call('mallory',oldUri,'PATCH',{fields:{name:'forged'}})).status,403);
+  assert.equal((await call('mallory',oldUri,'PATCH',{fields:{adminIds:['mallory','bob']}})).status,403);
+  assert.equal((await call('bob',oldUri,'PATCH',{fields:{pendingMemberIds:{__fieldValue:'arrayUnion',values:['bob']}}})).status,200);
+  assert.equal((await call('bob',oldUri,'PATCH',{fields:{members:{__fieldValue:'arrayUnion',values:['bob']}}})).status,403);
+  assert.equal((await call('mallory',oldUri,'PATCH',{fields:{members:[],adminIds:[]}})).status,200);
   assert.equal((await call('alice',uri,'DELETE')).status,200);
   sql.close();
 });
@@ -763,5 +768,33 @@ test('trusted group chats support admin management, member leave, transfer and a
   assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g'),undefined);
   // Messages remain inaccessible rather than being adopted by a new room owner.
   assert.notEqual((await call('eve','chats/g','PUT',{data:{participants:['eve']}})).status,200);
+  sql.close();
+});
+
+test('both people can reconfirm a legacy friendship without duplicating it or incrementing counters', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  for(const n of ['0018_social_guards.sql','0019_trusted_friendships.sql'])sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
+  let race=null;
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){if(race){const f=race;race=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method,body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify(body)}),env);
+  for(const uid of ['alice','bob']) await call(uid,`/v1/firestore/document?path=users/${uid}`,'PUT',{data:{uid,friendsCount:0}});
+  for(const uid of ['alice','bob']) sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.friendsCount',1) WHERE path=?").run(`users/${uid}`);
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('friends/old','friends','old','alice',JSON.stringify({participants:['alice','bob']}),1);
+  assert.equal(await hasD1Friendship(db,'alice','bob'),null);
+  const req=await call('alice','/v1/firestore/document?parent=friend_requests','POST',{data:{fromUid:'alice',toUid:'bob',status:'pending'}});
+  const id=(await req.json()).id;
+  const ops=[{op:'update',path:`friend_requests/${id}`,updates:{status:'accepted'}},{op:'set',path:'friends/new',data:{participants:['bob','alice'],createdAt:{__fieldValue:'serverTimestamp'}}},...['alice','bob'].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:1}}}))];
+  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:ops})).status,403);
+  race=()=>sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({participants:['alice','eve']}),'friends/old');
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:ops})).status,409);
+  assert.equal(await hasD1Friendship(db,'alice','bob'),null);
+  sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({participants:['alice','bob']}),'friends/old');
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:ops})).status,200);
+  assert.equal(await hasD1Friendship(db,'alice','bob'),true);
+  assert.equal(sql.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships').get().friend_path,'friends/old');
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE path='friends/new'").get().n,0);
+  for(const uid of ['alice','bob']) assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json).friendsCount,1);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:ops})).status,403);
   sql.close();
 });
