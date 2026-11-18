@@ -904,3 +904,32 @@ test('chat message query checks room membership once, not once per message', asy
   assert.equal((await query('eve')).status,403);
   sql.close();
 });
+
+test('query cursor bounds work for prefixes, ties and deleted page anchors', async () => {
+  const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for(const [id,name] of [['u1','Alice'],['u2','Alina'],['u3','Bob'],['u4','Bobby'],['u5','Charlie']])
+    add.run(`users/${id}`,'users',id,id,JSON.stringify({uid:id,displayName:name}),1);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  const app=createWorker(async()=> 'u1');
+  const query=async spec=>{
+    const result=await app.fetch(new Request('https://example.test/v1/firestore/query',{
+      method:'POST',headers:{authorization:'Bearer test','content-type':'application/json'},
+      body:JSON.stringify({parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],...spec})
+    }),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+    assert.equal(result.status,200);return (await result.json()).documents.map(d=>d.id);
+  };
+  assert.deepEqual(await query({startAt:['Bo'],endAt:['Bo\uf8ff']}),['u3','u4']);
+  assert.deepEqual(await query({startAfter:['Bob']}),['u4','u5']);
+  assert.deepEqual(await query({endBefore:['Bob']}),['u1','u2']);
+  assert.deepEqual(await query({startAfter:['Bob','u3']}),['u4','u5']);
+  add.run('users/u6','users','u6','u6',JSON.stringify({uid:'u6',displayName:'Bob'}),1);
+  assert.deepEqual(await query({startAt:['Bob'],endAt:['Bob']}),['u3','u6']);
+  assert.deepEqual(await query({startAfter:['Bob']}),['u4','u5']);
+  assert.deepEqual(await query({startAfter:['Bob','u3']}),['u6','u4','u5']);
+  assert.deepEqual(await query({orderBy:[{field:'displayName',direction:'DESCENDING'}],startAfter:['Bob','u6']}),['u3','u2','u1']);
+  sql.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').run('users/u3');
+  assert.deepEqual(await query({startAfter:['Bob','u3']}),['u6','u4','u5']);
+  assert.deepEqual(await query({startAt:['ZZZ']}),[]);
+  sql.close();
+});

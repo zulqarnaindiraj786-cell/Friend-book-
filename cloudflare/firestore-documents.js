@@ -472,28 +472,48 @@ function cursorIndex(sorted, cursor, orderBy) {
   if (!id) return -1;
   return sorted.findIndex(d => d.id === id);
 }
+// Array cursors describe ordered values, not necessarily an existing document. Prefix
+// searches and deleted/moved pagination anchors must still apply the boundary.
+function compareDocumentToCursor(doc, cursor, orderBy) {
+  const orders = Array.isArray(orderBy) && orderBy.length ? orderBy : [{field:'__name__',direction:'ASCENDING'}];
+  const effective = [...orders];
+  if (!orders.some(o => o.field === '__name__')) {
+    effective.push({field:'__name__',direction:orders[orders.length - 1].direction});
+  }
+  for (let i=0; i<cursor.length && i<effective.length; i++) {
+    const order=effective[i];
+    const value=order.field === '__name__' ? doc.id : getField(doc.data,order.field);
+    const cmp=compareValues(value,decodeValue(cursor[i]));
+    if (cmp) return order.direction === 'DESCENDING' ? -cmp : cmp;
+  }
+  return 0;
+}
 function applyQuery(docs, spec) {
   const filters = Array.isArray(spec?.filters) ? spec.filters : [];
   let filtered = docs.filter(d => filters.every(f => matchesFilter(d.data, f, d.id)));
   let sorted = sortDocuments(filtered, spec?.orderBy);
   let start = 0;
   let end = sorted.length;
-  if (spec?.startAfter) {
-    const idx = cursorIndex(sorted, spec.startAfter, spec.orderBy);
-    if (idx >= 0) start = Math.max(start, idx + 1);
+  for (const [name, side, inclusive] of [
+    ['startAfter','start',false], ['startAt','start',true],
+    ['endBefore','end',false], ['endAt','end',true],
+  ]) {
+    const cursor=spec?.[name];
+    if (!cursor) continue;
+    if (Array.isArray(cursor)) {
+      if (!cursor.length) continue;
+      sorted=sorted.filter(doc => {
+        const cmp=compareDocumentToCursor(doc,cursor,spec?.orderBy);
+        return side === 'start' ? (inclusive ? cmp >= 0 : cmp > 0)
+          : (inclusive ? cmp <= 0 : cmp < 0);
+      });
+    } else {
+      // Retain legacy object cursors for older clients.
+      const idx=cursorIndex(sorted,cursor,spec?.orderBy);
+      if (idx >= 0) sorted=side === 'start' ? sorted.slice(idx+(inclusive?0:1)) : sorted.slice(0,idx+(inclusive?1:0));
+    }
   }
-  if (spec?.startAt) {
-    const idx = cursorIndex(sorted, spec.startAt, spec.orderBy);
-    if (idx >= 0) start = Math.max(start, idx);
-  }
-  if (spec?.endBefore) {
-    const idx = cursorIndex(sorted, spec.endBefore, spec.orderBy);
-    if (idx >= 0) end = Math.min(end, idx);
-  }
-  if (spec?.endAt) {
-    const idx = cursorIndex(sorted, spec.endAt, spec.orderBy);
-    if (idx >= 0) end = Math.min(end, idx + 1);
-  }
+  start=0; end=sorted.length;
   let sliced = sorted.slice(start, end);
   const limit = Number.isFinite(spec?.limit) ? Math.trunc(spec.limit) : null;
   const limitToLast = spec?.limitToLast === true ? limit
