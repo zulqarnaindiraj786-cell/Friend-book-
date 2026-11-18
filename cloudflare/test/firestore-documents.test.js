@@ -1010,3 +1010,24 @@ test('legacy chat lookup uses both indexes and returns the same rows as the form
  assert.match(plan,/idx_friendbook_cf_documents_message_chat_id/);
  sql.close();
 });
+
+test('inbox narrowing preserves canonical precedence and private legacy compatibility', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ sql.exec(readFileSync(new URL('../migrations/0025_inbox_recipient_indexes.sql',import.meta.url),'utf8'));
+ const canon=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ function a(id,data){legacy.run('notifications/'+id,'notifications',id,'',JSON.stringify(data),1);}
+ function f(id,data){canon.run('notifications/'+id,'notifications','notifications',id,'',JSON.stringify(data),1,1);}
+ f('mine',{toUserId:'alice'});f('notmine',{toUserId:'bob'});a('notmine',{toUserId:'alice'});
+ f('override',{toUserId:'alice'});a('override',{toUserId:'bob'});
+ a('raw',{toUserId:'alice'});a('wrapped',{fields:{toUserId:{stringValue:'alice'}}});a('hidden',{toUserId:'bob'});
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null};}};}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const request=(token)=>new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({parent:'notifications'})});
+ const alice=await app.fetch(request('alice'),env);assert.equal(alice.status,200);
+ assert.deepEqual((await alice.json()).documents.map(d=>d.id).sort(),['mine','override','raw','wrapped']);
+ const bob=await app.fetch(request('bob'),env);assert.deepEqual((await bob.json()).documents.map(d=>d.id).sort(),['hidden','notmine']);
+ const query="SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?";
+ assert.match(sql.prepare('EXPLAIN QUERY PLAN '+query).all('alice').map(x=>x.detail).join(),/idx_cf_firestore_inbox_recipient/);
+ sql.close();
+});

@@ -284,7 +284,20 @@ async function readRow(db, path) {
   return appDocumentToFirestoreRow(appRow);
 }
 
-async function readCollectionRows(db, parent) {
+async function readCollectionRows(db, parent, uid) {
+  if (parent === 'notifications') {
+    // Authorization itself narrows the inbox before loading rows. Keep canonical
+    // path precedence even when its recipient differs from a stale legacy mirror.
+    const canonical = await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?`).bind(uid).all();
+    const legacy = await db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
+      FROM friendbook_cf_documents a WHERE a.collection='notifications'
+        AND (CASE WHEN json_type(a.document_json,'$.fields')='object'
+          THEN json_extract(a.document_json,'$.fields.toUserId.stringValue')
+          ELSE json_extract(a.document_json,'$.toUserId') END)=?
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all();
+    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+  }
   const firestoreRows = await db.prepare(
     'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
   ).bind(parent).all();
@@ -1326,7 +1339,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let rows;
-    try { rows = await readCollectionRows(db, parent); }
+    try { rows = await readCollectionRows(db, parent, uid); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {
@@ -1353,7 +1366,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
     let rows;
-    try { rows = await readCollectionRows(db, parent); }
+    try { rows = await readCollectionRows(db, parent, uid); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     try {

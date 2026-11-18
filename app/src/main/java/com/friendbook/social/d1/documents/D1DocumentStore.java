@@ -26,8 +26,11 @@ public class D1DocumentStore {
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Polls use the same bounded pool and each
     // listener has an in-flight guard so a slow response cannot pile up every five seconds.
+    // A non-full queue prevents ThreadPoolExecutor from growing past its core size.
+    // Use all eight workers immediately instead of silently running only four while
+    // foreground screen requests wait behind slow network calls.
     private final ExecutorService executor = new java.util.concurrent.ThreadPoolExecutor(
-            4, 8, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(256),
+            8, 8, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(256),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
