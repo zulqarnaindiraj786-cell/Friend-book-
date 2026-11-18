@@ -126,3 +126,23 @@ class ExtensionTests(unittest.TestCase):
         with self.assertRaises(q.CopyError):q.extend_15k_budget_on_day(db,'2026-11-18',now)
         with self.assertRaises(q.CopyError):q.extend_15k_budget_on_day(db,'2026-11-17',now)
         self.assertEqual(db.query('SELECT cap FROM friendbook_cf_copy_read_budget')[0]['cap'],10000)
+
+    def test_third_extension_once_only_and_strict_pacific_date(self):
+        db=LocalD1(); now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        db.query('INSERT INTO friendbook_cf_copy_read_budget VALUES (?,?,?)',('2026-11-18',19999,20000))
+        day=q.extend_20k_budget_on_day(db,'2026-11-18',now)
+        self.assertEqual(q.extend_20k_budget_on_day(db,'2026-11-18',now),day)
+        b=q.Budget(db,30000,now,allowed_day=day)
+        self.assertEqual(b.reserve(10001)['reserved'],30000)
+        with self.assertRaises(q.BudgetExhausted): b.reserve(1)
+        with self.assertRaises(q.CopyError): q.extend_20k_budget_on_day(db,'2026-11-18',lambda:datetime(2026,11,19,12,tzinfo=timezone.utc))
+        with self.assertRaises(q.BudgetExhausted): q.Budget(db,30000,lambda:datetime(2026,11,19,12,tzinfo=timezone.utc),allowed_day=day).reserve(1)
+        self.assertEqual(len(db.query('SELECT * FROM friendbook_cf_copy_read_budget')),1)
+
+    def test_third_extension_rejects_wrong_cap_day_or_unexhausted(self):
+        db=LocalD1();now=lambda:datetime(2026,11,18,12,tzinfo=timezone.utc)
+        db.query('INSERT INTO friendbook_cf_copy_read_budget VALUES (?,?,?)',('2026-11-18',18000,20000))
+        with self.assertRaises(q.CopyError): q.extend_20k_budget_on_day(db,'2026-11-18',now)
+        with self.assertRaises(q.CopyError): q.extend_20k_budget_on_day(db,'2026-11-17',now)
+        db.query('UPDATE friendbook_cf_copy_read_budget SET cap=15000,reserved=14999')
+        with self.assertRaises(q.CopyError): q.extend_20k_budget_on_day(db,'2026-11-18',now)

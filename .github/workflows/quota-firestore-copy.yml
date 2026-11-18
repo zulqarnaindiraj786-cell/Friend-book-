@@ -37,6 +37,6 @@ jobs:
         env:
           FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: python3 scripts/admin/quota_firestore_copy.py --execute --daily-budget 20000 --extend-15k-on 2026-11-18
+        run: python3 scripts/admin/quota_firestore_copy.py --execute --daily-budget 30000 --extend-20k-on 2026-11-18
 
 # Resume retained checkpoint after connection interruption; same authorized daily cap.
