@@ -307,12 +307,20 @@ async function readCollectionRows(db, parent) {
     // Legacy CloudflareStore messages use either messages/{chatId}_{messageId} IDs or a chatId
     // field, while Android reads chats/{chatId}/messages/{messageId}. Restrict this bridge to
     // exact ID-prefix/chatId matches and a participant-checked chat query; native nested rows win.
-    const prefix = `${parts[1]}_`;
+    const prefix = `${parts[1]}_`, upper = `${parts[1]}\``;
+    // Two indexable branches in one D1 request. '_' and '`' are adjacent ASCII
+    // characters, so this range exactly matches prefix + any valid message ID.
+    // Exclude prefix rows from branch two to avoid duplicating a legacy message.
     const appRows = await db.prepare(
       `SELECT path, collection, doc_id, owner_uid, document_json, updated_at
        FROM friendbook_cf_documents
-       WHERE collection='messages' AND (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=?)`
-    ).bind(prefix.length, prefix, parts[1]).all();
+       WHERE collection='messages' AND doc_id>=? AND doc_id<?
+       UNION ALL
+       SELECT path, collection, doc_id, owner_uid, document_json, updated_at
+       FROM friendbook_cf_documents
+       WHERE collection='messages' AND json_extract(document_json,'$.chatId')=?
+         AND NOT (doc_id>=? AND doc_id<?)`
+    ).bind(prefix, upper, parts[1], prefix, upper).all();
     for (const appRow of appRows?.results || []) {
       const messageId = appRow.doc_id.startsWith(prefix) ? appRow.doc_id.slice(prefix.length) : appRow.doc_id;
       if (!validSegment(messageId)) continue;

@@ -75,7 +75,7 @@ public class D1DocumentStore {
     private void pollChatMessages() {
         for (QueryListenerEntry e : queryListeners) {
             String path = e.query.parentPath;
-            if (e.active && path.startsWith("chats/") && path.endsWith("/messages")) {
+            if (e.active && ListenerPollingPolicy.isChatMessages(path)) {
                 scheduleQueryRead(e);
             }
         }
@@ -222,7 +222,9 @@ public class D1DocumentStore {
         for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
             for (DocListenerEntry e : list) scheduleDocRead(e);
         }
-        for (QueryListenerEntry e : queryListeners) scheduleQueryRead(e);
+        for (QueryListenerEntry e : queryListeners) {
+            if (!ListenerPollingPolicy.isChatMessages(e.query.parentPath)) scheduleQueryRead(e);
+        }
     }
 
     private void scheduleDocRead(DocListenerEntry entry) {

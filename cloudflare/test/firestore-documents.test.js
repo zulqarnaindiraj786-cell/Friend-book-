@@ -990,3 +990,23 @@ test('pending friend requests are atomically unique per sender and recipient', a
  assert.equal(remove.status,200);assert.equal((await send('bob')).status,201);
  sql.close();
 });
+
+test('legacy chat lookup uses both indexes and returns the same rows as the former scan', () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(appSchema);
+ sql.exec(readFileSync(new URL('../migrations/0019_legacy_query_indexes.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0024_legacy_chat_prefix_index.sql',import.meta.url),'utf8'));
+ const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ for(let i=0;i<5000;i++) {const id=`chat${i}_m`;add.run('messages/'+id,'messages',id,'u',JSON.stringify({chatId:'chat'+i}),1);}
+ for(const id of ['chat42_😀','chat42_x','chat42`x','other'])add.run('messages/'+id,'messages',id,'u',JSON.stringify({chatId:id==='other'?'chat42':'other'}),1);
+ sql.exec('ANALYZE');
+ const previous="SELECT path FROM friendbook_cf_documents WHERE collection='messages' AND (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=?)";
+ const next="SELECT path FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<? UNION ALL SELECT path FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? AND NOT (doc_id>=? AND doc_id<?)";
+ const prefix='chat42_',upper='chat42`',args=[prefix,upper,'chat42',prefix,upper];
+ const before=sql.prepare(previous).all(prefix.length,prefix,'chat42').map(row=>row.path).sort();
+ const after=sql.prepare(next).all(...args).map(row=>row.path).sort();
+ assert.deepEqual(after,before);assert.equal(new Set(after).size,after.length);
+ const plan=sql.prepare('EXPLAIN QUERY PLAN '+next).all(...args).map(row=>row.detail).join('\n');
+ assert.match(plan,/idx_friendbook_cf_documents_message_doc_id/);
+ assert.match(plan,/idx_friendbook_cf_documents_message_chat_id/);
+ sql.close();
+});
