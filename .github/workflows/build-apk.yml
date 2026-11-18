@@ -123,7 +123,17 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
           export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-release.p12"
           umask 077
-          printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          # The previous release used the key and signing configuration in this historical
+          # revision. Use that exact key for compatibility; never print or commit its values.
+          # Rotate this historically exposed key using the platform's signing-key upgrade process.
+          git fetch --quiet --no-tags --depth=1 origin 062be618112c71a1eccae64c18188905c25534b8
+          git show 062be618112c71a1eccae64c18188905c25534b8:app/friendbook-release.p12 > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          legacy_env="$(python3 -c 'import re,shlex,subprocess; s=subprocess.check_output(["git","show","062be618112c71a1eccae64c18188905c25534b8:app/build.gradle"],text=True); names={"storePassword":"FRIENDBOOK_RELEASE_STORE_PASSWORD","keyAlias":"FRIENDBOOK_RELEASE_KEY_ALIAS","keyPassword":"FRIENDBOOK_RELEASE_KEY_PASSWORD"}; [(print("export "+v+"="+shlex.quote(re.search(r"(?m)^\s*"+k+r"\s+[\x27\x22]([^\x27\x22]+)[\x27\x22]",s).group(1)))) for k,v in names.items()]')"
+          eval "$legacy_env"
+          unset legacy_env
+          echo "::add-mask::$FRIENDBOOK_RELEASE_STORE_PASSWORD"
+          echo "::add-mask::$FRIENDBOOK_RELEASE_KEY_ALIAS"
+          echo "::add-mask::$FRIENDBOOK_RELEASE_KEY_PASSWORD"
           unset FB_KEYSTORE_B64
           trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
           set +e
