@@ -4,7 +4,7 @@ import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, con
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
-import { canReadReports, reportForCreate } from './report-access.js';
+import { canReadReports, reportForCreate, feedbackForCreate } from './report-access.js';
 // Cloudflare D1 document API (/v1/d1/*). Android uses a D1-backed document adapter
 // authenticated with Firebase Auth tokens; Firebase stores Auth + FCM only.
 
@@ -1445,7 +1445,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
-    if (parts[0] === 'reports' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
     let row;
@@ -1471,7 +1471,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (['friend_requests','friends','payments','reports'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['friend_requests','friends','payments','reports','feedback'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
@@ -1507,7 +1507,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
-      const row = await writeRow(db, docPath, next, now, existing);
+      const row = await writeRow(db, docPath, next, now, existing, splitPath(docPath)[0]==='stories');
       return json(rowToDocument(row));
     } catch (e) {
       return json({ error: e.message === 'Document too large' ? 'Document too large' : 'Write unavailable' }, e.message === 'Document too large' ? 413 : 503);
@@ -1519,7 +1519,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (['friend_requests','friends','reports'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['friend_requests','friends','reports','feedback'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({error:'Invalid body'},400);
@@ -1542,7 +1542,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
-      const row = await writeRow(db, docPath, next, now, existing);
+      const row = await writeRow(db, docPath, next, now, existing, splitPath(docPath)[0]==='stories');
       return json(rowToDocument(row));
     } catch {
       return json({ error: 'Update unavailable' }, 503);
@@ -1555,7 +1555,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     if (['friends','payments'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
-    if (splitPath(docPath)[0] === 'reports') {
+    if (['reports','feedback'].includes(splitPath(docPath)[0])) {
       if (!canReadReports(env,uid)) return json({error:'Forbidden'},403);
       if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
       try {
@@ -1595,7 +1595,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       try { const row=await readRow(db,docPath); if (row && decodeValue(JSON.parse(row.document_json))?.groupId) return await writeGroupPost(db,uid,docPath,row,null,now); }
       catch { return json({error:'Post changed or unavailable'},409); }
     }
-    if (['notifications','users','pushDevices','chats','messages','posts','reels'].includes(splitPath(docPath)?.[0])) {
+    if (['notifications','users','pushDevices','chats','messages','posts','reels','stories'].includes(splitPath(docPath)?.[0])) {
       let existing;
       try { existing = await readRow(db, docPath); }
       catch { return json({ error: 'Read unavailable' }, 503); }
@@ -1604,6 +1604,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!existing || !notificationWriteAllowed(docPath, uid, before, null) || !profileWriteAllowed(docPath, uid, before, null) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, before, null)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) { try { return await writeChatMessage(db,docPath,null,now,existing,chatAuth,uid,true); } catch { return json({error:'Message changed or unavailable'},503); } }
       if (splitPath(docPath)[0]==='chats' && splitPath(docPath).length===2) { try { return await deleteChatRoot(db,docPath,existing); } catch { return json({error:'Group changed or unavailable'},503); } }
+      if (['posts','reels','stories'].includes(splitPath(docPath)[0])) {
+        if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+        try {
+          const guard=await chatDocumentGuard(db,docPath,existing);
+          await db.batch([guard,db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(docPath),
+            db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(docPath),
+            db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+          return json({deleted:true,path:docPath});
+        } catch (error) {
+          if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Content changed. Please retry.'},409);
+          return json({error:'Deletion unavailable'},503);
+        }
+      }
     }
     try {
       const canonicalDelete=db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(docPath);
@@ -1627,8 +1640,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const docPath = `${parent}/${id}`;
     try {
       const next = applySet(null, body?.data || {}, false, null, now);
-      if (parent === 'reports') {
-        const report=reportForCreate(uid,next,now);
+      if (['reports','feedback'].includes(parent)) {
+        const report=parent==='feedback'?feedbackForCreate(uid,next,now):reportForCreate(uid,next,now);
         if (!report) return json({error:'Invalid report'},400);
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
         await db.batch([
@@ -1683,7 +1696,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,null,chatAuth,uid);
       if (parent === 'chats') return await writeChatRoot(db,docPath,next,now,null,uid);
-      const row = await writeRow(db, docPath, next, now, null);
+      const row = await writeRow(db, docPath, next, now, null, parent==='stories');
       return json(rowToDocument(row), 201);
     } catch {
       return json({ error: 'Write unavailable' }, 503);
@@ -1697,7 +1710,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (parent === 'reports' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
@@ -1727,7 +1740,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (parent === 'reports' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
         && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
@@ -1790,7 +1803,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
-      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments','groups','reports'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
+      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments','groups','reports','feedback'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;
@@ -1845,7 +1858,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       const statements = [];
       const roomPaths=order.filter(p=>splitPath(p).length===2 && splitPath(p)[0]==='chats');
       const messagePaths=order.filter(p=>chatAuths.get(p).roomPath);
-      const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels'].includes(splitPath(p)[0]));
+      const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels','stories'].includes(splitPath(p)[0]));
       if ((roomPaths.length || messagePaths.length || guardedPaths.length) && typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
       for (const p of guardedPaths) statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
       for (const roomPath of roomPaths) {

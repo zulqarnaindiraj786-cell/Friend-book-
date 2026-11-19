@@ -942,7 +942,7 @@ test('query cursor bounds work for prefixes, ties and deleted page anchors', asy
 
 
 test('stories load with owner and privacy checks without exposing viewers', async () => {
-  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for(const uid of ['alice','bob'])add.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
@@ -1426,5 +1426,47 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x'})).status,403);
  story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.equal(story.reactions.bob,'❤️'); // a block racing the batch prevented the write
+ sql.close();
+});
+
+test('only the story author can delete, and concurrent modifications roll back deletion', async () => {
+ const sql=new DatabaseSync(':memory:');for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(s);
+ const add=(id,owner)=>{const doc={authorId:owner,caption:'original'};sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(`stories/${id}`,'stories','stories',id,owner,JSON.stringify(doc),1,1);sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run(`stories/${id}`,'stories',id,owner,JSON.stringify({...doc,id}),1);};
+ add('s1','alice');add('s2','alice');let race=false;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+  if(race){race=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='stories/s2'").run(JSON.stringify({authorId:'alice',caption:'new'}));}
+  sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+ }};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const del=(who,id)=>app.fetch(new Request(`https://example.test/v1/firestore/document?path=stories/${id}`,{method:'DELETE',headers:{authorization:`Bearer ${who}`}}),env);
+ assert.equal((await del('bob','s1')).status,403);assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get());
+ race=true;assert.equal((await del('alice','s2')).status,409);
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s2'").get().document_json).caption,'new');
+ assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_documents WHERE path='stories/s2'").get());
+ assert.equal((await del('alice','s1')).status,200);assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE path='stories/s1'").get().n,0);
+ sql.close();
+});
+
+test('feedback is create-only for authenticated sender and private to configured admin', async () => {
+ const sql=new DatabaseSync(':memory:');for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(s);
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+ const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+ const submission={data:{uid:'alice',name:'Alice',text:'Please fix loading',app:'android',createdAt:{__fieldValue:'serverTimestamp'}}};
+ assert.equal((await call('alice','/v1/firestore/document?parent=feedback','POST',{data:{...submission.data,uid:'bob'}})).status,400);
+ assert.equal((await call('alice','/v1/firestore/document?parent=feedback','POST',{data:{...submission.data,admin:true}})).status,400);
+ const created=await call('alice','/v1/firestore/document?parent=feedback','POST',submission);assert.equal(created.status,201);const doc=await created.json();
+ for(const uid of ['alice','bob']){
+  assert.equal((await call(uid,`/v1/firestore/document?path=${doc.path}`)).status,403);
+  assert.equal((await call(uid,'/v1/firestore/query','POST',{parent:'feedback'})).status,403);
+  assert.equal((await call(uid,'/v1/firestore/count?parent=feedback')).status,403);
+  assert.equal((await call(uid,`/v1/firestore/document?path=${doc.path}`,'DELETE')).status,403);
+ }
+ assert.equal((await call('alice',`/v1/firestore/document?path=${doc.path}`,'PATCH',{fields:{text:'changed'}})).status,403);
+ assert.equal((await call('alice',`/v1/firestore/document?path=${doc.path}`,'PUT',{data:submission.data})).status,403);
+ assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:[{op:'delete',path:doc.path}]})).status,403);
+ const inbox=await (await call('admin','/v1/firestore/query','POST',{parent:'feedback'})).json();assert.equal(inbox.documents.length,1);assert.equal(inbox.documents[0].data.text,'Please fix loading');
+ assert.equal((await call('admin',`/v1/firestore/document?path=${doc.path}`,'DELETE')).status,200);
+ assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='feedback'").get().n,0);
  sql.close();
 });

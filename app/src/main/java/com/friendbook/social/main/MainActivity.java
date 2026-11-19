@@ -734,8 +734,9 @@ public class MainActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-android");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
-                    Ui.toast(this, "Thanks for your feedback!");
+                    Fb.db().collection("feedback").add(m)
+                            .addOnSuccessListener(ref -> Ui.toast(this, "Thanks for your feedback!"))
+                            .addOnFailureListener(error -> Ui.toast(this, "Couldn't send feedback. Please try again."));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

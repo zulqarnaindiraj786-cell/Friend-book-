@@ -1226,8 +1226,9 @@ public class SettingsActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
                     m.put("createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
-                    Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
+                    Fb.db().collection("feedback").add(m)
+                            .addOnSuccessListener(ref -> Ui.toast(this, "Thanks! Report sent to friendbook Team ✓"))
+                            .addOnFailureListener(error -> Ui.toast(this, "Couldn't send feedback. Please try again."));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
