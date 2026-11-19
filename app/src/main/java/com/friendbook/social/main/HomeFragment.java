@@ -198,6 +198,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         pymkLoaded=false;loadPymk();startStoriesListener(true);
         if (adapter != null) adapter.advanceFeaturedReelRotation();
         featuredReelsLoaded=false;loadFeaturedReelsForHome();
+        notesReadAt = -120_000L;
         loadNotesUsers();
         if (scrollTop && rv != null) rv.scrollToPosition(0);
     }
@@ -246,8 +247,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
-        if (!hidden && adapter != null) {
+        if (hidden) {
+            stopHomeWatchers();
+        } else if (adapter != null && isResumed()) {
             refreshPostsIfNeeded();
+            startVisibleHomeContent();
             adapter.refreshSponsoredAds();
         }
     }
@@ -403,8 +407,23 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 .show();
     }
 
+    private String notesActor;
+    private long notesReadAt = -120_000L;
+
     private void loadNotesUsers() {
+        String actor = Fb.uid();
+        if (actor == null) return;
+        if (!actor.equals(notesActor)) {
+            notesActor = actor;
+            notesReadAt = -120_000L;
+            noteUsers.clear();
+            renderNotesRow();
+        }
+        long attempt = android.os.SystemClock.elapsedRealtime();
+        if (attempt - notesReadAt < 120_000L) return;
+        notesReadAt = attempt;
         Fb.db().collection("users").limit(30).get().addOnSuccessListener(snap -> {
+            if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
             noteUsers.clear();
             long now = System.currentTimeMillis();
             if (snap != null) {
@@ -484,15 +503,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
         refreshPostsIfNeeded();
-        startFriendsListener();
-        loadPymk();
-        // Every time Home is opened the Featured Reels card rotates to the NEXT viral/fresh Reel
-        // (never the same video on repeat) while the view counter stays 100% real.
-        if (adapter != null) adapter.advanceFeaturedReelRotation();
-        loadFeaturedReelsForHome();
-        startStoriesListener();
-        startLivesListener();
-        loadNotesUsers();
+        if (!isHidden()) {
+            if (adapter != null) adapter.advanceFeaturedReelRotation();
+            startVisibleHomeContent();
+        }
         com.friendbook.social.core.AdsConfig.setChangeListener((id, en) -> {
             if (adapter != null) adapter.setAdsConfig(id, en);
         });
@@ -506,9 +520,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         FastCache.removeReactionObserver(reactionObserver);
         feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (storiesReg != null) storiesReg.remove();
-        if (friendsReg != null) friendsReg.remove();
-        if (livesReg != null) livesReg.remove();
+        stopHomeWatchers();
         com.friendbook.social.core.AdsConfig.setChangeListener(null);
+    }
+
+    private void startVisibleHomeContent() {
+        startHomeWatchers();
+        loadPymk();
+        loadFeaturedReelsForHome();
+        startStoriesListener();
+        loadNotesUsers();
+    }
+
+    private void startHomeWatchers() {
+        if (friendsReg == null) startFriendsListener();
+        if (livesReg == null) startLivesListener();
+    }
+
+    private void stopHomeWatchers() {
+        if (friendsReg != null) { friendsReg.remove(); friendsReg = null; }
+        if (livesReg != null) { livesReg.remove(); livesReg = null; }
     }
 
     // ---------- 🔴 active lives strip ----------

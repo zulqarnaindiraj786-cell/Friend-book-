@@ -58,6 +58,7 @@ public class D1DocumentStore {
         volatile boolean active = true;
         volatile long lastAttemptMs = -60_000;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
+        final PollBudget budget = new PollBudget();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
@@ -73,6 +74,7 @@ public class D1DocumentStore {
         volatile boolean active = true;
         volatile long lastAttemptMs = -60_000;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
+        final PollBudget budget = new PollBudget();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
         final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
@@ -91,10 +93,11 @@ public class D1DocumentStore {
     private void pollChatMessages() {
         if (!com.friendbook.social.App.isForeground()) return;
         long now = android.os.SystemClock.elapsedRealtime();
+        if (!D1DocumentTransport.periodicAllowed(now)) return;
         for (QueryListenerEntry e : queryListeners) {
             String path = e.query.parentPath;
             if (e.active && ListenerPollingPolicy.isChatMessages(path)
-                    && ListenerPollingPolicy.due(path, true, now - e.lastAttemptMs)) {
+                    && e.budget.due(path, true, now - e.lastAttemptMs)) {
                 scheduleQueryRead(e);
             }
         }
@@ -372,15 +375,16 @@ public class D1DocumentStore {
         // Never perform HTTP on the single scheduled executor. A slow request there used to block
         // every remaining listener (and the next poll cycle), making unrelated screens appear hung.
         long now = android.os.SystemClock.elapsedRealtime();
+        if (!D1DocumentTransport.periodicAllowed(now)) return;
         boolean foreground = com.friendbook.social.App.isForeground();
         for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
             for (DocListenerEntry e : list) {
-                if (ListenerPollingPolicy.due(e.ref.getPath(), foreground, now - e.lastAttemptMs)) scheduleDocRead(e);
+                if (e.budget.due(e.ref.getPath(), foreground, now - e.lastAttemptMs)) scheduleDocRead(e);
             }
         }
         for (QueryListenerEntry e : queryListeners) {
             String path = e.query.parentPath;
-            if (!ListenerPollingPolicy.isChatMessages(path) && ListenerPollingPolicy.due(path, foreground, now - e.lastAttemptMs)) scheduleQueryRead(e);
+            if (!ListenerPollingPolicy.isChatMessages(path) && e.budget.due(path, foreground, now - e.lastAttemptMs)) scheduleQueryRead(e);
         }
     }
 
@@ -423,11 +427,14 @@ public class D1DocumentStore {
             cacheDoc(entry.ref.getPath(), snap, entry.actor);
             // Timestamp equality is not sufficient: concurrent writes may share a
             // millisecond, and an identical result must clear a prior read error.
-            if (!entry.deliveryState.server(response.toString())) return;
+            boolean changed = entry.deliveryState.server(response.toString());
+            entry.budget.success(changed);
+            if (!changed) return;
             mainHandler.post(() -> {
                 if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
+            entry.budget.failure();
             entry.deliveryState.error();
             D1DocumentStoreException ffe = ex instanceof D1DocumentStoreException
                     ? (D1DocumentStoreException) ex
@@ -449,12 +456,15 @@ public class D1DocumentStore {
             cacheQuery(queryCacheKey(entry.query, entry.actor), fp);
             // Cached rows are not server confirmation: the first server result
             // must be delivered even when its contents match the cached snapshot.
-            if (!entry.deliveryState.server(fp)) return;
+            boolean changed = entry.deliveryState.server(fp);
+            entry.budget.success(changed);
+            if (!changed) return;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
             mainHandler.post(() -> {
                 if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
+            entry.budget.failure();
             entry.deliveryState.error();
             D1DocumentStoreException ffe = ex instanceof D1DocumentStoreException
                     ? (D1DocumentStoreException) ex

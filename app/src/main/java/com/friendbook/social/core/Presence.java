@@ -39,7 +39,7 @@ public class Presence {
     /** Callback for presence updates: (online, lastSeenMs). */
     public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
-    public static final long HEARTBEAT_INTERVAL_MS = 30_000L; // 30 seconds
+    public static final long HEARTBEAT_INTERVAL_MS = 90_000L; // Profile fallback; the WebSocket handles live presence.
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 minutes (300s)
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
@@ -91,6 +91,7 @@ public class Presence {
         }
         if (boundUid != null && !uid.equals(boundUid)) goOffline();
 
+        if (foregroundActive && uid.equals(boundUid)) return;
         foregroundActive = true;
         activeStatusVisible = (c != null && Prefs.activeStatus(c));
         boundUid = uid;
@@ -267,7 +268,8 @@ public class Presence {
         if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
             h.ticker = () -> {
                 if (!h.closed) {
-                    fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, profileRevision, emit);
+                    if (com.friendbook.social.App.isForeground())
+                        fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, profileRevision, emit);
                     H.postDelayed(h.ticker, 30_000L); // poll every 30s
                 }
             };

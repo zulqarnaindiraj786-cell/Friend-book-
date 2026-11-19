@@ -20,6 +20,19 @@ import java.util.concurrent.TimeUnit;
 final class D1DocumentTransport {
     static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
     private D1DocumentTransport() {}
+    private static final java.util.concurrent.atomic.AtomicLong PERIODIC_PAUSED_UNTIL = new java.util.concurrent.atomic.AtomicLong();
+
+    static boolean periodicAllowed(long elapsedMs) { return elapsedMs >= PERIODIC_PAUSED_UNTIL.get(); }
+
+    private static void pausePeriodicReads(String retryAfter) {
+        long delaySeconds = 60;
+        if (retryAfter != null) {
+            try { delaySeconds = Math.max(30, Math.min(300, Long.parseLong(retryAfter.trim()))); }
+            catch (NumberFormatException ignored) { /* Use default for unavailable or date-form headers. */ }
+        }
+        PERIODIC_PAUSED_UNTIL.accumulateAndGet(android.os.SystemClock.elapsedRealtime() + delaySeconds * 1000L, Math::max);
+    }
+
     private static final ThreadLocal<String> REQUEST_ACTOR = new ThreadLocal<>();
 
     static <T> T runForActor(String actor, java.util.concurrent.Callable<T> task) throws Exception {
@@ -79,6 +92,7 @@ final class D1DocumentTransport {
                 try (OutputStream out = conn.getOutputStream()) { out.write(bytes); }
             }
             int code = conn.getResponseCode();
+            if (code == 429) pausePeriodicReads(conn.getHeaderField("Retry-After"));
             InputStream rs = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
             StringBuilder sb = new StringBuilder();
             if (rs != null) {
@@ -106,6 +120,7 @@ final class D1DocumentTransport {
                 if ("NOT_FOUND".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.NOT_FOUND, err);
                 if ("ALREADY_EXISTS".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS, err);
                 if (code == 401) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, err);
+                if (code == 429) throw new D1DocumentStoreException(D1DocumentStoreException.Code.RESOURCE_EXHAUSTED, err);
                 if (code == 403) throw new D1DocumentStoreException(D1DocumentStoreException.Code.PERMISSION_DENIED, err);
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, err + " HTTP " + code);
             }
