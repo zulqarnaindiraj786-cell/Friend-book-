@@ -30,7 +30,12 @@ jobs:
           fi
       - name: Compile Android and run unit tests without packaging
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[android-compile-only]')
-        run: gradle :app:compileDebugJavaWithJavac :app:testDebugUnitTest --no-daemon --console=plain
+        run: |
+          if ! gradle :app:compileDebugJavaWithJavac :app:testDebugUnitTest --no-daemon --console=plain > android-compile.log 2>&1; then
+            tail -100 android-compile.log
+            grep -A 4 -E 'error:|What went wrong|FAILED|Execution failed' android-compile.log | tail -45 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - name: Compile and test the candidate
         if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[android-compile-only]')
         run: |
