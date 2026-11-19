@@ -1,3 +1,4 @@
+import { readRow } from './firestore-documents.js';
 import { readD1DocumentFields } from './app-documents.js';
 // Cloudflare Worker FCM gateway (/functions/v1/send-fcm-notification, /functions/v1/bulk-mentions).
 // Firebase keeps ONLY Auth (token verification in worker.js) + FCM delivery.
@@ -59,7 +60,7 @@ export async function googleToken(env) {
 
 async function d1Doc(db, path) {
   try {
-    const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
+    const row = await readRow(db,path);
     if (!row?.document_json) return null;
     const parsed = JSON.parse(row.document_json);
     // Decode timestamp wrappers to millis for freshness checks.

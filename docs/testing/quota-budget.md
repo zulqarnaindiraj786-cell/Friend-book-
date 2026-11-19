@@ -15,3 +15,9 @@ Steady-state upper estimates per device and listener (not production measurement
 Assumes unchanged successful results after warm-up, one listener for each row, and no pushes/manual refresh. Active room signaling and foreground chat retain their healthy-network cadence. Periodic failures back off and HTTP 429 pauses both document pollers temporarily; explicit refreshes, mutation notifications and FCM invalidations bypass periodic backoff.
 
 Before releasing: run staging with 200 synthetic concurrent sessions; compare idle and active workloads separately. Check Home/Friends tab switching, message delivery, incoming calls after idle both foreground and background, notification badges, and recovery after a simulated service limit. Verify requests and D1 rows examined, not just response size. Do not infer 200-device capacity from unit tests alone.
+
+### Notification page follow-up
+
+The badge (32) and notification history (20) now use recipient/order indexes and a cursor, fetching at most one page per store per SQL batch for standard records. Historical exceptional timestamp formats still use the compatibility path. The SQLite regression checks unread paging and canonical precedence with a stale legacy mirror; this is not a production rows-read measurement.
+
+The static list inventory still flags Home friendship membership and Main chat-room badge/call fallback. Neither was arbitrarily capped: doing so could hide an existing friend or drop a call from a room outside the cap. They need dedicated participant-indexed projections with correctness tests before a cap is safe. Background data-only push now posts the Android notification without also running foreground list invalidations; foreground pushes still refresh authenticated data.

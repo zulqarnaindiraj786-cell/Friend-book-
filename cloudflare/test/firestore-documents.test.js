@@ -2047,3 +2047,25 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?").all('Am','An');
   assert.ok(plan.some(row=>row.detail.includes('idx_cf_users_display_name')));
 });
+
+test('notification pages use bounded per-store reads and do not expose stale mirrors', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ sql.exec(readFileSync(new URL('../migrations/0055_notification_page_indexes.sql',import.meta.url),'utf8'));
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)'),a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ const data=(uid,i)=>JSON.stringify({toUserId:uid,fromUserId:'sender',isRead:i%3===0,createdAt:{__type:'timestamp',millis:i}});
+ for(let i=0;i<200;i++){
+  const id='n'+i,path='notifications/'+id;
+  if(i%2===0) f.run(path,'notifications','notifications',id,'sender',data('alice',i),1,1);
+  else a.run(path,'notifications',id,'sender',data('alice',i),1);
+ }
+ f.run('notifications/shadow','notifications','notifications','shadow','sender',data('bob',999),1,1);
+ a.run('notifications/shadow','notifications','shadow','sender',data('alice',999),1);
+ let rows=0;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const filters=[{field:'toUserId',op:'==',value:'alice'},{field:'isRead',op:'==',value:false}];
+ const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return (await res.json()).documents;};
+ const first=await query({});const last=first.at(-1);const second=await query({startAfter:[last.data.createdAt,last.id]});
+ assert.equal(rows,40);const actual=[...first,...second].map(d=>d.id);
+ assert.deepEqual(actual,Array.from({length:200},(_,i)=>199-i).filter(i=>i%3!==0).slice(0,20).map(i=>'n'+i));sql.close();
+});

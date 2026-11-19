@@ -278,7 +278,7 @@ function appDocumentToFirestoreRow(row) {
   };
 }
 
-async function readRow(db, path) {
+export async function readRow(db, path) {
   const row = await db.prepare(
     'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?'
   ).bind(path).first();
@@ -923,6 +923,75 @@ async function boundedFeedPage(db,uid,spec) {
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     const allowed=await visibleDocuments(db,uid,'posts',docs,requestUserReads);
+    visible.push(...allowed);
+    if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
+    const last=docs[docs.length-1], value=last.data.createdAt;
+    cursor=[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id];
+    if (docs.length<chunk) break;
+  }
+  return visible;
+}
+
+async function boundedNotificationPage(db,uid,spec) {
+  const filters=Array.isArray(spec?.filters)?spec.filters:[];
+  const recipient=filters.filter(f=>f?.field==='toUserId' && f.op==='==' && f.value===uid);
+  const unread=filters.filter(f=>f?.field==='isRead' && f.op==='==' && f.value===false);
+  if (recipient.length!==1 || unread.length>1 || filters.length!==recipient.length+unread.length) return null;
+  const recipientArgs=[uid];
+  const field="json_extract(document_json,'$.toUserId')";
+  const legacyField="CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.toUserId.stringValue') ELSE json_extract(document_json,'$.toUserId') END";
+  const byRecipient=` AND ${field}=?`;
+  const byLegacyRecipient=` AND (${legacyField})=?`;
+  const unreadOnly=unread.length?" AND json_type(document_json,'$.isRead')='false'":'';
+  if (spec?.parent!=='notifications' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'  || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || (spec.orderBy[0].fieldPath!==undefined) || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
+  let cursor=null;
+  if (spec.startAfter) {
+    const c=spec.startAfter;
+    if (!Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
+    const rank=typeof c[0]==='number'?2:c[0]?.__type==='timestamp'?4:0;
+    const time=rank===2?c[0]:c[0]?.millis;
+    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
+    cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
+  }
+  const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
+    OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
+  const probe=async (table,index,where,args)=>{
+    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
+    catch(error) {
+      if (!String(error).includes(`no such index: ${index}`)) throw error;
+      return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
+    }
+  };
+  const [canonicalBad,legacyBad]=await Promise.all([
+    probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs),
+    probe('friendbook_cf_documents','idx_cf_legacy_notif_exceptions',`collection='notifications'${byLegacyRecipient}
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`,recipientArgs),
+  ]);
+  if (canonicalBad || legacyBad) return null;
+  const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
+  const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
+  const chunk=spec.limit;
+  const visible=[];
+  for (;;) {
+    const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
+    const args=[...recipientArgs,...(cursor||[]),chunk];
+    const [canonical,legacy]=await Promise.all([
+      db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
+        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+        FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+    ]);
+    const rows=[...(canonical?.results || []),...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    const docs=sortDocuments(rows.map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    if (!docs.length) break;
+    const allowed=docs.filter(doc=>canReadNotification(doc.path,uid,doc.data));
     visible.push(...allowed);
     if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
     const last=docs[docs.length-1], value=last.data.createdAt;
@@ -2373,7 +2442,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
           AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(match).all();
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
-        const page=await boundedFeedPage(db,uid,body);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body);
         if (page!==null) return json({parent,documents:await feedEngagement(db,env,uid,body,page)});
         rows = await readCollectionRows(db, parent, uid, body?.filters, body);
       }

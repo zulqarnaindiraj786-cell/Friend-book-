@@ -745,6 +745,7 @@ public class ReelsFragment extends Fragment {
 
     @Override public void onResume(){
         super.onResume();
+        if (getActivity() != null) ConsentManager.retryConsentOnResume(getActivity());
         AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
         AdsConfig.setReelsPoolListener(() -> {
             if (adapter != null && pager != null) {

@@ -4,13 +4,13 @@
   "findings": [
     {
       "file": "app/src/main/java/com/friendbook/social/main/HomeFragment.java",
-      "line": 577,
+      "line": 574,
       "kind": "collection query needs manual limit/cursor review",
       "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
     },
     {
       "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 590,
+      "line": 597,
       "kind": "collection query needs manual limit/cursor review",
       "query": "Fb.db().collection(\"chats\")\n                .whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
     }

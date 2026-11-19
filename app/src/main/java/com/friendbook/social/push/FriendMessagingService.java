@@ -12,13 +12,14 @@ public class FriendMessagingService extends FirebaseMessagingService {
         // A push wakes only an already-open chat listener; it never supplies message
         // content or bypasses the Worker's authenticated membership check.
         java.util.Map<String,String> data=message.getData();
+        // Post the notification before attempting any optional network refresh.
+        PushManager.show(this, data);
         String actor=com.friendbook.social.core.Fb.uid();
-        if (actor != null && actor.equals(data.get("toUserId"))) {
+        if (com.friendbook.social.App.isForeground() && actor != null && actor.equals(data.get("toUserId"))) {
             com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();
             String type = data.get("type");
             if ("message".equals(type)) store.refreshChatFromPush(data.get("chatId"));
             if (data.get("notificationId") != null || !"message".equals(type)) store.refreshInboxFromPush(type);
         }
-        PushManager.show(this, data);
     }
 }

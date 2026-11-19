@@ -141,7 +141,8 @@ public final class ConsentManager {
         if (activity == null || activity.isFinishing()) return;
         try {
             UserMessagingPlatform.showPrivacyOptionsForm(activity, formError -> {
-                if (onDone != null) onDone.run();
+                finishConsent(activity.getApplicationContext(), formError == null ? "Privacy choices updated"
+                        : "UMP privacy options error " + formError.getErrorCode() + ": " + formError.getMessage(), onDone);
             });
         } catch (Throwable t) {
             if (onDone != null) onDone.run();
