@@ -1405,6 +1405,9 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             postSystemChat(hostNameStr + " started a live video & voice broadcast!");
             notifyFollowersGoingLive();
         }).addOnFailureListener(e -> {
+            // A rejected room creation is not a running broadcast. In particular,
+            // onDestroy must not attempt to end a room that was never created.
+            isLiveStarted = false;
             Ui.toast(this, "Could not start live: " + e.getMessage());
             finish();
         });
