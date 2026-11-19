@@ -24,7 +24,7 @@ jobs:
           sql="SELECT 'canonical' AS source, COUNT(*) AS total, SUM(CASE WHEN (json_type(document_json,'\$.createdAt') IN ('integer','real') OR (json_extract(document_json,'\$.createdAt.__type')='timestamp' AND json_type(document_json,'\$.createdAt.millis')='integer')) THEN 0 ELSE 1 END) AS nonstandard FROM friendbook_cf_firestore_documents WHERE parent_path='posts' UNION ALL SELECT 'legacy',COUNT(*),SUM(CASE WHEN (json_type(document_json,'\$.createdAt') IN ('integer','real') OR (json_extract(document_json,'\$.createdAt.__type')='timestamp' AND json_type(document_json,'\$.createdAt.millis')='integer')) AND json_type(document_json,'\$.fields') IS NOT 'object' THEN 0 ELSE 1 END) FROM friendbook_cf_documents WHERE collection='posts';"
           npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --json --command "$sql" > diagnostic.json
           node -e "const d=require('./diagnostic.json'); for(const r of d[0].results) console.log('::notice title=D1 feed aggregate::'+r.source+' total='+r.total+' nonstandard='+r.nonstandard)"
-      - name: Verify real D1 engagement and document reads without modifying data
+      - name: Verify real D1 engagement, social, feed and chat reads without modifying data
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/admin/check_live_engagement_d1.mjs

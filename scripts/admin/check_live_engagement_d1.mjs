@@ -37,3 +37,17 @@ if(actor){
   const friends=await query({parent:'friends',filters:[{field:'participants',op:'array-contains',value:actor}],limit:20});
   console.log(`::notice title=D1 document diagnostic::Read-only handler checks succeeded (feed rows=${feed}, request rows=${requests}, friend rows=${friends}, elapsed=${Date.now()-before}ms); simulated identity, not app login`);
 }
+// Pick an existing room and one of its stored members, then check that the
+// message query can be authorized and paged. Neither IDs nor messages are logged.
+const room=(await execute(`SELECT doc_id AS id,json_extract(document_json,'$.participants[0]') AS member
+  FROM friendbook_cf_firestore_documents WHERE parent_path='chats'
+  AND json_array_length(document_json,'$.participants')>=2
+  AND typeof(json_extract(document_json,'$.participants[0]'))='text' LIMIT 1`))[0];
+if(room?.id && room?.member){
+  const request=new Request('https://test.invalid/v1/firestore/query',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({parent:`chats/${room.id}/messages`,orderBy:[{field:'createdAt',direction:'ASCENDING'}],limit:5,limitToLast:true})});
+  const result=await firestoreDocuments(request,{DB:db},{uid:room.member});
+  if(result.status!==200)throw Error(`Read-only chat query returned ${result.status}`);
+  const payload=await result.json();if(!Array.isArray(payload.documents))throw Error('Invalid chat page');
+  console.log(`::notice title=D1 chat diagnostic::Member-scoped read returned ${payload.documents.length} messages; simulated identity, no login or message contents logged`);
+}
