@@ -719,7 +719,7 @@ function prefilterRaw(docs,parent,filters) {
   if (!['posts','reels','chats','messages','notifications','friend_requests'].includes(root) || !Array.isArray(filters)) return docs;
   return docs.filter(d=>filters.every(f=>matchesFilter(d.data,f,d.id)));
 }
-async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map()) {
+async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),includeArchivedOwner = false) {
   const parts=splitPath(parent), nestedChat=parts?.length===3 && parts[0]==='chats' && parts[2]==='messages';
   // All comments/reactions in a nested collection share the same parent post.
   // Authorize that parent once per request, not once per child row.
@@ -732,7 +732,7 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map())
     for (;;) {
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
-      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path,requestUserReads);
+      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
@@ -1473,7 +1473,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
-    if (!(await contentReadAllowed(db, uid, docPath))) return json({error:'Forbidden'},403);
+    if (!(await contentReadAllowed(db, uid, docPath, undefined, true))) return json({error:'Forbidden'},403);
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
@@ -1750,7 +1750,13 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
     let visible;
-    try { visible=await visibleDocuments(db,uid,parent,docs); }
+    // Archived content is included only for an explicit owner-scoped archive
+    // query. Feed, profile counts and ordinary queries retain hidden filtering.
+    const filters=Array.isArray(body?.filters)?body.filters:[];
+    const archiveQuery=parent==='posts' && filters.some(f=>f.field==='authorId' && f.op==='==' && f.value===uid)
+      && filters.some(f=>(f.field==='archived' && f.op==='==' && f.value===true)
+        || (f.field==='trashedAt' && f.op==='>' && f.value===0));
+    try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const result = applyQuery(visible, body || {});
     return json({ parent, documents: result });

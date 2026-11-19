@@ -3,7 +3,7 @@ import { trustedGroupOwner } from './social-access.js';
 
 // D1-only authorization. Firebase is used to verify the caller's Auth token in
 // worker.js; no source-data request is made to Firestore from this module.
-export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads) {
+export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads, includeArchivedOwner = false) {
   if (!db || typeof uid !== 'string' || !uid) return false;
   // Coalesce repeated user-profile checks only within this one query request.
   // Never share authorization state across requests or Worker isolates.
@@ -20,7 +20,9 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
 
   const post = await fields(`${collection}/${id}`);
   const owner = string(post, 'authorId');
-  if (!owner || post.archived?.booleanValue || Number(post.trashedAt?.integerValue || 0) > 0) return false;
+  if (!owner) return false;
+  const hidden=Boolean(post.archived?.booleanValue) || Number(post.trashedAt?.integerValue || post.trashedAt?.doubleValue || post.trashedAt?.timestampValue && Date.parse(post.trashedAt.timestampValue) || 0) > 0;
+  if (hidden && !(includeArchivedOwner && collection==='posts' && owner===uid)) return false;
   const me = await fields(`users/${uid}`);
   if (!Object.keys(me).length || me.banned?.booleanValue || me.deactivated?.booleanValue) return false;
   if (context) Object.assign(context, {

@@ -1622,16 +1622,19 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 }
             }
             else if (t.contains("Move to Archive")) {
-                Fb.db().collection("posts").document(p.id).update("archived", true);
-                posts.remove(p);
-                notifyDataSetChanged();
-                Ui.toast(activity, "Moved to Archive 📦 (Settings → Archive & Trash)");
+                String actor=Fb.uid();
+                Fb.db().collection("posts").document(p.id).update("archived", true).addOnSuccessListener(ignored -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) return;
+                    posts.remove(p); notifyDataSetChanged();
+                    Ui.toast(activity, "Moved to Archive 📦 (Settings → Archive & Trash)");
+                }).addOnFailureListener(error -> Ui.toast(activity,"Couldn't archive post. Please try again."));
             }
             else if (t.contains("Move to Recycle Bin")) {
-                Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis());
-                posts.remove(p);
-                notifyDataSetChanged();
-                Ui.toast(activity, "Moved to Recycle Bin for 30 days 🗑");
+                String actor=Fb.uid();
+                Fb.db().collection("posts").document(p.id).update("trashedAt", System.currentTimeMillis()).addOnSuccessListener(ignored -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) return;
+                    posts.remove(p); notifyDataSetChanged(); Ui.toast(activity, "Moved to Recycle Bin 🗑");
+                }).addOnFailureListener(error -> Ui.toast(activity,"Couldn't move post to Recycle Bin. Please try again."));
             }
             else if (t.contains("Read post aloud")) speakPost(p.content);
             else if (t.contains("Translate post")) translatePost(p.content);

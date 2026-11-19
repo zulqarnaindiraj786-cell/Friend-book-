@@ -77,7 +77,7 @@ public class ArchiveTrashActivity extends Activity {
             if (i > 0) lp.leftMargin = Ui.dp(this, 6);
             tabs.addView(t, lp);
             tabViews[i] = t;
-            t.setOnClickListener(v -> { activeTab = idx; updateTabs(); render(); });
+            t.setOnClickListener(v -> { activeTab = idx; updateTabs(); startArchivePage(); render(); });
         }
         root.addView(tabs);
         root.addView(Ui.divider(this));
@@ -112,7 +112,7 @@ public class ArchiveTrashActivity extends Activity {
             bannerTv.setText("Archived posts are hidden from your profile & Feed. Restore them anytime.");
             emptyAllBtn.setVisibility(View.GONE);
         } else {
-            bannerTv.setText("Items in Recycle Bin are hidden from everyone and kept for 30 days.");
+            bannerTv.setText("Items in Recycle Bin are hidden from everyone. You can restore or delete them.");
         }
     }
 
@@ -122,25 +122,37 @@ public class ArchiveTrashActivity extends Activity {
         String me = Fb.uid();
         if (me == null) { finish(); return; }
 
-        storiesReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("stories").whereEqualTo("authorId",me),20,"archive-stories",(snap,err)-> {
-                    myStories.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) myStories.add(Models.Story.fromDoc(d));
-                        Collections.sort(myStories, (x, y) -> Long.compare(y.createdAt, x.createdAt));
-                    }
-                    render();
-                });
+        startArchivePage();
+    }
 
-        postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("posts").whereEqualTo("authorId",me),15,"archive-posts",(snap,err)-> {
-                    myPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) myPosts.add(Models.Post.fromDoc(d));
-                        Collections.sort(myPosts, (x, y) -> Long.compare(y.createdAt, x.createdAt));
-                    }
-                    render();
-                });
+    private void startArchivePage() {
+        if (storiesReg != null) { storiesReg.remove(); storiesReg=null; }
+        if (postsReg != null) { postsReg.remove(); postsReg=null; }
+        String me=Fb.uid();
+        if (me==null || pageControls==null) return;
+        myStories.clear(); myPosts.clear();
+        if (activeTab==0) {
+            storiesReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                    Fb.db().collection("stories").whereEqualTo("authorId",me),20,"archive-stories",(snap,err)-> {
+                        myStories.clear();
+                        if (snap != null) {
+                            for (DocumentSnapshot d : snap) myStories.add(Models.Story.fromDoc(d));
+                            Collections.sort(myStories, (x, y) -> Long.compare(y.createdAt, x.createdAt));
+                        }
+                        render();
+                    });
+        } else {
+            com.friendbook.social.d1.documents.Query query=Fb.db().collection("posts").whereEqualTo("authorId",me);
+            query=activeTab==1 ? query.whereEqualTo("archived",true) : query.whereGreaterThan("trashedAt",0L);
+            postsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,query,15,"archive-posts:"+activeTab,(snap,err)-> {
+                        myPosts.clear();
+                        if (snap != null) {
+                            for (DocumentSnapshot d : snap) myPosts.add(Models.Post.fromDoc(d));
+                            Collections.sort(myPosts, (x, y) -> Long.compare(y.createdAt, x.createdAt));
+                        }
+                        render();
+                    });
+        }
     }
 
     @Override
@@ -241,7 +253,8 @@ public class ArchiveTrashActivity extends Activity {
         Fb.db().collection("users").document(me).update("highlightStoryIds",
                 currentlyHighlighted ? FieldValue.arrayRemove(s.id) : FieldValue.arrayUnion(s.id))
                 .addOnSuccessListener(x -> Ui.toast(this, currentlyHighlighted
-                        ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨"));
+                        ? "Removed from Profile Highlights" : "Added to Profile Highlights ✨"))
+                .addOnFailureListener(error -> Ui.toast(this,"Couldn't update highlight. Please try again."));
     }
 
     private void reshareStory(Models.Story s) {
@@ -258,7 +271,8 @@ public class ArchiveTrashActivity extends Activity {
         m.put("createdAt", FieldValue.serverTimestamp());
         m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
         Fb.db().collection("stories").add(m)
-                .addOnSuccessListener(x -> Ui.toast(this, "Story re-shared for 24h 📖"));
+                .addOnSuccessListener(x -> Ui.toast(this, "Story re-shared for 24h 📖"))
+                .addOnFailureListener(error -> Ui.toast(this,"Couldn't re-share story. Please try again."));
     }
 
     private void renderArchivedPosts() {
@@ -277,7 +291,7 @@ public class ArchiveTrashActivity extends Activity {
         for (Models.Post p : myPosts) if (p.trashedAt > 0) list.add(p);
         emptyAllBtn.setVisibility(list.isEmpty() ? View.GONE : View.VISIBLE);
         if (list.isEmpty()) {
-            addEmpty("Recycle Bin is empty 🧹\nPosts moved to Trash stay here for 30 days before permanent deletion.");
+            addEmpty("Recycle Bin is empty 🧹\nPosts moved to Trash appear here until restored or deleted.");
             return;
         }
         for (Models.Post p : list) listCol.addView(postRow(p, true));
@@ -298,10 +312,8 @@ public class ArchiveTrashActivity extends Activity {
         body.setMaxLines(3);
         card.addView(body);
 
-        long daysLeft = isTrash
-                ? Math.max(1, 30 - ((System.currentTimeMillis() - p.trashedAt) / 86400_000L)) : 0;
         TextView sub = Ui.tv(this, Format.dateTime(p.createdAt)
-                + (isTrash ? " · ⏳ " + daysLeft + " days left in Trash" : " · 🗂 Archived"),
+                + (isTrash ? " · 🗑 In Trash" : " · 🗂 Archived"),
                 11, Ui.sub(this));
         sub.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
         card.addView(sub);
@@ -313,7 +325,8 @@ public class ArchiveTrashActivity extends Activity {
             upd.put("archived", false);
             upd.put("trashedAt", 0L);
             Fb.db().collection("posts").document(p.id).update(upd)
-                    .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");});
+                    .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=0;render();Ui.toast(this, "Restored to your profile ✓");})
+                    .addOnFailureListener(error -> Ui.toast(this,"Couldn't restore post. Please try again."));
         });
         btns.addView(restore);
 
@@ -324,11 +337,13 @@ public class ArchiveTrashActivity extends Activity {
             if (isTrash) {
                 Ui.confirm(this, "Delete forever?", "This post cannot be recovered.", "Delete",
                         () -> Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");}));
+                                .addOnSuccessListener(x -> {myPosts.remove(p);render();Ui.toast(this, "Deleted permanently");})
+                                .addOnFailureListener(error -> Ui.toast(this,"Couldn't delete post. Please try again.")));
             } else {
                 Fb.db().collection("posts").document(p.id)
                         .update("archived", false, "trashedAt", System.currentTimeMillis())
-                        .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=System.currentTimeMillis();render();Ui.toast(this, "Moved to Recycle Bin 🗑");});
+                        .addOnSuccessListener(x -> {p.archived=false;p.trashedAt=System.currentTimeMillis();render();Ui.toast(this, "Moved to Recycle Bin 🗑");})
+                        .addOnFailureListener(error -> Ui.toast(this,"Couldn't move post to Recycle Bin. Please try again."));
             }
         });
         btns.addView(second, sp);
@@ -346,10 +361,17 @@ public class ArchiveTrashActivity extends Activity {
         Ui.confirm(this, "Delete loaded Recycle Bin items?",
                 "Only the loaded Recycle Bin items will be permanently deleted. Load more first to include more items. This cannot be undone.",
                 "Delete loaded items", () -> {
+                    String actor=Fb.uid();
+                    java.util.List<com.google.android.gms.tasks.Task<Void>> tasks=new ArrayList<>();
                     for (Models.Post p : new ArrayList<>(myPosts)) {
-                        if (p.trashedAt > 0) Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(x->{myPosts.remove(p);render();});
+                        if (p.trashedAt > 0) tasks.add(Fb.db().collection("posts").document(p.id).delete()
+                                .addOnSuccessListener(x->{if (java.util.Objects.equals(actor,Fb.uid())) {myPosts.remove(p);render();}}));
                     }
-                    Ui.toast(this, "Loaded trash items deleted");
+                    com.google.android.gms.tasks.Tasks.whenAllComplete(tasks).addOnSuccessListener(results -> {
+                        if (!java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
+                        int failed=0; for (com.google.android.gms.tasks.Task<?> task : results) if (!task.isSuccessful()) failed++;
+                        Ui.toast(this, failed==0 ? "Loaded trash items deleted" : "Some items couldn't be deleted. Please retry.");
+                    });
                 });
     }
 

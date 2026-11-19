@@ -1489,3 +1489,27 @@ test('ads config permits limited authenticated reads and guarded admin-only writ
  assert.equal((await call('alice','/v1/firestore/batch','POST',{operations:[{op:'set',path:'config/ads',data}]})).status,403);
  sql.close();
 });
+
+test('archive and trash queries reveal only the owner’s hidden posts, never in normal feeds or counts', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema]) sql.exec(s);
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  for(const uid of ['alice','bob']) assert.equal((await call(uid,`/v1/firestore/document?path=users/${uid}`,'PUT',{data:{uid}})).status,200);
+  for(const [id,extra] of [['visible',{}],['archive',{archived:true}],['trash',{trashedAt:12345}]]) {
+    assert.equal((await call('alice',`/v1/firestore/document?path=posts/${id}`,'PUT',{data:{authorId:'alice',privacy:'Public',...extra}})).status,200);
+  }
+  const query=(uid,filters)=>call(uid,'/v1/firestore/query','POST',{parent:'posts',filters});
+  const owner={field:'authorId',op:'==',value:'alice'}, archived={field:'archived',op:'==',value:true}, trashed={field:'trashedAt',op:'>',value:0};
+  assert.deepEqual((await (await query('alice',[owner])).json()).documents.map(x=>x.id),['visible']);
+  assert.deepEqual((await (await query('alice',[owner,archived])).json()).documents.map(x=>x.id),['archive']);
+  assert.deepEqual((await (await query('alice',[owner,trashed])).json()).documents.map(x=>x.id),['trash']);
+  assert.deepEqual((await (await query('bob',[owner,archived])).json()).documents,[]);
+  assert.equal((await call('alice','/v1/firestore/document?path=posts/archive')).status,200);
+  assert.equal((await call('bob','/v1/firestore/document?path=posts/archive')).status,403);
+  assert.equal((await (await call('alice','/v1/firestore/count?parent=posts')).json()).count,1);
+  assert.equal((await call('alice','/v1/firestore/document?path=posts/archive','PATCH',{fields:{archived:false}})).status,200);
+  assert.equal((await call('bob','/v1/firestore/document?path=posts/archive')).status,200);
+  sql.close();
+});
