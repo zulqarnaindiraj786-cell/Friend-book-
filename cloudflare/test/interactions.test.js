@@ -49,6 +49,14 @@ test('deployment flag, migration marker, auth and authorization fail closed', as
   assert.equal((await app.fetch(new Request('https://example.invalid/v1/engagement/posts/p1/reactions',
     { headers: { Authorization: 'Bearer invalid' } }), { FIREBASE_PROJECT_ID: identity.project })).status, 401);
 });
+test('engagement summary binds the comment actor to parameter one, not an unbound fourth parameter', async t => {
+  const f=fixture(); t.after(f.close);
+  const db=f.env.DB; const prepare=db.prepare; let summarySql='';
+  db.prepare=function(sql){if(sql.includes('AS preview_json'))summarySql=sql;return prepare.call(this,sql);};
+  assert.equal((await call(f.env,'reactions')).status,200);
+  assert.match(summarySql,/r\.uid=\?1\)/);
+  assert.doesNotMatch(summarySql,/\?(?![0-9])/,'D1 requires exactly three explicitly numbered bindings');
+});
 test('reaction retries set state without duplicate increments or trusting client actor', async t => {
   const f = fixture(); t.after(f.close);
   for (const type of ['like', 'like', 'love']) assert.equal((await call(f.env, 'reactions', 'PUT', { type })).status, 200);
