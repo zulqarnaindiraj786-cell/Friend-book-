@@ -1515,3 +1515,17 @@ test('archive and trash queries reveal only the owner’s hidden posts, never in
   assert.equal((await call('bob','/v1/firestore/document?path=posts/archive')).status,200);
   sql.close();
 });
+
+test('new account signup can finish an existing presence-only profile without privilege escalation', async () => {
+ const sql=new DatabaseSync(':memory:'); for (const s of [resourcesSchema,appSchema,schema,socialGuardSchema]) sql.exec(s);
+ const db={prepare(q){const st=sql.prepare(q);return{bind(...a){return{run:async()=>st.run(...a),all:async()=>({results:st.all(...a)}),first:async()=>st.get(...a)||null};}};},async batch(ss){sql.exec('BEGIN');try{for(const s of ss)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async()=> 'new_user'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const put=(data,extra={})=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/new_user',{method:'PUT',headers:{authorization:'Bearer test','content-type':'application/json'},body:JSON.stringify({data,...extra})}),env);
+ assert.equal((await put({isOnline:true,lastSeenMs:100},{merge:true})).status,200);
+ assert.equal((await put({displayName:'New person',bio:'hello',friendsCount:0,followers:[],following:[],isAdmin:false,isVerified:false})).status,200);
+ const doc=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/new_user'").get().document_json);
+ assert.equal(doc.displayName,'New person');assert.deepEqual(doc.followers,[]);
+ assert.equal((await put({displayName:'Fallback overwrites name'},{createOnly:true})).status,409);
+ assert.equal((await put({...doc,isAdmin:true})).status,403);
+ sql.close();
+});
