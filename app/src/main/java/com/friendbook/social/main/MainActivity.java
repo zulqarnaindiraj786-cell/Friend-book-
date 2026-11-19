@@ -105,12 +105,7 @@ public class MainActivity extends Activity {
 
         TextView logo = Ui.tvBold(this, "friendbook", 27, Ui.isDark(this) ? 0xFFFFFFFF : 0xFF111827);
         logo.setLetterSpacing(-0.03f);
-        logo.setOnClickListener(v -> {
-            if (active != TAB_HOME) select(TAB_HOME);
-            else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            }
-        });
+        logo.setOnClickListener(v -> { if (active != TAB_HOME) select(TAB_HOME); });
         brandBar.addView(logo, new LinearLayout.LayoutParams(0, -2, 1));
 
         brandBar.addView(circleHeaderIcon(Icons.PLUS, v -> showUniversalCreateSheet()));
@@ -375,9 +370,7 @@ public class MainActivity extends Activity {
             AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
         }
         if (tab == active) {
-            if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            } else if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
+            if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
                 ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
             return;

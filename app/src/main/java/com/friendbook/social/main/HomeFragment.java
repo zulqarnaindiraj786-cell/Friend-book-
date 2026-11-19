@@ -254,6 +254,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void refreshPostsIfNeeded() {
+        // A warm tab return must not replace loaded older pages with the first ten.
+        if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid()) && rv!=null
+                && rv.getLayoutManager() instanceof LinearLayoutManager) {
+            LinearLayoutManager layout=(LinearLayoutManager)rv.getLayoutManager();
+            if (loadedPostIds.size()>PAGE || rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
+                    || layout.findFirstVisibleItemPosition()>1) return;
+        }
         if (!isHidden() && (!loadedPosts || lastFeedWriteVersion != Fb.db().postWriteVersion()
                 || !java.util.Objects.equals(feedAccount, Fb.uid())
                 || android.os.SystemClock.elapsedRealtime() - lastFeedFetch >= 120_000L)) restartPostsListener();
@@ -587,8 +594,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     // Reapply visibility once membership is known instead of hiding
                     // friends-only posts until a later manual refresh.
                     if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty()) {
-                        LinearLayoutManager layout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
-                        if (layout==null || layout.findFirstVisibleItemPosition()<=1) forceReRank=true;
+                        if (sessionOrderIds.isEmpty()) forceReRank=true;
                         consumePostsSnapshot(lastPostDocs,false);
                     }
                 });
@@ -692,6 +698,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private void startPostsQuery() {
         final int generation=++feedGeneration;
+        final DocumentSnapshot previousCursor=lastDoc;
+        final boolean previousMore=moreAvailable;
+        final boolean sameAccount=java.util.Objects.equals(feedAccount,Fb.uid());
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
         // The D1 document query already merges legacy rows with canonical precedence.
@@ -716,6 +725,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
         first.get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            if(snapshot.getMetadata().isFromCache() && sameAccount && !loadedPostIds.isEmpty()) {
+                lastDoc=previousCursor;moreAvailable=previousMore;
+                loadingPosts=false;loadedPosts=true;updatePagingUi();return;
+            }
             loadingPosts=false;updatePagingUi(); loadedPosts=true;
             lastFeedFetch=android.os.SystemClock.elapsedRealtime();
             lastFeedWriteVersion=writeVersion;
@@ -728,8 +741,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             // The cached first paint should not lock the first authoritative D1 page
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
-            LinearLayoutManager firstLayout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
-            if (firstLayout==null || firstLayout.findFirstVisibleItemPosition()<=1) forceReRank=true;
+            if (sessionOrderIds.isEmpty()) forceReRank=true;
             consumePostsSnapshot(snapshot.getDocuments(),true);
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
@@ -746,10 +758,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         long stableId = anchor == null ? RecyclerView.NO_ID : rv.getChildViewHolder(anchor).getItemId();
         int offset = anchor == null ? 0 : layout.getDecoratedTop(anchor) - rv.getPaddingTop();
         adapter.setPosts(posts);
-        if (stableId < 0 || rv.getScrollState() != RecyclerView.SCROLL_STATE_IDLE) return;
+        if (stableId == RecyclerView.NO_ID || rv.getScrollState() != RecyclerView.SCROLL_STATE_IDLE) return;
         for (int i = 0; i < adapter.getItemCount(); i++) {
             if (adapter.getItemId(i) == stableId) {
-                if (i != first) layout.scrollToPositionWithOffset(i, offset);
+                layout.scrollToPositionWithOffset(i, offset);
                 break;
             }
         }

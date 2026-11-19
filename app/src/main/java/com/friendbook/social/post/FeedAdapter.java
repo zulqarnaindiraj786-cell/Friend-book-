@@ -144,11 +144,30 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
         }
+        List<Long> before=rowIds();
+        int oldFirst=posts.isEmpty()?-1:offset();
         posts.clear();
         java.util.Set<String> existing=new java.util.HashSet<>();
-        for(Models.Post post:posts) if(post!=null) existing.add(post.id);
         for(Models.Post post:list) if(post!=null && existing.add(post.id)) posts.add(post);
-        notifyDataSetChanged();
+        dispatchRowDiff(before,false);
+        if(showHeader && !posts.isEmpty() && (oldFirst<0 || before.get(oldFirst)!=getItemId(offset())))
+            notifyItemChanged(offset(), "DISCOVERY_SECTION");
+    }
+
+    private List<Long> rowIds() {
+        List<Long> ids=new ArrayList<>();
+        for(int i=0;i<getItemCount();i++) ids.add(getItemId(i));
+        return ids;
+    }
+
+    private void dispatchRowDiff(List<Long> before, boolean unchangedPosts) {
+        List<Long> after=rowIds();
+        androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback(){
+            public int getOldListSize(){return before.size();}
+            public int getNewListSize(){return after.size();}
+            public boolean areItemsTheSame(int a,int b){return before.get(a).equals(after.get(b));}
+            public boolean areContentsTheSame(int a,int b){return unchangedPosts || before.get(a)<0;}
+        }).dispatchUpdatesTo(this);
     }
 
     private static boolean sameReactionsSignature(Models.Post a, Models.Post b) {
@@ -313,10 +332,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             notifyAdSlotsOnly();
             return;
         }
+        List<Long> before=rowIds();
         nativeAdUnitId = cleanId;
         adsEnabled = nextEnabled;
         if (nextEnabled) com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(activity);
-        notifyDataSetChanged();
+        dispatchRowDiff(before,true);
     }
 
     /** Never rebind or resize Ad slots mid-scroll — slots bind cleanly inside onBindViewHolder with zero layout jump! */
@@ -2635,8 +2655,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 adRequestInFlight = false;
                 if (readyAd == null || currentNativeAd != null || !com.friendbook.social.core.AdsConfig.nativeAdsEnabled()
                         || !com.friendbook.social.core.ConsentManager.canRequestAds(ctx)) {
-                    collapse();
                     return;
+                }
+                // Do not grow an already-bound zero-height slot during a gesture or
+                // above the reading anchor. The ad remains assigned for the next bind.
+                if (!(itemView.getParent() instanceof RecyclerView)) return;
+                RecyclerView list=(RecyclerView)itemView.getParent();
+                if (list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE) return;
+                if (list.getLayoutManager() instanceof androidx.recyclerview.widget.LinearLayoutManager) {
+                    int first=((androidx.recyclerview.widget.LinearLayoutManager)list.getLayoutManager()).findFirstVisibleItemPosition();
+                    if (getBindingAdapterPosition()<=first) return;
                 }
                 currentNativeAd = readyAd;
                 expand(ctx);
