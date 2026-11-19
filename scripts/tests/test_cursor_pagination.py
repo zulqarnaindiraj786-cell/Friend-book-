@@ -17,5 +17,5 @@ class CursorContracts(unittest.TestCase):
         self.assertIn('postPager.next()',code)
     def test_comments_new_fifty_contract(self):
         code=(ROOT/'post/CommentsEngine.java').read_text()
-        for token in ['legacyLoaded=50, visible=50','handle.query.limit(50)','query.startAfter(cursor).limit(50)','page.size()==50']:
+        for token in ['legacyLoaded=10, visible=10','handle.query.limit(10)','query.startAfter(cursor).limit(10)','page.size()==10']:
             self.assertIn(token,code)

@@ -53,7 +53,7 @@ public class CommentsEngine {
         void onComments(List<Models.Comment> allComments, String pinnedCommentId);
     }
 
-    /** One latest-50 listener; older pages are explicit one-shot cursor reads. */
+    /** One latest-10 listener; older pages are explicit one-shot cursor reads. */
     public static class Handle {
         private final List<ListenerRegistration> regs=new ArrayList<>();
         private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
@@ -64,20 +64,14 @@ public class CommentsEngine {
         private String pinned="", actor=Fb.uid();
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, loading, more=true, cursorReady;
-        private int legacyLoaded=50, visible=50;
+        private int legacyLoaded=10, visible=10;
         private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
         private long revision;
         private final Set<String> pendingD1=new HashSet<>();
-        private final android.os.Handler d1PollHandler=new android.os.Handler(android.os.Looper.getMainLooper());
-        private final Runnable d1Poll=new Runnable(){@Override public void run(){
-            if(!active())return;
-            if(!loading)d1Page(true,true);
-            d1PollHandler.postDelayed(this,8000);
-        }};
         private void d1Page(boolean first){d1Page(first,false);}
         private void d1Page(boolean first,boolean background){
             if(!active()||loading)return;loading=true;if(!background){error="";emit();}
-            String query=first||nextD1==null?null:"?before="+android.net.Uri.encode(nextD1);
+            String query="?limit=10"+(first||nextD1==null?"":"&before="+android.net.Uri.encode(nextD1));
             final long requestedAtRevision=revision;
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
                 if(!active())return;loading=false;
@@ -95,7 +89,7 @@ public class CommentsEngine {
                             older.remove(entry.getKey());latest.put(entry.getKey(),entry.getValue());
                         }
                     }else older.putAll(received);
-                    if(!first){visible+=20;loadedOlderD1=true;}
+                    if(!first){visible+=10;loadedOlderD1=true;}
                     if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
                     error="";if(first)firstPageReady=true;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
@@ -127,18 +121,18 @@ public class CommentsEngine {
         public void loadMore() {
             if(!active() || loading || !hasMore()) return;
             if(d1Mode){d1Page(nextD1==null);return;}
-            if(!more) { legacyLoaded+=50; visible+=50; emit(); return; }
+            if(!more) { legacyLoaded+=10; visible+=10; emit(); return; }
             if(!cursorReady || cursor==null) return;
             loading=true; error=""; emit();
-            query.startAfter(cursor).limit(50).get().addOnSuccessListener(page -> {
-                if(!active()) return; loading=false; visible+=50; legacyLoaded+=50;
-                more=page.size()==50;
+            query.startAfter(cursor).limit(10).get().addOnSuccessListener(page -> {
+                if(!active()) return; loading=false; visible+=10; legacyLoaded+=10;
+                more=page.size()==10;
                 if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
                 for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); older.put(c.id,c); }
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true;d1PollHandler.removeCallbacks(d1Poll); for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
     }
 
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
@@ -147,7 +141,7 @@ public class CommentsEngine {
         if(d1(collection)){
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
             D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);
-            handle.d1PollHandler.postDelayed(handle.d1Poll,8000);return handle;
+            return handle;
         }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
         handle.query=parent.collection("comments").orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
@@ -158,7 +152,7 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        handle.add(handle.query.limit(50).addSnapshotListener((page,error) -> {
+        handle.add(handle.query.limit(10).addSnapshotListener((page,error) -> {
             if(!handle.active()) return;
             if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
@@ -175,7 +169,7 @@ public class CommentsEngine {
             handle.latest.clear();
             for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.firstPageReady=true; handle.error=""; handle.more=page.size()==50;
+                handle.cursorReady=true; handle.firstPageReady=true; handle.error=""; handle.more=page.size()==10;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();

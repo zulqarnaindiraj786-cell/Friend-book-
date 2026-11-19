@@ -122,6 +122,18 @@ test('cursor pages preserve equal-timestamp order and bound each read to twenty'
   assert.equal(second.comments.length, 20); assert.equal(third.comments.length, 11); assert.equal(third.next, null);
   assert.equal(new Set([...first.comments, ...second.comments, ...third.comments].map(c => c.id)).size, 51);
 });
+test('explicit ten-comment pages preserve cursor and never send the lookahead row', async t=>{
+  const f=fixture();t.after(f.close);
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');
+  for(let i=0;i<22;i++)insert.run('posts/p1',`ten_${i}`,'user1','text',null,100+i);
+  const ids=[];let cursor=null;
+  for(const length of [10,10,2]){
+    const query='?limit=10'+(cursor?'&before='+encodeURIComponent(cursor):'');
+    const page=await (await call(f.env,'comments','GET',undefined,{query})).json();
+    assert.equal(page.comments.length,length);ids.push(...page.comments.map(c=>c.id));cursor=page.next;
+  }
+  assert.equal(cursor,null);assert.equal(new Set(ids).size,22);
+});
 test('D1-only authorization enforces privacy, bans, blocks, archives and friendship without source fetches', async () => {
   for (const [privacy, extra, expected] of [['Public', {}, true], ['Only me', {}, false], ['Friends', {}, true],
     ['Friends', { notFriends: true }, false], ['Public', { blocked: true }, false], ['Public', { ownerBlocks: true }, false],

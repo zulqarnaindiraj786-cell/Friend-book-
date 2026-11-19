@@ -435,21 +435,26 @@ public class Ui {
      * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
      * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
+    static String feedThumbnailUrl(String url) {
+        if (url == null || !url.matches("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+")) return url;
+        return url.replace("/image/upload/", "/image/upload/w_480,c_limit,f_webp,q_auto:eco/");
+    }
+
     public static void imgFeed(Context c, ImageView iv, String url) {
         Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        String fastUrl = optimizeImageUrl(c, url, false);
+        String fastUrl = feedThumbnailUrl(url);
         Prefs.recordBytes(c, 38_000L, 162_000L);
         if (Prefs.fullPhotoDisplay(c)) {
             Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(960, 1200)
+                    .override(480, 640)
                     .fitCenter()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
                     .placeholder(ph).error(ph).into(iv);
         } else {
             Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(960, 1200)
+                    .override(480, 640)
                     .centerCrop()
                     .dontAnimate()
                     .diskCacheStrategy(DiskCacheStrategy.ALL)

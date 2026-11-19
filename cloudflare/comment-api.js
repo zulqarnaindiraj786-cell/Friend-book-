@@ -172,16 +172,17 @@ export async function commentsAPI(request, db, identity, resource, data, context
     }
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
+    const size=url.searchParams.get('limit')==='10'?10:20;
     const [page,old,pinned]=await Promise.all([
       db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
-        AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all(),
+        AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT ?`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1],size+1).all(),
       legacyPage(db,resource,uid,context.blocked||[],before),pin(),
     ]);
     const current=page.results.map(row=>normalized(row,uid));
     const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0));
-    const comments=merged.slice(0,20);
+    const comments=merged.slice(0,size);
     const last=comments.at(-1);
-    const hasMore=merged.length>20 || page.results.length===20;
+    const hasMore=merged.length>size;
     return reply({comments,pinned,next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);

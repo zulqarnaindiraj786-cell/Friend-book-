@@ -576,7 +576,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
-                .limitToLast(40)
+                .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     boolean bridged=false;
@@ -588,7 +588,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             historyRanges.push(new HistoryResume(historyCursor,historyEnd,historyMore,maskedHistoryIds));
                             historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=new HashSet<>(known);bridged=true;
                         }
-                        if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==40;}
+                        if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==10;}
                         lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
                     }
                     if(snap.getDocumentChanges(com.friendbook.social.d1.documents.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
@@ -667,12 +667,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(40).get(com.friendbook.social.d1.documents.Source.SERVER)
+        older.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
-                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==40;
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
-                    if(historyEnd!=null && page.size()<40){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
+                    if(historyEnd!=null && page.size()<10){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
                     LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
                     int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
                     int top=anchor==null?0:anchor.getTop();

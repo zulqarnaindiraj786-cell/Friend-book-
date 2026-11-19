@@ -6,12 +6,12 @@ class ChatAutoplayUx(unittest.TestCase):
         inbox=(JAVA/'chat/ConversationsActivity.java').read_text();chat=(JAVA/'chat/ChatActivity.java').read_text()
         for token in ['cachedRooms++>=10','query.limit(10).addSnapshotListener','query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)']:
             self.assertIn(token,inbox)
-        self.assertIn('.limitToLast(40)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(40)',chat)
+        self.assertIn('.limitToLast(10)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(10)',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()
         self.assertIn('MetadataChanges.EXCLUDE).isEmpty()',chat)
         self.assertIn('if(oldKeys.equals(newKeys))return;',adapter)
-        live=chat.split('.limitToLast(40)',1)[1].split('private void loadOlderMessages()',1)[0]
+        live=chat.split('.limitToLast(10)',1)[1].split('private void loadOlderMessages()',1)[0]
         self.assertLess(live.index('markVisibleReceipts();\n'),live.index('adapter.setData(list)'))
         for token in ['!chatVisible','receiptInFlight.contains(m.id)','receiptFailed.contains(m.id)','batch.update(', 'receiptFailed.addAll(claimed)']:
             self.assertIn(token,chat)
