@@ -1,4 +1,4 @@
-# Deploy the validated Worker with additive D1 migrations and corrected engagement bindings.
+# Deploy the validated Worker with corrected engagement and duplicate request handling.
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
