@@ -1,0 +1,47 @@
+name: Verify published FriendBook Play bundle
+on:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/verify-play-bundle.yml']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub release tag containing the signed app-release.aab
+        required: true
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'friendbook-2.9.5-cloudflare-0726f87' }}
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Download the published AAB and validate it with bundletool
+        run: |
+          gh release download "$RELEASE_TAG" --pattern app-release.aab
+          curl -fsSL --retry 3 https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar -o bundletool.jar
+          jarsigner -verify app-release.aab
+          java -jar bundletool.jar validate --bundle=app-release.aab
+          java -jar bundletool.jar dump manifest --bundle=app-release.aab --module=base > bundle-manifest.xml
+          sha256sum app-release.aab >> "$GITHUB_STEP_SUMMARY"
+      - name: Check exact AAB manifest for the reported Play hardware restrictions
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          from xml.etree import ElementTree as ET
+          manifest = ET.parse('bundle-manifest.xml').getroot()
+          ns = '{http://schemas.android.com/apk/res/android}'
+          assert manifest.get('package') == 'com.friendbook.social', 'Unexpected package'
+          print('Package: com.friendbook.social; version:', manifest.get(ns+'versionName'), 'code:', manifest.get(ns+'versionCode'))
+          for name in ('android.hardware.screen.portrait', 'android.hardware.wifi'):
+              flags = [x.get(ns+'required') for x in manifest.findall('uses-feature') if x.get(ns+'name') == name]
+              assert flags == ['false'], f'{name}: {flags}'
+              print(f'{name}: optional')
+          PY
+          echo '::notice::Published AAB validated; portrait and Wi-Fi both optional in the base manifest.'
