@@ -130,14 +130,13 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
     while (index < devices.length) {
       const device = devices[index++];
       const claimKey = `fcm:${event}:${device.device_id}`;
-      // RETURNING identifies the sole winning insert across Worker isolates.
-      // Never use isolate-local memory to decide whether a persisted claim is new.
-      let claim;
+      // D1 writes use run(); changes identifies the winning insert atomically.
       try {
-        claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
-          VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
+        const result=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
+          VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(claimKey,actor,Date.now()).run();
+        if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('claim metadata unavailable');
+        if (result.meta.changes===0) { duplicate++; continue; }
       } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
-      if (!claim) { duplicate++; continue; }
       try {
         const r = await sendFcm(env, access, buildFcmMessage({token:device.token}, data));
         const result = await r.json().catch(() => ({}));
@@ -238,9 +237,8 @@ export async function fcmGateway(request, env, identity) {
     }
     if (action === 'status') {
       await googleToken(env);
-      const devices = await db.prepare('SELECT device_id, updated_at FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(actor).all()
-        .then(r => r?.results || []).catch(() => []);
-      return json({ provider: 'fcm', project: PROJECT, registered_devices: devices.length, server_configured: true, google_oauth_verified: true });
+      const count = await db.prepare('SELECT COUNT(*) AS total FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(actor).first();
+      return json({ provider: 'fcm', project: PROJECT, registered_devices: Number(count?.total || 0), server_configured: true, google_oauth_verified: true });
     }
     if (isBulk) return await bulkMention(body, actor, db, env);
     // send / self_test

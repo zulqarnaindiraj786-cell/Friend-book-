@@ -30,14 +30,10 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('callbacks.addAll(FEED_SLOT_WAITERS.values());', notify)
         absent(self, 'failPendingWaiters', self.ads, 'AdsConfig')
 
-    def test_under_filled_pools_are_asked_again_while_the_app_is_open(self):
-        self.assertIn('private static final long POOL_TOP_UP_INTERVAL_MS = 30_000L;', self.ads)
-        self.assertIn('com.friendbook.social.App.isForeground()', self.ads)
-        self.assertIn('public static synchronized void startPoolTopUpTicker(Context context)', self.ads)
-        # Foreground only, bounded by the cooldown and the in-flight guard, never a tight loop.
-        self.assertIn('poolTopUpRunning = false;', self.ads)
-        self.assertIn('MAIN_UI_HANDLER.postDelayed(this, POOL_TOP_UP_INTERVAL_MS);', self.ads)
-        self.assertEqual(self.ads.count('startPoolTopUpTicker(appCtx);'), 3)
+    def test_no_periodic_refill_and_impressions_earn_one_request(self):
+        self.assertNotIn('POOL_TOP_UP_INTERVAL_MS', self.ads)
+        self.assertIn('REQUEST_BUDGET.onImpression(isFeedPool)', self.ads)
+        self.assertIn('if (replacementEarned) return;', self.ads)
 
     def test_the_real_admob_failure_reason_is_stored_and_shown(self):
         self.assertIn('private static final String KEY_LAST_ERROR_MSG = "last_error_message";', self.ads)
@@ -56,7 +52,7 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);', screen)
         self.assertIn('AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);', screen)
         self.assertIn('AdsConfig.statsSummary(this)', screen)
-        self.assertIn('Code 3 = AdMob has no ad to serve', screen)
+        self.assertIn('Code 3 can mean AdMob has no ad to serve', screen)
         # Zero test ads and zero dummy creatives anywhere in the ad path.
         for path in [JAVA / 'core/AdsConfig.java', JAVA / 'admin/AdMobSettingsActivity.java']:
             absent(self, 'isTestDevice', path.read_text(), path.name)

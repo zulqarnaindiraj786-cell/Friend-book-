@@ -8,7 +8,7 @@ import { fcmGateway } from '../fcm-push.js';
 test('FCM delivery uses durable atomic claims across retries and allows retry after provider errors', async () => {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0015_additive_fcm_devices.sql'])sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
-  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>({success:true,meta:{changes:Number(stmt.run(...args).changes)}}),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
   const add=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   add.run('users/alice','users','users','alice','alice',JSON.stringify({displayName:'Alice'}),1,1);
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/bob','users','bob','bob',JSON.stringify({fields:{displayName:{stringValue:'Bob'}}}),1);

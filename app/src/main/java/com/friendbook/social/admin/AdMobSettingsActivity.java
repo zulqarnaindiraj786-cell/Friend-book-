@@ -86,7 +86,7 @@ public class AdMobSettingsActivity extends Activity {
                                     + com.friendbook.social.core.ConsentManager.consentDiagnostic() + "\n\n"
                                     + "How to read this:\n"
                                     + "• Loaded > 0 and Pool > 0 = real ads are arriving; the Feed slot shows one after every 3 posts.\n"
-                                    + "• Code 3 = AdMob has no ad to serve for this app/unit right now (new unit, app still in review, or no advertiser demand). The app keeps asking every 30s while open.\n"
+                                    + "• Code 3 can mean AdMob has no ad to serve for this app/unit right now (new unit, app still in review, or no advertiser demand). No automatic retry loop.\n"
                                     + "• Code 0 with a message = the request itself was rejected; the message tells us why.\n"
                                     + "• Requests 0 = the SDK never asked, which points at consent/initialization, not at AdMob fill.")
                             .setPositiveButton("OK", null)

@@ -14,15 +14,12 @@ class AdsFastFirstFillGuards(unittest.TestCase):
         self.assertIn('if (isFeedPool) ensureFeedPoolReplenished(appCtx);', source)
         self.assertIn('else ensureReelsPoolReplenished(appCtx);', source)
 
-    def test_failure_cooldown_is_short_and_the_retry_is_bounded_to_one(self):
+    def test_failure_does_not_retry_or_earn_an_ad_request(self):
         source = (JAVA / 'core/AdsConfig.java').read_text()
-        self.assertIn('private static final long FAIL_COOLDOWN_MS = 8_000L;', source)
-        self.assertIn('private static final long FIRST_FILL_RETRY_DELAY_MS = 3_000L;', source)
-        # The retry flag is read and latched in the same guarded block: exactly one auto retry.
-        for pool in ['feed', 'reels']:
-            self.assertIn(f'scheduleFirstFillRetry = !{pool}FirstFillRetryUsed;', source)
-            self.assertIn(f'{pool}FirstFillRetryUsed = true;', source)
-        self.assertIn('if (scheduleFirstFillRetry)', source)
+        failed = source.split('public void onAdFailedToLoad', 1)[1].split('.withNativeAdOptions', 1)[0]
+        self.assertNotIn('postDelayed', failed)
+        self.assertNotIn('onImpression', failed)
+        self.assertIn('REQUEST_BUDGET.tryRequest(isFeedPool)', source)
 
     def test_first_request_waits_for_the_real_sdk_initialization(self):
         ads = (JAVA / 'core/AdsConfig.java').read_text()
