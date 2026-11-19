@@ -79,9 +79,9 @@ jobs:
           trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
           printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
           unset FB_KEYSTORE_B64
-          if ! gradle :app:assembleRelease :app:bundleRelease --no-daemon --console=plain > android-release.log 2>&1; then
+          if ! gradle :app:assembleRelease :app:bundleRelease -PfriendbookUnshrunkCandidate=true --max-workers=2 --no-daemon --console=plain > android-release.log 2>&1; then
             tail -100 android-release.log
-            grep -E 'error:|^> |^e: |FAILED|What went wrong' android-release.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
+            grep -Ei 'error|exception|daemon|failed|what went wrong|killed' android-release.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
             exit 1
           fi
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
