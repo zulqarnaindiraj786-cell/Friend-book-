@@ -50,14 +50,13 @@ android {
         }
     }
 
-    def unshrunkCandidate = providers.gradleProperty('friendbookUnshrunkCandidate').orNull == 'true'
     buildTypes {
         release {
             if (releaseSigningConfigured) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled !unshrunkCandidate
-            shrinkResources !unshrunkCandidate
+            minifyEnabled true
+            shrinkResources true
             debuggable false
             jniDebuggable false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

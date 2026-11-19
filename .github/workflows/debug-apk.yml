@@ -91,7 +91,7 @@ jobs:
           : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing historical alias configuration}"
           : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing historical key configuration}"
           printf '::add-mask::%s\n' "$FRIENDBOOK_RELEASE_STORE_PASSWORD" "$FRIENDBOOK_RELEASE_KEY_PASSWORD"
-          if ! gradle :app:assembleRelease :app:bundleRelease -PfriendbookUnshrunkCandidate=true --max-workers=2 --no-daemon --console=plain > android-release.log 2>&1; then
+          if ! gradle :app:assembleRelease :app:bundleRelease --max-workers=2 --no-daemon --console=plain > android-release.log 2>&1; then
             tail -100 android-release.log
             grep -Ei 'error|exception|daemon|failed|what went wrong|killed' android-release.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
             exit 1
@@ -119,4 +119,4 @@ jobs:
             app/build/outputs/bundle/release/app-release.aab#FriendBook.aab \
             --target "$GITHUB_SHA" --prerelease --latest=false \
             --title "FriendBook ${version} Cloudflare test candidate" \
-            --notes "Signed with the original v2.8.89 key. Test candidate; not the production release."
+            --notes "Signed with the original v2.8.89 key; code and resources shrunk. Test candidate; not the production release."
