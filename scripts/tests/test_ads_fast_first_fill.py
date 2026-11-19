@@ -9,8 +9,8 @@ JAVA = ROOT / 'app/src/main/java/com/friendbook/social'
 class AdsFastFirstFillGuards(unittest.TestCase):
     def test_empty_pool_asks_for_one_ad_and_tops_up_after_it_lands(self):
         source = (JAVA / 'core/AdsConfig.java').read_text()
-        self.assertIn('int reqCount = FEED_POOL.isEmpty()', source)
-        self.assertIn('int reqCount = REELS_POOL.isEmpty()', source)
+        self.assertIn('preloadMediatedAd(appCtx, feedNativeId(), true)', source)
+        self.assertIn('preloadMediatedAd(appCtx, reelsNativeId(), false)', source)
         self.assertIn('if (isFeedPool) ensureFeedPoolReplenished(appCtx);', source)
         self.assertIn('else ensureReelsPoolReplenished(appCtx);', source)
 

@@ -108,6 +108,8 @@ dependencies {
 
     // 📢 Google AdMob Production Ads SDK + UMP GDPR Consent SDK
     implementation 'com.google.android.gms:play-services-ads:22.5.0'
+    // Placement mappings stay in AdMob; use the adapter from the GMA 22.x generation.
+    implementation 'com.google.ads.mediation:facebook:6.16.0.0'
     implementation 'com.google.android.ump:user-messaging-platform:2.2.0'
 
     implementation 'androidx.core:core:1.13.1'

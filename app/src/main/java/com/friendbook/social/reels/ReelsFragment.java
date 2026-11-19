@@ -758,9 +758,11 @@ public class ReelsFragment extends Fragment {
         AdsConfig.setReelsPoolListener(() -> {
             if (adapter != null && pager != null) {
                 adapter.onPoolAdAvailable();
+                if (com.friendbook.social.core.ConsentManager.canRequestAds(getActivity())) AdsConfig.ensureReelsPoolReplenished(getActivity());
             }
         });
         if(pager!=null && adapter!=null){
+            adapter.onPoolAdAvailable();
             adapter.refreshVisibleHoldersInPlace(pager);
             pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));
         }
@@ -907,22 +909,15 @@ public class ReelsFragment extends Fragment {
 
         private boolean lastAdsActive = false;
 
-        private boolean adsActive() {
-            boolean active = AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0);
-            lastAdsActive = active;
-            return active;
-        }
+        private boolean adsActive() { return lastAdsActive; }
 
         void onPoolAdAvailable() {
-            if (!lastAdsActive && AdsConfig.nativeAdsEnabled() && AdsConfig.hasReadyReelsSlotOrPoolAd(0)
-                    && !data.isEmpty()) {
-                lastAdsActive = true;
-                int ads = data.size() / REELS_PER_AD;
-                for (int k = 0; k < ads; k++) {
-                    int adPos = (k + 1) * REEL_AD_STEP - 1;
-                    notifyItemInserted(adPos);
-                }
-            }
+            boolean permitted=AdsConfig.nativeAdsEnabled() && com.friendbook.social.core.ConsentManager.canRequestAds(activity);
+            boolean next=permitted && (lastAdsActive || AdsConfig.hasReadyReelsSlotOrPoolAd(0));
+            if(next==lastAdsActive)return;
+            lastAdsActive=next;
+            if (!next) { notifyDataSetChanged(); return; }
+            for (int k=0;k<data.size()/REELS_PER_AD;k++) notifyItemInserted((k+1)*REEL_AD_STEP-1);
         }
 
         private int adCount() {

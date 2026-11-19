@@ -68,8 +68,8 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('if (reelsInFlight > 0 && now - reelsInFlightSinceMs > IN_FLIGHT_STALE_MS) reelsInFlight = 0;', self.ads)
 
     def test_first_fill_rules_from_the_previous_speed_up_are_still_in_place(self):
-        self.assertIn('int reqCount = FEED_POOL.isEmpty()', self.ads)
-        self.assertIn('int reqCount = REELS_POOL.isEmpty()', self.ads)
+        self.assertIn('preloadMediatedAd(appCtx, feedNativeId(), true)', self.ads)
+        self.assertIn('preloadMediatedAd(appCtx, reelsNativeId(), false)', self.ads)
         self.assertIn('private static final long FAIL_COOLDOWN_MS = 8_000L;', self.ads)
         self.assertIn('if (!ConsentManager.isAdsSdkInitialized())', self.ads)
         consent = (JAVA / 'core/ConsentManager.java').read_text()

@@ -1104,6 +1104,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.image.setOnTouchListener(null);
         vh.mediaWrap.setOnClickListener(null);
         vh.playBadge.setVisibility(View.GONE);
+        vh.playBadge.setOnClickListener(null);
         vh.playBadge.setTextSize(44);
         vh.pageBadge.setVisibility(View.GONE);
         int targetMediaH = textOnlyPhotoHidden ? Ui.dp(c, 92)
@@ -1172,7 +1173,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
             vh.playBadge.setText("Tap to watch Reel");
-            vh.mediaWrap.setOnClickListener(v -> {
+            View.OnClickListener watchReel = v -> {
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
                 i.putExtra("is_post", true);
@@ -1185,7 +1186,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 i.putExtra("comments", p.comments);
                 i.putExtra("shares", p.shares);
                 c.startActivity(i);
-            });
+            };
+            vh.playBadge.setOnClickListener(watchReel);
+            vh.image.setOnClickListener(watchReel);
+            vh.mediaWrap.setOnClickListener(watchReel);
         }
 
         // ---------- ⚡ 0.0ms Instant Reaction & Counter Render + Exact Subcollection Sync ----------

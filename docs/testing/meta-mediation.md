@@ -1,0 +1,6 @@
+# Meta Audience Network for Feed and Reels
+
+- In AdMob Mediation, add **Meta Audience Network (bidding)**, not the historical waterfall entry. Meta is bidding-only. Link the Meta bidding partnership and select the **Android Native** inventory.
+- Map Placement ID `4871960679794940_4871960806461594` in the bidding configuration for the intended Feed and Reels native ad units (`ca-app-pub-3387480177023669/4957447582` and `ca-app-pub-3387480177023669/6468085788`). Confirm the placement is active and eligible for both; if Meta supplies separate placements, map each unit to its corresponding placement. Do not replace an AdMob unit ID with a Meta placement string in Android or the FriendBook admin panel.
+- Follow Google's [Meta mediation guide](https://developers.google.com/admob/android/mediation/meta) for Meta privacy partners and the publisher-provided `app-ads.txt` entries. Do not invent seller entries. Native requests run only when the app's ad switch and UMP allow requests.
+- On a physical Android device with the updated build, use Ad Inspector single-ad-source testing to verify adapter initialization and Meta bidding separately for Feed and Reels. Then confirm normal serving, with test mode disabled. A valid mapping and SDK integration do not guarantee inventory or fill.

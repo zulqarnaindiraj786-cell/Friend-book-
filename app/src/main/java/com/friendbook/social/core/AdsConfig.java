@@ -733,13 +733,7 @@ public class AdsConfig {
                 if (missing > 0 && feedInFlight <= 0) {
                     feedInFlight = 1;
                     feedInFlightSinceMs = now;
-                    // Fast first fill: with an empty pool ask for ONE ad — a single request lands
-                    // noticeably sooner than a 5-ad batch — then the pool is topped back up to 5
-                    // straight after that ad arrives (see the forNativeAd callback).
-                    int reqCount = FEED_POOL.isEmpty()
-                            ? 1
-                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
-                    preloadBatchIntoPool(appCtx, feedNativeId(), true, reqCount);
+                    preloadMediatedAd(appCtx, feedNativeId(), true);
                 }
             }
             startPoolTopUpTicker(appCtx);
@@ -763,11 +757,7 @@ public class AdsConfig {
                 if (missing > 0 && reelsInFlight <= 0) {
                     reelsInFlight = 1;
                     reelsInFlightSinceMs = now;
-                    // Fast first fill for Reels too: one ad first, the remaining four right after.
-                    int reqCount = REELS_POOL.isEmpty()
-                            ? 1
-                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
-                    preloadBatchIntoPool(appCtx, reelsNativeId(), false, reqCount);
+                    preloadMediatedAd(appCtx, reelsNativeId(), false);
                 }
             }
             startPoolTopUpTicker(appCtx);
@@ -1136,14 +1126,6 @@ public class AdsConfig {
         return b.build();
     }
 
-    private static void preloadOneFeedAd(final Context appCtx) {
-        preloadBatchIntoPool(appCtx, feedNativeId(), true, AD_POOL_SIZE);
-    }
-
-    private static void preloadOneReelsAd(final Context appCtx) {
-        preloadBatchIntoPool(appCtx, reelsNativeId(), false, AD_POOL_SIZE);
-    }
-
     /**
      * Tells every waiting Feed/Reels slot "no ad yet", so the slot collapses and content shows with
      * zero gap — but it KEEPS the waiter registered, because the next preloaded ad must still fill
@@ -1170,12 +1152,11 @@ public class AdsConfig {
         }
     }
 
-    private static void preloadBatchIntoPool(
+    private static void preloadMediatedAd(
             final Context appCtx,
             final String unitId,
-            final boolean isFeedPool,
-            final int batchCount) {
-        if (!nativeAdsEnabled() || (isFeedPool && !ConsentManager.canRequestAds(appCtx))) {
+            final boolean isFeedPool) {
+        if (!nativeAdsEnabled() || !ConsentManager.canRequestAds(appCtx)) {
             synchronized (AdsConfig.class) {
                 if (isFeedPool) feedInFlight = 0;
                 else reelsInFlight = 0;
@@ -1188,7 +1169,7 @@ public class AdsConfig {
             // ads used to appear late. ConsentManager guarantees this deferred call runs, either on
             // the real `MobileAds.initialize` callback or on its 4s boot fallback.
             ConsentManager.runWhenSdkInitialized(appCtx,
-                    () -> preloadBatchIntoPool(appCtx, unitId, isFeedPool, batchCount));
+                    () -> preloadMediatedAd(appCtx, unitId, isFeedPool));
             return;
         }
         try {
@@ -1204,28 +1185,18 @@ public class AdsConfig {
                             .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                             .setVideoOptions(videoOptions)
                             .build();
-            final com.google.android.gms.ads.AdLoader[] loaderRef = new com.google.android.gms.ads.AdLoader[1];
-            MAIN_UI_HANDLER.postDelayed(() -> {
-                synchronized (AdsConfig.class) {
-                    if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
-                    else reelsInFlight = Math.max(0, reelsInFlight - 1);
-                }
-            }, 5000L);
             com.google.android.gms.ads.AdLoader adLoader =
                     new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
                             .forNativeAd(nativeAd -> {
-                                boolean done = loaderRef[0] == null || !loaderRef[0].isLoading();
                                 synchronized (AdsConfig.class) {
                                     if (isFeedPool) lastFeedFailAtMs = 0L;
                                     else lastReelsFailAtMs = 0L;
-                                    if (done) {
-                                        if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
-                                        else reelsInFlight = Math.max(0, reelsInFlight - 1);
-                                    }
+                                    if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
+                                    else reelsInFlight = Math.max(0, reelsInFlight - 1);
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
                                 }
-                                if (!nativeAdsEnabled() || (isFeedPool && !ConsentManager.canRequestAds(appCtx))) {
+                                if (!nativeAdsEnabled() || !ConsentManager.canRequestAds(appCtx)) {
                                     nativeAd.destroy();
                                     return;
                                 }
@@ -1239,7 +1210,7 @@ public class AdsConfig {
                                 // flight, so no duplicate request is ever issued.
                                 if (isFeedPool) ensureFeedPoolReplenished(appCtx);
                                 else ensureReelsPoolReplenished(appCtx);
-                                if (done) notifyChange();
+                                notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
                                 @Override
@@ -1291,8 +1262,8 @@ public class AdsConfig {
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            loaderRef[0] = adLoader;
-            adLoader.loadAds(buildHighValueAdRequest(!isFeedPool), Math.min(AD_POOL_SIZE, Math.max(1, batchCount)));
+            // Single requests participate in mediation; bulk requests do not.
+            adLoader.loadAd(buildHighValueAdRequest(!isFeedPool));
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
                 if (isFeedPool) {
