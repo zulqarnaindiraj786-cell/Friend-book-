@@ -34,9 +34,9 @@ public class CommentsEngine {
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data){
         for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && id.equals(h.docId)){
-            h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
-            if(data.has("removed")){String removed=data.optString("removed");h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
-            org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
+            h.revision++;h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
+            if(data.has("removed")){String removed=data.optString("removed");h.pendingD1.remove(removed);h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
+            org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.pendingD1.remove(c.id);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
             h.emit();
         }
         D1Reactions.invalidate(collection,id);
@@ -66,6 +66,8 @@ public class CommentsEngine {
         private boolean closed, loading, more=true, cursorReady;
         private int legacyLoaded=50, visible=50;
         private boolean d1Mode,loadedOlderD1;private String collection,docId,key,nextD1;
+        private long revision;
+        private final Set<String> pendingD1=new HashSet<>();
         private final android.os.Handler d1PollHandler=new android.os.Handler(android.os.Looper.getMainLooper());
         private final Runnable d1Poll=new Runnable(){@Override public void run(){
             if(!active())return;
@@ -76,11 +78,23 @@ public class CommentsEngine {
         private void d1Page(boolean first,boolean background){
             if(!active()||loading)return;loading=true;if(!background){error="";emit();}
             String query=first||nextD1==null?null:"?before="+android.net.Uri.encode(nextD1);
+            final long requestedAtRevision=revision;
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
                 if(!active())return;loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
-                try{for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);if(first)latest.put(c.id,c);else older.put(c.id,c);
-}
+                // A response started before a local mutation must not overwrite its result.
+                if(requestedAtRevision!=revision){if(!background)d1Page(first);return;}
+                try{Map<String,Models.Comment> received=new LinkedHashMap<>();
+                    for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);received.put(c.id,c);}
+                    if(first){
+                        // Replace the polled window, otherwise deleted/blocked comments stay forever.
+                        // Keep optimistic unsent comments until their write resolves.
+                        for(String id:new ArrayList<>(latest.keySet())) if(!pendingD1.contains(id)) older.remove(id);
+                        latest.entrySet().removeIf(entry->!pendingD1.contains(entry.getKey()));
+                        for(Map.Entry<String,Models.Comment> entry:received.entrySet())if(!pendingD1.contains(entry.getKey())){
+                            older.remove(entry.getKey());latest.put(entry.getKey(),entry.getValue());
+                        }
+                    }else older.putAll(received);
                     if(!first){visible+=20;loadedOlderD1=true;}
                     if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
                     error="";pinned=data.optString("pinned");emit();
@@ -245,7 +259,7 @@ public class CommentsEngine {
             // Keep the optimistic comment in each active handle as well as the screen.
             // An in-flight page response must not erase it before the POST resolves.
             for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && docId.equals(h.docId)){
-                h.deleted.remove(local.id);h.latest.put(local.id,local);
+                h.revision++;h.pendingD1.add(local.id);h.deleted.remove(local.id);h.latest.put(local.id,local);
             }
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
                 if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);

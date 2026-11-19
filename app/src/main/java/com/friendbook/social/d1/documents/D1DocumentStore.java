@@ -153,6 +153,23 @@ public class D1DocumentStore {
         });
     }
 
+    /** Record only the current viewer's story interaction using the dedicated Worker policy. */
+    public Task<Void> storyEngagement(String id, String op, String emoji) {
+        final String actor=authenticatedUid();
+        return runAsync(() -> {
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed before story interaction");
+            org.json.JSONObject body=new org.json.JSONObject().put("id",id).put("op",op);
+            if (emoji!=null) body.put("emoji",emoji);
+            D1DocumentTransport.request("POST", "/v1/firestore/story-engagement",body);
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed during story interaction");
+            invalidateDoc("stories/"+id);
+            notifyDocListeners("stories/"+id);
+            return null;
+        });
+    }
+
     /** Server verifies the signed-in administrator; the UI is not an authorization boundary. */
     public Task<org.json.JSONObject> previewSocialRecovery(String kind, String id) {
         return runAsync(() -> D1DocumentTransport.request("GET", "/v1/admin/recover-social?kind="

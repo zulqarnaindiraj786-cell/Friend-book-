@@ -1395,3 +1395,36 @@ test('disabled account cannot use D1 routes but can read its own status for sign
  assert.equal((await call('/v1/firestore/query','POST',{parent:'chats'})).status,200);
  sql.close();
 });
+
+test('story engagement records only authorized actor, retries races, and mirrors atomically', async () => {
+ const sql=new DatabaseSync(':memory:');for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')])sql.exec(s);
+ const put=(coll,id,obj)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(obj),1,1);
+ put('users','alice',{uid:'alice'});put('users','bob',{uid:'bob'});put('users','carol',{uid:'carol'});
+ put('stories','s1',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
+ let race=true,blockRace=false;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+  if(race){race=false;const row=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);row.viewedBy=['carol'];sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='stories/s1'").run(JSON.stringify(row));}
+  if(blockRace){blockRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({uid:'alice',blocked:['bob']}));}
+  sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+ }};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const call=(who,body)=>app.fetch(new Request('https://example.test/v1/firestore/story-engagement',{method:'POST',headers:{authorization:'Bearer '+who,'content-type':'application/json'},body:JSON.stringify(body)}),env);
+ assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
+ let story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
+ assert.deepEqual(story.viewedBy,['carol','bob']);
+ assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
+ assert.equal((await call('bob',{id:'s1',op:'react',emoji:'❤️'})).status,200);
+ story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
+ assert.deepEqual(story.viewedBy,['carol','bob']);assert.deepEqual(story.reactions,{bob:'❤️'});
+ const mirror=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='stories/s1'").get().document_json);assert.deepEqual(mirror.viewedBy,story.viewedBy);assert.deepEqual(mirror.reactions,story.reactions);
+ assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x',uid:'carol'})).status,400);
+ story.privacy='Friends';sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='stories/s1'").run(JSON.stringify(story));
+ assert.equal((await call('bob',{id:'s1',op:'view'})).status,403);
+ sql.prepare('INSERT INTO friendbook_cf_trusted_friendships(uid_low,uid_high,friend_path) VALUES (?,?,?)').run('alice','bob','friends/f1');
+ assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
+ blockRace=true;
+ assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x'})).status,403);
+ story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
+ assert.equal(story.reactions.bob,'❤️'); // a block racing the batch prevented the write
+ sql.close();
+});

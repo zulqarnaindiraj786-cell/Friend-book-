@@ -342,8 +342,8 @@ public class StoryViewerActivity extends Activity {
 
         String me = Fb.uid();
         if (me != null && !mine && !s.viewedBy.contains(me)) {
-            Fb.db().collection("stories").document(s.id)
-                    .update("viewedBy", FieldValue.arrayUnion(me));
+            Fb.db().storyEngagement(s.id, "view", null)
+                    .addOnSuccessListener(v -> { if (me.equals(Fb.uid()) && !s.viewedBy.contains(me)) s.viewedBy.add(me); });
         }
 
         if (!"video".equals(s.mediaType)) {
@@ -440,10 +440,12 @@ public class StoryViewerActivity extends Activity {
     private void sendQuickReaction(String emoji) {
         if (stories.isEmpty() || Fb.uid() == null) return;
         Models.Story s = stories.get(index);
-        Fb.db().collection("stories").document(s.id)
-                .update("reactions." + Fb.uid(), emoji);
-        Notify.send(s.authorId, "story_reaction", "reacted " + emoji + " to your story", "");
-        Ui.toast(this, "Sent " + emoji + " to " + s.authorName);
+        String actor=Fb.uid();
+        Fb.db().storyEngagement(s.id, "react", emoji).addOnSuccessListener(v -> {
+            if (!actor.equals(Fb.uid()) || isFinishing()) return;
+            Notify.send(s.authorId, "story_reaction", "reacted " + emoji + " to your story", "");
+            Ui.toast(this, "Sent " + emoji + " to " + s.authorName);
+        }).addOnFailureListener(e -> { if (actor.equals(Fb.uid()) && !isFinishing()) Ui.toast(this, "Couldn't send reaction. Try again."); });
     }
 
     private void buildSegments() {
@@ -504,23 +506,26 @@ public class StoryViewerActivity extends Activity {
             Fb.db().collection("stories").document(s.id).delete().addOnSuccessListener(v->{
                 if(storyPages!=null)storyPages.forget(s.id);stories.remove(s);
                 Ui.toast(this,"Story deleted");if(stories.isEmpty()){finish();return;}index=Math.min(index,stories.size()-1);show();
-            });
+            }).addOnFailureListener(e -> { if (!isFinishing()) Ui.toast(this,"Couldn't delete story. Try again."); });
         });
     }
 
     private void showViewers() {
         if (stories.isEmpty()) return;
         Models.Story s = stories.get(index);
-        List<String> viewers = s.viewedBy;
+        List<String> viewers = new ArrayList<>(s.viewedBy);
         if (viewers.isEmpty()) { Ui.toast(this, "No views yet"); return; }
-        List<String> lines = new ArrayList<>();
-        for (String uid : viewers) {
-            Fb.getUser(uid).addOnSuccessListener(u -> {
-                String r = s.reactions.get(uid);
-                lines.add((u != null ? u.displayName : "User") + (r != null ? "  " + r : ""));
-                if (lines.size() == viewers.size()) {
-                    Ui.info(this, "👁 Story viewers (" + viewers.size() + ")", TextUtils.join("\n", lines));
-                }
+        String actor=Fb.uid();
+        List<String> lines = new ArrayList<>(java.util.Collections.nCopies(viewers.size(), "User"));
+        final int[] remaining={viewers.size()};
+        for (int i=0;i<viewers.size();i++) {
+            final int position=i;String uid=viewers.get(i);
+            Fb.getUser(uid).addOnCompleteListener(task -> {
+                if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
+                Models.User u=task.isSuccessful()?task.getResult():null;
+                String r=s.reactions.get(uid);
+                lines.set(position,(u!=null && u.displayName!=null && !u.displayName.isEmpty()?u.displayName:"User")+(r!=null?"  "+r:""));
+                if (--remaining[0]==0) Ui.info(this, "👁 Story viewers ("+viewers.size()+")", TextUtils.join("\n",lines));
             });
         }
     }

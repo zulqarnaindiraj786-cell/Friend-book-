@@ -1238,6 +1238,48 @@ async function adminModeration(request,env,uid,now) {
   }
 }
 
+// Story viewers may only record their own view/reaction. Guard every document
+// used by authorization and the friendship ledger within the same D1 batch.
+async function storyEngagement(request,env,uid,now) {
+  if(request.method!=='POST') return json({error:'Method not allowed'},405);
+  let input;try{input=await request.json();}catch{return json({error:'Invalid JSON'},400);}
+  if(!input || Array.isArray(input) || typeof input!=='object' || Object.keys(input).some(k=>!['id','op','emoji'].includes(k))
+    || !validSegment(input.id) || input.id.length>128 || !['view','react'].includes(input.op)
+    || (input.op==='view' && input.emoji!==undefined)
+    || (input.op==='react' && (typeof input.emoji!=='string' || !input.emoji.trim() || input.emoji.length>32))) return json({error:'Invalid request'},400);
+  const db=env.DB,path=`stories/${input.id}`;
+  if(typeof db.batch!=='function')return json({error:'Atomic storage unavailable'},503);
+  for(let attempt=0;attempt<3;attempt++) {
+    try {
+      const row=await readRow(db,path);if(!row)return json({error:'NOT_FOUND'},404);
+      const doc=decodeValue(JSON.parse(row.document_json)),owner=doc.authorId;
+      if(!validSegment(owner) || owner===uid || doc.groupId) return json({error:'Forbidden'},403);
+      const [low,high]=[uid,owner].sort();
+      const [viewer,author,friend]=await Promise.all([
+        readRow(db,`users/${uid}`),readRow(db,`users/${owner}`),
+        db.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high).first(),
+      ]);
+      if(!viewer || !author || !await contentReadAllowed(db,uid,path))return json({error:'Forbidden'},403);
+      const expiration=typeof doc.expiresAt==='number'?doc.expiresAt:doc.expiresAt?.millis;
+      if(Number.isFinite(expiration) && expiration<=now)return json({error:'Story expired'},403);
+      if((doc.viewedBy!==undefined && !Array.isArray(doc.viewedBy)) || (doc.reactions!==undefined && (!doc.reactions || typeof doc.reactions!=='object' || Array.isArray(doc.reactions))))return json({error:'Invalid story'},409);
+      const next={...doc,viewedBy:[...new Set([...(doc.viewedBy||[]),uid])]};
+      if(input.op==='react')next.reactions={...(doc.reactions||{}),[uid]:input.emoji};
+      const guards=await Promise.all([chatDocumentGuard(db,path,row),chatDocumentGuard(db,`users/${uid}`,viewer),chatDocumentGuard(db,`users/${owner}`,author)]);
+      guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN COALESCE((SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?),\'\') = ? THEN 1 ELSE 0 END').bind(low,high,friend?.friend_path||''));
+      const encoded=JSON.stringify(next);if(encoded.length>1_800_000)return json({error:'Document too large'},413);
+      await db.batch([...guards,
+        db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'stories','stories',input.id,owner,encoded,row.create_time||now,now),
+        db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'stories',input.id,owner,JSON.stringify({...next,id:input.id}),now),
+        db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+      return json({ok:true});
+    } catch(error) {
+      if(/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))){if(attempt<2)continue;return json({error:'Story changed. Please retry.'},409);}
+      return json({error:'Story engagement unavailable'},503);
+    }
+  }
+}
+
 async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map()) {
   const id=chatMessageRoom(path,before,after);
   if (id===null) return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms), room:null};
@@ -1382,6 +1424,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
 
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
   if (path === '/v1/admin/moderation') return adminModeration(request,env,uid,now);
+  if (path === '/v1/firestore/story-engagement') return storyEngagement(request,env,uid,now);
 
   // One authenticated round trip for the profile header and its first post page.
   // Delegate to the same endpoints/policies so this cannot bypass projections or post privacy.

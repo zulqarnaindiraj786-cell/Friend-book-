@@ -51,7 +51,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const photo = path === '/v1/photos';
       const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
-        || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation';
+        || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation' || path === '/v1/firestore/story-engagement';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
