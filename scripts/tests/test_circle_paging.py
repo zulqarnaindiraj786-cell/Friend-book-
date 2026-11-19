@@ -15,5 +15,5 @@ class CirclePaging(unittest.TestCase):
             self.assertIn(token,s)
     def test_cached_revalidation_does_not_repaint_unchanged_rows(self):
         s=(JAVA/'core/CursorPager.java').read_text()
-        for token in ['CachedPage(first,records.size()>size || more)','more=cached.more;emit("")','sameData(lastDelivered,docs)','Objects.equals(a.get(i).getData(),b.get(i).getData())','more=true;next()']:
+        for token in ['CachedPage(first,records.size()>size || more)','more=cached.more;emit("")','sameData(lastDelivered,docs)','Objects.equals(a.get(i).getData(),b.get(i).getData())','if (!observed) next()', 'acceptObservedFirstPage(QuerySnapshot page)']:
             self.assertIn(token,s)
