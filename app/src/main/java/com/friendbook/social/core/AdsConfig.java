@@ -232,13 +232,14 @@ public class AdsConfig {
                 "Mode: Real Production Only  •  Requests: %d  •  Loaded: %d\n"
                         + "Impressions: %d  •  Clicks: %d  •  Failed: %d (Last error: %s)  •  Est: $%.4f\n"
                         + "Pool now: Feed %d/%d  •  Reels %d/%d\n"
-                        + "Switches: native ads %s (Admin master %s, Remote Config %s)  •  SDK initialized: %s",
+                        + "Switches: native ads %s (Admin master %s, Remote Config %s)  •  SDK initialized: %s  •  Consent allows requests: %s",
                 req, loads, imps, clicks, fails, errLabel, usd,
                 FEED_POOL.size(), AD_POOL_SIZE, REELS_POOL.size(), AD_POOL_SIZE,
                 nativeAdsEnabled() ? "ON" : "OFF",
                 masterSwitchEnabled ? "ON" : "OFF",
                 remoteAllowed ? "ON" : "OFF",
-                ConsentManager.isAdsSdkInitialized() ? "yes" : "not yet");
+                ConsentManager.isAdsSdkInitialized() ? "yes" : "not yet",
+                ConsentManager.canRequestAds(c) ? "yes" : "no");
     }
 
     /** Reads bundled assets/app-ads.txt for instant verification inside the app. */

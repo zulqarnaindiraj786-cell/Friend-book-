@@ -492,7 +492,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if (p != null && p.id != null) sessionOrderIds.add(p.id);
         }
         forceReRank = false;
-        adapter.setPosts(ranked);
+        setPostsKeepingScroll(ranked);
     }
 
     @Override
@@ -738,6 +738,23 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
     }
 
+    private void setPostsKeepingScroll(List<Models.Post> posts) {
+        if (rv == null || !(rv.getLayoutManager() instanceof LinearLayoutManager)) { adapter.setPosts(posts); return; }
+        LinearLayoutManager layout = (LinearLayoutManager) rv.getLayoutManager();
+        int first = layout.findFirstVisibleItemPosition();
+        View anchor = first <= 0 ? null : layout.findViewByPosition(first);
+        long stableId = anchor == null ? RecyclerView.NO_ID : rv.getChildViewHolder(anchor).getItemId();
+        int offset = anchor == null ? 0 : layout.getDecoratedTop(anchor) - rv.getPaddingTop();
+        adapter.setPosts(posts);
+        if (stableId < 0 || rv.getScrollState() != RecyclerView.SCROLL_STATE_IDLE) return;
+        for (int i = 0; i < adapter.getItemCount(); i++) {
+            if (adapter.getItemId(i) == stableId) {
+                if (i != first) layout.scrollToPositionWithOffset(i, offset);
+                break;
+            }
+        }
+    }
+
     private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean persistCache) {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
@@ -835,7 +852,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         if (adapter != null) {
             if (addedReel || !featuredReels.isEmpty()) adapter.setFeaturedReels(featuredReels);
-            adapter.setPosts(finalFeed);
+            setPostsKeepingScroll(finalFeed);
         }
         updatePagingUi();
     }

@@ -42,6 +42,49 @@ public final class PushManager {
             manager.createNotificationChannel(n);
         }
     }
+    public static void testThisPhone(Context context, android.widget.TextView result) {
+        channel(context);
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            result.setText("Android notifications are off. Open Android notification settings above.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel n = context.getSystemService(NotificationManager.class).getNotificationChannel(CHANNEL);
+            if (n != null && n.getImportance() < NotificationManager.IMPORTANCE_HIGH) {
+                result.setText("Enable banners for FriendBook in Android notification settings, then retry.");
+                return;
+            }
+        }
+        String actor = Fb.uid();
+        if (actor == null || !result.isEnabled()) return;
+        result.setEnabled(false);
+        result.setText("Registering and sending a real FCM test…");
+        new Thread(() -> {
+            String report;
+            try {
+                String token = com.google.android.gms.tasks.Tasks.await(com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                String bearer = PushGateway.idToken();
+                if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
+                PushGateway.Response registration = PushGateway.call(new org.json.JSONObject().put("action", "register")
+                        .put("device_id", FCMTokenManager.deviceId(context)).put("token", token), bearer);
+                if (registration.status != 200 || !registration.data.optBoolean("registered")) {
+                    report = "Registration failed (HTTP " + registration.status + ")";
+                } else {
+                    if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
+                    PushGateway.Response test = PushGateway.call(new org.json.JSONObject().put("action", "self_test")
+                            .put("device_id", FCMTokenManager.deviceId(context)), bearer);
+                    report = test.data.optInt("accepted") > 0 ? "FCM accepted the test. Check your notification shade."
+                            : test.data.optInt("duplicate") > 0 ? "Already sent this minute. Retry after a minute."
+                            : "Push test failed: " + test.data.optString("error", "HTTP " + test.status);
+                }
+            } catch (Exception error) { report = "Couldn't reach the push service. Tap to retry."; }
+            final String text = report;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                if (actor.equals(Fb.uid())) { result.setText(text); result.setEnabled(true); }
+            });
+        }, "FriendBook push test").start();
+    }
+
     /** Fallback for a fresh server-authenticated inbox event observed while Main is visible. */
     public static void showForegroundInbox(Context c, com.friendbook.social.d1.documents.DocumentSnapshot doc, long since) {
         if (doc.getMetadata().isFromCache() || doc.getMetadata().hasPendingWrites() || Prefs.quiet(c)) return;

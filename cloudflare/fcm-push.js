@@ -1,3 +1,4 @@
+import { readD1DocumentFields } from './app-documents.js';
 // Cloudflare Worker FCM gateway (/functions/v1/send-fcm-notification, /functions/v1/bulk-mentions).
 // Firebase keeps ONLY Auth (token verification in worker.js) + FCM delivery.
 // Device tokens + push claims live in D1; event payloads are derived from D1
@@ -71,6 +72,15 @@ async function d1Doc(db, path) {
     return null;
   }
 }
+async function pushProfile(db, uid) {
+  const fields=await readD1DocumentFields(db, `users/${uid}`);
+  if (!fields) return null;
+  const strings=key=>(fields[key]?.arrayValue?.values||[]).map(x=>x.stringValue).filter(x=>typeof x==='string');
+  return {displayName:fields.displayName?.stringValue, name:fields.name?.stringValue,
+    banned:fields.banned?.booleanValue===true, deactivated:fields.deactivated?.booleanValue===true,
+    blocked:strings('blocked'), blockedUsers:strings('blockedUsers')};
+}
+
 async function d1Query(db, parent, filters) {
   try {
     const rows = await db.prepare('SELECT doc_id, document_json FROM friendbook_cf_firestore_documents WHERE parent_path = ?').bind(parent).all();
@@ -104,45 +114,51 @@ function fresh(ts) {
   return Number.isFinite(ms) && Date.now() - ms <= 86400000 && ms <= Date.now() + 30000;
 }
 
-async function sendToDevices(env, db, actor, target, data, event) {
-  const devices = await db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(target).all()
+async function sendToDevices(env, db, actor, target, data, event, deviceId = null) {
+  const devices = await (deviceId
+    ? db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ? AND device_id = ?').bind(target,deviceId)
+    : db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(target)).all()
     .then(r => r?.results || []);
   if (!devices.length) return { status: 409, body: { error: 'RECIPIENT_NOT_REGISTERED', accepted: 0 } };
   const access = await googleToken(env);
   let accepted = 0, duplicate = 0, invalid = 0, failed = 0;
-  for (const device of devices) {
-    const claimKey = `fcm:${event}:${device.device_id}`;
-    // RETURNING identifies the sole winning insert across Worker isolates.
-    // Never use isolate-local memory to decide whether a persisted claim is new.
-    let claim;
-    try {
-      claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
-        VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
-    } catch { failed++; continue; }
-    if (!claim) { duplicate++; continue; }
-    try {
-      const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: '86400s' } } }),
-        signal: AbortSignal.timeout(15000),
-      });
-      const result = await r.json().catch(() => ({}));
-      if (r.ok && result.name) { accepted++; continue; }
-      const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
-      if (code === 'UNREGISTERED') {
-        await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
-        invalid++;
-      } else {
-        if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
+  let index = 0;
+  await Promise.all(Array.from({length:Math.min(3, devices.length)}, async () => {
+    while (index < devices.length) {
+      const device = devices[index++];
+      const claimKey = `fcm:${event}:${device.device_id}`;
+      // RETURNING identifies the sole winning insert across Worker isolates.
+      // Never use isolate-local memory to decide whether a persisted claim is new.
+      let claim;
+      try {
+        claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
+          VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
+      } catch { failed++; continue; }
+      if (!claim) { duplicate++; continue; }
+      try {
+        const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: '86400s' } } }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const result = await r.json().catch(() => ({}));
+        if (r.ok && result.name) { accepted++; continue; }
+        const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
+        if (code === 'UNREGISTERED') {
+          await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
+          invalid++;
+        } else {
+          if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
+          failed++;
+          await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+        }
+      } catch {
         failed++;
         await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
       }
-    } catch {
-      failed++;
-      await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
     }
-  }
+  }));
   if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid } };
   if (!accepted && !duplicate) return { status: 409, body: { error: 'NO_VALID_RECIPIENT_DEVICE', accepted, invalid } };
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
@@ -235,19 +251,21 @@ export async function fcmGateway(request, env, identity) {
     if (!['send', 'self_test'].includes(action)) return json({ error: 'INVALID_ACTION' }, 400);
     let data, event, title, message;
     if (action === 'self_test') {
+      if (body.device_id != null && !validId(body.device_id)) return json({error:'INVALID_DEVICE'},400);
       event = `selftest_${actor}_${Math.floor(Date.now() / 60000)}`;
       title = 'friendbook push test';
       message = 'Direct FCM reached your phone. Notification permission and delivery are working.';
       data = { type: 'push_test', toUserId: actor, fromUserId: actor, eventId: event, title, body: message };
     } else {
-      const sender = await d1Doc(db, `users/${actor}`);
-      const recipient = await d1Doc(db, `users/${target}`);
+      let sender, recipient;
+      try { [sender,recipient]=await Promise.all([pushProfile(db,actor),pushProfile(db,target)]); }
+      catch { return json({error:'FCM_PROFILE_UNAVAILABLE'},503); }
       if (!sender || !recipient) return json({ error: 'INVALID_OR_UNAVAILABLE_EVENT' }, 400);
-      if (sender.banned || recipient.banned) return json({ error: 'Unavailable account' }, 403);
+      if (sender.banned || recipient.banned || sender.deactivated || recipient.deactivated) return json({ error: 'Unavailable account' }, 403);
       if (blockedList(recipient).includes(actor)) return json({ skipped: 'blocked' });
       if (input.type === 'message' && validId(input.chatId) && validId(input.messageId)) {
-        const chat = await d1Doc(db, `chats/${input.chatId}`);
-        const m = await d1Doc(db, `chats/${input.chatId}/messages/${input.messageId}`);
+        const [chat,m] = await Promise.all([d1Doc(db, `chats/${input.chatId}`),
+          d1Doc(db, `chats/${input.chatId}/messages/${input.messageId}`)]);
         if (!m || !chat || m.senderId !== actor || !chat.participants?.includes(actor) || !chat.participants?.includes(target) || m.isDeleted) {
           return json({ error: 'Forbidden event' }, 403);
         }
@@ -268,7 +286,7 @@ export async function fcmGateway(request, env, identity) {
       title = String(sender.displayName || sender.name || 'friendbook').slice(0, 100);
       Object.assign(data, { toUserId: target, fromUserId: actor, eventId: event, title, body: message });
     }
-    const result = await sendToDevices(env, db, actor, target, data, event);
+    const result = await sendToDevices(env, db, actor, target, data, event, action === 'self_test' ? body.device_id : null);
     return json(result.body, result.status);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'INVALID_REQUEST';

@@ -776,6 +776,20 @@ public class SettingsActivity extends Activity {
         box.addView(sReqs); box.addView(sMsgs); box.addView(sBday);
         box.addView(sGrp); box.addView(sEv); box.addView(sVib);
 
+        TextView androidSettings = Ui.tvBold(this, "Open Android notification settings", 14, Ui.BLUE);
+        Ui.pad(androidSettings, 0, 12, 0, 12);
+        androidSettings.setOnClickListener(v -> {
+            Intent intent = android.os.Build.VERSION.SDK_INT >= 26
+                    ? new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName())
+                    : new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        });
+        box.addView(androidSettings);
+        TextView test = Ui.tvBold(this, "Send real push test to this phone", 14, Ui.BLUE);
+        Ui.pad(test, 0, 12, 0, 12);
+        test.setOnClickListener(v -> com.friendbook.social.push.PushManager.testThisPhone(this, test));
+        box.addView(test);
+
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
         new AlertDialog.Builder(this)
