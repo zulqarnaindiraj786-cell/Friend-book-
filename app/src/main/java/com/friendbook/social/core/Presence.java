@@ -155,7 +155,8 @@ public class Presence {
             m.put("showActiveStatus", allowed);
             m.put("lastSeenMs", now());
             m.put("lastSeen", FieldValue.serverTimestamp());
-            Fb.db().collection("users").document(uid).set(m, SetOptions.merge())
+            // Presence must not create a partial profile ahead of registration.
+            Fb.db().collection("users").document(uid).update(m)
                     .addOnSuccessListener(unused -> FIRESTORE_WRITES.complete(ticket, true, android.os.SystemClock.elapsedRealtime()))
                     .addOnFailureListener(error -> FIRESTORE_WRITES.complete(ticket, false, android.os.SystemClock.elapsedRealtime()));
         } catch (Exception e) {

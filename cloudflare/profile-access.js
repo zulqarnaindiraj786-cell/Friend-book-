@@ -43,6 +43,11 @@ export function profileReadView(path, uid, data, admin = false) {
   }
   return withFollowSummary(result,data,uid);
 }
+function harmlessDefault(key,value) {
+  return value === undefined || value === null || value === false || value === 0 || value === ''
+    || (key === 'tickLevel' && value === 'none')
+    || (['followers','following'].includes(key) && Array.isArray(value) && value.length === 0);
+}
 export function profileWriteAllowed(path, uid, before, after) {
   const parts=path.split('/');
   if (parts[0] !== 'users' && parts[0] !== 'pushDevices') return true;
@@ -51,9 +56,9 @@ export function profileWriteAllowed(path, uid, before, after) {
   if (after.uid != null && after.uid !== uid) return false;
   for (const key of SERVER_FIELDS) {
     const old=before?.[key], value=after[key];
-    if (before) {
+    if (before && old !== undefined) {
       if (JSON.stringify(old) !== JSON.stringify(value)) return false;
-    } else if (value !== undefined && value !== null && value !== false && value !== 0 && value !== '' && !(key === 'tickLevel' && value === 'none') && !(['followers','following'].includes(key) && Array.isArray(value) && value.length === 0)) return false;
+    } else if (!harmlessDefault(key,value)) return false;
   }
   return true;
 }

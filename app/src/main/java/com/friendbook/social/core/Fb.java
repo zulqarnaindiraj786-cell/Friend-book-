@@ -92,9 +92,8 @@ public class Fb {
                                         : (!em.isEmpty() && em.contains("@") ? em.substring(0, em.indexOf('@')) : "friendbook User");
                                 String ph = fu.getPhotoUrl() != null
                                         ? fu.getPhotoUrl().toString().replace("=s96-c", "=s400-c") : "";
-                                db().collection("users").document(uid).set(
-                                        com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph),
-                                        com.friendbook.social.d1.documents.SetOptions.merge());
+                                db().collection("users").document(uid).create(
+                                        com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph));
                             }
                         }
                         return;

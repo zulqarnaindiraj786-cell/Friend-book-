@@ -857,8 +857,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             profile.put("following", new ArrayList<String>());
             profile.put("blockedUsers", new ArrayList<String>());
             profile.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("users").document(uid).set(profile, SetOptions.merge())
+            Fb.db().collection("users").document(uid).create(profile)
                     .addOnFailureListener(error -> {
+                        if (error instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                                && ((com.friendbook.social.d1.documents.D1DocumentStoreException)error).getCode()
+                                == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS) return;
                         if (uid.equals(Fb.uid())) Ui.toast(this, "Profile sync failed. Check internet and reopen Profile.");
                     });
         }

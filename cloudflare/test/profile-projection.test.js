@@ -13,3 +13,12 @@ test('locked profile exposes counts and only the viewer follow state, not member
   assert.equal(profileWriteAllowed('users/bob','bob',profile,{...profile,followerCount:900}),false);
   assert.equal(profileWriteAllowed('users/bob','bob',profile,{...profile,followedByMe:true}),false);
 });
+
+test('partial profile can acquire safe signup defaults but never privileges or forged counts',()=>{
+  const partial={uid:'alice',isOnline:true};
+  const signup={...partial,displayName:'Alice',isAdmin:false,isVerified:false,friendsCount:0,followers:[],following:[]};
+  assert.equal(profileWriteAllowed('users/alice','alice',partial,signup),true);
+  for (const patch of [{isAdmin:true},{isVerified:true},{friendsCount:8},{followers:['eve']},{followerCount:1}])
+    assert.equal(profileWriteAllowed('users/alice','alice',partial,{...signup,...patch}),false);
+  assert.equal(profileWriteAllowed('users/alice','alice',{...signup,friendsCount:2},{...signup,friendsCount:0}),false);
+});

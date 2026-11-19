@@ -106,11 +106,13 @@ public class DocumentReference {
         });
     }
 
-    /** Atomically create a notification; existing notifications are never overwritten. */
+    /** Atomically create supported root documents without overwriting existing data. */
     @SuppressWarnings("unchecked")
     public Task<Void> create(Object data) {
-        if (!path.startsWith("notifications/") || path.substring("notifications/".length()).contains("/"))
-            return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Create-only is supported for notifications"));
+        boolean notification=path.startsWith("notifications/") && !path.substring("notifications/".length()).contains("/");
+        boolean profile=path.startsWith("users/") && !path.substring("users/".length()).contains("/");
+        if (!notification && !profile)
+            return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Create-only is supported for notifications and profiles"));
         Map<String,Object> map=data instanceof Map ? (Map<String,Object>) data : new HashMap<>();
         JSONObject body = new JSONObject();
         try { body.put("data", D1DocumentJson.encodeMap(map)); body.put("createOnly", true); }
