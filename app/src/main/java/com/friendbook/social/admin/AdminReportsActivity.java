@@ -98,18 +98,20 @@ public class AdminReportsActivity extends Activity {
             if (w == 0) {
                 if (m == null) return;
                 String postId = Format.str(m, "postId");
-                String commentId = Format.str(m, "commentId");
+                String reelId = Format.str(m, "reelId");
                 String uid = Format.str(m, "uid");
                 String type = Format.str(m, "type");
                 com.google.android.gms.tasks.Task<Void> action;
                 if (!postId.isEmpty() && !postId.startsWith("reel_")) {
-                    action = Fb.db().collection("posts").document(postId).delete();
+                    action = Fb.db().moderate("delete_content", "posts", postId);
                 } else if (postId.startsWith("reel_")) {
-                    action = Fb.db().collection("reels").document(postId.substring(5)).delete();
-                } else if (!commentId.isEmpty()) {
-                    action = Fb.db().collection("comments").document(commentId).delete();
+                    action = Fb.db().moderate("delete_content", "reels", postId.substring(5));
+                } else if (!reelId.isEmpty()) {
+                    action = Fb.db().moderate("delete_content", "reels", reelId);
+                } else if ("story".equals(type) && !Format.str(m, "targetId").isEmpty()) {
+                    action = Fb.db().moderate("delete_content", "stories", Format.str(m, "targetId"));
                 } else if (!uid.isEmpty() && "profile".equals(type)) {
-                    action = Fb.db().collection("users").document(uid).update("banned", true);
+                    action = Fb.db().moderate("ban_user", "users", uid);
                 } else {
                     Ui.toast(this, "No supported content action for this report");
                     return;
@@ -119,7 +121,7 @@ public class AdminReportsActivity extends Activity {
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
-                Fb.db().collection("users").document(author).update("banned", true)
+                Fb.db().moderate("ban_user", "users", author)
                         .addOnSuccessListener(v -> dismissAfterAction(d, "Author banned ✓"))
                         .addOnFailureListener(e -> Ui.toast(this, "Ban failed; report kept in queue"));
             } else {

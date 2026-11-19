@@ -1,4 +1,4 @@
-import { canReadPayment } from './payment-access.js';
+import { canReadPayment, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
@@ -153,7 +153,7 @@ export async function appDocuments(request, env, identity) {
         const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
-          const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc);
+          const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));
           if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
         }
       }
@@ -196,7 +196,7 @@ export async function appDocuments(request, env, identity) {
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
       if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
-      const view = collection === 'groups' ? groupReadView(uid,document,await trustedGroupOwner(env.DB,docPath)) : collection === 'friends' ? friendshipReadView(uid,document) : profileReadView(docPath, uid, document);
+      const view = collection === 'groups' ? groupReadView(uid,document,await trustedGroupOwner(env.DB,docPath)) : collection === 'friends' ? friendshipReadView(uid,document) : profileReadView(docPath, uid, document, isPaymentAdmin(env,uid));
       if (view === null) return json({ error: 'Forbidden' }, 403);
       return json({ id: docId, document: view });
     } catch {

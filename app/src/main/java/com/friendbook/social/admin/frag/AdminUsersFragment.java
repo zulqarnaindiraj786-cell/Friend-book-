@@ -176,10 +176,14 @@ public class AdminUsersFragment extends Fragment {
             else if (sel.contains("Remove FULL Admin"))
                 Fb.db().collection("users").document(u.uid).update("isAdmin", false);
             else if (sel.contains("Unban"))
-                Fb.db().collection("users").document(u.uid).update("banned", false);
+                Fb.db().moderate("unban_user", "users", u.uid)
+                        .addOnSuccessListener(v -> Ui.toast(a, "User unbanned ✓"))
+                        .addOnFailureListener(e -> Ui.toast(a, "Couldn't unban user. Please retry."));
             else if (sel.contains("Ban user"))
                 Ui.confirm(a, "Ban " + u.displayName + "?", "They'll be signed out and blocked.",
-                        "Ban", () -> Fb.db().collection("users").document(u.uid).update("banned", true));
+                        "Ban", () -> Fb.db().moderate("ban_user", "users", u.uid)
+                                .addOnSuccessListener(v -> Ui.toast(a, "User banned ✓"))
+                                .addOnFailureListener(e -> Ui.toast(a, "Couldn't ban user. Please retry.")));
             else if (sel.contains("Delete user data"))
                 Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
                         "Delete", () -> Fb.db().collection("users").document(u.uid).delete());

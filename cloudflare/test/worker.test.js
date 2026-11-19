@@ -50,8 +50,9 @@ test('profile lookup binds only verified UID, not caller-supplied UID', async ()
     assert.equal(token, 'test'); assert.equal(project, 'friendbook-17551'); return 'verified-user';
   });
   const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', DB: { prepare(sql) {
-    assert.ok(sql.endsWith('WHERE uid = ?'));
-    return { bind(uid) { assert.equal(uid, 'verified-user'); return { first: async () => null }; } };
+    const statusRead=sql.includes('friendbook_cf_firestore_documents') || sql.includes('friendbook_cf_documents');
+    assert.ok(statusRead || sql.endsWith('WHERE uid = ?'));
+    return { bind(uid) { assert.equal(uid, statusRead ? 'users/verified-user' : 'verified-user'); return { first: async () => null }; } };
   } } };
   const response = await call('/v1/me?uid=victim', env, { Authorization: 'Bearer test' }, 'GET', app);
   assert.deepEqual(await response.json(), { uid: 'verified-user', profile: null });

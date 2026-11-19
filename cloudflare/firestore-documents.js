@@ -1195,6 +1195,49 @@ async function chatDocumentGuard(db,path,row) {
   if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:collectionIdOf(path),doc_id:docIdOf(path),document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Document changed');
   return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||'');
 }
+// Moderation authority comes exclusively from the configured verified UID list.
+// Preserve the original document in a private audit record before changing it.
+async function adminModeration(request,env,uid,now) {
+  const db=env.DB;
+  if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
+  if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  let input; try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
+  if (!input || typeof input!=='object' || Array.isArray(input)
+      || Object.keys(input).some(k=>!['action','collection','id'].includes(k))
+      || !validSegment(input.id) || input.id.length>128) return json({error:'Invalid request'},400);
+  const isBan=['ban_user','unban_user'].includes(input.action);
+  if ((isBan && input.collection!=='users') || (!isBan && (input.action!=='delete_content'
+      || !['posts','reels','stories'].includes(input.collection)))) return json({error:'Invalid request'},400);
+  if (isBan && (uid===input.id || isPaymentAdmin(env,input.id))) return json({error:'Protected account'},403);
+  const path=`${input.collection}/${input.id}`;
+  try {
+    const row=await readRow(db,path);
+    if (!row) return json({error:'NOT_FOUND'},404);
+    const before=decodeValue(JSON.parse(row.document_json));
+    const guard=await chatDocumentGuard(db,path,row);
+    const audit=db.prepare('INSERT INTO friendbook_cf_moderation_audit(id,admin_uid,action,target_path,original_json,created_at) VALUES (?,?,?,?,?,?)')
+      .bind(crypto.randomUUID(),uid,input.action,path,row.document_json,now);
+    const statements=[guard,audit];
+    if (isBan) {
+      const next={...before,banned:input.action==='ban_user'},serialized=JSON.stringify(next);
+      statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+        .bind(path,'users','users',input.id,input.id,serialized,row.create_time||now,now));
+      statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
+        .bind(path,'users',input.id,input.id,JSON.stringify({...next,id:input.id}),now));
+    } else {
+      statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
+      statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
+    }
+    statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+    await db.batch(statements);
+    return json({ok:true,action:input.action,path});
+  } catch (error) {
+    if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Content changed. Please retry.'},409);
+    return json({error:'Moderation unavailable'},503);
+  }
+}
+
 async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map()) {
   const id=chatMessageRoom(path,before,after);
   if (id===null) return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms), room:null};
@@ -1338,6 +1381,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   const now = Date.now();
 
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
+  if (path === '/v1/admin/moderation') return adminModeration(request,env,uid,now);
 
   // One authenticated round trip for the profile header and its first post page.
   // Delegate to the same endpoints/policies so this cannot bypass projections or post privacy.
@@ -1372,7 +1416,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
     let view;
-    try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data); }
+    try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }
     catch { return json({error:'Read unavailable'},503); }
     if (view === null) return json({ error: 'Forbidden' }, 403);
     document.data = view;
@@ -1624,7 +1668,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let docs;
     try {
       docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,body?.filters).map(async doc => {
-        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
+        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
@@ -1652,7 +1696,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let docs;
     try {
       docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,filters).map(async doc => {
-        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data);
+        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }

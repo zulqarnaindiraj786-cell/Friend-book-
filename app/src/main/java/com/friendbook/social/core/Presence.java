@@ -196,6 +196,7 @@ public class Presence {
         private ListenerRegistration fsL;
         private Runnable ticker;
         private boolean closed = false;
+        private final java.util.concurrent.atomic.AtomicBoolean cfReadInFlight = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         public void close() {
             closed = true;
@@ -208,8 +209,9 @@ public class Presence {
 
     // ---------- PRESENCE WATCHING (Cloudflare HTTP + Firestore) ----------
 
-    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
-    private static final android.util.LruCache<String, Long> CF_PRESENCE_FETCH_AT = new android.util.LruCache<>(256);
+    private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newFixedThreadPool(4);
+    // Preserve ordering of typing true/false writes without blocking presence reads.
+    private static final java.util.concurrent.ExecutorService CF_TYPING_WRITE_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
 
     /**
      * Watch presence for a user: combines Firestore (server-known) + Cloudflare HTTP (real-time).
@@ -247,8 +249,8 @@ public class Presence {
                     boolean allowed = (show == null || show)
                             && !Boolean.TRUE.equals(d.getBoolean("deactivated"))
                             && !Boolean.TRUE.equals(d.getBoolean("banned"));
-                    fsOnline[0] = allowed && firestoreActive(d);
-                    fsLastSeen[0] = extractLastSeenMs(d);
+                    fsOnline[0] = allowed && isUserOnlineDoc(d);
+                    fsLastSeen[0] = allowed ? extractLastSeenMs(d) : 0L;
                     emit.run();
                 });
 
@@ -272,18 +274,13 @@ public class Presence {
 
     private static void fetchCloudflarePresence(String uid, Handle h, boolean[] fsSeen, boolean[] fsOnline,
                                                 long[] fsLastSeen, Runnable emit) {
-        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null) return;
-        long nowMs = android.os.SystemClock.elapsedRealtime();
-        Long lastFetch = CF_PRESENCE_FETCH_AT.get(uid);
-        if (lastFetch != null && (nowMs - lastFetch) < 30_000L) return; // rate limit
-        CF_PRESENCE_FETCH_AT.put(uid, nowMs);
-
+        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null || !h.cfReadInFlight.compareAndSet(false, true)) return;
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
+            if (user == null) { h.cfReadInFlight.set(false); return; }
             user.getIdToken(false).addOnSuccessListener(res -> {
                 String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty() || h.closed) return;
+                if (token == null || token.isEmpty() || h.closed) { h.cfReadInFlight.set(false); return; }
                 CF_IO.execute(() -> {
                     try {
                         String route = uid.equals(user.getUid()) ? "/me" : ("/contact/" + android.net.Uri.encode(uid));
@@ -291,7 +288,7 @@ public class Presence {
                         boolean cfOnline = data.optBoolean("online", false);
                         long cfSeen = data.optLong("lastSeen", 0L);
                         H.post(() -> {
-                            if (h.closed) return;
+                            if (h.closed || !user.getUid().equals(Fb.uid())) return;
                             // Cloudflare is the real-time source; Firestore is privacy gate
                             if (cfOnline || cfSeen > 0L) {
                                 fsSeen[0] = true;
@@ -301,9 +298,10 @@ public class Presence {
                             }
                         });
                     } catch (Throwable ignored) { }
+                    finally { h.cfReadInFlight.set(false); }
                 });
-            });
-        } catch (Throwable ignored) { }
+            }).addOnFailureListener(e -> h.cfReadInFlight.set(false));
+        } catch (Throwable ignored) { h.cfReadInFlight.set(false); }
     }
 
     private static boolean firestoreActive(DocumentSnapshot data) {
@@ -321,51 +319,43 @@ public class Presence {
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
 
-        // Firestore typing (for persistence/history)
-        Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
+        // Cloudflare's shared TTL state is authoritative when enabled. Keeping
+        // a second persistent chat flag can leave "typing" stuck after a crash.
+        if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) sendCloudflareTyping(chatId, typing);
+        else Fb.db().collection("chats").document(chatId).update("typing." + uid, typing);
 
-        // Cloudflare typing (real-time)
-        sendCloudflareTyping(chatId, typing);
-
+        Runnable old = typingClear.remove(chatId);
+        if (old != null) H.removeCallbacks(old);
         if (typing) {
-            Runnable clear = () -> {
-                setTyping(chatId, false);
-            };
+            Runnable clear = () -> { if (uid.equals(Fb.uid())) setTyping(chatId, false); };
             typingClear.put(chatId, clear);
             H.postDelayed(clear, 4000);
-        } else {
-            Runnable old = typingClear.remove(chatId);
-            if (old != null) H.removeCallbacks(old);
         }
     }
 
     private static void sendCloudflareTyping(String chatId, boolean typing) {
         if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || chatId == null || chatId.isEmpty()) return;
-        try {
-            FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                CF_IO.execute(() -> {
-                    try {
-                        JSONObject body = new JSONObject();
-                        body.put("typing", typing);
-                        Request request = new Request.Builder()
-                                .url(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId))
-                                .put(RequestBody.create(body.toString(), JSON))
-                                .header("Authorization", "Bearer " + token)
-                                .build();
-                        CF_CLIENT.newCall(request).enqueue(new okhttp3.Callback() {
-                            @Override public void onFailure(Call call, java.io.IOException e) { }
-                            @Override public void onResponse(Call call, Response response) {
-                                if (response != null) response.close();
-                            }
-                        });
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
+        FirebaseUser user = Fb.auth().getCurrentUser();
+        if (user == null) return;
+        CF_TYPING_WRITE_IO.execute(() -> {
+            try {
+                if (!user.getUid().equals(Fb.uid())) return;
+                com.google.firebase.auth.GetTokenResult result = com.google.android.gms.tasks.Tasks.await(
+                        user.getIdToken(false), 10, TimeUnit.SECONDS);
+                String token = result != null ? result.getToken() : null;
+                if (token == null || token.isEmpty() || !user.getUid().equals(Fb.uid())) return;
+                JSONObject body = new JSONObject();
+                body.put("typing", typing);
+                Request request = new Request.Builder()
+                        .url(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId))
+                        .put(RequestBody.create(body.toString(), JSON))
+                        .header("Authorization", "Bearer " + token)
+                        .build();
+                try (Response response = CF_CLIENT.newCall(request).execute()) {
+                    if (!response.isSuccessful()) Log.w("FriendBookPresence", "Typing update failed: HTTP " + response.code());
+                }
+            } catch (Exception e) { Log.w("FriendBookPresence", "Typing update failed"); }
+        });
     }
 
     /** Watch whether any OTHER participant in a chat is typing (Cloudflare HTTP polling + Firestore). */
@@ -378,8 +368,8 @@ public class Presence {
             if (!h.closed) cb.accept(fsTyping[0] || cfTyping[0]);
         };
 
-        // Firestore typing snapshot
-        h.fsL = Fb.db().collection("chats").document(chatId)
+        // Only use the legacy chat flag when shared Cloudflare typing is disabled.
+        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) h.fsL = Fb.db().collection("chats").document(chatId)
                 .addSnapshotListener((d, err) -> {
                     if (h.closed) return;
                     fsTyping[0] = false;
@@ -413,26 +403,27 @@ public class Presence {
     }
 
     private static void fetchCloudflareTyping(String chatId, String myUid, Handle h, boolean[] cfTyping, Runnable emit) {
-        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || chatId == null) return;
+        if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || chatId == null || !h.cfReadInFlight.compareAndSet(false, true)) return;
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
-            if (user == null) return;
+            if (user == null) { h.cfReadInFlight.set(false); return; }
             user.getIdToken(false).addOnSuccessListener(res -> {
                 String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty() || h.closed) return;
+                if (token == null || token.isEmpty() || h.closed) { h.cfReadInFlight.set(false); return; }
                 CF_IO.execute(() -> {
                     try {
                         JSONObject data = D1HttpTransport.send(new java.net.URL(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId)), "GET", token, null);
                         boolean typing = data.optBoolean("typing", false);
                         H.post(() -> {
-                            if (h.closed) return;
+                            if (h.closed || !user.getUid().equals(Fb.uid()) || !myUid.equals(Fb.uid())) return;
                             cfTyping[0] = typing;
                             emit.run();
                         });
                     } catch (Throwable ignored) { }
+                    finally { h.cfReadInFlight.set(false); }
                 });
-            });
-        } catch (Throwable ignored) { }
+            }).addOnFailureListener(e -> h.cfReadInFlight.set(false));
+        } catch (Throwable ignored) { h.cfReadInFlight.set(false); }
     }
 
     // Call signaling is persisted in the D1-backed chats document, never RTDB.

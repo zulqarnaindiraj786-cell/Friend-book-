@@ -1667,8 +1667,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         unban ? "They can use friendbook again."
                                 : "They will be signed out and blocked from using friendbook.",
                         unban ? "Unban" : "Ban", () ->
-                                Fb.db().collection("users").document(uid)
-                                        .set(Fb.map("banned", !unban), SetOptions.merge())
+                                Fb.db().moderate(unban ? "unban_user" : "ban_user", "users", uid)
                                         .addOnSuccessListener(x -> {
                                             if (user != null) user.banned = !unban;
                                             Ui.toast(this, unban ? "Unbanned ✓" : "Banned 🚫");

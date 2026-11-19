@@ -15,35 +15,24 @@ export function isFreshOnline(online, visible, lastSeen, now) {
   return Boolean(online) && visible !== false && visible !== 0
     && Number.isFinite(lastSeen) && lastSeen > 0 && lastSeen <= now && (now - lastSeen) < PRESENCE_TTL_MS;
 }
-const presenceCache = new WeakMap();
-const typingCache = new Map();
-
-function getPresenceMap(db) {
-  let map = presenceCache.get(db);
-  if (!map) {
-    map = new Map();
-    presenceCache.set(db, map);
-  }
-  return map;
+// Per-isolate maps do not represent other Worker isolates. Persist each socket
+// separately so one phone disconnecting cannot mark another phone offline.
+export async function writePresence(db, uid, session, online, visible, now) {
+  await db.prepare(`INSERT INTO friendbook_cf_presence_sessions(uid,session_id,online,visible,last_seen) VALUES (?,?,?,?,?)
+    ON CONFLICT(uid,session_id) DO UPDATE SET online=excluded.online,visible=excluded.visible,last_seen=excluded.last_seen
+    WHERE excluded.last_seen>=friendbook_cf_presence_sessions.last_seen`)
+    .bind(uid,session,online?1:0,visible?1:0,now).run();
 }
-
-async function writePresence(db, uid, online, visible, now) {
-  if (!db) return;
-  const map = getPresenceMap(db);
-  const prev = map.get(uid);
-  const bestSeen = prev && prev.last_seen > now ? prev.last_seen : now;
-  map.set(uid, { online: online ? 1 : 0, visible: visible ? 1 : 0, last_seen: bestSeen });
-}
-async function readPresence(db, uid, now) {
-  const map = getPresenceMap(db);
-  let row = map.get(uid);
-  if (row === undefined) {
-    row = await db.prepare('SELECT online, visible, last_seen FROM friendbook_cf_presence WHERE uid = ?').bind(uid).first();
-    map.set(uid, row || null);
-  }
-  if (!row || row.visible === 0) return { uid, online: false, lastSeen: 0 };
-  const lastSeen = Number(row.last_seen) || 0;
-  return { uid, online: isFreshOnline(row.online === 1, true, lastSeen, now), lastSeen };
+export async function readPresence(db, uid, now) {
+  const row=await db.prepare(`SELECT COUNT(*) AS session_count, MAX(CASE WHEN visible=1 THEN last_seen END) AS last_seen,
+    MAX(CASE WHEN online=1 AND visible=1 AND last_seen>? AND last_seen<=? THEN 1 ELSE 0 END) AS online
+    FROM friendbook_cf_presence_sessions WHERE uid=?`).bind(now-PRESENCE_TTL_MS,now,uid).first();
+  if (Number(row?.session_count)>0) return {uid,online:row.online===1,lastSeen:Number(row.last_seen)||0};
+  // Only pre-migration installations can have an old legacy presence row.
+  const legacy=await db.prepare('SELECT online, visible, last_seen FROM friendbook_cf_presence WHERE uid = ?').bind(uid).first();
+  if (!legacy || legacy.visible===0) return {uid,online:false,lastSeen:0};
+  const lastSeen=Number(legacy.last_seen)||0;
+  return {uid,online:isFreshOnline(legacy.online===1,true,lastSeen,now),lastSeen};
 }
 export async function presenceRealtime(request, env, identity) {
   if (env.REALTIME_WS_ENABLED === 'false' || !env.DB) return json({ error: 'Presence unavailable' }, 503);
@@ -94,28 +83,19 @@ export async function presenceRealtime(request, env, identity) {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
       if (!body || typeof body.typing !== 'boolean') return json({ error: 'Invalid typing state' }, 400);
-      let chatMap = typingCache.get(chatId);
-      if (!chatMap) {
-        chatMap = new Map();
-        typingCache.set(chatId, chatMap);
-      }
-      if (body.typing) chatMap.set(uid, now);
-      else chatMap.delete(uid);
-      return json({ chatId, typing: body.typing });
+      try {
+        await env.DB.prepare(`INSERT INTO friendbook_cf_typing(chat_id,uid,typing,updated_at) VALUES (?,?,?,?)
+          ON CONFLICT(chat_id,uid) DO UPDATE SET typing=excluded.typing,updated_at=excluded.updated_at
+          WHERE excluded.updated_at>=friendbook_cf_typing.updated_at`).bind(chatId,uid,body.typing?1:0,now).run();
+        return json({ chatId, typing: body.typing });
+      } catch { return json({error:'Typing unavailable'},503); }
     }
     if (request.method === 'GET') {
-      const chatMap = typingCache.get(chatId);
-      let active = false;
-      if (chatMap) {
-        for (const [peerUid, ts] of chatMap.entries()) {
-          if (now - ts <= TYPING_TTL_MS) {
-            if (peerUid !== uid) active = true;
-          } else {
-            chatMap.delete(peerUid);
-          }
-        }
-      }
-      return json({ chatId, typing: active });
+      try {
+        const row=await env.DB.prepare('SELECT 1 AS active FROM friendbook_cf_typing WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=? LIMIT 1')
+          .bind(chatId,uid,now-TYPING_TTL_MS,now).first();
+        return json({ chatId, typing: Boolean(row?.active) });
+      } catch { return json({error:'Typing unavailable'},503); }
     }
     return json({ error: 'Method not allowed' }, 405);
   }
@@ -126,8 +106,11 @@ export async function presenceRealtime(request, env, identity) {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.accept();
-    const state = { uid, active: true, visible: true, lastSeen: Date.now(), lastWrite: 0, lastMessage: 0 };
-    writePresence(env.DB, uid, true, true, state.lastSeen).then(() => { state.lastWrite = state.lastSeen; }).catch(() => {});
+    const state = { uid, session: crypto.randomUUID(), active: true, visible: true, lastSeen: Date.now(), lastWrite: 0, lastMessage: 0 };
+    // Bounded per-account cleanup; never remove a potentially fresh session.
+    env.DB.prepare('DELETE FROM friendbook_cf_presence_sessions WHERE uid=? AND last_seen<?')
+      .bind(uid,state.lastSeen-7*24*60*60*1000).run().catch(() => {});
+    writePresence(env.DB, uid, state.session, true, true, state.lastSeen).then(() => { state.lastWrite = state.lastSeen; }).catch(() => {});
 
     server.addEventListener('message', async event => {
       const now = Date.now();
@@ -150,11 +133,11 @@ export async function presenceRealtime(request, env, identity) {
         state.active = true; state.lastSeen = now;
         if (becameActive || now - state.lastWrite >= WRITE_COALESCE_MS) {
           state.lastWrite = now;
-          try { await writePresence(env.DB, uid, true, state.visible, now); } catch {}
+          try { await writePresence(env.DB, uid, state.session, true, state.visible, now); } catch {}
         }
       } else if (data.type === 'offline') {
         state.active = false; state.lastSeen = now; state.lastWrite = now;
-        try { await writePresence(env.DB, uid, false, state.visible, now); } catch {}
+        try { await writePresence(env.DB, uid, state.session, false, state.visible, now); } catch {}
       }
       const online = isFreshOnline(state.active, state.visible, state.lastSeen, now);
       server.send(JSON.stringify({ uid, online, lastSeen: state.visible ? state.lastSeen : 0 }));
@@ -163,7 +146,7 @@ export async function presenceRealtime(request, env, identity) {
     const markOffline = () => {
       const now = Date.now();
       state.active = false; state.lastSeen = now;
-      writePresence(env.DB, uid, false, state.visible, now).catch(() => {});
+      writePresence(env.DB, uid, state.session, false, state.visible, now).catch(() => {});
     };
     server.addEventListener('close', markOffline);
     server.addEventListener('error', markOffline);

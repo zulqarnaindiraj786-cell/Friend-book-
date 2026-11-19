@@ -1089,9 +1089,10 @@ test('feed coalesces repeated author and viewer checks per request but refreshes
  const reads={};const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>({results:stmt.all(...args)}),first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith('users/'))reads[args[0]]=(reads[args[0]]||0)+1;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'posts',limit:10})}),env);
- let response=await query();assert.equal((await response.json()).documents.length,10);assert.equal(reads['users/bob'],1);assert.equal(reads['users/alice'],1);
+ // One extra current-account read enforces bans before the per-request feed ACL cache.
+ let response=await query();assert.equal((await response.json()).documents.length,10);assert.equal(reads['users/bob'],2);assert.equal(reads['users/alice'],1);
  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({uid:'alice',blocked:['bob']}),'users/alice');
- response=await query();assert.deepEqual((await response.json()).documents,[]);assert.equal(reads['users/bob'],2);assert.equal(reads['users/alice'],2);
+ response=await query();assert.deepEqual((await response.json()).documents,[]);assert.equal(reads['users/bob'],4);assert.equal(reads['users/alice'],2);
  sql.close();
 });
 
@@ -1323,5 +1324,74 @@ test('older app document profile writes use the same guarded merge', async () =>
  const r=await app.fetch(new Request('https://example.test/v1/docs/users/alice',{method:'PUT',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({displayName:'After'})}),env);
  assert.equal(r.status,200,await r.clone().text());
  const profile=(await r.json()).document;assert.equal(profile.displayName,'After');assert.equal(profile.friendsCount,1);
+ sql.close();
+});
+
+test('admin moderation requires configured UID, preserves audit and atomically bans or deletes', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ sql.exec(readFileSync(new URL('../migrations/0030_moderation_audit.sql',import.meta.url),'utf8'));
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ const add=(coll,id,data)=>{f.run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(data),1,1);a.run(`${coll}/${id}`,coll,id,id,JSON.stringify({...data,id}),1);};
+ add('users','alice',{uid:'alice',displayName:'Alice',email:'private@example.test',banned:false,secret:'not-for-admin-list'});
+ add('users','admin',{uid:'admin',displayName:'Owner',banned:false});
+ add('posts','p',{authorId:'alice',privacy:'Only me',content:'sensitive'});
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+ const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+ const mod=(uid,body)=>call(uid,'/v1/admin/moderation','POST',body);
+ const ban={action:'ban_user',collection:'users',id:'alice'};
+ assert.equal((await mod('alice',ban)).status,403);
+ assert.equal((await mod('admin',{...ban,id:'admin'})).status,403);
+ assert.equal((await mod('admin',{...ban,id:'../alice'})).status,400);
+ assert.equal((await mod('admin',{...ban,admin:true})).status,400);
+ assert.equal((await mod('admin',ban)).status,200);
+ const canonical=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json);
+ const mirror=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get().document_json);
+ assert.equal(canonical.banned,true);assert.equal(mirror.banned,true);
+ const adminRead=await call('admin','/v1/firestore/document?path=users/alice');assert.equal(adminRead.status,200);
+ const view=(await adminRead.json()).data;assert.equal(view.banned,true);assert.equal(view.email,'private@example.test');assert.equal(view.secret,undefined);
+ assert.equal((await call('mallory','/v1/firestore/document?path=users/alice')).status,403);
+ assert.equal((await mod('admin',{action:'unban_user',collection:'users',id:'alice'})).status,200);
+ assert.equal((await mod('alice',{action:'delete_content',collection:'posts',id:'p'})).status,403);
+ assert.equal((await mod('admin',{action:'delete_content',collection:'posts',id:'p'})).status,200);
+ assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().n,0);
+ assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE path='posts/p'").get().n,0);
+ const audit=sql.prepare('SELECT action,original_json FROM friendbook_cf_moderation_audit ORDER BY rowid').all();
+ assert.deepEqual(audit.map(x=>x.action),['ban_user','unban_user','delete_content']);assert.equal(JSON.parse(audit[2].original_json).content,'sensitive');
+ sql.close();
+});
+
+test('moderation audit and ban roll back together on a storage failure', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ sql.exec(readFileSync(new URL('../migrations/0030_moderation_audit.sql',import.meta.url),'utf8'));
+ const profile={uid:'alice',banned:false};
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(profile),1,1);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify({...profile,id:'alice'}),1);
+ sql.exec("CREATE TRIGGER fail_mod BEFORE UPDATE ON friendbook_cf_documents WHEN OLD.path='users/alice' BEGIN SELECT RAISE(ABORT,'mirror failure'); END;");
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+ const r=await app.fetch(new Request('https://example.test/v1/admin/moderation',{method:'POST',headers:{authorization:'Bearer admin','content-type':'application/json'},body:JSON.stringify({action:'ban_user',collection:'users',id:'alice'})}),env);
+ assert.equal(r.status,503);assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json).banned,false);
+ assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_moderation_audit').get().n,0);
+ sql.close();
+});
+
+test('disabled account cannot use D1 routes but can read its own status for sign-out', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify({uid:'alice',banned:true}),1,1);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify({uid:'alice',banned:false}),1);
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const call=(path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer alice','content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+ const own=await call('/v1/firestore/document?path=users/alice');assert.equal(own.status,200);assert.equal((await own.json()).data.banned,true);
+ for (const [path,method,body] of [
+  ['/v1/firestore/query','POST',{parent:'chats'}],
+  ['/v1/firestore/document?parent=reports','POST',{data:{reportedBy:'alice',reason:'spam'}}],
+  ['/v1/presence/me','GET'], ['/v1/docs/users/alice','PUT',{displayName:'x'}],
+  ['/v1/firestore/document?path=users/alice','PATCH',{fields:{banned:false}}]
+ ]) assert.equal((await call(path,method,body)).status,403,path);
+ sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({uid:'alice',banned:false}),'users/alice');
+ assert.equal((await call('/v1/firestore/query','POST',{parent:'chats'})).status,200);
  sql.close();
 });

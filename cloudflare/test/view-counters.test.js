@@ -427,6 +427,9 @@ test('migration stays repeatable and the view path never needs it', async t => {
 test('worker exposes /v1/views behind the Firebase token gate and reports its bindings', async t => {
   resetViewState();
   const f = fixture({ kvSeed: { 'reels/r1': 12 }, sql: tsv([['reels/r1', 12]]) }); t.after(f.close);
+  const basePrepare=f.env.DB.prepare;
+  f.env.DB.prepare=q => q.includes('friendbook_cf_firestore_documents') || q.includes('friendbook_cf_documents')
+    ? {bind:()=>({first:async()=>null})} : basePrepare(q);
   const worker = createWorker(async () => 'user1');
   const fetchWith = async (path, method, token = 'id-token') => {
     const response = await worker.fetch(

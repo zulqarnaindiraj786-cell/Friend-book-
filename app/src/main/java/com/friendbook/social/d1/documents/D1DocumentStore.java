@@ -136,6 +136,23 @@ public class D1DocumentStore {
         }
     }
 
+    /** Moderation is authorized by the Worker using the verified admin UID, not UI state. */
+    public Task<Void> moderate(String action, String collection, String id) {
+        final String actor=authenticatedUid();
+        return runAsync(() -> {
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed before moderation");
+            D1DocumentTransport.request("POST", "/v1/admin/moderation",
+                    new org.json.JSONObject().put("action",action).put("collection",collection).put("id",id));
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed during moderation");
+            invalidateDoc(collection + "/" + id);
+            notifyDocListeners(collection + "/" + id);
+            notifyCollectionListeners(collection);
+            return null;
+        });
+    }
+
     /** Server verifies the signed-in administrator; the UI is not an authorization boundary. */
     public Task<org.json.JSONObject> previewSocialRecovery(String kind, String id) {
         return runAsync(() -> D1DocumentTransport.request("GET", "/v1/admin/recover-social?kind="

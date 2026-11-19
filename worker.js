@@ -8,6 +8,8 @@ import { appDocuments } from './cloudflare/app-documents.js';
 import { firestoreDocuments } from './cloudflare/firestore-documents.js';
 import { fcmGateway } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { accountDisabled } from './cloudflare/account-access.js';
+import { isPaymentAdmin } from './cloudflare/payment-access.js';
 
 const googleKeys = createRemoteJWKSet(new URL(
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
@@ -49,7 +51,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const photo = path === '/v1/photos';
       const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
-        || path === '/v1/admin/recover-social';
+        || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
       const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
@@ -90,6 +92,14 @@ export function createWorker(verify = verifyFirebaseToken) {
       let uid;
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
+      // Keep the own-profile read available so the Android app can detect a ban
+      // and sign out, but reject all other operations for disabled accounts.
+      const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'
+        && new URL(request.url).searchParams.get('path')===`users/${uid}`;
+      if (!ownProfileRead && !isPaymentAdmin(env,uid)) {
+        try { if (await accountDisabled(env.DB,uid)) return json({error:'Account disabled'},403); }
+        catch { return json({error:'Account status unavailable'},503); }
+      }
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) return firestoreDocuments(request, env, { uid, token: bearer[1] });

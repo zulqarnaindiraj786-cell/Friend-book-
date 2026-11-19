@@ -90,9 +90,15 @@ public class AdminContentActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (adapter != null) listen();
+    }
+
+    @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove(); reg = null; }
     }
 
     private void listen() {
@@ -101,6 +107,11 @@ public class AdminContentActivity extends Activity {
         reg = Fb.db().collection(tab)
                 .orderBy(orderField, Query.Direction.DESCENDING).limit(100)
                 .addSnapshotListener((snap, err) -> {
+                    if (err != null || snap == null) {
+                        empty.setText("Couldn't load " + tab + ". Please retry.");
+                        empty.setVisibility(View.VISIBLE);
+                        return;
+                    }
                     items.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -142,14 +153,16 @@ public class AdminContentActivity extends Activity {
     }
 
     private void deleteItem(Item it) {
-        Ui.confirm(this, "Delete this " + tab.substring(0, tab.length() - 1) + "?",
+        final String collection = tab;
+        Ui.confirm(this, "Delete this " + collection.substring(0, collection.length() - 1) + "?",
                 it.title + "\n" + it.sub, "Delete", () -> {
-                    Fb.db().collection(tab).document(it.id).delete();
-                    if ("posts".equals(tab)) {
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
-                                .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));
+                    if (!"posts".equals(collection) && !"reels".equals(collection) && !"stories".equals(collection)) {
+                        Ui.toast(this, "Comment moderation is not available here.");
+                        return;
                     }
-                    Ui.toast(this, "Deleted ✓");
+                    Fb.db().moderate("delete_content", collection, it.id)
+                            .addOnSuccessListener(v -> Ui.toast(this, "Deleted ✓"))
+                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't delete content. Please retry."));
                 });
     }
 

@@ -9,8 +9,15 @@ const SERVER_FIELDS = new Set([
   'suspendedUntil','suspendedLifetime','stars','dailyStreak','lastBonusAt',
   'verificationStatus','admin','role','friendsCount','followers','following'
 ]);
-export function profileReadView(path, uid, data) {
+const ADMIN_FIELDS = new Set([...PUBLIC_FIELDS, 'email','banned','deactivated','isAdmin','isModerator','suspendedUntil','suspendedLifetime']);
+export function profileReadView(path, uid, data, admin = false) {
   const parts=path.split('/');
+  if ((parts[0] === 'users' || parts[0] === 'pushDevices') && parts[1] === uid) return data;
+  if (admin && parts[0]==='users' && parts.length===2 && data) {
+    const view={};
+    for (const [key,value] of Object.entries(data)) if (ADMIN_FIELDS.has(key)) view[key]=value;
+    return view;
+  }
   if (parts[0] === 'stories' && data && data.authorId !== uid) {
     const {viewedBy, reactions, ...publicStory}=data;
     return publicStory;
