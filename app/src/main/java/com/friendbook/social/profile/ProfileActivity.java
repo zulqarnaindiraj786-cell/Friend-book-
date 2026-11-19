@@ -967,13 +967,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),10,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
-            if (postCountReg==null && error.isEmpty()) {
-                postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
-                    if(generation!=profileStartGeneration || isFinishing())return;
-                    userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
-                    if(user!=null)updateStatsLine();
-                });
-            }
             if (!error.isEmpty() && docs.isEmpty()) {
                 Ui.toast(this,error);
                 return;
@@ -1003,6 +996,24 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             if(!error.isEmpty())Ui.toast(this,error);
         });
         postPager.start();
+        refreshPostCount(generation);
+    }
+
+    private void refreshPostCount(int generation) {
+        if (postCountReg != null) postCountReg.remove();
+        // Independent from the page request and canceled when the profile stops.
+        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
+            if(generation!=profileStartGeneration || isFinishing())return;
+            userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
+            if(user!=null)updateStatsLine();
+        });
+    }
+
+    @Override public void onPostDeleted(String id) {
+        if (postPager != null) postPager.forget(id);
+        allLoadedPosts.removeIf(post -> id.equals(post.id));
+        applyPostsFilter();
+        refreshPostCount(profileStartGeneration);
     }
 
     private void applyPostsFilter() {

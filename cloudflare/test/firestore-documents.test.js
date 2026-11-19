@@ -1,3 +1,4 @@
+import { resumeOfficialBroadcasts } from '../firestore-documents.js';
 import { drainBroadcastPush } from '../fcm-push.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1840,7 +1841,7 @@ test('official broadcast advances an indexed D1 cursor and writes private Team m
   const sql=new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0039_broadcast_recipient_indexes.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0042_broadcast_push_outbox.sql',import.meta.url),'utf8')]) sql.exec(ddl);
   const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
-  for (const [uid, data] of [['alice',{}],['bob',{banned:true}],['cara',{}]]) legacy.run(`users/${uid}`,'users',uid,uid,JSON.stringify(data),1);
+  for (const [uid, data] of [['alice',{}],['bob',{banned:true}],['cara',{}],...Array.from({length:5},(_,i)=>['z'+i,{}])]) legacy.run(`users/${uid}`,'users',uid,uid,JSON.stringify(data),1);
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice','{}',1,1);
   const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test',PAYMENT_ADMIN_UIDS:'admin',CLOUDINARY_CLOUD_NAME:'example'};
@@ -1863,13 +1864,14 @@ test('official broadcast advances an indexed D1 cursor and writes private Team m
   assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE parent_path IN ('notifications','chats')").get().n,0);
   assert.equal((await (await call('admin',readJob)).json()).data.cursor,'');
   sql.exec('DROP TRIGGER fail_team_message;');
-  for (const expected of [false,false,false,true,true]) {
-    const result=await post('admin',{action:'advance',id:'job'});
-    assert.equal(result.status,200,await result.clone().text());
-    assert.equal((await result.json()).complete,expected);
-  }
-  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE collection_id='messages'").get().n,2);
-  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,2);
+  const firstBatch=await post('admin',{action:'advance',id:'job'});
+  assert.equal(firstBatch.status,200);
+  assert.deepEqual(await firstBatch.json(),{complete:false,processed:5});
+  await resumeOfficialBroadcasts(env);
+  const retry=await post('admin',{action:'advance',id:'job'});
+  assert.deepEqual(await retry.json(),{complete:true,processed:7});
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE collection_id='messages'").get().n,7);
+  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,7);
   const pushes=[];
   const send=async(_env,_db,actor,target,data,event)=>{
     pushes.push({actor,target,data,event});
@@ -1877,7 +1879,7 @@ test('official broadcast advances an indexed D1 cursor and writes private Team m
   };
   const now=Date.now()+1;
   await drainBroadcastPush(env,now,send);
-  assert.equal(pushes.length,2);
+  assert.equal(pushes.length,7);
   assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,1);
   await drainBroadcastPush(env,now+300000,send);
   assert.equal(pushes.filter(p=>p.target==='alice').length,2);

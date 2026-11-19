@@ -128,7 +128,7 @@ public final class OfficialBroadcastActivity extends Activity {
         Fb.db().queueOfficialBroadcast(jobId, text, mediaUrl, mediaType)
                 .addOnSuccessListener(v -> {
                     OfficialBroadcastWorker.enqueue(getApplicationContext(), jobId, uid);
-                    if (!isDestroyed()) status.setText("Queued. Background sending will continue while this admin account is signed in.");
+                    if (!isDestroyed()) status.setText("Queued. The server will continue sending even if you close the app.");
                 }).addOnFailureListener(e -> {
                     if (!isDestroyed()) fail("Could not queue broadcast. Check Cloudflare access and connection.");
                 });
@@ -138,7 +138,12 @@ public final class OfficialBroadcastActivity extends Activity {
         listener = Fb.db().collection("officialBroadcasts").document(jobId).addSnapshotListener((doc, error) -> {
             if (error != null || doc == null || !doc.exists()) return;
             String state = doc.getString("status");
-            status.setText("Broadcast: " + state + " • " + doc.getLong("processed") + " accounts processed");
+            Long processed = doc.getLong("processed");
+            Long skipped = doc.getLong("skipped");
+            status.setText("complete".equals(state)
+                    ? "Broadcast complete • " + ((processed == null ? 0 : processed) - (skipped == null ? 0 : skipped))
+                        + " inboxes updated" + (skipped == null || skipped == 0 ? "" : " • " + skipped + " skipped")
+                    : "Broadcast sending • no need to keep this screen open");
             if ("complete".equals(state) || "queued".equals(state) || "sending".equals(state) || "retrying".equals(state)) {
                 busy = true; send.setEnabled(false); message.setEnabled(false);
             } else if ("permission_denied".equals(state)) fail("Broadcast stopped: Cloudflare admin access denied.");

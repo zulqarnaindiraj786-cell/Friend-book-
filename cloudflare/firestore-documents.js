@@ -1518,12 +1518,14 @@ async function adminBroadcast(request,env,uid,now) {
     if (!job || !broadcastPayload(env,job)) return json({error:'Broadcast unavailable'},404);
     if (job.status==='complete') return json({complete:true,processed:job.processed});
     const cursor=typeof job.cursor==='string'?job.cursor:'';
-    const a=await db.prepare("SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT 1").bind(cursor).first();
-    const b=await db.prepare("SELECT doc_id FROM friendbook_cf_documents WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT 1").bind(cursor).first();
-    const to=[a?.doc_id,b?.doc_id].filter(Boolean).sort((x,y)=>x===y?0:x<y?-1:1)[0];
+    const size=6;
+    const {results: recipients=[]}=await db.prepare(`SELECT doc_id FROM (
+      SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
+      UNION SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_documents WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
+    ) ORDER BY doc_id LIMIT ?`).bind(cursor,size+1,cursor,size+1,size+1).all();
     const statements=[await chatDocumentGuard(db,path,jobRow)];
-    const next={...job,status:to?'sending':'complete',processed:Number.isSafeInteger(job.processed)?job.processed:0};
-    if (to) {
+    const next={...job,status:recipients.length>size?'sending':'complete',processed:Number.isSafeInteger(job.processed)?job.processed:0};
+    for (const {doc_id:to} of recipients.slice(0,size)) {
       next.cursor=to;
       const account=validSegment(to)&&to!==broadcastTeam ? await readRow(db,`users/${to}`):null;
       const user=account?decodeValue(JSON.parse(account.document_json)):null;
@@ -1534,7 +1536,7 @@ async function adminBroadcast(request,env,uid,now) {
           const room=chatRow?decodeValue(JSON.parse(chatRow.document_json)):{};
           const conflict=chatRow && (room.isGroup===true || !Array.isArray(room.participants) || room.participants.length!==2
               || !room.participants.includes(to) || !room.participants.includes(broadcastTeam));
-          if (conflict) next.skipped=(Number.isSafeInteger(job.skipped)?job.skipped:0)+1;
+          if (conflict) next.skipped=(Number.isSafeInteger(next.skipped)?next.skipped:0)+1;
           else {
             const time={__type:'timestamp',millis:now}, title='friendbook Team';
             const unread=room.unreadCount && typeof room.unreadCount==='object' && !Array.isArray(room.unreadCount)?room.unreadCount:{};
@@ -1563,6 +1565,22 @@ async function adminBroadcast(request,env,uid,now) {
     if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Broadcast changed. Please retry.'},409);
     return json({error:'Broadcast unavailable'},503);
   }
+}
+
+// Bounded scheduled recovery keeps queued jobs moving even when the admin phone is offline.
+export async function resumeOfficialBroadcasts(env,now=Date.now()) {
+  const {results=[]}=await env.DB.prepare(`SELECT doc_id,owner_uid FROM friendbook_cf_firestore_documents
+    WHERE parent_path='officialBroadcasts' AND json_extract(document_json,'$.status') IN ('queued','sending')
+    ORDER BY update_time,doc_id LIMIT 4`).bind().all();
+  await Promise.all(results.map(async job=>{
+    if (!isPaymentAdmin(env,job.owner_uid)) return;
+    for (let round=0;round<4;round++) {
+      const response=await adminBroadcast(new Request('https://internal.invalid/v1/admin/broadcast',{
+        method:'POST',body:JSON.stringify({action:'advance',id:job.doc_id}),
+      }),env,job.owner_uid,now);
+      if (!response.ok || (await response.json()).complete) break;
+    }
+  }));
 }
 
 const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);

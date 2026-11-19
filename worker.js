@@ -10,7 +10,8 @@ import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
-import { firestoreDocuments } from './cloudflare/firestore-documents.js';
+import { drainBroadcastPush } from './cloudflare/fcm-push.js';
+import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
 import { fcmGateway } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
@@ -177,4 +178,9 @@ export function createWorker(verify = verifyFirebaseToken) {
   };
 }
 const app = createWorker();
-export default {...app, scheduled(_controller, env, ctx) { ctx.waitUntil(runMaintenance(env)); }};
+export default {...app, scheduled(controller, env, ctx) {
+  if (controller.cron === '* * * * *') {
+    ctx.waitUntil(resumeOfficialBroadcasts(env));
+    ctx.waitUntil(drainBroadcastPush(env));
+  } else ctx.waitUntil(runMaintenance(env));
+}};

@@ -57,6 +57,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean automaticPaging(){return false;}
         default boolean isLoadingMore(){return false;}
         default boolean hasPageError(){return false;}
+        default void onPostDeleted(String id) { }
         default void openFindFriends() { }
         default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
@@ -1641,32 +1642,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
             }
             else if (t.contains("Save post")) toggleSave(p, false);
-            else if (t.contains("Delete post (moderator)")) {
-                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
-                    if (com.friendbook.social.core.Admin.isProtectedStaff(u)) {
-                        Ui.toast(activity, "Admin posts cannot be removed by a moderator");
-                        return;
-                    }
-                    deletePost(p);
-                });
-            }
+            else if (t.contains("Delete post (moderator)")) deletePost(p, true);
             else if (t.contains("Ban user (moderator)")) {
-                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
-                    if (com.friendbook.social.core.Admin.isProtectedStaff(u)) {
-                        Ui.toast(activity, "Admin accounts cannot be banned");
-                        return;
-                    }
-                    Ui.confirm(activity, "🛡 Ban " + p.authorName + "?",
-                            "This user will be banned from using friendbook.",
-                            "Ban User", () -> Fb.db().collection("users").document(p.authorId)
-                                    .set(Fb.map("banned", true), com.friendbook.social.d1.documents.SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
-                                        Notify.sendOfficialTeamMessage(p.authorId, "ban",
-                                                "Your account was suspended by a friendbook Moderator.", false);
-                                        Ui.toast(activity, "Banned " + p.authorName + " 🚫");
-                                    })
-                                    .addOnFailureListener(e -> Ui.toast(activity, e.getMessage())));
-                });
+                Ui.confirm(activity, "Ban " + p.authorName + "?", "This user will be banned from using friendbook.",
+                        "Ban User", () -> Fb.db().moderate("ban_user", "users", p.authorId)
+                                .addOnSuccessListener(x -> Ui.toast(activity, "User banned"))
+                                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't ban this account.")));
             }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
             else if (t.contains("Who can see")) changePrivacyDialog(p);
@@ -1681,8 +1662,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 java.util.Iterator<Models.Post> it = posts.iterator();
                 while (it.hasNext()) if (p.authorId.equals(it.next().authorId)) it.remove();
                 notifyDataSetChanged();
-            } else if (t.contains("Delete post (admin)")) deletePost(p);
-            else if (t.contains("Delete")) deletePost(p);
+            } else if (t.contains("Delete post (admin)")) deletePost(p, true);
+            else if (t.contains("Delete")) deletePost(p, false);
             else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
             else if (t.contains("Copy text")) copyText(p.content);
             else if (t.contains("Share to other")) {
@@ -1735,11 +1716,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .addOnFailureListener(e -> Ui.toast(activity, "Couldn't update saved posts. Please try again."));
     }
 
-    private void deletePost(Models.Post p) {
+    private void deletePost(Models.Post p, boolean moderation) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
-            Fb.db().collection("posts").document(p.id).delete()
+            (moderation ? Fb.db().moderate("delete_content", "posts", p.id)
+                    : Fb.db().collection("posts").document(p.id).delete())
                     .addOnSuccessListener(v -> {
                         removePostById(p.id);
+                        if (host != null) host.onPostDeleted(p.id);
                         com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
                         Ui.toast(activity, "Post deleted");
                     })

@@ -161,7 +161,14 @@ public class AdminContentActivity extends Activity {
                         return;
                     }
                     Fb.db().moderate("delete_content", collection, it.id)
-                            .addOnSuccessListener(v -> Ui.toast(this, "Deleted ✓"))
+                            .addOnSuccessListener(v -> {
+                                if (collection.equals(tab)) {
+                                    items.removeIf(row -> it.id.equals(row.id));
+                                    adapter.notifyDataSetChanged();
+                                }
+                                if ("posts".equals(collection)) com.friendbook.social.core.FastCache.removeFeedPost(this, it.id);
+                                Ui.toast(this, "Deleted ✓");
+                            })
                             .addOnFailureListener(e -> Ui.toast(this, "Couldn't delete content. Please retry."));
                 });
     }
