@@ -41,12 +41,17 @@ public final class CursorPager {
             if(!active())return;loading=false;serverReceived=true;
             boolean offline=result.getMetadata().isFromCache();
             if(!offline)more=result.size()==size;
-            if(cursor==null)records.clear();
+            // An offline cache can be incomplete or empty; it cannot prove that
+            // previously confirmed rows disappeared. Only replace on a server read.
+            if(cursor==null && !offline)records.clear();
             if(!offline && !result.isEmpty())cursor=result.getDocuments().get(result.size()-1);
-            for(DocumentSnapshot doc:result)records.put(doc.getId(),doc);
-            List<DocumentSnapshot> first=new ArrayList<>(records.values());
-            if(first.size()>size) first=new ArrayList<>(first.subList(0,size));
-            CACHE.put(key,new CachedPage(first,records.size()>size || more));emit(offline?"Showing cached results. Reconnect and tap to retry.":"");
+            for(DocumentSnapshot doc:result)if(!offline || !records.containsKey(doc.getId()))records.put(doc.getId(),doc);
+            if(!offline){
+                List<DocumentSnapshot> first=new ArrayList<>(records.values());
+                if(first.size()>size) first=new ArrayList<>(first.subList(0,size));
+                CACHE.put(key,new CachedPage(first,records.size()>size || more));
+            }
+            emit(offline?"Showing cached results. Reconnect and tap to retry.":"");
         }).addOnFailureListener(error -> {if(active()){loading=false;emit("Couldn't load this page. Tap to retry.");}});
     }
     private boolean active(){return !closed && Objects.equals(actor,Fb.uid());}

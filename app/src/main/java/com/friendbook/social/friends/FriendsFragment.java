@@ -58,7 +58,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private boolean started;
     private String pageActor;
     private final Set<Integer> loadedSections=new HashSet<>();
-    private final Set<String> checkingUsers=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
+    private final Set<String> checkingUsers=new HashSet<>(),loadingProfiles=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
     private final Map<String,String> sentIds=new HashMap<>();
     private final Set<String> cancelledRequestIds=new HashSet<>(),removedFriendIds=new HashSet<>(),requestWrites=new HashSet<>();
     private final android.os.Handler frameHandler=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -66,7 +66,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final Runnable renderFrame=()->{renderQueued=false;render();};
     private void requestRender(){if(!renderQueued){renderQueued=true;frameHandler.postDelayed(renderFrame,16);}}
     private boolean current(int token,String actor){return token==generation && java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null && !isHidden();}
-    private void closePage(){generation++;if(activePager!=null){activePager.close();activePager=null;}if(suggestionPager!=null){suggestionPager.close();suggestionPager=null;}checkingUsers.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
+    private void closePage(){generation++;if(activePager!=null){activePager.close();activePager=null;}if(suggestionPager!=null){suggestionPager.close();suggestionPager=null;}checkingUsers.clear();loadingProfiles.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
 
 
     @Nullable
@@ -153,15 +153,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
         boolean pullRefresh=swipe!=null && swipe.isRefreshing();
         if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
-        // Requests, sent state and friendships change on other devices. Revalidate on
-        // every visit (including failure recovery) rather than pinning stale tab data.
-        if(!pullRefresh && section==SEC_SUGGESTIONS && loadedSections.contains(section)){
-            pageLoading=false;suggestionLoading=false;render();return;
-        }
+        // Relationship checks and profile details belong to the current actor and
+        // must be revalidated on each visit, not just on manual pull-to-refresh.
         closePage();
+        checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();
         pageActor=me;final int token=generation, selected=section;
-        if(pullRefresh){checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();}
         pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=selected==SEC_REQUESTS && suggestions.isEmpty();suggestionError="";
+        if(selected==SEC_REQUESTS && !suggestions.isEmpty())checkCandidates(me,token);
         Query query;
         if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
@@ -234,12 +232,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     }
 
     private void ensureUser(String uid){
-        if(uid==null || userCache.containsKey(uid) || checkingUsers.contains(uid))return;
-        Models.User cached=com.friendbook.social.core.FastCache.getUser(uid);if(cached!=null){userCache.put(uid,cached);return;}
-        final int token=generation;final String actor=Fb.uid();checkingUsers.add(uid);
-        Fb.getUser(uid).addOnSuccessListener(user->{if(!current(token,actor))return;checkingUsers.remove(uid);
+        if(uid==null || userCache.containsKey(uid) || loadingProfiles.contains(uid))return;
+        Models.User cached=com.friendbook.social.core.FastCache.getUser(uid);if(cached!=null)userCache.put(uid,cached);
+        final int token=generation;final String actor=Fb.uid();loadingProfiles.add(uid);
+        Fb.getUserFresh(uid).addOnSuccessListener(user->{if(!current(token,actor))return;loadingProfiles.remove(uid);
             if(user!=null){userCache.put(uid,user);com.friendbook.social.core.FastCache.putUser(user);requestRender();}
-        }).addOnFailureListener(error->{if(current(token,actor))checkingUsers.remove(uid);});
+        }).addOnFailureListener(error->{if(current(token,actor))loadingProfiles.remove(uid);});
     }
 
     private void render() {
