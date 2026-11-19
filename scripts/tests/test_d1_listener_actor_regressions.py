@@ -10,6 +10,8 @@ class D1ActorAndListenerRegression(unittest.TestCase):
         self.assertIn('final String actor=authenticatedUid();\n        try {\n            executor.execute', store)
         self.assertIn('D1DocumentTransport.runForActor(actor, task)', store)
         self.assertEqual(store.count('D1DocumentTransport.runForActor(entry.actor'), 2)
+        self.assertEqual(store.count('try { listenerExecutor.execute'), 2)
+        self.assertIn('new java.util.concurrent.ArrayBlockingQueue<>(128)', store)
         self.assertIn('if (!actor.equals(user.getUid()))', transport)
         self.assertGreaterEqual(transport.count('requireActor(actor);'), 3)
         self.assertIn('finally { REQUEST_ACTOR.remove(); }', transport)

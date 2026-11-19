@@ -24,13 +24,15 @@ import java.util.concurrent.TimeUnit;
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
-    // mobile networks, which starves the UI and battery. Polls use the same bounded pool and each
-    // listener has an in-flight guard so a slow response cannot pile up every five seconds.
-    // A non-full queue prevents ThreadPoolExecutor from growing past its core size.
-    // Use all eight workers immediately instead of silently running only four while
-    // foreground screen requests wait behind slow network calls.
+    // mobile networks, which starves the UI and battery. Each listener has an
+    // in-flight guard so slow polls cannot pile up every five seconds.
+    // Separate bounded queues stop background polling from blocking foreground
+    // page reads, friend actions and chat sends on a slow connection.
     private final ExecutorService executor = new java.util.concurrent.ThreadPoolExecutor(
             8, 8, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(256),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    private final ExecutorService listenerExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            4, 4, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(128),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -304,7 +306,7 @@ public class D1DocumentStore {
 
     private void scheduleDocRead(DocListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { executor.execute(() -> {
+        try { listenerExecutor.execute(() -> {
             try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverDoc(entry); return null; }); }
             catch (Exception ignored) { entry.inFlight.set(false); }
         }); }
@@ -313,7 +315,7 @@ public class D1DocumentStore {
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { executor.execute(() -> {
+        try { listenerExecutor.execute(() -> {
             try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry); return null; }); }
             catch (Exception ignored) { entry.inFlight.set(false); }
         }); }
