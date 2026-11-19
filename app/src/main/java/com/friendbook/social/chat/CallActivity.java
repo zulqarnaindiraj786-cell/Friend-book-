@@ -275,8 +275,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                 | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
-        getWindow().setStatusBarColor(0xFF0E1117);
-        getWindow().setNavigationBarColor(0xFF0E1117);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), 0xFF0E1117);
 
         Intent in = getIntent();
         mode = in.getStringExtra("mode");

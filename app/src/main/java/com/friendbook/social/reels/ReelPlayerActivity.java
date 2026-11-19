@@ -19,7 +19,7 @@ public class ReelPlayerActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);

@@ -1,4 +1,4 @@
-# Google Play Console DEX Code Optimization & Split Debug Info (R8 Full Mode >75% Obfuscation)
+# R8 release shrinking and obfuscation; Play computes its own dashboard metric.
 -optimizationpasses 5
 -overloadaggressively
 -repackageclasses 'o'
@@ -25,7 +25,7 @@
 -dontwarn com.facebook.infer.annotation.Nullsafe$Mode
 
 # AdMob waterfall loads adapter entry points by their server-supplied class names.
--keep class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationAdapter { public <init>(); }
--keep class com.google.ads.mediation.applovin.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
--keep class com.google.ads.mediation.facebook.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
--keep class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationNativeAdapter { public <init>(); }
+-keep,allowoptimization class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationAdapter { public <init>(); }
+-keep,allowoptimization class com.google.ads.mediation.applovin.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
+-keep,allowoptimization class com.google.ads.mediation.facebook.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
+-keep,allowoptimization class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationNativeAdapter { public <init>(); }

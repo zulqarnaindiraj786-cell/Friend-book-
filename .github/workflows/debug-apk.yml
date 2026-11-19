@@ -19,7 +19,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.11.1
+          gradle-version: '8.13'
       - name: Install Android SDK 36
         run: |
           set -euo pipefail
@@ -65,7 +65,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.11.1
+          gradle-version: '8.13'
       - name: Install Android SDK 36
         run: |
           set -euo pipefail
@@ -110,6 +110,24 @@ jobs:
               if len(matches) != 1 or not re.search(r'android:required[^=]*=\(type 0x12\)0x0\b', matches[0]):
                   raise SystemExit(f'Expected one optional declaration for {name}: {matches}')
               print(f'{name}: required=false')
+          PY
+      - name: Validate signed AAB and report R8 mapping coverage
+        run: |
+          curl -fsSL --retry 3 https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar -o "$RUNNER_TEMP/bundletool.jar"
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=app/build/outputs/bundle/release/app-release.aab
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=app/build/outputs/bundle/release/app-release.aab --module=base > "$RUNNER_TEMP/fb-base-manifest.xml"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os, pathlib, re
+          from xml.etree import ElementTree as ET
+          manifest=ET.parse(pathlib.Path(os.environ['RUNNER_TEMP'])/'fb-base-manifest.xml').getroot()
+          ns='{http://schemas.android.com/apk/res/android}'
+          for name in ('android.hardware.screen.portrait','android.hardware.wifi'):
+              assert [x.get(ns+'required') for x in manifest.findall('uses-feature') if x.get(ns+'name')==name]==['false'],name
+          mapping=pathlib.Path('app/build/outputs/mapping/release/mapping.txt').read_text()
+          classes=re.findall(r'(?m)^(\S+) -> (\S+):$',mapping)
+          renamed=sum(old!=new for old,new in classes)
+          assert renamed>0, 'No renamed classes in the release mapping'
+          print(f'Bundletool validated the signed AAB. R8 mapping: {renamed:,} renamed class entries out of {len(classes):,} mapped entries (not the Play Console score).')
           PY
       - name: Report compressed APK size by component
         run: |

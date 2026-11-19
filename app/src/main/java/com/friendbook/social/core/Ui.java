@@ -582,9 +582,21 @@ public class Ui {
         return bar;
     }
 
-    public static void statusBar(Window w, int color) {
-        w.setStatusBarColor(color);
-        w.setNavigationBarColor(color == 0 ? Color.BLACK : color);
+    public static void statusBar(Window window, int color) {
+        boolean light = Color.luminance(color) > 0.5;
+        androidx.core.view.WindowInsetsControllerCompat controller = androidx.core.view.WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(android.os.Build.VERSION.SDK_INT >= 35 ? light
+                : legacyBarIsLight(window, android.R.attr.statusBarColor, light));
+        controller.setAppearanceLightNavigationBars(android.os.Build.VERSION.SDK_INT >= 35 ? light
+                : legacyBarIsLight(window, android.R.attr.navigationBarColor, light));
+        window.setBackgroundDrawable(new ColorDrawable(color));
+    }
+
+    private static boolean legacyBarIsLight(Window window, int attr, boolean fallback) {
+        android.util.TypedValue value = new android.util.TypedValue();
+        if (!window.getContext().getTheme().resolveAttribute(attr,value,true)
+                || value.type<android.util.TypedValue.TYPE_FIRST_COLOR_INT || value.type>android.util.TypedValue.TYPE_LAST_COLOR_INT) return fallback;
+        return Color.luminance(value.data)>0.5;
     }
 
     public static void statusBarWhite(Activity a) {
@@ -745,17 +757,7 @@ public class Ui {
         if (a == null) return;
         Window w = a.getWindow();
         if (w == null) return;
-        boolean dark = isDark(a);
-        w.setStatusBarColor(card(a));
-        w.setNavigationBarColor(dark ? bg(a) : Color.WHITE);
-        View decor = w.getDecorView();
-        int flags = decor.getSystemUiVisibility();
-        if (!dark && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        }
-        decor.setSystemUiVisibility(flags);
+        statusBar(w, card(a));
     }
 
     /**

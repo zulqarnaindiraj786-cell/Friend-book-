@@ -80,7 +80,7 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
         authorId = getIntent().getStringExtra("author");
         specificStoryId = getIntent().getStringExtra("story_id");
         if (authorId == null) { finish(); return; }

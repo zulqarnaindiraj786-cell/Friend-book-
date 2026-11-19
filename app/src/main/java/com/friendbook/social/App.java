@@ -112,19 +112,7 @@ public class App extends Application implements SensorEventListener {
                     Presence.init();
                 }
                 startedCount++;
-                if (android.os.Build.VERSION.SDK_INT >= 36) {
-                    android.view.View content = a.findViewById(android.R.id.content);
-                    if (content != null && content.getTag(com.friendbook.social.R.id.activityMainRoot) == null) {
-                        content.setTag(com.friendbook.social.R.id.activityMainRoot, Boolean.TRUE);
-                        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content, (v, insets) -> {
-                            androidx.core.graphics.Insets bars = insets.getInsets(
-                                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
-                                            | androidx.core.view.WindowInsetsCompat.Type.ime());
-                            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-                            return insets;
-                        });
-                    }
-                }
+                com.friendbook.social.core.ActivityInsets.apply(a);
             }
             @Override public void onActivityStopped(Activity a) {
                 startedCount = Math.max(0, startedCount - 1);

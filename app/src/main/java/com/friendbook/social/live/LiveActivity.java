@@ -361,8 +361,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().setStatusBarColor(0xFF000000);
-        getWindow().setNavigationBarColor(0xFF000000);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), 0xFF000000);
 
         liveId = getIntent().getStringExtra("live_id");
         hostId = getIntent().getStringExtra("host_id");
