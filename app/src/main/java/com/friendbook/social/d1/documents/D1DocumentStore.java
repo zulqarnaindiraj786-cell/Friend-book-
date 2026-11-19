@@ -53,7 +53,6 @@ public class D1DocumentStore {
         volatile boolean active = true;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
-        final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
             this.ref = ref;
@@ -68,6 +67,7 @@ public class D1DocumentStore {
         volatile boolean active = true;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
+        final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
         QueryListenerEntry(Query query, EventListener<QuerySnapshot> listener) {
             this.query = query;
