@@ -81,30 +81,13 @@ async function pushProfile(db, uid) {
     blocked:strings('blocked'), blockedUsers:strings('blockedUsers')};
 }
 
-async function d1Query(db, parent, filters) {
-  try {
-    const rows = await db.prepare('SELECT doc_id, document_json FROM friendbook_cf_firestore_documents WHERE parent_path = ?').bind(parent).all();
-    const docs = [];
-    for (const row of rows?.results || []) {
-      try {
-        const parsed = JSON.parse(row.document_json);
-        const out = { id: row.doc_id };
-        for (const [k, v] of Object.entries(parsed || {})) {
-          out[k] = v && typeof v === 'object' && v.__type === 'timestamp' ? v.millis : v;
-        }
-        docs.push(out);
-      } catch { /* skip malformed */ }
-    }
-    if (!Array.isArray(filters) || !filters.length) return docs;
-    return docs.filter(d => filters.every(f => {
-      const actual = d[f.field];
-      if (f.op === '==') return actual === f.value;
-      if (f.op === 'array-contains') return Array.isArray(actual) && actual.includes(f.value);
-      return false;
-    }));
-  } catch {
-    return [];
-  }
+async function highlightFriends(db, actor) {
+  // Both legs use indexed equality; never scan the whole friends collection.
+  const [low,high]=await Promise.all([
+    db.prepare('SELECT uid_high AS uid FROM friendbook_cf_trusted_friendships WHERE uid_low=? ORDER BY uid_high LIMIT 80').bind(actor).all(),
+    db.prepare('SELECT uid_low AS uid FROM friendbook_cf_trusted_friendships WHERE uid_high=? ORDER BY uid_low LIMIT 80').bind(actor).all(),
+  ]);
+  return [...(low.results||[]),...(high.results||[])].map(row=>row.uid);
 }
 function blockedList(u) {
   return [...(Array.isArray(u?.blockedUsers) ? u.blockedUsers : []), ...(Array.isArray(u?.blocked) ? u.blocked : [])];
@@ -115,7 +98,7 @@ function fresh(ts) {
 }
 
 export function buildFcmMessage(target, data) {
-  return { ...target, data, android: { priority: 'HIGH', ttl: '86400s' } };
+  return { ...target, data: Object.fromEntries(Object.entries(data).map(([key,value])=>[key,typeof value==='string'?value:''])), android: { priority: 'HIGH', ttl: '86400s' } };
 }
 
 async function sendFcm(env, access, message) {
@@ -160,6 +143,7 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
         if (r.ok && result.name) { accepted++; continue; }
         const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
         if (code === 'UNREGISTERED') {
+          await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run();
           await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
           invalid++;
         } else {
@@ -348,10 +332,9 @@ async function bulkMention(body, actor, db, env) {
     }
   }
   if (tags.has('bulk:highlight')) {
-    const friends = await d1Query(db, 'friends', [{ field: 'participants', op: 'array-contains', value: actor }]);
-    for (const f of friends) {
-      for (const uid of Array.isArray(f.participants) ? f.participants : []) {
-        if (validId(uid) && candidates.size < 80) { candidates.add(uid); highlightIds.add(uid); }
+    for (const uid of await highlightFriends(db,actor)) {
+      if (validId(uid) && (candidates.has(uid) || candidates.size < 80)) {
+        candidates.add(uid); highlightIds.add(uid);
       }
     }
   }
