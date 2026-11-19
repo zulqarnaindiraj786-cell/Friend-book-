@@ -20,8 +20,8 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:label="friendbook"
-        android:icon="@mipmap/ic_friendbook_crown"
-        android:roundIcon="@mipmap/ic_friendbook_crown_round"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
@@ -35,8 +35,8 @@
             android:value="@string/privacy_policy_url"/>
 
         <activity android:name="com.friendbook.social.SplashActivity"
-            android:icon="@mipmap/ic_friendbook_crown"
-            android:roundIcon="@mipmap/ic_friendbook_crown_round"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>

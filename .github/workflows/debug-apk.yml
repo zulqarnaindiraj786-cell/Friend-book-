@@ -98,6 +98,24 @@ jobs:
           fi
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
           jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+      - name: Report compressed APK size by component
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          from collections import Counter
+          from pathlib import Path
+          from zipfile import ZipFile
+          apk = Path('app/build/outputs/apk/release/app-release.apk')
+          print(f"### Signed APK: {apk.stat().st_size:,} bytes")
+          print("| Component | Compressed bytes |\n|---|---:|")
+          totals = Counter()
+          with ZipFile(apk) as archive:
+              for entry in archive.infolist():
+                  name = entry.filename
+                  group = ('DEX (compressed)' if entry.compress_type else 'DEX (stored)') if name.endswith('.dex') else name.split('/')[0]
+                  totals[group] += entry.compress_size
+          for group, size in totals.most_common(12):
+              print(f"| {group} | {size:,} |")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: FriendBook-signed-candidate

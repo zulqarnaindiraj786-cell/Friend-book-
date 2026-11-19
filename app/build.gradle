@@ -67,6 +67,9 @@ android {
         }
     }
 
+    // Prefer a smaller downloadable APK; ART can decompress DEX on installation.
+    packaging { dex { useLegacyPackaging = true } }
+
     testOptions { unitTests.includeAndroidResources = true }
     buildFeatures { buildConfig true }
 
