@@ -60,9 +60,15 @@ public class AdminReportsActivity extends Activity {
         reg = Fb.db().collection("reports")
                 .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
                 .addSnapshotListener((snap, err) -> {
+                    if (err != null || snap == null) {
+                        empty.setText("Couldn't load reports. Please retry.");
+                        empty.setVisibility(View.VISIBLE);
+                        return;
+                    }
                     reports.clear();
-                    if (snap != null) reports.addAll(snap.getDocuments());
+                    reports.addAll(snap.getDocuments());
                     adapter.notifyDataSetChanged();
+                    empty.setText("No reports — everything is clean 🎉");
                     empty.setVisibility(reports.isEmpty() ? View.VISIBLE : View.GONE);
                 });
     }
@@ -93,30 +99,39 @@ public class AdminReportsActivity extends Activity {
                 if (m == null) return;
                 String postId = Format.str(m, "postId");
                 String commentId = Format.str(m, "commentId");
-                if (!postId.isEmpty() && !postId.startsWith("reel_")) {
-                    Fb.db().collection("posts").document(postId).delete();
-                } else if (postId.startsWith("reel_")) {
-                    Fb.db().collection("reels").document(postId.substring(5)).delete();
-                }
-                if (!commentId.isEmpty()) Fb.db().collection("comments").document(commentId).delete();
                 String uid = Format.str(m, "uid");
                 String type = Format.str(m, "type");
-                if (!uid.isEmpty() && "profile".equals(type)) {
-                    Fb.db().collection("users").document(uid).update("banned", true);
+                com.google.android.gms.tasks.Task<Void> action;
+                if (!postId.isEmpty() && !postId.startsWith("reel_")) {
+                    action = Fb.db().collection("posts").document(postId).delete();
+                } else if (postId.startsWith("reel_")) {
+                    action = Fb.db().collection("reels").document(postId.substring(5)).delete();
+                } else if (!commentId.isEmpty()) {
+                    action = Fb.db().collection("comments").document(commentId).delete();
+                } else if (!uid.isEmpty() && "profile".equals(type)) {
+                    action = Fb.db().collection("users").document(uid).update("banned", true);
+                } else {
+                    Ui.toast(this, "No supported content action for this report");
+                    return;
                 }
-                d.getReference().delete();
-                Ui.toast(this, "Content deleted ✓");
+                action.addOnSuccessListener(v -> dismissAfterAction(d, "Content action completed ✓"))
+                        .addOnFailureListener(e -> Ui.toast(this, "Action failed; report kept in queue"));
             } else if (w == 1) {
                 String author = m != null ? Format.str(m, "authorId") : "";
                 if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
-                Fb.db().collection("users").document(author).update("banned", true);
-                d.getReference().delete();
-                Ui.toast(this, "Author banned ✓");
+                Fb.db().collection("users").document(author).update("banned", true)
+                        .addOnSuccessListener(v -> dismissAfterAction(d, "Author banned ✓"))
+                        .addOnFailureListener(e -> Ui.toast(this, "Ban failed; report kept in queue"));
             } else {
-                d.getReference().delete();
-                Ui.toast(this, "Report dismissed");
+                dismissAfterAction(d, "Report dismissed");
             }
         });
+    }
+
+    private void dismissAfterAction(DocumentSnapshot report, String successMessage) {
+        report.getReference().delete()
+                .addOnSuccessListener(v -> Ui.toast(this, successMessage))
+                .addOnFailureListener(e -> Ui.toast(this, "Couldn't dismiss report. Please try again."));
     }
 
     class Adapter extends RecyclerView.Adapter<Adapter.VH> {

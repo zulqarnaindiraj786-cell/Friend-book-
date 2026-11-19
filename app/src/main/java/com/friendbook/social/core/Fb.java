@@ -146,12 +146,11 @@ public class Fb {
         return me != null && me.blocked != null && me.blocked.contains(otherUid);
     }
 
-    /** Patch a couple of fields on my user doc (merge). */
-    public static void patchMe(Map<String, Object> fields) {
+    /** Apply the patch once through the D1 document API and return its acknowledgement. */
+    public static Task<Void> patchMe(Map<String, Object> fields) {
         String uid = uid();
-        if (uid == null) return;
-        CloudflareStore.put("users", uid, fields);
-        db().collection("users").document(uid).set(fields, SetOptions.merge());
+        if (uid == null) return Tasks.forException(new IllegalStateException("Not signed in"));
+        return db().collection("users").document(uid).set(fields, SetOptions.merge());
     }
 
     public static Map<String, Object> map(Object... kv) {

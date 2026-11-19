@@ -215,6 +215,27 @@ export async function appDocuments(request, env, identity) {
       return json({ error: 'Document object required' }, 400);
     }
     const now = Date.now();
+    if (['users','posts','reels'].includes(collection)) {
+      // Older clients use /v1/docs. Share the guarded canonical mutation with
+      // newer clients so concurrent edits and relationship changes are not lost.
+      const data={...incoming,updatedAt:now};
+      delete data.id;
+      const {firestoreDocuments}=await import('./firestore-documents.js');
+      const forwarded=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(docPath)}`,{
+        method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({data,merge:true}),
+      });
+      const result=await firestoreDocuments(forwarded,env,identity);
+      if (!result.ok) return result;
+      const saved=await result.json();
+      const profile=saved.data || {};
+      // This separate projection is only a convenience for /v1/me; failure must
+      // never turn an already committed canonical profile update into a retry.
+      if (collection==='users') try {
+        await env.DB.prepare('INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url')
+          .bind(uid,typeof profile.displayName==='string' ? profile.displayName.slice(0,200) : '',typeof profile.photoUrl==='string' ? profile.photoUrl.slice(0,2048) : null).run();
+      } catch { /* Canonical profile remains authoritative. */ }
+      return json({id:docId,path:docPath,document:{...profile,id:docId}});
+    }
     try {
       const existingRow = await env.DB.prepare(
         'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'

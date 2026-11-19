@@ -19,15 +19,16 @@ public class Notify {
     }
 
     /** Commit both sides before creating a follow notification / calling the push gateway. */
-    public static void follow(String toUid, boolean following) {
+    public static com.google.android.gms.tasks.Task<Void> follow(String toUid, boolean following) {
         String me = Fb.uid();
-        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
+        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid))
+            return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Invalid follow target"));
         WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("users").document(toUid),
                 Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
         batch.set(Fb.db().collection("users").document(me),
                 Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
-        batch.commit().addOnSuccessListener(v -> {
+        return batch.commit().addOnSuccessListener(v -> {
             if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
         }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
     }

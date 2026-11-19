@@ -17,6 +17,7 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   sql.exec(appSchema);
   sql.exec(schema);
   sql.exec(mirrorMigration);
+  sql.exec(socialGuardSchema);
   const db = {
     prepare(query) {
       const stmt = sql.prepare(query);
@@ -29,6 +30,11 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
           };
         },
       };
+    },
+    async batch(statements) {
+      sql.exec('BEGIN');
+      try { for (const stmt of statements) await stmt.run(); sql.exec('COMMIT'); }
+      catch (error) { sql.exec('ROLLBACK'); throw error; }
     },
   };
   const uid = 'FF3hGwZJlTMp9r4q2eTAXbgsQMx2';
@@ -381,8 +387,8 @@ test('profiles and chats: private fields, membership and write bypasses across A
 });
 
 test('post privacy and unreviewed collections fail closed on all document routes', async () => {
-  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){for(const s of stmts)await s.run();}};
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   add.run('users/alice','users','alice','alice',JSON.stringify({uid:'alice'}),1);
   add.run('users/bob','users','bob','bob',JSON.stringify({uid:'bob'}),1);
@@ -1125,6 +1131,21 @@ test('profile bootstrap combines first page with ordinary projection and post pr
  sql.close();
 });
 
+test('profile bootstrap selects the newest visible posts before limiting', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const add=(coll,id,data)=>insert.run(`${coll}/${id}`,coll,coll,id,'alice',JSON.stringify(data),1,1);
+ add('users','alice',{uid:'alice',displayName:'Alice'});add('users','bob',{uid:'bob'});
+ for(let i=0;i<12;i++) add('posts',`p${String(11-i).padStart(2,'0')}`,{authorId:'alice',privacy:'Public',createdAt:i+1});
+ add('posts','private',{authorId:'alice',privacy:'Only me',createdAt:20});
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const r=await app.fetch(new Request('https://example.test/v1/firestore/profile-bootstrap?uid=alice',{headers:{authorization:'Bearer bob'}}),env);
+ assert.equal(r.status,200);const posts=(await r.json()).posts.body.documents;
+ assert.deepEqual(posts.map(p=>p.data.createdAt),[12,11,10,9,8,7,6]);
+ sql.close();
+});
+
 test('bounded chat pages match full merge across ties, cursors and legacy fallback', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
  sql.exec(readFileSync(new URL('../migrations/0019_legacy_query_indexes.sql',import.meta.url),'utf8'));
@@ -1175,5 +1196,132 @@ test('bounded feed pages fill after privacy checks and preserve legacy precedenc
  // Fractional timestamp must use the old JS comparator, which truncates millis.
  f.run('posts/odd','posts','posts','odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
  assert.deepEqual((await query({})).map(d=>d.id),(await query({},true)).map(d=>d.id));assert.equal(batchReads,prior);
+ sql.close();
+});
+
+test('reports accept authenticated submissions and restrict reads and dismissals to configured admins', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
+ const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+ const post='/v1/firestore/document?parent=reports';
+ assert.equal((await call('alice',post,'POST',{data:{reportedBy:'bob',postId:'p'}})).status,400);
+ assert.equal((await call('alice',post,'POST',{data:{reportedBy:'alice',reporterId:'bob'}})).status,400);
+ assert.equal((await call('alice',post,'POST',{data:{reportedBy:'alice',extra:'bad'}})).status,400);
+ const created=await call('alice',post,'POST',{data:{reportedBy:'alice',postId:'p',type:'post',reason:'spam',createdAt:1}});
+ assert.equal(created.status,201,await created.clone().text());const report=await created.json();
+ assert.notEqual(report.data.createdAt.millis,1);
+ const path='/v1/firestore/document?path=reports/'+report.id;
+ for(const uid of ['alice','bob']) {
+  assert.equal((await call(uid,path)).status,403);
+  assert.equal((await call(uid,path,'DELETE')).status,403);
+  assert.equal((await call(uid,'/v1/firestore/query','POST',{parent:'reports'})).status,403);
+  assert.equal((await call(uid,'/v1/firestore/count?parent=reports')).status,403);
+  assert.equal((await call(uid,'/v1/firestore/batch','POST',{operations:[{op:'delete',path:'reports/'+report.id}]})).status,403);
+  assert.equal((await call(uid,path,'PATCH',{fields:{reason:'changed'}})).status,403);
+  assert.equal((await call(uid,path,'PUT',{data:{reportedBy:uid}})).status,403);
+ }
+ assert.equal((await call('admin',path)).status,200);
+ assert.equal((await (await call('admin','/v1/firestore/query','POST',{parent:'reports'})).json()).documents.length,1);
+ assert.equal((await (await call('admin','/v1/firestore/count?parent=reports')).json()).count,1);
+ assert.equal((await call('admin',path,'DELETE')).status,200);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE parent_path='reports'").get().n,0);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE collection='reports'").get().n,0);
+ sql.close();
+});
+
+test('a failed root mirror write rolls back the canonical D1 document', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ sql.exec("CREATE TRIGGER fail_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='users/alice' BEGIN SELECT RAISE(ABORT, 'mirror failure'); END;");
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async()=> 'alice'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const r=await app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PUT',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({data:{uid:'alice',displayName:'Alice'}})}),env);
+ assert.equal(r.status,503);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().n,0);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE path='users/alice'").get().n,0);
+ sql.close();
+});
+
+test('profile merges retry concurrent friendship updates without erasing them', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ const original={uid:'alice',displayName:'Before',friendsCount:0,followers:[],following:[]};
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ f.run('users/alice','users','users','alice','alice',JSON.stringify(original),1,1);
+ a.run('users/alice','users','alice','alice',JSON.stringify({...original,id:'alice'}),1);
+ let injected=false, batches=0;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+  batches++;
+  if(!injected){injected=true;const concurrent={...original,friendsCount:1,followers:['bob']};
+   sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify(concurrent),'users/alice');
+   sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({...concurrent,id:'alice'}),'users/alice');}
+  sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+ }};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const call=(uid,body)=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PUT',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify(body)}),env);
+ const r=await call('alice',{data:{displayName:'After'},merge:true});assert.equal(r.status,200,await r.clone().text());
+ const doc=(await r.json()).data;assert.equal(doc.displayName,'After');assert.equal(doc.friendsCount,1);assert.deepEqual(doc.followers,['bob']);assert.equal(batches,2);
+ assert.equal((await call('bob',{data:{displayName:'forged'},merge:true})).status,403);
+ assert.equal((await call('alice',{data:{friendsCount:99},merge:true})).status,403);
+ const mirrored=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('users/alice').document_json);
+ assert.equal(mirrored.friendsCount,1);assert.equal(mirrored.displayName,'After');
+ sql.close();
+});
+
+test('saving visible posts is actor-scoped and survives concurrent owner edits', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ for(const uid of ['alice','bob','mallory']) f.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
+ const initial={authorId:'alice',privacy:'Public',content:'original',savedBy:[]};
+ f.run('posts/p','posts','posts','p','alice',JSON.stringify(initial),1,1);
+ let injected=false;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+  if(!injected){injected=true;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,content:'edited'}));}
+  sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+ }};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const patch=(uid,path,fields)=>app.fetch(new Request('https://example.test/v1/firestore/document?path='+encodeURIComponent(path),{method:'PATCH',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({fields})}),env);
+ const transform=(kind,who)=>({__fieldValue:kind,values:[who]});
+ const saved=await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')});assert.equal(saved.status,200,await saved.clone().text());
+ assert.equal((await saved.json()).data.content,'edited');
+ assert.equal((await patch('mallory','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403);
+ assert.equal((await patch('mallory','posts/p',{savedBy:transform('arrayUnion','mallory'),content:'forged'})).status,403);
+ const doc=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json);
+ assert.deepEqual(doc.savedBy,['bob']);assert.equal(doc.content,'edited');
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayRemove','bob')})).status,200);
+ const removed=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json);assert.deepEqual(removed.savedBy,[]);
+ sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,privacy:'Only me'}));
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403);
+ sql.close();
+});
+
+test('root post deletion rolls back both copies when a mirror delete fails', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ const post={authorId:'alice',privacy:'Public'};
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('posts/p','posts','posts','p','alice',JSON.stringify(post),1,1);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('posts/p','posts','p','alice',JSON.stringify({...post,id:'p'}),1);
+ sql.exec("CREATE TRIGGER fail_delete BEFORE DELETE ON friendbook_cf_documents WHEN OLD.path='posts/p' BEGIN SELECT RAISE(ABORT, 'mirror failure'); END;");
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async()=> 'alice'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const r=await app.fetch(new Request('https://example.test/v1/firestore/document?path=posts/p',{method:'DELETE',headers:{authorization:'Bearer alice'}}),env);
+ assert.equal(r.status,503);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().n,1);
+ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_documents WHERE path='posts/p'").get().n,1);
+ sql.close();
+});
+
+test('older app document profile writes use the same guarded merge', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+ const original={uid:'alice',displayName:'Before',friendsCount:0,followers:[],following:[]};
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(original),1,1);
+ let injected=false;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+  if(!injected){injected=true;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({...original,friendsCount:1}));}
+  sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+ }};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const r=await app.fetch(new Request('https://example.test/v1/docs/users/alice',{method:'PUT',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({displayName:'After'})}),env);
+ assert.equal(r.status,200,await r.clone().text());
+ const profile=(await r.json()).document;assert.equal(profile.displayName,'After');assert.equal(profile.friendsCount,1);
  sql.close();
 });

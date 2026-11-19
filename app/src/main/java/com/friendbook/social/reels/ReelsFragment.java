@@ -2693,9 +2693,14 @@ public class ReelsFragment extends Fragment {
                 if (reel == null) return;
                 String me = Fb.uid();
                 if (me == null) return;
-                Notify.follow(reel.authorId, true);
-                followT.setText("Following");
-                Ui.toast(itemView.getContext(), "Following " + reel.authorName);
+                final String authorId = reel.authorId, authorName = reel.authorName;
+                Notify.follow(authorId, true).addOnSuccessListener(v -> {
+                    if (!me.equals(Fb.uid())) return;
+                    if (reel != null && java.util.Objects.equals(authorId, reel.authorId)) followT.setText("Following");
+                    Ui.toast(itemView.getContext(), "Following " + authorName);
+                }).addOnFailureListener(e -> {
+                    if (me.equals(Fb.uid())) Ui.toast(itemView.getContext(), "Couldn't follow. Please try again.");
+                });
             }
 
             private void shareSheet(Activity a) {

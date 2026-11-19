@@ -10,10 +10,11 @@ const MIGRATION_0002 = readFileSync(new URL('../migrations/0002_additive_copy_st
 const MIGRATION_0003 = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
 const MIGRATION_0011 = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
 const MIGRATION_0014 = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
+const MIGRATION_0018 = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
 
 function createSqliteD1() {
   const sql = new DatabaseSync(':memory:');
-  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0014]) {
+  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0014, MIGRATION_0018]) {
     sql.exec(m);
   }
   const db = {
@@ -31,6 +32,11 @@ function createSqliteD1() {
         all: async () => ({ results: stmt.all() }),
         first: async () => stmt.get() || null,
       };
+    },
+    async batch(stmts) {
+      sql.exec('BEGIN');
+      try { for (const s of stmts) await s.run(); sql.exec('COMMIT'); }
+      catch (error) { sql.exec('ROLLBACK'); throw error; }
     },
   };
   return { sql, db };

@@ -1157,8 +1157,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             } else if (sel.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map(
                         "messageId", m.id, "chatId", chatId, "reportedBy", Fb.uid(),
-                        "createdAt", FieldValue.serverTimestamp()));
-                Ui.toast(this, "Reported");
+                        "createdAt", FieldValue.serverTimestamp()))
+                        .addOnSuccessListener(ref -> Ui.toast(this, "Reported"))
+                        .addOnFailureListener(e -> Ui.toast(this, "Couldn't send report. Please try again."));
             }
         });
     }

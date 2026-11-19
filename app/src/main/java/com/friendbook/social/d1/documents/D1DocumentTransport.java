@@ -57,9 +57,16 @@ final class D1DocumentTransport {
             }
             JSONObject data;
             try { data = sb.length() > 0 ? new JSONObject(sb.toString()) : new JSONObject(); }
-            catch (Exception e) { data = new JSONObject(); }
-            if (code == 404 && "GET".equals(method) && pathAndQuery.contains("/v1/firestore/document")) {
-                return data;
+            catch (Exception e) {
+                if (code >= 200 && code < 300)
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid server response", e);
+                data = new JSONObject();
+            }
+            // Only an explicit missing-document response is a miss. A proxy or route
+            // 404 must not cause account bootstrap to recreate an existing profile.
+            if (code == 404 && "GET".equals(method) && pathAndQuery.startsWith("/v1/firestore/document?")
+                    && "NOT_FOUND".equals(data.optString("error"))) {
+                return new JSONObject().put("exists", false);
             }
             if (code < 200 || code >= 300) {
                 String err = data.optString("error", "HTTP_" + code);
@@ -79,7 +86,12 @@ final class D1DocumentTransport {
     }
 
     static JSONObject getDocument(String path) throws Exception {
-        return request("GET", "/v1/firestore/document?path=" + enc(path), null);
+        JSONObject data = request("GET", "/v1/firestore/document?path=" + enc(path), null);
+        boolean present = data.optJSONObject("data") != null;
+        if ((!data.has("exists") && !present) || (data.optBoolean("exists", false) && !present)
+                || (data.has("exists") && !(data.opt("exists") instanceof Boolean)))
+            throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid document response");
+        return data;
     }
 
     static JSONObject putDocument(String path, JSONObject body) throws Exception {
@@ -101,13 +113,19 @@ final class D1DocumentTransport {
     static JSONArray query(JSONObject body) throws Exception {
         JSONObject data = request("POST", "/v1/firestore/query", body);
         JSONArray arr = data.optJSONArray("documents");
-        return arr != null ? arr : new JSONArray();
+        if (arr == null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid query response");
+        return arr;
     }
 
     static int count(String parent, JSONArray filters) throws Exception {
         String q = "/v1/firestore/count?parent=" + enc(parent) + "&filters=" + enc(filters.toString());
         JSONObject data = request("GET", q, null);
-        return data.optInt("count", 0);
+        Object value = data.opt("count");
+        if (!(value instanceof Number)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid count response");
+        double count = ((Number) value).doubleValue();
+        if (!Double.isFinite(count) || count < 0 || count > Integer.MAX_VALUE || count != Math.floor(count))
+            throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid count response");
+        return (int) count;
     }
 
     static void batch(JSONArray operations) throws Exception {

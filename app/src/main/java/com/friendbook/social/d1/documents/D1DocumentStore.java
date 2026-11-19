@@ -129,7 +129,8 @@ public class D1DocumentStore {
         if (posts!=null && posts.optInt("status")==200 && posts.optJSONObject("body")!=null) {
             org.json.JSONArray rows=posts.optJSONObject("body").optJSONArray("documents");
             if (rows!=null) {
-                Query query=collection("posts").whereEqualTo("authorId",uid).limit(7);
+                Query query=collection("posts").whereEqualTo("authorId",uid)
+                        .orderBy("createdAt", Query.Direction.DESCENDING).limit(7);
                 cacheQuery(queryCacheKey(query,actor),rows.toString());
             }
         }

@@ -272,8 +272,9 @@ public class EditProfileActivity extends Activity {
                 .addOnSuccessListener(url -> {
                     Map<String, Object> patch = new HashMap<>();
                     patch.put(isAvatar ? "photoUrl" : "coverUrl", url.toString());
-                    Fb.patchMe(patch);
-                    Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓");
+                    Fb.patchMe(patch)
+                            .addOnSuccessListener(v -> Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓"))
+                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't save photo. Please try again."));
                 })
                 .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
     }

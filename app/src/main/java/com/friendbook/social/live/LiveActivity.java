@@ -3106,12 +3106,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void followHostNow() {
         String me = Fb.uid();
         if (me == null || hostId == null || hostId.equals(me)) return;
-        Notify.follow(hostId, true);
-        if (followHostBtn != null) {
-            followHostBtn.setText("Following");
-            followHostBtn.setBackground(Ui.round(this, 0x55FFFFFF, 14));
-        }
-        postSystemChat(Fb.myName() + " followed " + hostNameStr + "!");
+        Notify.follow(hostId, true).addOnSuccessListener(v -> {
+            if (!me.equals(Fb.uid())) return;
+            if (followHostBtn != null) {
+                followHostBtn.setText("Following");
+                followHostBtn.setBackground(Ui.round(this, 0x55FFFFFF, 14));
+            }
+            postSystemChat(Fb.myName() + " followed " + hostNameStr + "!");
+        }).addOnFailureListener(e -> {
+            if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't follow. Please try again.");
+        });
     }
 
     private void reportLiveStream() {

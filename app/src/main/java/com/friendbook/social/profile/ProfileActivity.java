@@ -185,7 +185,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             viewAsPublic = false;
             viewAsBanner.setVisibility(View.GONE);
             if (user != null) bindUser();
-            if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+            applyPostsFilter();
         });
         viewAsBanner.addView(exitVa);
         root.addView(viewAsBanner);
@@ -736,7 +736,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 .addOnSuccessListener(url -> {
                     Map<String, Object> up = new HashMap<>();
                     up.put(isAvatar ? "photoUrl" : "coverUrl", url);
-                    Fb.patchMe(up);
+                    Fb.patchMe(up).addOnSuccessListener(saved -> {
                     if (user != null) {
                         if (isAvatar) user.photoUrl = url;
                         else user.coverUrl = url;
@@ -758,11 +758,13 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                 "likes", 0, "comments", 0, "shares", 0,
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
-                        Fb.db().collection("posts").add(dpPost);
+                        Fb.db().collection("posts").add(dpPost)
+                                .addOnFailureListener(e -> Ui.toast(ProfileActivity.this, "Photo saved, but couldn't share the post."));
                     }
                     Ui.toast(ProfileActivity.this, isAvatar
-                            ? "Profile picture updated & shared in full HD ✓"
+                            ? "Profile picture updated ✓"
                             : "Cover photo updated ✓");
+                    }).addOnFailureListener(e -> Ui.toast(ProfileActivity.this, "Couldn't save photo. Please try again."));
                 })
                 .addOnFailureListener(err ->
                         Ui.toast(ProfileActivity.this, "Upload failed: " + err.getMessage()));
@@ -969,7 +971,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             if(user!=null)updateStatsLine();
         });
         if(postPager!=null) postPager.close();
-        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+        postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
                     allLoadedPosts.clear();
                     if (docs != null) {
@@ -1038,7 +1041,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void startReelsWatcher() {
         if(videoPager!=null)videoPager.close();
-        videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
+        videoPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("reels").whereEqualTo("authorId",uid)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),10,"profile-reels:"+uid,(docs,more,loading,error)-> {
             if(isFinishing())return;
             if(loading){if(moreProfileVideos!=null){moreProfileVideos.setText("Loading…");moreProfileVideos.setEnabled(false);}return;}
             List<Models.Reel> list=new ArrayList<>();for(DocumentSnapshot doc:docs)list.add(Models.Reel.fromDoc(doc));
@@ -1531,7 +1535,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         boolean following = user.followers != null && user.followers.contains(me);
-        Notify.follow(uid, !following);
+        Notify.follow(uid, !following).addOnFailureListener(e -> {
+            if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't update follow. Please try again.");
+        });
     }
 
     private void message() {
@@ -1683,7 +1689,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 viewAsPublic = true;
                 viewAsBanner.setVisibility(View.VISIBLE);
                 if (user != null) bindUser();
-                if (postsReg != null) { postsReg.remove(); startPostsWatcher(); }
+                applyPostsFilter();
             } else if (t.contains("Lock profile") || t.contains("Unlock profile")) {
                 boolean next = !(user != null && user.profileLocked);
                 Fb.patchMe(Fb.map("profileLocked", next));
@@ -1692,8 +1698,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 startActivity(new Intent(this, ArchiveTrashActivity.class));
             } else if (t.contains("Report")) {
                 Fb.db().collection("reports").add(Fb.map("uid", uid, "reportedBy", Fb.uid(),
-                        "type", "profile", "createdAt", FieldValue.serverTimestamp()));
-                Ui.toast(this, "Reported");
+                        "type", "profile", "createdAt", FieldValue.serverTimestamp()))
+                        .addOnSuccessListener(ref -> Ui.toast(this, "Reported"))
+                        .addOnFailureListener(e -> Ui.toast(this, "Couldn't send report. Please try again."));
             } else if (t.contains("Change profile photo")) {
                 pickImage(REQ_PICK_AVATAR);
             } else if (t.contains("Change cover photo")) {

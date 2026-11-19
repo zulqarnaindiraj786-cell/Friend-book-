@@ -68,6 +68,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final Activity activity;
     private final Host host;
     private final List<Models.Post> posts = new ArrayList<>();
+    // Fetch a missing author at most once per adapter/account; recycled rows must not
+    // launch a network request on every bind.
+    private final Set<String> requestedAuthors = new HashSet<>();
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
@@ -850,10 +853,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         // ---------- header: 40dp circular avatar · bold name · gray time below · ⋮ ----------
         boolean pagePost = p.isPagePost();
-        Ui.avatar(c, vh.avatar, pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto : p.authorPhoto);
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         Models.User author = pagePost || p.authorId == null ? null
                 : com.friendbook.social.core.FastCache.getUser(p.authorId);
+        String actor = Fb.uid();
+        if (!pagePost && author == null && p.authorId != null && !p.authorId.isEmpty()
+                && (p.authorName == null || p.authorName.trim().isEmpty() || "User".equals(p.authorName))
+                && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
+            Fb.getUser(p.authorId).addOnSuccessListener(loaded -> {
+                if (loaded != null && java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing())
+                    notifyDataSetChanged();
+            });
+        }
+        String photo = pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto
+                : author != null && author.photoUrl != null && !author.photoUrl.isEmpty() ? author.photoUrl : p.authorPhoto;
+        Ui.avatar(c, vh.avatar, photo);
         String currentName = author != null && author.displayName != null && !author.displayName.isEmpty()
                 ? author.displayName : p.authorName;
         String baseAuthor = pagePost ? ("🚩 " + p.pageName) : (currentName == null || currentName.isEmpty() ? "User" : currentName);
@@ -895,7 +909,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         };
         vh.avatar.setOnClickListener(prof);
         vh.avatar.setOnLongClickListener(v -> {
-            String dpUrl = pagePost ? p.pagePhoto : p.authorPhoto;
+            String dpUrl = photo;
             if (dpUrl != null && !dpUrl.isEmpty()) {
                 Intent fullDp = new Intent(c, FullscreenMediaActivity.class);
                 fullDp.putExtra("type", "image");
@@ -1707,10 +1721,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String[] opts = {"🌐 Public", "👥 Friends", "🔒 Only me"};
         String[] vals = {"Public", "Friends", "Only me"};
         Ui.choose(activity, "Who can see this post?", opts, w -> {
-            Fb.db().collection("posts").document(p.id).update("privacy", vals[w]);
-            p.privacy = vals[w];
-            notifyDataSetChanged();
-            Ui.toast(activity, "Privacy updated: " + vals[w]);
+            Fb.db().collection("posts").document(p.id).update("privacy", vals[w])
+                    .addOnSuccessListener(v -> {
+                        p.privacy = vals[w];
+                        notifyDataSetChanged();
+                        Ui.toast(activity, "Privacy updated: " + vals[w]);
+                    })
+                    .addOnFailureListener(e -> Ui.toast(activity, "Couldn't update privacy. Please try again."));
         });
     }
 
@@ -1719,17 +1736,19 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (me == null) return;
         Fb.db().collection("posts").document(p.id)
                 .update("savedBy", unsave ? FieldValue.arrayRemove(me) : FieldValue.arrayUnion(me))
-                .addOnSuccessListener(x -> Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓"));
+                .addOnSuccessListener(x -> Ui.toast(activity, unsave ? "Removed from Saved" : "Saved ✓"))
+                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't update saved posts. Please try again."));
     }
 
     private void deletePost(Models.Post p) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
-            Fb.db().collection("posts").document(p.id).delete();
-            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",p.id))
-                    .addOnFailureListener(e->Ui.toast(activity,"Post removed; some old comments could not be cleaned up."));
-            com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("posts").document(p.id).collection("reactions"))
-                    .addOnFailureListener(e->Ui.toast(activity,"Some reactions could not be cleaned up."));
-            Ui.toast(activity, "Post deleted");
+            Fb.db().collection("posts").document(p.id).delete()
+                    .addOnSuccessListener(v -> {
+                        removePostById(p.id);
+                        com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
+                        Ui.toast(activity, "Post deleted");
+                    })
+                    .addOnFailureListener(e -> Ui.toast(activity, "Couldn't delete post. Please try again."));
         });
     }
 
@@ -1743,8 +1762,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private void followUser(String uid) {
         String me = Fb.uid();
         if (me == null || uid == null || uid.isEmpty()) return;
-        Notify.follow(uid, true);
-        Ui.toast(activity, "Following ✓");
+        Notify.follow(uid, true)
+                .addOnSuccessListener(v -> { if (me.equals(Fb.uid())) Ui.toast(activity, "Following ✓"); })
+                .addOnFailureListener(e -> { if (me.equals(Fb.uid())) Ui.toast(activity, "Couldn't follow. Please try again."); });
     }
 
     private void blockUser(String uid) {
@@ -1775,20 +1795,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     "reportedBy", Fb.uid(),
                     "authorId", p.authorId,
                     "createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("reports").add(m);
+            Fb.db().collection("reports").add(m)
+                    .addOnSuccessListener(ref -> Ui.toast(activity, "Post hidden & reported to moderation team ✓"))
+                    .addOnFailureListener(e -> Ui.toast(activity, "Post hidden, but the report could not be sent."));
             Prefs.hidePost(activity, p.id);
             removePostById(p.id);
             com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
-            if (w == 0 || w == 1 || w == 2) {
-                // Severe safety violation -> flag & auto-delete violating post
-                com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(
-                        activity, "posts", p.id, p.authorId,
-                        w == 1 ? "csae" : (w == 0 ? "adult_nudity" : "gore_violence"),
-                        reason, null);
-                Ui.toast(activity, "🛡 Violating post removed & reported ✓");
-            } else {
-                Ui.toast(activity, "Post hidden & reported to moderation team ✓");
-            }
+            // A report is an allegation, not authority for the reporter to delete
+            // another user's post. Moderation must review it server-side.
         });
     }
 
