@@ -478,7 +478,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (isGroupChat) {
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
-                        if (d == null || !d.exists()) { finish(); return; }
+                        if (d == null) return; // a transient read failure is not a deleted room
+                        if (!d.exists()) { finish(); return; }
                         CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         groupRoom = Models.ChatRoom.fromDoc(d);
                         peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())

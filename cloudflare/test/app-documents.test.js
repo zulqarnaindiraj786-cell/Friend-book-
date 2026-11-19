@@ -11,10 +11,11 @@ const MIGRATION_0003 = readFileSync(new URL('../migrations/0003_additive_interac
 const MIGRATION_0011 = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
 const MIGRATION_0014 = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
 const MIGRATION_0018 = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
+const MIGRATION_0019 = readFileSync(new URL('../migrations/0019_trusted_friendships.sql', import.meta.url), 'utf8');
 
 function createSqliteD1() {
   const sql = new DatabaseSync(':memory:');
-  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0014, MIGRATION_0018]) {
+  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0014, MIGRATION_0018, MIGRATION_0019]) {
     sql.exec(m);
   }
   const db = {

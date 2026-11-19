@@ -102,26 +102,24 @@ export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   // Authorization and privacy fields must reflect the current D1 row, not a
   // stale per-isolate cache after another device changes a block or ban.
-  try {
-    // Canonical Firestore-compatible records take precedence over an older app mirror. Using
-    // a stale public mirror to authorize a newer private post would leak the private document.
-    const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first()
-      || await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
-    return row?.document_json ? toFirestoreFields(row.document_json) : null;
-  } catch {
-    return null;
-  }
+  // Canonical records take precedence over the mirror. A failed read is not a
+  // missing record: treating it as missing can turn a transient outage into a
+  // successful empty feed, overwriting good cached data on every client.
+  const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first()
+    || await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
+  if (!row) return null;
+  const fields=toFirestoreFields(row.document_json);
+  if (!fields) throw new Error('Invalid stored document');
+  return fields;
 }
 
 // Only server-verified friendship transitions can authorize private content or presence.
 // Legacy records are not trusted merely because their document ID looks correct.
 export async function hasD1Friendship(db, uidA, uidB) {
   if (!db || !validSegment(uidA) || !validSegment(uidB) || uidA===uidB) return null;
-  try {
-    const [low,high]=[uidA,uidB].sort();
-    const row=await db.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high).first();
-    return row ? true : null;
-  } catch { return null; }
+  const [low,high]=[uidA,uidB].sort();
+  const row=await db.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high).first();
+  return row ? true : null;
 }
 
 async function canonicalRoot(db, path, fallback) {

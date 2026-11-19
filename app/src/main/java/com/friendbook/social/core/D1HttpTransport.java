@@ -8,6 +8,10 @@ import java.nio.charset.StandardCharsets;
 /** One bounded HTTP attempt only. Endpoint, auth and account guards stay in D1Client. */
 final class D1HttpTransport {
     private D1HttpTransport(){}
+    static final class HttpStatusException extends IOException {
+        final int status;
+        HttpStatusException(int status) { super("D1 request failed ("+status+")"); this.status=status; }
+    }
     static JSONObject send(URL url,String method,String token,JSONObject body)throws Exception{
         byte[] bytes=body==null?null:body.toString().getBytes(StandardCharsets.UTF_8);
         if(bytes!=null&&bytes.length>32768)throw new IOException("Comment request too large");
@@ -23,7 +27,7 @@ final class D1HttpTransport {
                 try(OutputStream out=connection.getOutputStream()){out.write(bytes);}
             }
             int status=connection.getResponseCode();
-            if(status<200||status>=300)throw new IOException("D1 request failed ("+status+"). Retry here; no Firebase write was made.");
+            if(status<200||status>=300)throw new HttpStatusException(status);
             try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 byte[] buffer=new byte[4096];int n;
                 while((n=in.read(buffer))!=-1){

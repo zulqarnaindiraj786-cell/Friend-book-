@@ -898,10 +898,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         userReg = Fb.db().collection("users").document(uid)
                 .addSnapshotListener((d, err) -> {
                     if (d == null) {
-                        nameT.setText(err == null ? "Loading profile…" : "Profile unavailable — pull to retry");
+                        // Permission loss must not leave previously visible private data onscreen.
+                        if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) { finish(); return; }
+                        // A temporary poll failure is not a deleted profile.
+                        if (user == null) nameT.setText(err == null ? "Loading profile…" : "Profile unavailable — pull to retry");
                         return;
                     }
                     if (!d.exists()) {
+                        // A cached miss is not evidence that the server profile disappeared.
+                        if (d.getMetadata().isFromCache()) return;
                         if (showAndRepairOwnProfile()) return;
                         nameT.setText("User not found");
                         return;
@@ -919,19 +924,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
             friendsReg=Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
                     java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
-                friendIds.clear();if(snap!=null && !snap.isEmpty())friendIds.add(uid);
+                if (snap==null) return; // keep the last confirmed relationship on a transient error
+                friendIds.clear();if(!snap.isEmpty())friendIds.add(uid);
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
             outReg = Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
-                        hasOut = snap != null && !snap.isEmpty();
+                        if (snap == null) return;
+                        hasOut = !snap.isEmpty();
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
-                        hasIn = snap != null && !snap.isEmpty();
+                        if (snap == null) return;
+                        hasIn = !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
                     });
@@ -1077,7 +1085,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void updateStatsLine() {
         if (user == null) return;
-        int followers = user.followerCount;
+        // 2.8.89 showed at least the friend count in the profile headline.
+        int followers = Math.max(user.followerCount, user.friendsCount);
         int following = user.followingCount;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();

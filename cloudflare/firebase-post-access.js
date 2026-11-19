@@ -35,8 +35,7 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   if (groupId) {
     const group = await fields(`groups/${groupId}`);
     if (!Object.keys(group).length || list(group, 'bannedMemberIds').includes(uid)) return false;
-    let trustedOwner;
-    try { trustedOwner = await trustedGroupOwner(db, `groups/${groupId}`); } catch { return false; }
+    const trustedOwner = await trustedGroupOwner(db, `groups/${groupId}`);
     if (!trustedOwner || string(group, 'adminId') !== trustedOwner) return false;
     const member = list(group, 'members').includes(uid);
     const manager = member && (trustedOwner === uid || list(group, 'adminIds').includes(uid) || list(group, 'moderatorIds').includes(uid));

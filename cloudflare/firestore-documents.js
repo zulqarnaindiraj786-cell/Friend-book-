@@ -440,12 +440,10 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
 }
 
 async function canReadChatMessages(db, chatId, uid) {
-  const room = await readRow(db, `chats/${chatId}`).catch(() => null);
+  const room = await readRow(db, `chats/${chatId}`);
   if (!room) return false;
-  try {
-    const data = decodeValue(JSON.parse(room.document_json));
-    return Array.isArray(data?.participants) && data.participants.includes(uid);
-  } catch { return false; }
+  const data = decodeValue(JSON.parse(room.document_json));
+  return Array.isArray(data?.participants) && data.participants.includes(uid);
 }
 
 async function writeRow(db, path, doc, now, existing, guarded = false) {
@@ -1473,14 +1471,17 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
     if (['reports','feedback'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
-    if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages'
-        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
+    if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
+      try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
+      catch { return json({error:'Chat access unavailable'},503); }
+    }
     let row;
     try { row = await readRow(db, docPath); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
-    if (!(await contentReadAllowed(db, uid, docPath, undefined, true))) return json({error:'Forbidden'},403);
+    try { if (!(await contentReadAllowed(db,uid,docPath,undefined,true))) return json({error:'Forbidden'},403); }
+    catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
@@ -1740,8 +1741,10 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
-    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
-        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
+    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
+      try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
+      catch { return json({error:'Chat access unavailable'},503); }
+    }
     let rows;
     try {
       const page=await boundedFeedPage(db,uid,body);
@@ -1779,8 +1782,10 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
-    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages'
-        && !(await canReadChatMessages(db, parts[1], uid))) return json({ error: 'Forbidden' }, 403);
+    if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
+      try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
+      catch { return json({error:'Chat access unavailable'},503); }
+    }
     let filters = [];
     try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
     let rows;

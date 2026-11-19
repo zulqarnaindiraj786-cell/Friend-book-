@@ -36,7 +36,16 @@ public final class D1Client {
                 String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
-                JSONObject data=D1HttpTransport.send(url,method,token,body);MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
+                JSONObject response;
+                try { response=D1HttpTransport.send(url,method,token,body); }
+                catch(D1HttpTransport.HttpStatusException failure) {
+                    if(failure.status!=401 || !Objects.equals(actor,Fb.uid()))throw failure;
+                    String refreshed=Tasks.await(user.getIdToken(true),15,TimeUnit.SECONDS).getToken();
+                    if(refreshed==null || !Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+                    response=D1HttpTransport.send(url,method,refreshed,body);
+                }
+                final JSONObject data=response;
+                MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
             }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));}
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();

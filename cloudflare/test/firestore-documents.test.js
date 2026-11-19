@@ -1550,3 +1550,30 @@ test('own follow lists include locked people without exposing their private list
  }
  sql.close();
 });
+
+test('transient authorization reads never turn feed or chat data into empty success',async()=>{
+ const sql=new DatabaseSync(':memory:'); for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')])sql.exec(s);
+ const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const insert=(path,parent,id,data)=>put.run(path,parent,parent.split('/').at(-1),id,'',JSON.stringify(data),1,1);
+ insert('users/alice','users','alice',{uid:'alice'}); insert('users/bob','users','bob',{uid:'bob'});
+ insert('posts/p1','posts','p1',{authorId:'bob',privacy:'Public'});
+ insert('chats/c1','chats','c1',{participants:['alice','bob']});
+ insert('chats/c1/messages/m1','chats/c1/messages','m1',{senderId:'bob',text:'hello'});
+ let fail='';
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{
+  run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>{
+   if(fail && q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path') && a[0]===fail)throw Error('temporary D1 failure');
+   if(fail && q.includes('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path') && a[0]===fail)throw Error('temporary D1 failure');
+   return stmt.get(...a)||null;
+  }};}};}};
+ const app=createWorker(async()=> 'alice'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'},headers={authorization:'Bearer token','content-type':'application/json'};
+ const feed=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers,body:JSON.stringify({parent:'posts'})}),env);
+ const chat=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers,body:JSON.stringify({parent:'chats/c1/messages'})}),env);
+ assert.equal((await (await feed()).json()).documents.length,1);
+ fail='users/bob'; assert.equal((await feed()).status,503);
+ fail=''; assert.equal((await (await feed()).json()).documents.length,1);
+ assert.equal((await (await chat()).json()).documents.length,1);
+ fail='chats/c1'; assert.equal((await chat()).status,503);
+ fail=''; assert.equal((await (await chat()).json()).documents.length,1);
+ sql.close();
+});

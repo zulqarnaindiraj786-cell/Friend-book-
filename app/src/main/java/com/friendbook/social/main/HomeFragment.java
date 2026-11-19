@@ -559,6 +559,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                         }
                     }
                     loadPymk();renderLoadedStories();
+                    // The first feed page may arrive before the friendship graph.
+                    // Reapply visibility once membership is known instead of hiding
+                    // friends-only posts until a later manual refresh.
+                    if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty())
+                        consumePostsSnapshot(lastPostDocs,true,false);
                 });
     }
 

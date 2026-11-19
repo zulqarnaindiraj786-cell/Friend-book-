@@ -34,11 +34,11 @@ final class D1DocumentTransport {
                 D1DocumentStoreException.Code.CANCELLED, "Account changed during request");
     }
 
-    static String idToken(String actor) throws Exception {
+    static String idToken(String actor, boolean forceRefresh) throws Exception {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, "Not signed in");
         if (!actor.equals(user.getUid())) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before token");
-        String token = Tasks.await(user.getIdToken(false), 15, TimeUnit.SECONDS).getToken();
+        String token = Tasks.await(user.getIdToken(forceRefresh), 15, TimeUnit.SECONDS).getToken();
         requireActor(actor);
         if (token == null || token.isEmpty()) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, "Missing auth token");
         return token;
@@ -47,7 +47,17 @@ final class D1DocumentTransport {
     static JSONObject request(String method, String pathAndQuery, JSONObject body) throws Exception {
         String actor=REQUEST_ACTOR.get();
         if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
-        String token = idToken(actor);
+        try { return requestOnce(method,pathAndQuery,body,actor,false); }
+        catch (D1DocumentStoreException error) {
+            if (error.getCode()!=D1DocumentStoreException.Code.UNAUTHENTICATED) throw error;
+            // Worker authenticates before touching D1. Retry a rejected token once,
+            // without replaying successful or ambiguous writes.
+            return requestOnce(method,pathAndQuery,body,actor,true);
+        }
+    }
+
+    private static JSONObject requestOnce(String method,String pathAndQuery,JSONObject body,String actor,boolean refresh) throws Exception {
+        String token = idToken(actor,refresh);
         requireActor(actor);
         HttpURLConnection conn = (HttpURLConnection) new URL(BASE + pathAndQuery).openConnection();
         try {
@@ -91,7 +101,8 @@ final class D1DocumentTransport {
                 String err = data.optString("error", "HTTP_" + code);
                 if ("NOT_FOUND".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.NOT_FOUND, err);
                 if ("ALREADY_EXISTS".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS, err);
-                if (code == 401 || code == 403) throw new D1DocumentStoreException(D1DocumentStoreException.Code.PERMISSION_DENIED, err);
+                if (code == 401) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, err);
+                if (code == 403) throw new D1DocumentStoreException(D1DocumentStoreException.Code.PERMISSION_DENIED, err);
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, err + " HTTP " + code);
             }
             return data;
