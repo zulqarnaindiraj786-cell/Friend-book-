@@ -10,6 +10,14 @@ class IntermittentDataTests(unittest.TestCase):
   self.assertIn('if (snap.getMetadata().isFromCache()) return; // a partial cache',s)
   self.assertGreaterEqual(s.count('if (snap == null || snap.getMetadata().isFromCache()) return;'),2)
   self.assertIn('Math.max(user.followerCount, user.friendsCount)',s)
+ def test_reel_engagement_refreshes_visible_item_without_recursive_cached_render(self):
+  reactions=(ROOT/'post/D1Reactions.java').read_text()
+  reels=(ROOT/'reels/ReelsFragment.java').read_text()
+  self.assertIn('fetch(context.getApplicationContext(),collection,reel.id,false,render)',reactions)
+  self.assertIn('if(renderCached)ready.run()',reactions)
+  self.assertIn('findViewHolderForAdapterPosition(pager.getCurrentItem())',reels)
+  self.assertIn('engagementHandler.removeCallbacks(engagementRefresh)',reels)
+  self.assertIn('if (!isResumed()) return;',reels)
  def test_token_rejection_retries_once_not_all_failures(self):
   doc=(ROOT/'d1/documents/D1DocumentTransport.java').read_text()
   self.assertIn('Code.UNAUTHENTICATED',doc)

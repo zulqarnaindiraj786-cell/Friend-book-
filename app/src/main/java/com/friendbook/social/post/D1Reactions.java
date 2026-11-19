@@ -30,16 +30,17 @@ public final class D1Reactions {
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
   if("posts".equals(collection)){FastCache.setReactionTypes(id,types);FastCache.setReactionState(context,id,mine(data),total(data),true);}
  }
- private static void fetch(Context context,String collection,String id,Runnable ready){
+ private static void fetch(Context context,String collection,String id,Runnable ready){fetch(context,collection,id,true,ready);}
+ private static void fetch(Context context,String collection,String id,boolean renderCached,Runnable ready){
   scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){
-   ready.run();Long fetched=FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
+   if(renderCached)ready.run();Long fetched=FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;
   String uid=actor;int generation=GENERATION.getOrDefault(key,0);LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
    if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);
    if(WRITING.contains(key)){WAITERS.remove(key);return;}
-   if(generation!=GENERATION.getOrDefault(key,0)){List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)fetch(context,collection,id,callback);return;}
+   if(generation!=GENERATION.getOrDefault(key,0)){List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)fetch(context,collection,id,false,callback);return;}
    remember(context,collection,id,data);List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);WAITERS.remove(key);FAILED.add(key);
    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(Objects.equals(uid,Fb.uid()))FAILED.remove(key);},10000);});
@@ -59,7 +60,7 @@ public final class D1Reactions {
  public static void reel(Context context,Models.Reel reel,Runnable render){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
   if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
-  else fetch(context.getApplicationContext(),collection,reel.id,()->{reel(context,reel,render);render.run();});
+  fetch(context.getApplicationContext(),collection,reel.id,false,render);
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){
   apply(context,collection,id,requested,onlyAdd,false,render);
