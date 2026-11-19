@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[no-release]')
+    if: github.event_name != 'push' || (!contains(github.event.head_commit.message, '[no-release]') && !contains(github.event.head_commit.message, '[android-compile-only]'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
