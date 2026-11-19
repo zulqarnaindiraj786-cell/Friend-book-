@@ -46,8 +46,7 @@ public class D1DocumentStore {
         final String actor = authenticatedUid();
         final EventListener<DocumentSnapshot> listener;
         volatile boolean active = true;
-        volatile long lastUpdate = -1L;
-        volatile boolean lastExists = false;
+        final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
@@ -193,10 +192,14 @@ public class D1DocumentStore {
 
     <T> Task<T> runAsync(Callable<T> task) {
         TaskCompletionSource<T> tcs = new TaskCompletionSource<>();
+        // Capture the caller when work is queued, not when a worker eventually
+        // starts it. Otherwise a sign-out/account switch can execute an old
+        // screen's queued write with the new account's token.
+        final String actor=authenticatedUid();
         try {
             executor.execute(() -> {
                 try {
-                    tcs.setResult(task.call());
+                    tcs.setResult(D1DocumentTransport.runForActor(actor, task));
                 } catch (Exception e) {
                     tcs.setException(e);
                 }
@@ -301,30 +304,37 @@ public class D1DocumentStore {
 
     private void scheduleDocRead(DocListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { executor.execute(() -> deliverDoc(entry)); }
+        try { executor.execute(() -> {
+            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverDoc(entry); return null; }); }
+            catch (Exception ignored) { entry.inFlight.set(false); }
+        }); }
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { executor.execute(() -> deliverQuery(entry)); }
+        try { executor.execute(() -> {
+            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry); return null; }); }
+            catch (Exception ignored) { entry.inFlight.set(false); }
+        }); }
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
 
     private void deliverDoc(DocListenerEntry entry) {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
-            DocumentSnapshot snap = entry.ref.parseSnapshot(D1DocumentTransport.getDocument(entry.ref.getPath()));
+            org.json.JSONObject response = D1DocumentTransport.getDocument(entry.ref.getPath());
+            DocumentSnapshot snap = entry.ref.parseSnapshot(response);
             if (!entry.actor.equals(authenticatedUid())) return;
             cacheDoc(entry.ref.getPath(), snap, entry.actor);
-            long ut = snap.getUpdateTime() != null ? snap.getUpdateTime().toDate().getTime() : 0L;
-            if (entry.lastUpdate == ut && entry.lastExists == snap.exists() && entry.lastUpdate != -1L) return;
-            entry.lastUpdate = ut;
-            entry.lastExists = snap.exists();
+            // Timestamp equality is not sufficient: concurrent writes may share a
+            // millisecond, and an identical result must clear a prior read error.
+            if (!entry.deliveryState.server(response.toString())) return;
             mainHandler.post(() -> {
                 if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);
             });
         } catch (Exception ex) {
+            entry.deliveryState.error();
             D1DocumentStoreException ffe = ex instanceof D1DocumentStoreException
                     ? (D1DocumentStoreException) ex
                     : new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, ex.getMessage(), ex);

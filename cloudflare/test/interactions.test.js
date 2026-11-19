@@ -185,3 +185,16 @@ test('known epoch zero is distinct from unknown, and schema upgrade retains exis
   f.sql.exec(readFileSync(new URL('../migrations/0005_additive_reaction_history.sql', import.meta.url), 'utf8'));
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_reactions').get().n, 1);
 });
+
+test('reaction and comment totals reflect writes from other isolates and recheck migration status', async t => {
+  const f=fixture();t.after(f.close);
+  const first=await (await call(f.env,'reactions')).json();
+  assert.deepEqual(first.types,[]);assert.equal(first.comments,0);
+  // A different isolate/device writes directly to the same D1 database.
+  f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','other','like',100);
+  f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p1','external','other','hello',null,100);
+  const updated=await (await call(f.env,'reactions')).json();
+  assert.deepEqual(updated.types,[{type:'like',count:1,mine:0}]);assert.equal(updated.comments,1);
+  f.sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/p1'").run();
+  assert.equal((await call(f.env,'reactions')).status,503);
+});

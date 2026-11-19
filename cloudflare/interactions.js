@@ -27,35 +27,6 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
-const verifiedCache = new WeakMap();
-const reactionCache = new WeakMap();
-const REACTION_CACHE_TTL_MS = 300_000;
-
-function getVerifiedSet(db) {
-  let set = verifiedCache.get(db);
-  if (!set) {
-    set = new Set();
-    verifiedCache.set(db, set);
-  }
-  return set;
-}
-
-function getReactionMap(db) {
-  let map = reactionCache.get(db);
-  if (!map) {
-    map = new Map();
-    reactionCache.set(db, map);
-  }
-  return map;
-}
-
-function invalidateResourceReactionCache(db, resource) {
-  const map = getReactionMap(db);
-  for (const k of map.keys()) {
-    if (k.startsWith(resource + '|')) map.delete(k);
-  }
-}
-
 export async function interactions(request, env, identity, match, authorize = authorizePost) {
   // BOTH a deployment gate and independently verified resource migration are required.
   if (env.D1_INTERACTIONS_ENABLED !== 'true') return json({ error: 'D1 interactions not enabled' }, 503);
@@ -66,18 +37,15 @@ export async function interactions(request, env, identity, match, authorize = au
   let db;const context={};
   try {
     db = env.DB.withSession('first-primary');
-    const vSet = getVerifiedSet(env.DB);
-    if (!vSet.has(resource)) {
-      const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
-      if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
-      if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
-      if (!ready) {
-        await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
-          .bind(resource).run();
-      }
-      vSet.add(resource);
-    } else if (!await authorize(identity, collection, id, undefined, context)) {
-      return json({ error: 'Forbidden' }, 403);
+    const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+    if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
+    if (!await authorize(identity, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
+    if (!ready) {
+      await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
+        .bind(resource).run();
+      // Another request can establish a staging row between the read and insert.
+      const current = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+      if (!current || current.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     }
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }
   let data;
@@ -87,18 +55,9 @@ export async function interactions(request, env, identity, match, authorize = au
   try {
     if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') {
-      if (request.method !== 'GET') invalidateResourceReactionCache(env.DB, resource);
       return await commentsAPI(request,db,identity,resource,data,context);
     }
     if (kind === 'reactions') {
-      const rMap = getReactionMap(env.DB);
-      const cacheKey = `${resource}|${identity.uid}|${JSON.stringify(context.blocked || [])}`;
-      if (request.method === 'GET') {
-        const hit = rMap.get(cacheKey);
-        if (hit && hit.expiresAt > Date.now()) {
-          return json(hit.payload);
-        }
-      }
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
@@ -110,7 +69,6 @@ export async function interactions(request, env, identity, match, authorize = au
             VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1`)
             .bind(resource, identity.uid)
         ]);
-        invalidateResourceReactionCache(env.DB, resource);
       }
       const combined = await db.prepare(`SELECT
         COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
@@ -137,7 +95,6 @@ export async function interactions(request, env, identity, match, authorize = au
         comments: Number(combined?.total_comments || 0),
         preview: previewRows.map(row => normalized(row, identity.uid)),
       };
-      rMap.set(cacheKey, { payload, expiresAt: Date.now() + REACTION_CACHE_TTL_MS });
       return json(payload);
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }

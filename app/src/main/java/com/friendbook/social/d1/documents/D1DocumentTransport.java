@@ -20,17 +20,35 @@ import java.util.concurrent.TimeUnit;
 final class D1DocumentTransport {
     static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
     private D1DocumentTransport() {}
+    private static final ThreadLocal<String> REQUEST_ACTOR = new ThreadLocal<>();
 
-    static String idToken() throws Exception {
+    static <T> T runForActor(String actor, java.util.concurrent.Callable<T> task) throws Exception {
+        if (!actor.equals(D1DocumentStore.authenticatedUid())) throw new D1DocumentStoreException(
+                D1DocumentStoreException.Code.CANCELLED, "Account changed before request");
+        REQUEST_ACTOR.set(actor);
+        try { return task.call(); } finally { REQUEST_ACTOR.remove(); }
+    }
+
+    private static void requireActor(String actor) throws D1DocumentStoreException {
+        if (!actor.equals(D1DocumentStore.authenticatedUid())) throw new D1DocumentStoreException(
+                D1DocumentStoreException.Code.CANCELLED, "Account changed during request");
+    }
+
+    static String idToken(String actor) throws Exception {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, "Not signed in");
+        if (!actor.equals(user.getUid())) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before token");
         String token = Tasks.await(user.getIdToken(false), 15, TimeUnit.SECONDS).getToken();
+        requireActor(actor);
         if (token == null || token.isEmpty()) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, "Missing auth token");
         return token;
     }
 
     static JSONObject request(String method, String pathAndQuery, JSONObject body) throws Exception {
-        String token = idToken();
+        String actor=REQUEST_ACTOR.get();
+        if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
+        String token = idToken(actor);
+        requireActor(actor);
         HttpURLConnection conn = (HttpURLConnection) new URL(BASE + pathAndQuery).openConnection();
         try {
             conn.setConnectTimeout(15000);
@@ -55,6 +73,7 @@ final class D1DocumentTransport {
                     while ((line = br.readLine()) != null) sb.append(line);
                 }
             }
+            requireActor(actor);
             JSONObject data;
             try { data = sb.length() > 0 ? new JSONObject(sb.toString()) : new JSONObject(); }
             catch (Exception e) {
