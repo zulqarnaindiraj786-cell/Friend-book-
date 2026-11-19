@@ -212,6 +212,7 @@ public class Presence {
     private static final java.util.concurrent.ExecutorService CF_IO = java.util.concurrent.Executors.newFixedThreadPool(4);
     // Preserve ordering of typing true/false writes without blocking presence reads.
     private static final java.util.concurrent.ExecutorService CF_TYPING_WRITE_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final String CF_TYPING_SESSION = java.util.UUID.randomUUID().toString();
 
     /**
      * Watch presence for a user: combines Firestore (server-known) + Cloudflare HTTP (real-time).
@@ -232,6 +233,7 @@ public class Presence {
         final boolean[] fsSeen = {false};
         final boolean[] fsOnline = {false};
         final long[] fsLastSeen = {0L};
+        final long[] profileRevision = {0L};
 
         Runnable emit = () -> {
             if (!h.closed) cb.onPresence(fsOnline[0], fsLastSeen[0]);
@@ -241,6 +243,7 @@ public class Presence {
         h.fsL = Fb.db().collection("users").document(uid)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (d, err) -> {
                     if (h.closed) return;
+                    profileRevision[0]++;
                     if (d == null || !d.exists()) {
                         fsSeen[0] = false; fsOnline[0] = false; fsLastSeen[0] = 0L; emit.run(); return;
                     }
@@ -252,13 +255,18 @@ public class Presence {
                     fsOnline[0] = allowed && isUserOnlineDoc(d);
                     fsLastSeen[0] = allowed ? extractLastSeenMs(d) : 0L;
                     emit.run();
+                    // Peer profile projections intentionally omit private status
+                    // fields. Refresh the separately authorized presence endpoint
+                    // after a profile change instead of leaving peers offline.
+                    if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED && allowed)
+                        H.postDelayed(() -> fetchCloudflarePresence(uid,h,fsSeen,fsOnline,fsLastSeen,profileRevision,emit),1000L);
                 });
 
         // Cloudflare HTTP presence polling (real-time WebSocket state)
         if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
             h.ticker = () -> {
                 if (!h.closed) {
-                    fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, emit);
+                    fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, profileRevision, emit);
                     H.postDelayed(h.ticker, 30_000L); // poll every 30s
                 }
             };
@@ -273,8 +281,9 @@ public class Presence {
     }
 
     private static void fetchCloudflarePresence(String uid, Handle h, boolean[] fsSeen, boolean[] fsOnline,
-                                                long[] fsLastSeen, Runnable emit) {
+                                                long[] fsLastSeen, long[] profileRevision, Runnable emit) {
         if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null || !h.cfReadInFlight.compareAndSet(false, true)) return;
+        final long requestRevision=profileRevision[0];
         try {
             FirebaseUser user = Fb.auth().getCurrentUser();
             if (user == null) { h.cfReadInFlight.set(false); return; }
@@ -288,16 +297,20 @@ public class Presence {
                         boolean cfOnline = data.optBoolean("online", false);
                         long cfSeen = data.optLong("lastSeen", 0L);
                         H.post(() -> {
-                            if (h.closed || !user.getUid().equals(Fb.uid())) return;
-                            // Cloudflare is the real-time source; Firestore is privacy gate
-                            if (cfOnline || cfSeen > 0L) {
-                                fsSeen[0] = true;
-                                fsOnline[0] = cfOnline;
-                                if (cfSeen > 0L) fsLastSeen[0] = Math.max(fsLastSeen[0], cfSeen);
-                                emit.run();
-                            }
+                            if (h.closed || !user.getUid().equals(Fb.uid()) || requestRevision!=profileRevision[0]) return;
+                            // A successful zero response is authoritative too: retaining
+                            // the previous online state can leak hidden/offline presence.
+                            fsSeen[0] = true;
+                            fsOnline[0] = cfOnline;
+                            fsLastSeen[0] = cfSeen;
+                            emit.run();
                         });
-                    } catch (Throwable ignored) { }
+                    } catch (Exception error) {
+                        H.post(() -> {
+                            if (h.closed || !user.getUid().equals(Fb.uid()) || requestRevision!=profileRevision[0]) return;
+                            fsSeen[0]=false; fsOnline[0]=false; fsLastSeen[0]=0L; emit.run();
+                        });
+                    }
                     finally { h.cfReadInFlight.set(false); }
                 });
             }).addOnFailureListener(e -> h.cfReadInFlight.set(false));
@@ -346,6 +359,7 @@ public class Presence {
                 if (token == null || token.isEmpty() || !user.getUid().equals(Fb.uid())) return;
                 JSONObject body = new JSONObject();
                 body.put("typing", typing);
+                body.put("sessionId", CF_TYPING_SESSION);
                 Request request = new Request.Builder()
                         .url(CF_PRESENCE_BASE + "/typing/" + android.net.Uri.encode(chatId))
                         .put(RequestBody.create(body.toString(), JSON))

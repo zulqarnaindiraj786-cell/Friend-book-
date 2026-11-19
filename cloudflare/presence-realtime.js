@@ -20,7 +20,8 @@ export function isFreshOnline(online, visible, lastSeen, now) {
 export async function writePresence(db, uid, session, online, visible, now) {
   await db.prepare(`INSERT INTO friendbook_cf_presence_sessions(uid,session_id,online,visible,last_seen) VALUES (?,?,?,?,?)
     ON CONFLICT(uid,session_id) DO UPDATE SET online=excluded.online,visible=excluded.visible,last_seen=excluded.last_seen
-    WHERE excluded.last_seen>=friendbook_cf_presence_sessions.last_seen`)
+    WHERE excluded.last_seen>friendbook_cf_presence_sessions.last_seen
+       OR (excluded.last_seen=friendbook_cf_presence_sessions.last_seen AND friendbook_cf_presence_sessions.online=1 AND excluded.online=0)`)
     .bind(uid,session,online?1:0,visible?1:0,now).run();
 }
 export async function readPresence(db, uid, now) {
@@ -82,17 +83,25 @@ export async function presenceRealtime(request, env, identity) {
     if (request.method === 'PUT') {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
-      if (!body || typeof body.typing !== 'boolean') return json({ error: 'Invalid typing state' }, 400);
+      if (!body || typeof body.typing !== 'boolean' || Object.keys(body).some(k=>!['typing','sessionId'].includes(k))
+          || (body.sessionId!==undefined && !validId(body.sessionId))) return json({ error: 'Invalid typing state' }, 400);
+      const session=body.sessionId || 'legacy';
       try {
-        await env.DB.prepare(`INSERT INTO friendbook_cf_typing(chat_id,uid,typing,updated_at) VALUES (?,?,?,?)
-          ON CONFLICT(chat_id,uid) DO UPDATE SET typing=excluded.typing,updated_at=excluded.updated_at
-          WHERE excluded.updated_at>=friendbook_cf_typing.updated_at`).bind(chatId,uid,body.typing?1:0,now).run();
+        await env.DB.prepare(`INSERT INTO friendbook_cf_typing_sessions(chat_id,uid,session_id,typing,updated_at) VALUES (?,?,?,?,?)
+          ON CONFLICT(chat_id,uid,session_id) DO UPDATE SET typing=excluded.typing,updated_at=excluded.updated_at
+          WHERE excluded.updated_at>friendbook_cf_typing_sessions.updated_at
+          OR (excluded.updated_at=friendbook_cf_typing_sessions.updated_at AND friendbook_cf_typing_sessions.typing=1 AND excluded.typing=0)`)
+          .bind(chatId,uid,session,body.typing?1:0,now).run();
+        if (Math.random()<0.01) {
+          try { await env.DB.prepare('DELETE FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid=? AND updated_at<?')
+            .bind(chatId,uid,now-7*24*60*60*1000).run(); } catch { /* best-effort cleanup */ }
+        }
         return json({ chatId, typing: body.typing });
       } catch { return json({error:'Typing unavailable'},503); }
     }
     if (request.method === 'GET') {
       try {
-        const row=await env.DB.prepare('SELECT 1 AS active FROM friendbook_cf_typing WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=? LIMIT 1')
+        const row=await env.DB.prepare('SELECT 1 AS active FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=? LIMIT 1')
           .bind(chatId,uid,now-TYPING_TTL_MS,now).first();
         return json({ chatId, typing: Boolean(row?.active) });
       } catch { return json({error:'Typing unavailable'},503); }

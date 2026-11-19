@@ -302,7 +302,7 @@ public class GroupsActivity extends Activity {
                                 Ui.toast(this, "Group created 🎉");
                                 startActivity(new Intent(this, GroupDetailActivity.class)
                                         .putExtra("group_id", ref.getId()));
-                            });
+                            }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't create group. Please try again."); });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
