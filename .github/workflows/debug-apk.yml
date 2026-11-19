@@ -100,14 +100,17 @@ jobs:
           jarsigner -verify app/build/outputs/bundle/release/app-release.aab
       - name: Check packaged hardware features are optional
         run: |
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release.apk > "$RUNNER_TEMP/friendbook-badging.txt"
-          for feature in android.hardware.screen.portrait android.hardware.wifi; do
-            grep -Fx "uses-feature-not-required: name='$feature'" "$RUNNER_TEMP/friendbook-badging.txt"
-            if grep -F "name='$feature'" "$RUNNER_TEMP/friendbook-badging.txt" | grep -E '^uses-(implied-)?feature:'; then
-              echo "Packaged manifest still requires $feature" >&2
-              exit 1
-            fi
-          done
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree app/build/outputs/apk/release/app-release.apk AndroidManifest.xml > "$RUNNER_TEMP/friendbook-manifest.txt"
+          python3 - <<'PY'
+          import os, pathlib, re
+          xmltree = (pathlib.Path(os.environ['RUNNER_TEMP']) / 'friendbook-manifest.txt').read_text()
+          blocks = re.split(r'(?m)^\s*E: ', xmltree)
+          for name in ('android.hardware.screen.portrait', 'android.hardware.wifi'):
+              matches = [b for b in blocks if b.startswith('uses-feature ') and ('"'+name+'"') in b]
+              if len(matches) != 1 or not re.search(r'android:required[^=]*=\(type 0x12\)0x0\b', matches[0]):
+                  raise SystemExit(f'Expected one optional declaration for {name}: {matches}')
+              print(f'{name}: required=false')
+          PY
       - name: Report compressed APK size by component
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
