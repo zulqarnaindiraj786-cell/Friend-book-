@@ -540,14 +540,20 @@ public class MainActivity extends Activity {
                 com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
+    // Badges display at most 15+; full history remains in the paginated screens.
+    private static final int BADGE_WINDOW = 32;
+
     private void startBadgeListeners() {
         String me = Fb.uid();
         if (me == null) return;
         if (notifReg != null) notifReg.remove();
         notifReg = Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(BADGE_WINDOW)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                    if (snap == null || !me.equals(Fb.uid())) return;
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
@@ -622,7 +628,10 @@ public class MainActivity extends Activity {
         if (reqReg != null) reqReg.remove();
         reqReg = Fb.db().collection("friend_requests")
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(BADGE_WINDOW)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !me.equals(Fb.uid())) return;
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {

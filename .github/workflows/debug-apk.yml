@@ -111,10 +111,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="friendbook-2.8.89-cloudflare-${GITHUB_SHA:0:7}"
+          version=$(sed -nE "s/^[[:space:]]*versionName '([^']+)'.*/\1/p" app/build.gradle | head -1)
+          test -n "$version"
+          tag="friendbook-${version}-cloudflare-${GITHUB_SHA:0:7}"
           gh release create "$tag" \
             app/build/outputs/apk/release/app-release.apk#FriendBook.apk \
             app/build/outputs/bundle/release/app-release.aab#FriendBook.aab \
             --target "$GITHUB_SHA" --prerelease --latest=false \
-            --title "FriendBook 2.8.89 Cloudflare test candidate" \
+            --title "FriendBook ${version} Cloudflare test candidate" \
             --notes "Signed with the original v2.8.89 key. Test candidate; not the production release."
