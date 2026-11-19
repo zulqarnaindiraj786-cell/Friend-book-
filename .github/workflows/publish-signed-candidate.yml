@@ -1,0 +1,39 @@
+name: Publish owner-requested signed candidate
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/publish-signed-candidate.yml']
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    if: "contains(github.event.head_commit.message, '[publish-signed-candidate]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed APK from completed build
+        uses: actions/download-artifact@v4
+        with:
+          name: FriendBook-release-apk
+          run-id: 44441433601
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: files
+      - name: Download signed AAB from completed build
+        uses: actions/download-artifact@v4
+        with:
+          name: FriendBook-playstore-aab
+          run-id: 44441433601
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: files
+      - name: Publish direct download links without marking as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          test -s files/friendbook.apk
+          test -s files/friendbook-playstore.aab
+          gh release create friendbook-signed-3ad6dae files/friendbook.apk files/friendbook-playstore.aab \
+            --target 3ad6daecaf73f5ce0fd8b29502b8357907b3f70a \
+            --prerelease --title 'FriendBook signed candidate' \
+            --notes 'Owner-requested signed candidate. Automated tests passed; real old/new account and device flows have not been verified. Not a production readiness certification.'
