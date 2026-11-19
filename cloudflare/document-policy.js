@@ -3,14 +3,14 @@ import { isSelfArrayChange } from './social-access.js';
 import { authorizePost } from './firebase-post-access.js';
 
 // Access is denied by default: add a collection only after its read and write policy exists.
-const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels','stories','friend_requests','friends','payments','groups','reports','feedback','config','events','pages','lives']);
+const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels','stories','friend_requests','friends','payments','groups','reports','feedback','config','events','pages','lives','gifts','referrals','subscriptions']);
 export function supportedDocumentPath(path) {
   const p=path.split('/');
   if (!SUPPORTED.has(p[0])) return false;
   if (p[0]==='lives') return p.length===2 || (p.length===4 && p[2]==='chat');
   if (p[0]==='chats') return p.length===2 || (p.length===4 && p[2]==='messages');
   if (p[0]==='config') return p.length===2 && p[1]==='ads';
-  if (['messages','notifications','friend_requests','friends','payments','groups','stories','reports','feedback','events','pages','lives'].includes(p[0])) return p.length===2;
+  if (['messages','notifications','friend_requests','friends','payments','groups','stories','reports','feedback','events','pages','lives','gifts','referrals','subscriptions'].includes(p[0])) return p.length===2;
   if (['posts','reels'].includes(p[0])) return p.length===2 || (p.length===4 && ['comments','reactions'].includes(p[2]));
   return true;
 }
@@ -19,7 +19,7 @@ export function supportedCollectionPath(path) {
   if (!SUPPORTED.has(p[0]) || p[0]==='config') return false;
   if (p[0]==='lives') return p.length===1 || (p.length===3 && p[2]==='chat');
   if (p[0]==='chats') return p.length===1 || (p.length===3 && p[2]==='messages');
-  if (['messages','notifications','friend_requests','friends','payments','groups','stories','reports','feedback','events','pages','lives'].includes(p[0])) return p.length===1;
+  if (['messages','notifications','friend_requests','friends','payments','groups','stories','reports','feedback','events','pages','lives','gifts','referrals','subscriptions'].includes(p[0])) return p.length===1;
   if (['posts','reels'].includes(p[0])) return p.length===1 || (p.length===3 && ['comments','reactions'].includes(p[2]));
   return true;
 }
@@ -31,6 +31,7 @@ export async function contentReadAllowed(db, uid, path, requestUserReads, includ
 }
 export function contentWriteAllowed(path, uid, before, after) {
   const p=path.split('/');
+  if (['gifts','referrals','subscriptions'].includes(p[0])) return false;
   if (p[0]==='lives') return p.length===2 && !!after && after.hostId===uid
     && (!before ? (after.likesCount===undefined || after.likesCount===0) : (before.hostId===uid && before.status==='live' && after.likesCount===before.likesCount))
     && (after.status==='live' || (!!before && after.status==='ended'))

@@ -332,6 +332,14 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
   assert.deepEqual((await list.json()).documents,[]);
   list=await call('u1','/v1/docs?collection=notifications');
   assert.deepEqual((await list.json()).documents,[]);
+  sql.exec(readFileSync(new URL('../migrations/0036_inbox_unread_indexes.sql',import.meta.url),'utf8'));
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('notifications/old','notifications','old','u2',JSON.stringify({fields:{toUserId:{stringValue:'u2'},isRead:{booleanValue:false}}}),1);
+  const unread=[{field:'isRead',op:'==',value:false}];
+  const unreadCount=uid=>call(uid,`/v1/firestore/count?parent=notifications&filters=${encodeURIComponent(JSON.stringify(unread))}`);
+  assert.equal((await (await unreadCount('u2')).json()).count,2);
+  assert.equal((await (await unreadCount('u1')).json()).count,0);
+  const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_type(document_json,'$.isRead')='false' AND json_extract(document_json,'$.toUserId')=?").all('u2');
+  assert.ok(plan.some(row=>row.detail.includes('idx_cf_inbox_unread')));
   const count=await call('u1','/v1/firestore/count?parent=notifications');
   assert.equal((await count.json()).count,0);
   assert.equal((await call('u1','/v1/firestore/document?path=notifications/n1','PATCH',{fields:{toUserId:'u1'}})).status,403);
@@ -339,6 +347,7 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
   assert.equal((await call('u1','/v1/firestore/batch','POST',{operations:[{op:'update',path:'notifications/n1',updates:{toUserId:'u1'}}]})).status,403);
   assert.equal((await call('u1','/v1/firestore/document?path=notifications/n1','DELETE')).status,403);
   assert.equal((await call('u2','/v1/firestore/batch','POST',{operations:[{op:'update',path:'notifications/n1',updates:{isRead:true}}]})).status,200);
+  assert.equal((await (await unreadCount('u2')).json()).count,1);
   assert.equal((await call('u2','/v1/firestore/document?path=notifications/n1','PATCH',{fields:{text:'tampered'}})).status,403);
   assert.equal((await call('u3','/v1/firestore/document?parent=notifications','POST',{data:{fromUserId:'u1',toUserId:'u2',isRead:false}})).status,403);
   sql.close();
@@ -1347,6 +1356,7 @@ test('older app document profile writes use the same guarded merge', async () =>
 test('admin moderation requires configured UID, preserves audit and atomically bans or deletes', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
  sql.exec(readFileSync(new URL('../migrations/0030_moderation_audit.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0037_admin_live_audit.sql',import.meta.url),'utf8'));
  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
  const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
  const add=(coll,id,data)=>{f.run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(data),1,1);a.run(`${coll}/${id}`,coll,id,id,JSON.stringify({...data,id}),1);};
@@ -1374,8 +1384,26 @@ test('admin moderation requires configured UID, preserves audit and atomically b
  assert.equal((await mod('admin',{action:'delete_content',collection:'posts',id:'p'})).status,200);
  assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().n,0);
  assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE path='posts/p'").get().n,0);
+ add('lives','room',{hostId:'alice',status:'live',privacy:'friends'});
+ const end={action:'end_live',collection:'lives',id:'room'};
+ assert.equal((await mod('alice',end)).status,403);
+ assert.equal((await mod('admin',end)).status,200);
+ assert.equal((await mod('admin',end)).status,200);
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='lives/room'").get().document_json).status,'ended');
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='lives/room'").get().document_json).status,'ended');
+ for (const collection of ['gifts','referrals','subscriptions']) {
+   add(collection,'private',{value:1});
+   const path=`/v1/firestore/document?path=${collection}/private`;
+   assert.equal((await call('alice',path)).status,403);
+   assert.equal((await call('alice','/v1/firestore/query','POST',{parent:collection})).status,403);
+   assert.equal((await call('alice',`/v1/firestore/count?parent=${collection}`)).status,403);
+   assert.equal((await call('admin',path)).status,200);
+   assert.equal((await (await call('admin','/v1/firestore/query','POST',{parent:collection})).json()).documents.length,1);
+   assert.equal((await call('admin',path,'DELETE')).status,403);
+ }
  const audit=sql.prepare('SELECT action,original_json FROM friendbook_cf_moderation_audit ORDER BY rowid').all();
  assert.deepEqual(audit.map(x=>x.action),['ban_user','unban_user','delete_content']);assert.equal(JSON.parse(audit[2].original_json).content,'sensitive');
+ assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_live_moderation_audit').get().n,1);
  sql.close();
 });
 

@@ -380,15 +380,18 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'notifications') {
+    const unread = Array.isArray(filters) && filters.some(f=>f.field==='isRead' && f.op==='==' && f.value===false);
+    const canonicalUnread = unread ? " AND json_type(document_json,'$.isRead')='false'" : '';
+    const legacyUnread = unread ? " AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_type(a.document_json,'$.fields.isRead.booleanValue') ELSE json_type(a.document_json,'$.isRead') END)='false'" : '';
     // Authorization itself narrows the inbox before loading rows. Keep canonical
     // path precedence even when its recipient differs from a stale legacy mirror.
     const canonical = await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
-      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?`).bind(uid).all();
+      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?${canonicalUnread}`).bind(uid).all();
     const legacy = await db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
       FROM friendbook_cf_documents a WHERE a.collection='notifications'
         AND (CASE WHEN json_type(a.document_json,'$.fields')='object'
           THEN json_extract(a.document_json,'$.fields.toUserId.stringValue')
-          ELSE json_extract(a.document_json,'$.toUserId') END)=?
+          ELSE json_extract(a.document_json,'$.toUserId') END)=?${legacyUnread}
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all();
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
@@ -1238,7 +1241,8 @@ async function adminModeration(request,env,uid,now) {
       || Object.keys(input).some(k=>!['action','collection','id'].includes(k))
       || !validSegment(input.id) || input.id.length>128) return json({error:'Invalid request'},400);
   const isBan=['ban_user','unban_user'].includes(input.action);
-  if ((isBan && input.collection!=='users') || (!isBan && (input.action!=='delete_content'
+  const endLive=input.action==='end_live' && input.collection==='lives';
+  if ((isBan && input.collection!=='users') || (!isBan && !endLive && (input.action!=='delete_content'
       || !['posts','reels','stories'].includes(input.collection)))) return json({error:'Invalid request'},400);
   if (isBan && (uid===input.id || isPaymentAdmin(env,input.id))) return json({error:'Protected account'},403);
   const path=`${input.collection}/${input.id}`;
@@ -1247,15 +1251,18 @@ async function adminModeration(request,env,uid,now) {
     if (!row) return json({error:'NOT_FOUND'},404);
     const before=decodeValue(JSON.parse(row.document_json));
     const guard=await chatDocumentGuard(db,path,row);
-    const audit=db.prepare('INSERT INTO friendbook_cf_moderation_audit(id,admin_uid,action,target_path,original_json,created_at) VALUES (?,?,?,?,?,?)')
+    const auditTable=endLive ? 'friendbook_cf_live_moderation_audit' : 'friendbook_cf_moderation_audit';
+    const audit=db.prepare(`INSERT INTO ${auditTable}(id,admin_uid,action,target_path,original_json,created_at) VALUES (?,?,?,?,?,?)`)
       .bind(crypto.randomUUID(),uid,input.action,path,row.document_json,now);
     const statements=[guard,audit];
-    if (isBan) {
-      const next={...before,banned:input.action==='ban_user'},serialized=JSON.stringify(next);
+    if (endLive && before.status==='ended') return json({ok:true,action:input.action,path});
+    if (isBan || endLive) {
+      const next=endLive ? {...before,status:'ended',endedAt:{__type:'timestamp',millis:now},pkActive:false,pkBattleId:''} : {...before,banned:input.action==='ban_user'};
+      const serialized=JSON.stringify(next), collection=input.collection, owner=endLive ? before.hostId : input.id;
       statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
-        .bind(path,'users','users',input.id,input.id,serialized,row.create_time||now,now));
+        .bind(path,collection,collection,input.id,owner,serialized,row.create_time||now,now));
       statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
-        .bind(path,'users',input.id,input.id,JSON.stringify({...next,id:input.id}),now));
+        .bind(path,collection,input.id,owner,JSON.stringify({...next,id:input.id}),now));
     } else {
       statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
       statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));
@@ -1545,7 +1552,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
-    if (['reports','feedback'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
@@ -1661,6 +1668,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     if (['friends','payments','config'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['gifts','referrals','subscriptions'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(splitPath(docPath)[0])) {
       if (!canReadReports(env,uid)) return json({error:'Forbidden'},403);
       if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
@@ -1823,7 +1831,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
@@ -1883,7 +1891,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }

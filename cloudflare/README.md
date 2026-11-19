@@ -98,3 +98,9 @@ MINIFLARE=/tmp/friendbook-smoke/node_modules/miniflare node cloudflare/test/live
 ```
 
 The smoke test uses fixture identities and a disposable Cloudflare runtime with D1 and a Durable Object. It verifies room creation, publisher/watcher access, forwarding both packet types, and denial after a broadcast ends. It does not validate Android codecs, Google Sign-In, or production configuration.
+
+### D1 query indexes and admin access
+
+The existing schema keeps reactions and comments in their resource-keyed tables (0003/0004/0032), and profile document reads use the document path primary key. Author profiles, feed pages, chat history, friend requests and inbox queries use the query-specific indexes in 0023–0029. Migration 0036 adds partial recipient indexes for unread-only notification badge queries, including historical typed records; it does not replace the regular inbox indexes. Migration 0037 adds a separate indexed, server-written audit for ending live rooms without rewriting the existing ban/delete audit table.
+
+The Worker checks the configured administrator UID (`PAYMENT_ADMIN_UIDS`) before serving private admin report collections or accepting moderation writes. The Android admin panel uses the audited `end_live` action rather than a host-only document update. Existing gift, referral and subscription documents can be read by the administrator; this does not enable client writes to those collections, billing transitions, or official broadcast fanout.
