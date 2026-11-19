@@ -19,7 +19,13 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK 36
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ] || [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            SDKM="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+            test -x "$SDKM"
+            "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
+          fi
       - name: Compile and test the candidate
         run: bash ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain
       - uses: actions/upload-artifact@v4
@@ -40,7 +46,13 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK 36
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ] || [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            SDKM="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+            test -x "$SDKM"
+            "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
+          fi
       - name: Sign candidate with the existing release key
         env:
           FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
