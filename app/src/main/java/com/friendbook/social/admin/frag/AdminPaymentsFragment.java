@@ -28,7 +28,6 @@ import com.friendbook.social.d1.documents.Query;
 import com.friendbook.social.d1.documents.SetOptions;
 import com.friendbook.social.d1.documents.WriteBatch;
 
-import java.util.Date;
 
 /**
  * Admin Payments tab — ONE unified list of every payment type:
@@ -205,9 +204,8 @@ public class AdminPaymentsFragment extends Fragment {
             String subId = Format.str(m, "subscriptionId");
             if (!subId.isEmpty()) {
                 DocumentReference su = Fb.db().collection("subscriptions").document(subId);
-                batch.update(su, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
-                                new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
+                // The Worker verifies the linked subscriber and sets the expiry atomically.
+                batch.update(su, "status", "active");
             }
         }
         batch.commit().addOnSuccessListener(x -> {

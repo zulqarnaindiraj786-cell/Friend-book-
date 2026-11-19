@@ -368,15 +368,18 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all();
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
-  const authorFilter=Array.isArray(filters) && filters.find(f=>f?.field==='authorId' && f.op==='==' && typeof f.value==='string');
-  if (authorFilter && (parent==='posts' || parent==='reels')) {
-    // Only known constant SQL collection names are interpolated; values stay bound.
-    // Apply remaining filters, authorization and paging in the existing query engine.
+  // Only hard-coded root/field pairs can be interpolated into SQL. Privacy
+  // filtering still happens after candidate selection, before the page limit.
+  const indexedFields={posts:['groupId','authorId'],reels:['authorId'],stories:['authorId'],pages:['ownerId']};
+  const indexedField=(Object.hasOwn(indexedFields,parent)?indexedFields[parent]:[]).find(field=>
+    Array.isArray(filters) && filters.some(f=>f?.field===field && f.op==='==' && typeof f.value==='string'));
+  if (indexedField) {
+    const value=filters.find(f=>f.field===indexedField && f.op==='==' && typeof f.value==='string').value;
     const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
-      WHERE parent_path='${parent}' AND json_extract(document_json,'$.authorId')=?`).bind(authorFilter.value).all();
+      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all();
     const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='${parent}' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.authorId.stringValue') ELSE json_extract(a.document_json,'$.authorId') END)=?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(authorFilter.value).all();
+      WHERE a.collection='${parent}' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${indexedField}.stringValue') ELSE json_extract(a.document_json,'$.${indexedField}') END)=?
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(value).all();
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'notifications') {
@@ -1022,6 +1025,7 @@ async function unfriendBatch(db,uid,ops,now) {
 
 // Reviews are restricted to a server-configured Firebase UID and bind the
 // pending request and target profile to the same conditional D1 transaction.
+const canReadSubscription=(env,uid,data)=>isPaymentAdmin(env,uid) || data?.subscriberId===uid || data?.creatorId===uid;
 async function reviewPayment(db,env,uid,paymentPath,update,profileOp,now) {
   const forbidden=()=>json({error:'Forbidden'},403);
   if (!isPaymentAdmin(env,uid) || typeof db.batch!=='function' || !isDocumentPath(paymentPath) || splitPath(paymentPath)[0]!=='payments') return forbidden();
@@ -1031,10 +1035,27 @@ async function reviewPayment(db,env,uid,paymentPath,update,profileOp,now) {
   const payRow=await readRow(db,paymentPath);
   if (!payRow) return forbidden();
   const payment=decodeValue(JSON.parse(payRow.document_json));
-  // Only free verification requests are eligible; no proof of paid transactions is inferred.
-  if (!canCreateFreeReview(payment.userId,{...payment,status:'pending'}) || payment.status!=='pending' || !validSegment(payment.userId)) return forbidden();
+  // Existing paid subscriptions are reviewed manually by the configured admin;
+  // this does not create payments or claim that an external charge was verified.
+  const subscription=payment.type==='subscription';
+  if (payment.status!=='pending' || !validSegment(payment.userId)) return forbidden();
+  if (subscription) {
+    if (!validSegment(payment.subscriptionId) || !Number.isFinite(payment.amount) || payment.amount<=0
+        || typeof payment.currency!=='string' || !/^[A-Z]{3}$/.test(payment.currency) || payment.currency==='FREE') return forbidden();
+  } else if (!canCreateFreeReview(payment.userId,{...payment,status:'pending'})) return forbidden();
   let profileRow=null, profile=null;
-  if (action==='approved') {
+  if (action==='approved' && subscription) {
+    const target=`subscriptions/${payment.subscriptionId}`, fields=profileOp?.fields||profileOp?.updates||profileOp?.data;
+    if (profileOp?.path!==target || (profileOp.op||profileOp.type)!=='update' || !fields
+        || Object.keys(fields).length!==1 || fields.status!=='active') return forbidden();
+    profileRow=await readRow(db,target);
+    if (!profileRow) return forbidden();
+    const before=decodeValue(JSON.parse(profileRow.document_json));
+    if (before.status!=='pending' || before.subscriberId!==payment.userId || !validSegment(before.creatorId)
+        || before.creatorId===payment.userId || (before.paymentId!==undefined && before.paymentId!==docIdOf(paymentPath))
+        || (payment.creatorId!==undefined && payment.creatorId!==before.creatorId)) return forbidden();
+    profile={...before,status:'active',expiry:{__type:'timestamp',millis:now+30*86400000}};
+  } else if (action==='approved') {
     const level=payment.type.slice(5), value=profileOp?.data;
     if (!profileOp || (profileOp.op||profileOp.type)!=='set' || profileOp.merge!==true
         || profileOp.mergeFields || profileOp.path!==`users/${payment.userId}` || !value
@@ -1552,7 +1573,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
-    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
@@ -1565,6 +1586,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { if (!(await contentReadAllowed(db,uid,docPath,undefined,true))) return json({error:'Forbidden'},403); }
     catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
+    if (parts[0]==='subscriptions' && !canReadSubscription(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     try {
@@ -1831,7 +1853,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
@@ -1851,7 +1873,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let docs;
     const ownFollowFilters=Array.isArray(body?.filters) ? body.filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,body?.filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
@@ -1891,7 +1913,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback','gifts','referrals','subscriptions'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
@@ -1911,7 +1933,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let docs;
     const ownFollowFilters=Array.isArray(filters) ? filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };

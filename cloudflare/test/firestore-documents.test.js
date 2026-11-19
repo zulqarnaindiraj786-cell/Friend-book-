@@ -624,6 +624,21 @@ test('only configured administrators can atomically approve or reject a free rev
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PUT',{data:{uid:'alice'}})).status,200);
   const make=async()=>{const res=await call('alice','/v1/firestore/document?parent=payments','POST',{data:{userId:'alice',type:'tick_blue',amount:0,currency:'FREE',status:'pending'}});return (await res.json()).id;};
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  insert.run('payments/paid','payments','payments','paid','alice',JSON.stringify({type:'subscription',userId:'alice',subscriptionId:'fan',status:'pending',amount:100,currency:'PKR'}),1,1);
+  insert.run('subscriptions/fan','subscriptions','subscriptions','fan','alice',JSON.stringify({subscriberId:'alice',creatorId:'creator',status:'pending'}),1,1);
+  const paid=[{op:'update',path:'payments/paid',updates:{status:'approved',approvedBy:'admin',approvedAt:{__fieldValue:'serverTimestamp'}}},
+    {op:'update',path:'subscriptions/fan',updates:{status:'active'}}];
+  const review=(uid,operations)=>call(uid,'/v1/firestore/batch','POST',{operations});
+  assert.equal((await review('alice',paid)).status,403);
+  assert.equal((await review('admin',[paid[0],{...paid[1],path:'subscriptions/other'}])).status,403);
+  assert.equal((await review('admin',[paid[0],{...paid[1],updates:{status:'active',expiry:1}}])).status,403);
+  assert.equal((await review('admin',paid)).status,200);
+  const sub=await call('alice','/v1/firestore/document?path=subscriptions/fan');
+  assert.equal(sub.status,200);
+  assert.equal((await sub.json()).data.status,'active');
+  assert.equal((await call('stranger','/v1/firestore/document?path=subscriptions/fan')).status,403);
+  assert.equal((await review('admin',paid)).status,403);
   const id=await make(), path=`payments/${id}`;
   const ops=[{op:'update',path,updates:{status:'approved',approvedBy:'admin',approvedAt:{__fieldValue:'serverTimestamp'}}},
     {op:'set',path:'users/alice',merge:true,data:{tickLevel:'blue',isVerified:true}}];
@@ -1395,8 +1410,10 @@ test('admin moderation requires configured UID, preserves audit and atomically b
    add(collection,'private',{value:1});
    const path=`/v1/firestore/document?path=${collection}/private`;
    assert.equal((await call('alice',path)).status,403);
-   assert.equal((await call('alice','/v1/firestore/query','POST',{parent:collection})).status,403);
-   assert.equal((await call('alice',`/v1/firestore/count?parent=${collection}`)).status,403);
+   const list=await call('alice','/v1/firestore/query','POST',{parent:collection});
+   const count=await call('alice',`/v1/firestore/count?parent=${collection}`);
+   if (collection==='subscriptions') {assert.deepEqual((await list.json()).documents,[]);assert.equal((await count.json()).count,0);}
+   else {assert.equal(list.status,403);assert.equal(count.status,403);}
    assert.equal((await call('admin',path)).status,200);
    assert.equal((await (await call('admin','/v1/firestore/query','POST',{parent:collection})).json()).documents.length,1);
    assert.equal((await call('admin',path,'DELETE')).status,403);

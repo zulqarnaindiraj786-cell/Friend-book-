@@ -63,6 +63,7 @@ jobs:
         run: |
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
