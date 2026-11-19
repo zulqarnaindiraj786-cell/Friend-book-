@@ -240,6 +240,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private long coHostSeqOut = 0L;
     private long pkSeqOut = 0L;
     private long lastHostVideoUpdateMs = 0L;
+    private long lastPkLeftFrame, lastPkRightFrame;
     private long lastPkMediaPushMs = 0L;
     private int peakViewers = 1;
     private int currentViewers = 1;
@@ -1511,6 +1512,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (!isCoHost) {
                 // Side A (Left 50% Pane)
                 if (!(isHost && "A".equals(pkRole))) {
+                    lastPkLeftFrame = android.os.SystemClock.elapsedRealtime();
                     pkLeftRemoteImg.setVisibility(View.VISIBLE);
                     pkLeftRemoteImg.setImageBitmap(bitmap);
                     pkLeftFallbackBox.setVisibility(View.GONE);
@@ -1518,6 +1520,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             } else {
                 // Side B (Right 50% Pane)
                 if (!(isHost && "B".equals(pkRole)) && !isMePkGuest) {
+                    lastPkRightFrame = android.os.SystemClock.elapsedRealtime();
                     pkRightRemoteImg.setVisibility(View.VISIBLE);
                     pkRightRemoteImg.setImageBitmap(bitmap);
                     pkRightFallbackBox.setVisibility(View.GONE);
@@ -2504,6 +2507,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             toggleHostCameraPause();
             return;
         }
+        if (pkBattleActive && isMePkGuest && pkGuestEngine != null) {
+            boolean paused = !pkGuestEngine.isCameraPaused();
+            pkGuestEngine.setCameraPaused(paused);
+            pkRightGuestTexture.setVisibility(paused ? View.INVISIBLE : View.VISIBLE);
+            if (pkGuestBeautyOverlay != null) pkGuestBeautyOverlay.setVisibility(!paused && pkGuestEngine.getBeautyLevel() > 0 ? View.VISIBLE : View.GONE);
+            pkRightFallbackBox.setVisibility(paused ? View.VISIBLE : View.GONE);
+            if (btnVideoPause != null) btnVideoPause.setText(paused ? "none" : "camera");
+            Ui.toast(this, paused ? "PK camera off · mic unchanged" : "PK camera on");
+            return;
+        }
         if (isMeActiveCoHost && coHostLocalEngine != null) {
             boolean nextPaused = !coHostLocalEngine.isCameraPaused();
             coHostLocalEngine.setCameraPaused(nextPaused);
@@ -3144,6 +3157,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void tickPkCountdown() {
         if (!pkBattleActive || pkTimerPillTv == null || pkEndsAtMs <= 0L) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastPkLeftFrame > 0 && now - lastPkLeftFrame > 4_000L && !(isHost && "A".equals(pkRole))) {
+            lastPkLeftFrame = 0;
+            pkLeftRemoteImg.setVisibility(View.GONE);
+            pkLeftFallbackBox.setVisibility(View.VISIBLE);
+        }
+        if (lastPkRightFrame > 0 && now - lastPkRightFrame > 4_000L && !(isHost && "B".equals(pkRole)) && !isMePkGuest) {
+            lastPkRightFrame = 0;
+            pkRightRemoteImg.setVisibility(View.GONE);
+            pkRightFallbackBox.setVisibility(View.VISIBLE);
+        }
         long remMs = pkEndsAtMs - System.currentTimeMillis();
         if (remMs > 0L) {
             long remSec = remMs / 1000L;
@@ -3222,6 +3246,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void teardownPkStageUi() {
+        lastPkLeftFrame = lastPkRightFrame = 0;
         pkBattleActive = false;
         engine.resetRemoteSequences();
         pkVictoryPhase = false;
@@ -3246,8 +3271,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         pkGuestRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
             @Override public void ready() {
                 if (!isMePkGuest || isEnded || pkGuestEngine == null) return;
-                pkRightGuestTexture.setVisibility(View.VISIBLE);
-                pkRightFallbackBox.setVisibility(View.GONE);
+                pkRightGuestTexture.setVisibility(pkGuestEngine.isCameraPaused() ? View.INVISIBLE : View.VISIBLE);
+                pkRightFallbackBox.setVisibility(pkGuestEngine.isCameraPaused() ? View.VISIBLE : View.GONE);
                 pkGuestEngine.startBroadcasting(true);
             }
             @Override public void packet(String kind, String data, long seq) { }

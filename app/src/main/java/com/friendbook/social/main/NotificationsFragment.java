@@ -157,9 +157,8 @@ public class NotificationsFragment extends Fragment {
         if (!hidden) {
             MainActivity.clearNotificationsBadgeNow();
             if (adapter != null) startPages();
-        } else if (reg != null) {
-            reg.remove();
-            reg = null;
+        } else {
+            stopPages();
         }
     }
 
@@ -171,41 +170,40 @@ public class NotificationsFragment extends Fragment {
         }
         String me = Fb.uid();
         if (me == null || isHidden()) return;
-        if (!initialLoaded || !java.util.Objects.equals(loadedActor, me)) {
+        if (reg == null || !java.util.Objects.equals(loadedActor, me)) {
             startPages();
         }
     }
     private void startPages() {
-        if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
-        if (reg != null && !java.util.Objects.equals(loadedActor, me)) { reg.remove(); reg = null; data.clear(); }
+        stopPages();
+        String me=Fb.uid();if(me==null)return;
+        if (loadedActor != null && !me.equals(loadedActor)) { data.clear(); adapter.notifyDataSetChanged(); }
         loadedActor = me;
         initialLoaded = true;
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
-        if (reg == null) {
-            // Watch the latest page while the tab is open; the pager itself is one-shot.
-            final boolean[] first = {true};
-            reg = query.limit(20).addSnapshotListener((snapshot, error) -> {
-                if (snapshot == null) return;
-                if (snapshot.getMetadata().isFromCache()) return;
-                if (first[0]) { first[0] = false; return; }
-                if (!isHidden() && java.util.Objects.equals(me, Fb.uid())) startPages();
-            });
-        }
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
             data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
             Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
-            if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
+            if(!unreadOnly)com.friendbook.social.core.FastCache.saveNotifications(data);
             adapter.notifyDataSetChanged();
             empty.setText(error.isEmpty() ? "No notifications yet.\nLikes, comments and friend requests appear here." : error);
             empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
-        });pager.start();
+        });
+        // The same verified head query is both the first page and the live refresh.
+        // CursorPager reads the saved query on disk first, then accepts that live snapshot.
+        pager.startObserved();
+        reg=query.limit(20).addSnapshotListener((snapshot,error)->{
+            if(pager==null || isHidden() || !me.equals(Fb.uid()))return;
+            if(error!=null) pager.observedError();
+            else pager.acceptObservedFirstPage(snapshot);
+        });
     }
 
     private void setUnreadOnly(boolean on) {
@@ -248,9 +246,13 @@ public class NotificationsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) { reg.remove(); reg = null; }
-        if(pager!=null){pager.close();pager=null;}
+        stopPages();
         initialLoaded = false;
+    }
+
+    private void stopPages() {
+        if(reg!=null){reg.remove();reg=null;}
+        if(pager!=null){pager.close();pager=null;}
     }
 
     private void open(Models.Notif n) {

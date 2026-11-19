@@ -367,6 +367,23 @@ async function filteredRequestRows(db,uid,filters) {
 async function readCollectionRows(db, parent, uid, filters, spec) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
+  if (parent === 'users') {
+    const lo=filters?.find(f=>f.field==='displayName' && f.op==='>=')?.value;
+    const hi=filters?.find(f=>f.field==='displayName' && f.op==='<=')?.value;
+    if (typeof lo==='string' && /^[\x20-\x7e]{2,60}$/.test(lo) && hi===lo+'\uf8ff') {
+      // Use the indexed ASCII prefix range as a superset; the normal filters and ACL
+      // still check every result, including Unicode suffixes and legacy precedence.
+      const end=lo.slice(0,-1)+String.fromCharCode(lo.charCodeAt(lo.length-1)+1);
+      const canonicalName="json_extract(document_json,'$.displayName')";
+      const legacyName="CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.displayName.stringValue') ELSE json_extract(a.document_json,'$.displayName') END";
+      const [a,b]=await Promise.all([
+        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name WHERE parent_path='users' AND ${canonicalName}>=? AND ${canonicalName}<?`).bind(lo,end).all(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_users_display_name WHERE collection='users' AND (${legacyName})>=? AND (${legacyName})<?
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(lo,end).all(),
+      ]);
+      return [...(a.results||[]),...(b.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+    }
+  }
   if (parent === 'chats') {
     // Canonical membership wins over stale legacy mirrors. The normal document
     // ACL still runs before results are returned to the caller.

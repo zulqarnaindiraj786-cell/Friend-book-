@@ -5,7 +5,7 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class FriendsCursorPages(unittest.TestCase):
     def test_twenty_per_visible_section_and_bounded_request_listener(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20','NearEndPaging.attach(rv','if(hidden){ stopRequestWatch(); closePage(); }','if(loading){requestRender();return;}','swipe.setOnRefreshListener(this::startSection)','People you may know','suggestionPager.start()']:
+        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20','NearEndPaging.attach(rv','if(hidden){ stopRequestWatch(); closePage(true); }','if(loading){requestRender();return;}','swipe.setOnRefreshListener(this::startSection)','People you may know','suggestionPager.start()']:
             self.assertIn(token,code)
         self.assertEqual(code.count('addSnapshotListener'),1)
         self.assertIn('query.limit(20).addSnapshotListener',code)

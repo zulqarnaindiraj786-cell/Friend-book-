@@ -75,7 +75,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private boolean pageMore,pageLoading,suggestionMore,suggestionLoading;
     private String pageError="",suggestionError="";
-    private int generation;
+    private int generation, inlineToken;
     private int requestBoundary=-1,suggestionHeader=-1;
     private boolean started;
     private String pageActor;
@@ -88,7 +88,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final Runnable renderFrame=()->{renderQueued=false;render();};
     private void requestRender(){if(!renderQueued){renderQueued=true;frameHandler.postDelayed(renderFrame,16);}}
     private boolean current(int token,String actor){return token==generation && java.util.Objects.equals(actor,Fb.uid()) && getActivity()!=null && !isHidden();}
-    private void closePage(){generation++;if(activePager!=null){activePager.close();activePager=null;}if(suggestionPager!=null){suggestionPager.close();suggestionPager=null;}checkingUsers.clear();loadingProfiles.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
+    private void closePage(boolean keepInline){generation++;if(activePager!=null){activePager.close();activePager=null;}if(!keepInline && suggestionPager!=null){inlineToken++;suggestionPager.close();suggestionPager=null;}checkingUsers.clear();loadingProfiles.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
 
 
     @Nullable
@@ -167,22 +167,29 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     @Override public void onHiddenChanged(boolean hidden){
         super.onHiddenChanged(hidden);
-        if(hidden){ stopRequestWatch(); closePage(); }else if(started && adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
+        if(hidden){ stopRequestWatch(); closePage(true); }else if(started && adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
     }
     @Override public void onStart(){super.onStart();started=true;if(!isHidden()){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}}
-    @Override public void onStop(){started=false;stopRequestWatch();closePage();super.onStop();}
+    @Override public void onStop(){started=false;stopRequestWatch();closePage(false);super.onStop();}
 
     private void startSection(){
         String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
         if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
         // Relationship checks and profile details belong to the current actor and
         // must be revalidated on each visit, not just on manual pull-to-refresh.
-        closePage();
-        checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();
+        boolean keepInline = section == SEC_REQUESTS && suggestionPager != null && me.equals(pageActor)
+                && (swipe == null || !swipe.isRefreshing());
+        closePage(keepInline);
+        if (!keepInline) {
+            checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();
+            suggestionMore=false;suggestionLoading=false;suggestionError="";
+        }
         pageActor=me;final int token=generation, selected=section;
-        pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=false;suggestionError="";
+        pageMore=false;pageLoading=true;pageError="";
+        if (keepInline) checkCandidates(me,token);
         Query query;
-        if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending");
+        if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending")
+                .orderBy("createdAt",Query.Direction.DESCENDING);
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
@@ -210,11 +217,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void loadInlineSuggestions(){
         if(section!=SEC_REQUESTS || !started || isHidden() || suggestionPager!=null || pageLoading)return;
         String me=Fb.uid(); if(me==null)return;
-        int token=generation;
+        final int token=++inlineToken;
         suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
-            if(!current(token,me) || section!=SEC_REQUESTS)return;
+            if(token!=inlineToken || !me.equals(Fb.uid()) || !me.equals(pageActor) || section!=SEC_REQUESTS)return;
             suggestionMore=more;suggestionLoading=loading;suggestionError=error;
-            if(loading){requestRender();return;}consumeSuggestions(docs,me,token);render();
+            if(loading){if(!isHidden())requestRender();return;}
+            consumeSuggestions(docs,me,generation);if(!isHidden())render();
         });suggestionPager.start();
     }
 
@@ -222,14 +230,15 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         suggestions.clear();for(DocumentSnapshot doc:docs){Models.User user=Models.User.fromDoc(doc);
             if(me.equals(user.uid) || user.deactivated || "Only me".equalsIgnoreCase(user.lookupPrivacy) || (Fb.me!=null && Fb.me.blocked.contains(user.uid)))continue;
             suggestions.add(user);userCache.put(user.uid,user);com.friendbook.social.core.FastCache.putUser(user);
-        }checkCandidates(me,token);
+        }if(!isHidden())checkCandidates(me,token);
     }
     private UsersAdapter.Row control(String title,boolean loading,Runnable action){
         UsersAdapter.Row row=new UsersAdapter.Row();row.heading=title;row.loading=loading;row.action=action;return row;
     }
     private void addSuggestions(List<UsersAdapter.Row> rows){
         for(Models.User u:suggestions){
-            if(candidateFriends.contains(u.uid) || candidateIncoming.contains(u.uid) || candidateOutgoing.contains(u.uid))continue;
+            if(candidateFriends.contains(u.uid) || candidateIncoming.contains(u.uid) || candidateOutgoing.contains(u.uid)
+                    || (section==SEC_REQUESTS && incoming.stream().anyMatch(req -> u.uid.equals(req.fromUid))))continue;
             boolean incomingRequest=false;for(Models.FriendRequest request:incoming)if(request.fromUid.equals(u.uid)){incomingRequest=true;break;}
             if(incomingRequest)continue;
             UsersAdapter.Row row=new UsersAdapter.Row();row.user=u;

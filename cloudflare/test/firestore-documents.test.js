@@ -2025,3 +2025,25 @@ test('direct calls authorize both call participants, reject forged transitions a
  assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),null);
  sql.close();
 });
+
+test('indexed display-name prefix keeps canonical precedence and supports legacy names', async () => {
+  const sql = new DatabaseSync(':memory:');
+  for (const ddl of [resourcesSchema, appSchema, schema,
+    readFileSync(new URL('../migrations/0053_people_name_prefix.sql', import.meta.url), 'utf8')]) sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  put.run('users/actor','users','users','actor','actor','{"displayName":"Viewer"}',1,1);
+  put.run('users/changed','users','users','changed','changed','{"displayName":"New name"}',1,1);
+  put.run('users/match','users','users','match','match','{"displayName":"Amir"}',1,1);
+  legacy.run('users/changed','users','changed','changed','{"displayName":"Amir old"}',1);
+  legacy.run('users/legacy','users','legacy','legacy','{"fields":{"displayName":{"stringValue":"Amina"}}}',1);
+  const db={prepare(q){const s=sql.prepare(q);return {bind(...a){return {first:async()=>s.get(...a)||null,all:async()=>({results:s.all(...a)})};}};}};
+  const response=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
+    method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},
+    body:JSON.stringify({parent:'users',limit:12,filters:[{field:'displayName',op:'>=',value:'Am'},{field:'displayName',op:'<=',value:'Am\uf8ff'}]}),
+  }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).documents.map(doc=>doc.id).sort(),['legacy','match']);
+  const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?").all('Am','An');
+  assert.ok(plan.some(row=>row.detail.includes('idx_cf_users_display_name')));
+});

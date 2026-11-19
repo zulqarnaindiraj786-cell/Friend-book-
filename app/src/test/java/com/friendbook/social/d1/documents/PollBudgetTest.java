@@ -17,6 +17,15 @@ public class PollBudgetTest {
         assertTrue(budget.due("notifications", true, 15_000));
     }
 
+    @Test public void visibleInboxRefreshIsFasterWithoutIncreasingBackgroundReads() {
+        PollBudget budget = new PollBudget();
+        assertTrue(budget.due("friend_requests", true, 15_000, true));
+        budget.success(false);
+        assertFalse(budget.due("notifications", true, 29_999, true));
+        assertTrue(budget.due("notifications", true, 30_000, true));
+        assertFalse(budget.due("notifications", false, 300_000, true));
+    }
+
     @Test public void errorsDoNotKeepHammeringQuota() {
         PollBudget budget = new PollBudget();
         budget.failure();

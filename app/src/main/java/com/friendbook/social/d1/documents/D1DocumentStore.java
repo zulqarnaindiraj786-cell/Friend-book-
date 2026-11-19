@@ -395,7 +395,9 @@ public class D1DocumentStore {
         }
         for (QueryListenerEntry e : queryListeners) {
             String path = e.query.parentPath;
-            if (!ListenerPollingPolicy.isChatMessages(path) && e.budget.due(path, foreground, now - e.lastAttemptMs)) scheduleQueryRead(e);
+            boolean visibleList = Integer.valueOf(20).equals(e.query.limitValue)
+                    && ("notifications".equals(path) || "friend_requests".equals(path));
+            if (!ListenerPollingPolicy.isChatMessages(path) && e.budget.due(path, foreground, now - e.lastAttemptMs, visibleList)) scheduleQueryRead(e);
         }
     }
 
