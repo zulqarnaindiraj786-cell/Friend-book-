@@ -187,10 +187,11 @@ public class NotificationsFragment extends Fragment {
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
-            data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
-            Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
+            List<Models.Notif> next=new ArrayList<>();
+            for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))next.add(n);}
+            next.sort(java.util.Comparator.comparingLong((Models.Notif n)->n.createdAt).reversed().thenComparing(n->n.id,java.util.Comparator.reverseOrder()));
+            if (!next.isEmpty() || error.isEmpty()) adapter.replace(next);
             if(!unreadOnly)com.friendbook.social.core.FastCache.saveNotifications(data);
-            adapter.notifyDataSetChanged();
             empty.setText(error.isEmpty() ? "No notifications yet.\nLikes, comments and friend requests appear here." : error);
             empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
@@ -209,6 +210,7 @@ public class NotificationsFragment extends Fragment {
     private void setUnreadOnly(boolean on) {
         if (unreadOnly == on && initialLoaded) return;
         unreadOnly = on;
+        if (adapter != null) adapter.replace(java.util.Collections.emptyList());
         initialLoaded = false;
         android.app.Activity a = getActivity();
         if (a == null) return;
@@ -348,6 +350,17 @@ public class NotificationsFragment extends Fragment {
     }
 
     class NotifAdapter extends RecyclerView.Adapter<NotifAdapter.VH> {
+
+        void replace(List<Models.Notif> next) {
+            List<Models.Notif> before = new ArrayList<>(data);
+            androidx.recyclerview.widget.DiffUtil.DiffResult diff=androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback() {
+                public int getOldListSize(){return before.size();}
+                public int getNewListSize(){return next.size();}
+                public boolean areItemsTheSame(int a,int b){return before.get(a).id.equals(next.get(b).id);}
+                public boolean areContentsTheSame(int a,int b){return false;}
+            },false);
+            data.clear();data.addAll(next);diff.dispatchUpdatesTo(this);
+        }
 
         @Override public int getItemCount() { return data.size(); }
 

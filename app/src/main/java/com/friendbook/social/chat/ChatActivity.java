@@ -638,10 +638,20 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     pendingMessages.mergeInto(combined);
                     list=new ArrayList<>(combined.values()); list.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id));
                     list.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));
+                    int first = lm == null ? -1 : lm.findFirstVisibleItemPosition();
+                    View anchor = lm == null || first < 0 ? null : lm.findViewByPosition(first);
+                    String anchorId = anchor == null ? null : adapter.idAt(first);
+                    int offset = anchor == null ? 0 : lm.getDecoratedTop(anchor) - rv.getPaddingTop();
                     adapter.setData(list);
+                    if (!nearBottom && anchorId != null && rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
+                        for (int i=0;i<list.size();i++) if (anchorId.equals(list.get(i).id)) {
+                            if (i != first) lm.scrollToPositionWithOffset(i,offset);
+                            break;
+                        }
+                    }
                     hydrateTeamSharedReactions(list);
                     historyButton.setVisibility(View.GONE);
-                    if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || list.size() > prevCount)) {
+                    if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || (rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE && list.size() > prevCount))) {
                         initialScrollDone = true;
                         forceScrollBottom = false;
                         rv.scrollToPosition(list.size() - 1);

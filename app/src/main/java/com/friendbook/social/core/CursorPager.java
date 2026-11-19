@@ -19,7 +19,9 @@ public final class CursorPager {
     private final String actor,key;
     private final Listener listener;
     private final LinkedHashMap<String,DocumentSnapshot> records=new LinkedHashMap<>();
-    private DocumentSnapshot cursor;
+    private DocumentSnapshot cursor,observedTail;
+    private List<DocumentSnapshot> observedHead=Collections.emptyList();
+    private boolean receivedObserved;
     private boolean more=true,loading,closed,serverReceived;
     private int requestGeneration;
     private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -43,14 +45,28 @@ public final class CursorPager {
     /** Reuse the verified first page already fetched by the section listener. */
     public void acceptObservedFirstPage(QuerySnapshot page) {
         if (!active() || page == null || page.getMetadata().isFromCache()) return;
-        requestGeneration++;
-        if (timeout != null) timeoutHandler.removeCallbacks(timeout);
-        loading=false; serverReceived=true; more=page.size()==size;
-        records.clear();
         List<DocumentSnapshot> docs=page.getDocuments();
-        cursor=docs.isEmpty()?null:docs.get(docs.size()-1);
-        for(DocumentSnapshot doc:docs) records.put(doc.getId(),doc);
-        CACHE.put(key,new CachedPage(new ArrayList<>(docs),more));
+        if (receivedObserved && sameData(observedHead,docs)) return;
+        boolean hasOlderPages=cursor!=null && observedTail!=null && (loading || !cursor.getId().equals(observedTail.getId()));
+        receivedObserved=true;observedHead=new ArrayList<>(docs);
+        observedTail=docs.isEmpty()?null:docs.get(docs.size()-1);
+        if (page.size()<size || !hasOlderPages) {
+            if (loading) { requestGeneration++; if (timeout!=null) timeoutHandler.removeCallbacks(timeout); loading=false; }
+            records.clear();cursor=observedTail;more=page.size()==size;
+        } else {
+            // Refresh the live head without discarding older pages or invalidating their in-flight read.
+            Set<String> headIds=new HashSet<>();for(DocumentSnapshot doc:docs)headIds.add(doc.getId());
+            com.google.firebase.Timestamp boundary=observedTail==null?null:observedTail.getTimestamp("createdAt");
+            records.values().removeIf(doc->{
+                com.google.firebase.Timestamp time=doc.getTimestamp("createdAt");
+                return headIds.contains(doc.getId()) || (boundary!=null && time!=null && (time.compareTo(boundary)>0 || (time.equals(boundary) && doc.getId().compareTo(observedTail.getId())>0)));
+            });
+        }
+        LinkedHashMap<String,DocumentSnapshot> merged=new LinkedHashMap<>();
+        for(DocumentSnapshot doc:docs)merged.put(doc.getId(),doc);
+        merged.putAll(records);records.clear();records.putAll(merged);
+        serverReceived=true;
+        CACHE.put(key,new CachedPage(new ArrayList<>(docs),page.size()==size));
         emit("");
     }
     public void observedError() {

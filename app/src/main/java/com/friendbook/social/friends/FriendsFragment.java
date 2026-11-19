@@ -190,7 +190,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         Query query;
         if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending")
                 .orderBy("createdAt",Query.Direction.DESCENDING);
-        else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
+        else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending").orderBy("createdAt",Query.Direction.DESCENDING);
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
         activePager=new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20,"friends-section:"+selected,(docs,more,loading,error)->{
@@ -199,13 +199,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(loading){requestRender();return;}
             loadedSections.add(selected);
             if(swipe!=null)swipe.setRefreshing(false);
-            if(selected==SEC_REQUESTS){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
+            if(selected==SEC_REQUESTS && (error.isEmpty() || !docs.isEmpty())){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
                 if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);if(req.fromName.isEmpty())ensureUser(req.fromUid);}}
                 tabs[SEC_REQUESTS].setText("Requests");
             }else if(selected==SEC_SENT){outgoing.clear();sentIds.clear();for(DocumentSnapshot doc:docs){if(cancelledRequestIds.contains(doc.getId()))continue;String other=doc.getString("toUid");if(other!=null){outgoing.add(other);sentIds.put(other,doc.getId());ensureUser(other);}}}
             else if(selected==SEC_FRIENDS){friendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!me.equals(other) && !removedFriendIds.contains(other) && !friendIds.contains(other)){friendIds.add(other);ensureUser(other);}}
-            else consumeSuggestions(docs,me,token);
+            else if(selected==SEC_SUGGESTIONS)consumeSuggestions(docs,me,token);
             render();
         });render();
         if(selected==SEC_REQUESTS || selected==SEC_SENT){
