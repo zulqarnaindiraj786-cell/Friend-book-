@@ -60,6 +60,7 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
     if (!before) return false;
   }
   if (parts[0] === 'chats' && parts.length === 2) {
+    if (id.startsWith('callmedia_') || (after && !equal(before?.activeCall,after.activeCall))) return false;
     if (!before) {
       if (!after || !member(after,uid) || !validList(after.participants)) return false;
       if (after.isGroup===true) return validGroupRoom(after) && after.createdBy===uid && equal(after.adminIds,[uid]);

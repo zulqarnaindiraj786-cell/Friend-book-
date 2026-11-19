@@ -4,6 +4,8 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
+# Public app gate; config/ads and AdMob consent still apply in Android.
+ADS_ENABLED_V3 = "true"
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
@@ -54,3 +56,11 @@ class_name = "LiveRelay"
 [[migrations]]
 tag = "live-relay-v1"
 new_sqlite_classes = ["LiveRelay"]
+
+[[durable_objects.bindings]]
+name = "CALL_RELAY"
+class_name = "CallRelay"
+
+[[migrations]]
+tag = "call-relay-v1"
+new_sqlite_classes = ["CallRelay"]

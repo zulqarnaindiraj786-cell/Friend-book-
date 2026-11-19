@@ -44,7 +44,7 @@ import com.friendbook.social.d1.documents.FieldValue;
 import com.friendbook.social.d1.documents.ListenerRegistration;
 import com.friendbook.social.d1.documents.SetOptions;
 
-import java.util.Arrays;
+import com.friendbook.social.live.LiveRelayClient;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -80,12 +80,12 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
                                      boolean isVideo) {
         String me = Fb.uid();
         if (me == null || chatId.isEmpty()) return;
+        if (isGroup) { Ui.toast(c, "Calls are available in direct chats only"); return; }
         if (peerId != null && Ui.TEAM_USER_ID.equals(peerId)) {
             Ui.toast(c, "Direct calls to official support account are unavailable");
             return;
         }
-        String suffix = me.length() > 6 ? me.substring(0, 6) : me;
-        String callId = System.currentTimeMillis() + "_" + suffix;
+        String callId = java.util.UUID.randomUUID().toString();
         handledCallIds.add(callId);
 
         Intent i = new Intent(c, CallActivity.class);
@@ -118,7 +118,8 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         Map<String, Object> ac = (Map<String, Object>) raw;
 
         String status = Format.str(ac, "status");
-        if (!"ringing".equals(status)) return;
+        if (!"ringing".equals(status) || !me.equals(Format.str(ac, "calleeId"))
+                || Boolean.TRUE.equals(roomDoc.getBoolean("isGroup"))) return;
 
         String callerId = Format.str(ac, "callerId");
         if (callerId.isEmpty() || callerId.equals(me)) return;
@@ -174,31 +175,25 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     private String peerName = "";
     private String peerPhoto = "";
     private boolean isGroup = false;
+    private volatile LiveRelayClient mediaRelay;
+    private boolean accepting;
     private boolean isVideo = false;
     private boolean isCaller = true;
 
-    private boolean connected = false;
-    private boolean ended = false;
-    private boolean micMuted = false;
+    private volatile boolean connected = false;
+    private volatile boolean ended = false;
+    private volatile boolean micMuted = false;
     private boolean speakerOn = true;
-    private boolean cameraEnabled = false;
-    private long callStartedMs = 0L;
+    private volatile boolean cameraEnabled = false;
     private long connectedAtMs = 0L;
 
-    private LiveStreamEngine engine;
+    private volatile LiveStreamEngine engine;
     private DocumentReference chatDocRef;
-    private DocumentReference myMediaRef;
-    private DocumentReference remoteMediaRef;
     private ListenerRegistration signalReg;
-    private ListenerRegistration remoteMediaReg;
-    private com.friendbook.social.d1.realtime.DatabaseReference myRtdbMediaRef;
-    private com.friendbook.social.d1.realtime.DatabaseReference remoteRtdbMediaRef;
-    private com.friendbook.social.d1.realtime.ValueEventListener remoteRtdbListener;
 
     private final AtomicLong localVideoSeq = new AtomicLong(0);
     private final AtomicLong localAudioSeq = new AtomicLong(0);
     private volatile long lastVideoPushMs = 0L;
-    private volatile long lastAudioPushMs = 0L;
 
     private FrameLayout root;
     private ImageView remoteVideoView;
@@ -301,7 +296,6 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
         handledCallIds.add(callId);
-        callStartedMs = System.currentTimeMillis();
         cameraEnabled = isVideo;
         speakerOn = isVideo; // Video calls default to speakerphone; voice calls default to earpiece (toggleable!)
 
@@ -313,11 +307,6 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
 
         chatDocRef = Fb.db().collection("chats").document(chatId);
-        String mySuffix = isCaller ? "_a" : "_b";
-        String remSuffix = isCaller ? "_b" : "_a";
-        myMediaRef = Fb.db().collection("chats").document("callmedia_" + callId + mySuffix);
-        remoteMediaRef = Fb.db().collection("chats").document("callmedia_" + callId + remSuffix);
-
         engine = new LiveStreamEngine(this, this);
         engine.setStreamQuality(LiveStreamEngine.QUALITY_DATA_SAVER);
 
@@ -613,30 +602,17 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     // ==================== SIGNALING & MEDIA ====================
 
     private void publishOutgoingCallSignal() {
-        String me = Fb.uid();
-        if (me == null) return;
-        String myName = (Fb.me != null && Fb.me.displayName != null && !Fb.me.displayName.isEmpty())
-                ? Fb.me.displayName : "friendbook User";
-        String myPhoto = (Fb.me != null && Fb.me.photoUrl != null) ? Fb.me.photoUrl : "";
+        if (isGroup) { callFailure(); return; }
+        Fb.db().signalCall(chatId, callId, "start", peerId, isVideo)
+                .addOnSuccessListener(result -> {
+                    if (ended) Fb.db().signalCall(chatId, callId, "cancelled", peerId, isVideo);
+                }).addOnFailureListener(error -> callFailure());
+    }
 
-        Map<String, Object> activeCall = new HashMap<>();
-        activeCall.put("callId", callId);
-        activeCall.put("chatId", chatId);
-        activeCall.put("callerId", me);
-        activeCall.put("callerName", myName);
-        activeCall.put("callerPhoto", myPhoto);
-        activeCall.put("calleeId", peerId == null ? "" : peerId);
-        activeCall.put("callType", isVideo ? "video" : "voice");
-        activeCall.put("status", "ringing");
-        activeCall.put("startedAt", callStartedMs);
-        activeCall.put("connectedAt", 0L);
-
-        Map<String, Object> roomPatch = new HashMap<>();
-        roomPatch.put("activeCall", activeCall);
-        if (!isGroup && peerId != null && !peerId.isEmpty()) {
-            roomPatch.put("participants", Arrays.asList(me, peerId));
-        }
-        chatDocRef.set(roomPatch, SetOptions.merge());
+    private void callFailure() {
+        if (ended) return;
+        Ui.toast(this, isGroup ? "Calls are available in direct chats only" : "Call could not connect");
+        endCallInternal("ended", false);
     }
 
     @SuppressWarnings("unchecked")
@@ -664,26 +640,17 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void acceptIncomingCall() {
-        if (ended) return;
+        if (ended || accepting) return;
+        accepting = true;
         stopRingingFeedback();
         incomingControlsRow.setVisibility(View.GONE);
         activeControlsRow.setVisibility(View.VISIBLE);
         statusTv.setText("Connecting…");
-
-        long now = System.currentTimeMillis();
-        Map<String, Object> patch = new HashMap<>();
-        patch.put("activeCall.status", "connected");
-        patch.put("activeCall.connectedAt", now);
-        chatDocRef.update(patch).addOnFailureListener(e -> {
-            Map<String, Object> ac = new HashMap<>();
-            ac.put("callId", callId);
-            ac.put("status", "connected");
-            ac.put("connectedAt", now);
-            Map<String, Object> wrap = new HashMap<>();
-            wrap.put("activeCall", ac);
-            chatDocRef.set(wrap, SetOptions.merge());
-        });
-        onCallConnected(now);
+        Fb.db().signalCall(chatId, callId, "accept", peerId, isVideo)
+                .addOnSuccessListener(result -> {
+                    if (ended) Fb.db().signalCall(chatId, callId, "end", peerId, isVideo);
+                    else onCallConnected(result.optLong("connectedAt"));
+                }).addOnFailureListener(error -> { if (!connected) callFailure(); });
     }
 
     private void onCallConnected(long cMs) {
@@ -698,7 +665,6 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         mainHandler.removeCallbacks(durationTicker);
         mainHandler.post(durationTicker);
 
-        ensureCallPermissionsAndPreparePreview(true);
         attachRemoteMediaListener();
     }
 
@@ -772,69 +738,42 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void attachRemoteMediaListener() {
-        if (remoteMediaReg != null || remoteMediaRef == null) return;
-
-
-        remoteMediaReg = remoteMediaRef.addSnapshotListener((snap, err) -> {
-            if (ended || isFinishing() || snap == null || !snap.exists() || engine == null) return;
-
-            Long aSeq = snap.getLong("audioSeq");
-            String aChunk = snap.getString("audioChunk");
-            if (aChunk != null && !aChunk.isEmpty()) {
-                engine.enqueueRemoteAudio(aChunk, aSeq != null ? aSeq : 0L, false);
-            }
-
-            Boolean remCamOff = snap.getBoolean("camOff");
-            if (Boolean.TRUE.equals(remCamOff)) {
-                remoteVideoView.setVisibility(View.GONE);
-                centerProfileBox.setVisibility(View.VISIBLE);
-            } else {
-                Long vSeq = snap.getLong("videoSeq");
-                String vFrame = snap.getString("videoFrame");
-                if (vFrame != null && !vFrame.isEmpty()) {
-                    engine.decodeRemoteFrame(vFrame, vSeq != null ? vSeq : 0L, false);
+        mediaRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+            @Override public void ready() { if (!ended) ensureCallPermissionsAndPreparePreview(true); }
+            @Override public void audience(int count) { }
+            @Override public void disconnected() {
+                if (!ended) {
+                    Ui.toast(CallActivity.this, "Call connection lost");
+                    endCallInternal("completed", true);
                 }
             }
+            @Override public void packet(String kind, String data, long seq) {
+                LiveStreamEngine current = engine;
+                if (ended || current == null) return;
+                if ("audio".equals(kind)) current.enqueueRemoteAudio(data, seq, false);
+                if ("video".equals(kind)) current.decodeRemoteFrame(data, seq, false);
+                if ("camera".equals(kind)) mainHandler.post(() -> {
+                    if (ended) return;
+                    remoteVideoView.setVisibility(View.GONE);
+                    centerProfileBox.setVisibility(View.VISIBLE);
+                });
+            }
         });
+        mediaRelay.openCall(chatId, callId);
     }
 
-    // ==================== LiveStreamEngine.Listener ====================
-
-    @Override
-    public void onEncodedVideoFrame(String base64Webp, int width, int height) {
-        if (!connected || ended || !cameraEnabled || myMediaRef == null) return;
+    @Override public void onEncodedVideoFrame(String data, int width, int height) {
+        LiveRelayClient relay = mediaRelay;
+        if (!connected || ended || !cameraEnabled || relay == null) return;
         long now = System.currentTimeMillis();
-        if (now - lastVideoPushMs < 280L) return;
+        if (now - lastVideoPushMs < 140L) return;
         lastVideoPushMs = now;
-        long vSeq = localVideoSeq.incrementAndGet();
-
-        Map<String, Object> m = new HashMap<>();
-        m.put("videoSeq", vSeq);
-        m.put("videoFrame", base64Webp);
-        m.put("camOff", false);
-        m.put("updatedAt", now);
-        if (myRtdbMediaRef != null) {
-            try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
-        }
-        myMediaRef.set(m, SetOptions.merge());
+        relay.send("video", data, localVideoSeq.incrementAndGet());
     }
 
-    @Override
-    public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
-        if (!connected || ended || micMuted || myMediaRef == null) return;
-        long now = System.currentTimeMillis();
-        lastAudioPushMs = now;
-        long aSeq = localAudioSeq.incrementAndGet();
-
-        Map<String, Object> m = new HashMap<>();
-        m.put("audioSeq", aSeq);
-        m.put("audioChunk", base64Ulaw);
-        m.put("voiceLevel", voiceLevel);
-        m.put("updatedAt", now);
-        if (myRtdbMediaRef != null) {
-            try { myRtdbMediaRef.updateChildren(m); } catch (Throwable ignored) { }
-        }
-        myMediaRef.set(m, SetOptions.merge());
+    @Override public void onEncodedAudioChunk(String data, int voiceLevel) {
+        LiveRelayClient relay = mediaRelay;
+        if (connected && !ended && !micMuted && relay != null) relay.send("audio", data, localAudioSeq.incrementAndGet());
     }
 
     @Override
@@ -876,6 +815,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void toggleCameraEnabled() {
+        if (!isVideo) { Ui.toast(this, "Start a video call to use the camera"); return; }
         cameraEnabled = !cameraEnabled;
         if (cameraEnabled) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -892,28 +832,14 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.setCameraPaused(false);
                 if (connected) engine.startBroadcasting(true);
             }
-            if (myRtdbMediaRef != null) {
-                try { myRtdbMediaRef.child("camOff").setValue(false); } catch (Throwable ignored) { }
-            }
-            if (myMediaRef != null) {
-                Map<String, Object> m = new HashMap<>();
-                m.put("camOff", false);
-                myMediaRef.set(m, SetOptions.merge());
-            }
+
         } else {
             localPipCard.setVisibility(View.GONE);
             btnFlipCam.setVisibility(View.GONE);
             if (engine != null) {
                 engine.setCameraPaused(true);
             }
-            if (myRtdbMediaRef != null) {
-                try { myRtdbMediaRef.child("camOff").setValue(true); } catch (Throwable ignored) { }
-            }
-            if (myMediaRef != null) {
-                Map<String, Object> m = new HashMap<>();
-                m.put("camOff", true);
-                myMediaRef.set(m, SetOptions.merge());
-            }
+            if (mediaRelay != null) mediaRelay.send("camera", "AA==", localVideoSeq.incrementAndGet());
         }
         updateControlVisuals();
     }
@@ -969,24 +895,11 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
         }
 
         if (updateServer && chatDocRef != null) {
-            String serverStatus = connected ? "ended" : reason;
-            Map<String, Object> patch = new HashMap<>();
-            patch.put("activeCall.status", serverStatus);
-            patch.put("activeCall.endedAt", System.currentTimeMillis());
-            chatDocRef.update(patch).addOnFailureListener(e -> {
-                Map<String, Object> ac = new HashMap<>();
-                ac.put("callId", callId);
-                ac.put("status", serverStatus);
-                Map<String, Object> w = new HashMap<>();
-                w.put("activeCall", ac);
-                chatDocRef.set(w, SetOptions.merge());
-            });
-            writeDeterministicCallLogMessage(reason, durSec);
+            String action = connected || "ended".equals(reason) ? "end" : "declined".equals(reason) ? "decline" : reason;
+            final int duration = durSec;
+            Fb.db().signalCall(chatId, callId, action, peerId, isVideo)
+                    .addOnSuccessListener(result -> writeDeterministicCallLogMessage(reason, duration));
         }
-
-        // Delete ephemeral media stream docs so Firestore stays ultra-lean
-        if (myMediaRef != null) myMediaRef.delete();
-        if (remoteMediaRef != null && updateServer) remoteMediaRef.delete();
 
         releaseResources();
         finish();
@@ -1060,18 +973,9 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
             try { signalReg.remove(); } catch (Throwable ignored) { }
             signalReg = null;
         }
-        if (remoteRtdbMediaRef != null && remoteRtdbListener != null) {
-            try { remoteRtdbMediaRef.removeEventListener(remoteRtdbListener); } catch (Throwable ignored) { }
-            remoteRtdbListener = null;
-        }
-        if (myRtdbMediaRef != null) {
-            try { myRtdbMediaRef.removeValue(); } catch (Throwable ignored) { }
-            myRtdbMediaRef = null;
-        }
-        if (remoteMediaReg != null) {
-            try { remoteMediaReg.remove(); } catch (Throwable ignored) { }
-            remoteMediaReg = null;
-        }
+        LiveRelayClient relay = mediaRelay;
+        mediaRelay = null;
+        if (relay != null) relay.close();
         if (engine != null) {
             try { engine.releaseAll(); } catch (Throwable ignored) { }
             engine = null;

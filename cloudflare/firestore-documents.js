@@ -1,3 +1,4 @@
+import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
@@ -1761,6 +1762,50 @@ async function livePk(request,db,uid,now) {
   }
 }
 
+async function signalChatCall(request,db,uid,now) {
+  if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  let input; try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
+  const {chatId,callId,action}=input||{};
+  if (typeof chatId!=='string' || !/^[A-Za-z0-9_-]{1,200}$/.test(chatId) || chatId.startsWith('team_')
+      || typeof callId!=='string' || !/^[A-Za-z0-9_-]{1,80}$/.test(callId)
+      || !['start','accept','decline','end','missed','cancelled'].includes(action)) return json({error:'Invalid call'},400);
+  try {
+    const path=`chats/${chatId}`, row=await readRow(db,path), current=row?decodeValue(JSON.parse(row.document_json)):null;
+    let room=current;
+    if (!room && action==='start' && validSegment(input.peerId) && input.peerId!==uid && [uid,input.peerId].sort().join('_')===chatId) {
+      room={participants:[uid,input.peerId],isGroup:false};
+    }
+    if (!room || room.isGroup===true || !Array.isArray(room.participants) || room.participants.length!==2 || !room.participants.includes(uid)) return json({error:'Forbidden'},403);
+    const peer=room.participants.find(id=>id!==uid);
+    if (!validSegment(peer) || !await callAccountsAllowed(db,uid,peer)) return json({error:'Forbidden'},403);
+    const stored=await db.prepare('SELECT * FROM friendbook_cf_chat_calls WHERE chat_id=?').bind(chatId).first();
+    let next, expires;
+    if (action==='start') {
+      if (!['voice','video'].includes(input.callType) || (stored && ['ringing','connected'].includes(stored.status) && stored.expires_at>now)) return json({error:'Call already active or invalid'},409);
+      const caller=await readRow(db,`users/${uid}`), profile=caller?decodeValue(JSON.parse(caller.document_json)):{};
+      next={callId,chatId,callerId:uid,calleeId:peer,callerName:String(profile.displayName||'').slice(0,200),callerPhoto:String(profile.photoUrl||'').slice(0,2048),callType:input.callType,status:'ringing',startedAt:now};
+      expires=now+45000;
+    } else {
+      const call=room.activeCall;
+      if (!stored || stored.call_id!==callId || call?.callId!==callId || !['ringing','connected'].includes(stored.status)) return json({error:'Call is no longer active'},409);
+      if (['accept','decline'].includes(action) && (uid!==call.calleeId || stored.status!=='ringing' || stored.expires_at<=now)) return json({error:'Forbidden'},403);
+      if (['missed','cancelled'].includes(action) && (uid!==call.callerId || stored.status!=='ringing')) return json({error:'Call changed'},409);
+      next={...call,status:action==='accept'?'connected':action==='end'?'ended':action==='decline'?'declined':action};
+      if (action==='accept') next.connectedAt=now;
+      else next.endedAt=now;
+      expires=action==='accept'?now+3600000:now;
+    }
+    const guards=row?[await chatDocumentGuard(db,path,row)]:await chatRootGuards(db,path,null);
+    await db.batch([...guards,db.prepare(`INSERT INTO friendbook_cf_chat_calls(chat_id,call_id,status,expires_at) VALUES (?,?,?,?)
+      ON CONFLICT(chat_id) DO UPDATE SET call_id=excluded.call_id,status=excluded.status,expires_at=excluded.expires_at`).bind(chatId,callId,next.status,expires),
+      ...broadcastWrites(db,path,{...room,activeCall:next},row?.owner_uid||uid,row,now),db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+    return json(next);
+  } catch (error) {
+    if (/Document changed|CHECK constraint failed: ok/i.test(String(error?.message||''))) return json({error:'Call changed'},409);
+    return json({error:'Call unavailable'},503);
+  }
+}
+
 async function createLiveChat(db, roomId, uid, input, now) {
   const path=`lives/${roomId}`;
   const roomRow=await readRow(db,path);
@@ -1881,12 +1926,13 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   const db = env.DB;
   const now = Date.now();
   const writingContent=value=>typeof value==='string' && /^(posts|reels|stories|lives)(?:\/|$)/.test(value);
-  if (identity.suspended && (path==='/v1/live/pk' || (path==='/v1/firestore/document'
+  if (identity.suspended && (path==='/v1/chat/call' || path==='/v1/live/pk' || (path==='/v1/firestore/document'
       && ['POST','PUT','PATCH'].includes(request.method)
       && writingContent(url.searchParams.get('path') || url.searchParams.get('parent'))))) return json({error:'Account suspended'},403);
 
 
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
+  if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now);
   if (path === '/v1/live/pk') return livePk(request,db,uid,now);
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
   if (path === '/v1/admin/broadcast') return adminBroadcast(request,env,uid,now);

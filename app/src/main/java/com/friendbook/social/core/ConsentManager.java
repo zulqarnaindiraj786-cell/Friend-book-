@@ -102,6 +102,12 @@ public final class ConsentManager {
         }
     }
 
+    public static boolean canRequestAds(Context context) {
+        if (context == null) return false;
+        try { return UserMessagingPlatform.getConsentInformation(context.getApplicationContext()).canRequestAds(); }
+        catch (RuntimeException error) { return false; }
+    }
+
     /** Returns true if EEA/UK GDPR privacy options entry point should be shown in Settings. */
     public static boolean isPrivacyOptionsRequired(Context context) {
         if (context == null) return false;

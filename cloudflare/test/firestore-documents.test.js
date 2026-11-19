@@ -1976,3 +1976,36 @@ test('copied D1 post timestamps retain order, media and privacy without overwrit
   assert.deepEqual((await query([first[1].data.createdAt,first[1].id])).map(d=>d.id),['older']);
   sql.close();
 });
+
+test('direct calls authorize both call participants, reject forged transitions and stop ended media', async () => {
+ const {authorizeCallMedia}=await import('../call-access.js');
+ const sql=new DatabaseSync(':memory:');
+ for (const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema]) sql.exec(ddl);
+ sql.exec(readFileSync(new URL('../migrations/0048_direct_chat_calls.sql',import.meta.url),'utf8'));
+ const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ for (const uid of ['alice','bob','eve']) insert.run('users/'+uid,'users','users',uid,uid,JSON.stringify({displayName:uid}),1,1);
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),first:async()=>stmt.get(...a)||null};}};},
+   async batch(statements){sql.exec('BEGIN');try{for(const s of statements) await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+ const send=(uid,action,callId='first',callType='video')=>worker.fetch(new Request('https://example.test/v1/chat/call',{
+   method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},
+   body:JSON.stringify({chatId:'alice_bob',callId,action,peerId:'bob',callType})}),env);
+ let r=await send('alice','start');assert.equal(r.status,200,await r.text());
+ assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
+ assert.equal((await send('alice','accept')).status,403);
+ assert.equal((await send('eve','accept')).status,403);
+ assert.equal((await send('bob','accept')).status,200);
+ assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),'video');
+ assert.equal(await authorizeCallMedia(db,'alice_bob','first','bob'),'video');
+ assert.equal(await authorizeCallMedia(db,'alice_bob','first','eve'),null);
+ assert.equal((await send('alice','start','other')).status,409);
+ assert.equal((await send('alice','end')).status,200);
+ assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
+ assert.equal((await send('alice','start','second','voice')).status,200);
+ assert.equal((await send('alice','end','first')).status,409);
+ assert.equal((await send('bob','accept','second','voice')).status,200);
+ assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),'voice');
+ sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run('{"blocked":["bob"]}','users/alice');
+ assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),null);
+ sql.close();
+});

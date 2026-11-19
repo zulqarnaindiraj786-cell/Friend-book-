@@ -320,6 +320,12 @@ public class D1DocumentStore {
     }
 
     /** FCM is only an invalidation hint; the authenticated D1 query stays authoritative. */
+    public Task<org.json.JSONObject> signalCall(String chat, String call, String action, String peer, boolean video) {
+        return runAsync(() -> D1DocumentTransport.request("POST", "/v1/chat/call", new org.json.JSONObject()
+                .put("chatId",chat).put("callId",call).put("action",action)
+                .put("peerId",peer).put("callType",video ? "video" : "voice")));
+    }
+
     public void refreshChatFromPush(String chatId) {
         if (chatId == null || !chatId.matches("[A-Za-z0-9_-]{1,128}")) return;
         notifyCollectionListeners("chats/" + chatId + "/messages");

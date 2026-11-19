@@ -81,6 +81,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public FeedAdapter(Activity a, Host h) {
         this.activity = a;
         this.host = h;
+        adsEnabled = adsEnabled && com.friendbook.social.core.ConsentManager.canRequestAds(a);
         setHasStableIds(true);
         com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
         com.friendbook.social.core.AdsConfig.warmUpPools(a);
@@ -318,13 +319,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String cleanId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(id)
                 ? id.trim()
                 : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
-        boolean nextEnabled = enabled && !cleanId.isEmpty();
+        boolean nextEnabled = enabled && !cleanId.isEmpty()
+                && com.friendbook.social.core.ConsentManager.canRequestAds(activity);
         if (cleanId.equals(nativeAdUnitId) && nextEnabled == adsEnabled) {
             notifyAdSlotsOnly();
             return;
         }
         nativeAdUnitId = cleanId;
         adsEnabled = nextEnabled;
+        if (nextEnabled) com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(activity);
         notifyDataSetChanged();
     }
 
@@ -2610,6 +2613,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal, final boolean preserveExistingSlotAd) {
             this.inDetailScreen = preserveExistingSlotAd;
             final Context ctx = itemView.getContext();
+            if (!com.friendbook.social.core.AdsConfig.nativeAdsEnabled()
+                    || !com.friendbook.social.core.ConsentManager.canRequestAds(ctx)) {
+                ++requestSeq;
+                destroyCurrentAd();
+                collapse();
+                return;
+            }
             if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
                 if (boundNativeAdViewTarget != currentNativeAd) {
                     expand(ctx);
@@ -2645,7 +2655,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             com.friendbook.social.core.AdsConfig.registerFeedSlotWaiter(slotOrdinal, readyAd -> {
                 if (mySeq != requestSeq) return;
                 adRequestInFlight = false;
-                if (readyAd == null || currentNativeAd != null) {
+                if (readyAd == null || currentNativeAd != null || !com.friendbook.social.core.AdsConfig.nativeAdsEnabled()
+                        || !com.friendbook.social.core.ConsentManager.canRequestAds(ctx)) {
                     collapse();
                     return;
                 }

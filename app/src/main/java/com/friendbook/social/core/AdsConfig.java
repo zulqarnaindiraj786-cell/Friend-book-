@@ -1175,6 +1175,13 @@ public class AdsConfig {
             final String unitId,
             final boolean isFeedPool,
             final int batchCount) {
+        if (!nativeAdsEnabled() || (isFeedPool && !ConsentManager.canRequestAds(appCtx))) {
+            synchronized (AdsConfig.class) {
+                if (isFeedPool) feedInFlight = 0;
+                else reelsInFlight = 0;
+            }
+            return;
+        }
         if (!ConsentManager.isAdsSdkInitialized()) {
             // Never fire the first request into a half-booted SDK: it queues (or returns a
             // cold-start no-fill) and the pool then sits in the failure cooldown — the main reason
@@ -1217,6 +1224,10 @@ public class AdsConfig {
                                     }
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                }
+                                if (!nativeAdsEnabled() || (isFeedPool && !ConsentManager.canRequestAds(appCtx))) {
+                                    nativeAd.destroy();
+                                    return;
                                 }
                                 if (isFeedPool) {
                                     dispatchNextFeedWaiterIfPossible(nativeAd);

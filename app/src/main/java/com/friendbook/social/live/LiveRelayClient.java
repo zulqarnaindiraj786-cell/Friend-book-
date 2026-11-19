@@ -15,8 +15,8 @@ import okhttp3.WebSocketListener;
 import org.json.JSONObject;
 
 /** Authenticated, bounded, in-memory transport for the existing live codecs. */
-final class LiveRelayClient {
-    interface Listener {
+public final class LiveRelayClient {
+    public interface Listener {
         void ready();
         void packet(String kind, String data, long seq);
         void disconnected();
@@ -39,20 +39,30 @@ final class LiveRelayClient {
         }
     };
 
-    LiveRelayClient(Listener listener) { this.listener = listener; }
+    public LiveRelayClient(Listener listener) { this.listener = listener; }
 
     void open(String room, boolean publish) {
         open(room, publish ? "publish" : "watch");
     }
 
     void open(String room, String role) {
+        if (room == null || !room.matches("[A-Za-z0-9_-]{1,128}")) { fail(); return; }
+        connect("/v1/live/" + room + "/" + role, role);
+    }
+
+    public void openCall(String chat, String call) {
+        if (chat == null || !chat.matches("[A-Za-z0-9_-]{1,200}") || call == null || !call.matches("[A-Za-z0-9_-]{1,80}")) { fail(); return; }
+        connect("/v1/chat/call/" + chat + "/" + call, "call");
+    }
+
+    private void connect(String path, String role) {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-        if (user == null || room == null || !room.matches("[A-Za-z0-9_-]{1,128}")) { fail(); return; }
+        if (user == null) { fail(); return; }
         user.getIdToken(false).addOnSuccessListener(token -> {
             if (stopped) return;
             FirebaseUser current = FirebaseAuth.getInstance().getCurrentUser();
             if (current == null || !user.getUid().equals(current.getUid()) || token.getToken() == null) { fail(); return; }
-            Request request = new Request.Builder().url(BuildConfig.CLOUDFLARE_API_URL + "/v1/live/" + room + ("/" + role))
+            Request request = new Request.Builder().url(BuildConfig.CLOUDFLARE_API_URL + path)
                     .header("Authorization", "Bearer " + token.getToken()).build();
             socket = HTTP.newWebSocket(request, new WebSocketListener() {
                 @Override public void onOpen(WebSocket ws, Response response) {
@@ -75,10 +85,10 @@ final class LiveRelayClient {
                         }
                         if (kind.startsWith("co_") || kind.startsWith("pk_")) {
                             if (!("watch".equals(role) || "publish".equals(role))) return;
-                        } else if (!"watch".equals(role)) return;
+                        } else if (!("watch".equals(role) || "call".equals(role))) return;
                         String data = json.getString("data");
                         long seq = json.getLong("seq");
-                        if (seq > 0 && !data.isEmpty() && (kind.equals("audio") || kind.equals("video") || kind.equals("co_audio") || kind.equals("co_video") || kind.equals("pk_audio") || kind.equals("pk_video"))) {
+                        if (seq > 0 && !data.isEmpty() && (("call".equals(role) && kind.equals("camera")) || kind.equals("audio") || kind.equals("video") || kind.equals("co_audio") || kind.equals("co_video") || kind.equals("pk_audio") || kind.equals("pk_video"))) {
                             listener.packet(kind, data, seq);
                         }
                     } catch (org.json.JSONException ignored) { }
@@ -90,7 +100,7 @@ final class LiveRelayClient {
         }).addOnFailureListener(error -> fail());
     }
 
-    void send(String kind, String data, long seq) {
+    public void send(String kind, String data, long seq) {
         WebSocket s = socket;
         if (!ready || stopped || s == null || data == null || data.length() > MAX_PACKET - 128 || s.queueSize() > MAX_PACKET) return;
         try {
@@ -106,7 +116,7 @@ final class LiveRelayClient {
         });
     }
 
-    void close() {
+    public void close() {
         stopped = true;
         ready = false;
         main.removeCallbacks(renew);
