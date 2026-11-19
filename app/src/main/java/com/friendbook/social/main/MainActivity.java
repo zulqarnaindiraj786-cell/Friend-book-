@@ -561,6 +561,7 @@ public class MainActivity extends Activity {
         notifReg = Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
@@ -597,6 +598,7 @@ public class MainActivity extends Activity {
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {
