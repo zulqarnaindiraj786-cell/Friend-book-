@@ -13,7 +13,11 @@ class IntermittentDataTests(unittest.TestCase):
  def test_feed_and_candidate_timeouts_ignore_stale_callbacks(self):
   home=(ROOT/'main/HomeFragment.java').read_text()
   friends=(ROOT/'friends/FriendsFragment.java').read_text()
-  self.assertGreaterEqual(home.count('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();'),2)
+  first=home.split('private void startPostsQuery',1)[1].split('private void consumePostsSnapshot',1)[0]
+  self.assertIn('swipe.setRefreshing(false)',first)
+  self.assertNotIn('feedGeneration++',first)
+  self.assertNotIn('Ui.toast',first)
+  self.assertIn('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();',home)
   self.assertIn('if(!current(token,me) || !checkingUsers.containsAll(ids))return;',friends)
   self.assertIn('checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();',friends)
  def test_reel_engagement_avoids_periodic_reads_and_recursive_cached_render(self):

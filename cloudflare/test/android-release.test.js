@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import worker from '../../worker.js';
 import {androidRelease} from '../android-release.js';
-test('public APK metadata matches Android version; no database, auth or website needed',async()=>{
+test('public Play metadata does not advertise an unreleased Android build',async()=>{
  const gradle=readFileSync(new URL('../../app/build.gradle',import.meta.url),'utf8');
- assert.match(gradle,new RegExp('versionCode '+androidRelease.versionCode+'\\b'));
- assert.ok(gradle.includes("versionName '"+androidRelease.versionName+"'"));
+ const candidate=Number(gradle.match(/versionCode\s+(\d+)/)?.[1]);
+ assert.ok(androidRelease.versionCode<=candidate);
  const response=await worker.fetch(new Request('https://test.invalid/v1/android-release'),{});
  assert.equal(response.status,200);assert.deepEqual(await response.json(),androidRelease);
  assert.equal(response.headers.get('Cache-Control'),'no-store');

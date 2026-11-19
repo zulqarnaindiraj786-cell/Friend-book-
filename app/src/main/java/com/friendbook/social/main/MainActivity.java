@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private final Fragment[] tabFragments = new Fragment[5];
     private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
+    private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
@@ -85,7 +86,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;
         // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
@@ -747,6 +747,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (!isFinishing()) appUpdates.onResume(this);
         permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
@@ -779,6 +780,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        appUpdates.dismiss();
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();

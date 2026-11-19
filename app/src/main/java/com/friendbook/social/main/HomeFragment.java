@@ -247,8 +247,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
         if (!hidden && adapter != null) {
+            refreshPostsIfNeeded();
             adapter.refreshSponsoredAds();
         }
+    }
+
+    private void refreshPostsIfNeeded() {
+        if (!isHidden() && (!loadedPosts || lastFeedWriteVersion != Fb.db().postWriteVersion()
+                || !java.util.Objects.equals(feedAccount, Fb.uid())
+                || android.os.SystemClock.elapsedRealtime() - lastFeedFetch >= 120_000L)) restartPostsListener();
     }
 
     public void onLiteModeChanged() {
@@ -476,14 +483,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
+        refreshPostsIfNeeded();
         startFriendsListener();
         loadPymk();
         // Every time Home is opened the Featured Reels card rotates to the NEXT viral/fresh Reel
         // (never the same video on repeat) while the view counter stays 100% real.
         if (adapter != null) adapter.advanceFeaturedReelRotation();
         loadFeaturedReelsForHome();
-        if (!loadedPosts || lastFeedWriteVersion!=Fb.db().postWriteVersion() || !java.util.Objects.equals(feedAccount,Fb.uid())
-                || android.os.SystemClock.elapsedRealtime()-lastFeedFetch>=120_000L) restartPostsListener();
         startStoriesListener();
         startLivesListener();
         loadNotesUsers();
@@ -555,7 +561,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty()) {
                         LinearLayoutManager layout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
                         if (layout==null || layout.findFirstVisibleItemPosition()<=1) forceReRank=true;
-                        consumePostsSnapshot(lastPostDocs,true,false);
+                        consumePostsSnapshot(lastPostDocs,false);
                     }
                 });
     }
@@ -648,27 +654,22 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     // ---------- posts ----------
-    private boolean postsFallbackUsed;
     private final List<Models.Post> cfPosts = new ArrayList<>();
     private List<DocumentSnapshot> lastPostDocs = new ArrayList<>();
 
     private void restartPostsListener() {
         if(loadingPosts) return;
-        postsFallbackUsed = false;
-        startPostsQuery(true);
+        startPostsQuery();
     }
 
-    private void startPostsQuery(boolean ordered) {
+    private void startPostsQuery() {
         final int generation=++feedGeneration;
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
         // The D1 document query already merges legacy rows with canonical precedence.
         // A second independently ordered app-store request could put stale posts first.
         cfPosts.clear();
-        Query query=Fb.db().collection("posts");
-        // Same ordering/cursor is retained for subsequent pages, including the fallback.
-        query=ordered?query.orderBy("createdAt",Query.Direction.DESCENDING)
-                :query.orderBy(com.friendbook.social.d1.documents.FieldPath.documentId());
+        Query query=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING);
         feedQuery=query.withFeedEngagement();
         final Query first=feedQuery.limit(PAGE);
         final long writeVersion=Fb.db().postWriteVersion();
@@ -676,13 +677,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // A queued or stalled request must not leave pull-to-refresh spinning forever.
         engagementHandler.postDelayed(()->{
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
-            feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
-            if(getActivity()!=null)Ui.toast(getActivity(),"Feed is taking too long — pull down to retry");
+            // Stop the refresh animation without discarding a late response on a weak link.
+            if (swipe != null) swipe.setRefreshing(false);
         },20000L);
         if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
             if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty()) {
                 for(DocumentSnapshot doc:cache.getDocuments()) com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
-                consumePostsSnapshot(cache.getDocuments(),ordered,false);
+                consumePostsSnapshot(cache.getDocuments(),false);
             }
         });
         first.get().addOnSuccessListener(snapshot -> {
@@ -701,16 +702,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
             LinearLayoutManager firstLayout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
             if (firstLayout==null || firstLayout.findFirstVisibleItemPosition()<=1) forceReRank=true;
-            consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
+            consumePostsSnapshot(snapshot.getDocuments(),true);
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
             loadingPosts=false;pageError=true;updatePagingUi();
-            if(ordered && !postsFallbackUsed) { postsFallbackUsed=true; startPostsQuery(false); }
-            else if(getActivity()!=null) Ui.toast(getActivity(),"Feed unavailable — pull down to retry");
+            // Keep cached posts and the inline retry; do not issue a second query on network failure.
         });
     }
 
-    private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean ordered, boolean persistCache) {
+    private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean persistCache) {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
         if (docs != null) lastPostDocs = docs;

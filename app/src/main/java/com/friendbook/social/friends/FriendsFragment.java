@@ -139,7 +139,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         adapter = new UsersAdapter(a, this);
         rv.setAdapter(adapter);
         com.friendbook.social.core.NearEndPaging.attach(rv,()->{
-            if(section==SEC_REQUESTS && suggestionPager!=null)suggestionPager.next();else if(activePager!=null)activePager.next();
+            if(section==SEC_REQUESTS){if(suggestionPager!=null)suggestionPager.next();}
+            else if(activePager!=null)activePager.next();
         });
         rv.addOnScrollListener(new RecyclerView.OnScrollListener(){
             @Override public void onScrolled(RecyclerView list,int dx,int dy){
@@ -173,15 +174,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     private void startSection(){
         String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
-        boolean pullRefresh=swipe!=null && swipe.isRefreshing();
         if(!java.util.Objects.equals(pageActor,me)){incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
         // Relationship checks and profile details belong to the current actor and
         // must be revalidated on each visit, not just on manual pull-to-refresh.
         closePage();
         checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();
         pageActor=me;final int token=generation, selected=section;
-        pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=selected==SEC_REQUESTS && suggestions.isEmpty();suggestionError="";
-        if(selected==SEC_REQUESTS && !suggestions.isEmpty())checkCandidates(me,token);
+        pageMore=false;pageLoading=true;pageError="";suggestionMore=false;suggestionLoading=false;suggestionError="";
         Query query;
         if(selected==SEC_REQUESTS)query=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
@@ -194,7 +193,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             loadedSections.add(selected);
             if(swipe!=null)swipe.setRefreshing(false);
             if(selected==SEC_REQUESTS){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
-                if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);ensureUser(req.fromUid);}}
+                if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);if(req.fromName.isEmpty())ensureUser(req.fromUid);}}
                 tabs[SEC_REQUESTS].setText("Requests");
             }else if(selected==SEC_SENT){outgoing.clear();sentIds.clear();for(DocumentSnapshot doc:docs){if(cancelledRequestIds.contains(doc.getId()))continue;String other=doc.getString("toUid");if(other!=null){outgoing.add(other);sentIds.put(other,doc.getId());ensureUser(other);}}}
             else if(selected==SEC_FRIENDS){friendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
@@ -206,13 +205,17 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             activePager.startObserved();
             watchRequestPage(query,me,selected);
         }else{stopRequestWatch();activePager.start();}
-        if(selected==SEC_REQUESTS && (pullRefresh || suggestions.isEmpty())){
-            suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
-                if(!current(token,me) || section!=SEC_REQUESTS)return;
-                suggestionMore=more;suggestionLoading=loading;suggestionError=error;
-                if(loading){requestRender();return;}consumeSuggestions(docs,me,token);render();
-            });suggestionPager.start();
-        }
+    }
+
+    private void loadInlineSuggestions(){
+        if(section!=SEC_REQUESTS || !started || isHidden() || suggestionPager!=null || pageLoading)return;
+        String me=Fb.uid(); if(me==null)return;
+        int token=generation;
+        suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
+            if(!current(token,me) || section!=SEC_REQUESTS)return;
+            suggestionMore=more;suggestionLoading=loading;suggestionError=error;
+            if(loading){requestRender();return;}consumeSuggestions(docs,me,token);render();
+        });suggestionPager.start();
     }
 
     private void consumeSuggestions(List<DocumentSnapshot> docs,String me,int token){
@@ -298,7 +301,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             requestBoundary=rows.size();
             if(pageLoading || pageMore || !pageError.isEmpty())rows.add(control(!pageError.isEmpty()?"Tap to retry requests":pageLoading?"":"See more requests",pageLoading,()->{if(activePager!=null)activePager.next();}));
             suggestionHeader=rows.size();
-            rows.add(control("People you may know",false,null));int beforeSuggestions=rows.size();addSuggestions(rows);
+            if(suggestionPager==null){
+                if(!pageLoading) rows.add(control("People you may know · Tap to load",false,this::loadInlineSuggestions));
+            }else rows.add(control("People you may know",false,null));
+            int beforeSuggestions=rows.size();if(suggestionPager!=null)addSuggestions(rows);
             if(suggestionLoading || suggestionMore || !suggestionError.isEmpty())rows.add(control(!suggestionError.isEmpty()?"Tap to retry suggestions":!suggestionLoading && rows.size()==beforeSuggestions?"See more people":"",suggestionLoading,()->{if(suggestionPager!=null)suggestionPager.next();}));
         } else if (section == SEC_SUGGESTIONS) {
             empty.setText("No more suggestions right now.");addSuggestions(rows);
