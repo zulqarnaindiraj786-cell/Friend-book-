@@ -132,8 +132,8 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
       const claimKey = `fcm:${event}:${device.device_id}`;
       // D1 writes use run(); changes identifies the winning insert atomically.
       try {
-        const result=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
-          VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(claimKey,actor,Date.now()).run();
+        const result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims(event_key, created_at)
+          VALUES (?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(claimKey,Date.now()).run();
         if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('claim metadata unavailable');
         if (result.meta.changes===0) { duplicate++; continue; }
       } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
@@ -143,19 +143,19 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
         if (r.ok && result.name) { accepted++; continue; }
         const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
         if (code === 'UNREGISTERED') {
-          await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run();
+          await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run();
           await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
           invalid++;
         } else {
           reasons.add(code === 'SENDER_ID_MISMATCH' ? 'SENDER_ID_MISMATCH'
             : [400,401,403,404,429,500,503].includes(r.status) ? `FCM_HTTP_${r.status}` : 'FCM_PROVIDER_ERROR');
           failed++;
-          await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+          await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
         }
       } catch {
         reasons.add("FCM_NETWORK_ERROR");
         failed++;
-        await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+        await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
       }
     }
   }));

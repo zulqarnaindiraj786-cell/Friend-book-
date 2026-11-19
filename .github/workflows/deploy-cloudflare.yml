@@ -427,10 +427,17 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
         run: |
           key="validation_only_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
-          sql="INSERT INTO friendbook_cf_push_claims(event_key,actor,created_at) VALUES ('$key','',0) ON CONFLICT(event_key) DO NOTHING"
-          npx wrangler d1 execute friendbook-db --remote --command "$sql; $sql; DELETE FROM friendbook_cf_push_claims WHERE event_key='$key';" --json > "$RUNNER_TEMP/fcm-claim-write.json"
-          node -e 'const x=require(process.argv[1]);if(JSON.stringify(x.map(r=>r.success?r.meta.changes:null))!=="[1,0,1]")process.exit(1)' "$RUNNER_TEMP/fcm-claim-write.json"
-          echo '::notice::Production D1 claim writes verified: insert 1, duplicate 0, synthetic row removed.'
+          sql="INSERT INTO friendbook_cf_fcm_device_claims(event_key,created_at) VALUES ('$key',0) ON CONFLICT(event_key) DO NOTHING"
+          cleanup() { npx wrangler d1 execute friendbook-db --remote --command "DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key='$key'" --json >/dev/null; }
+          trap cleanup EXIT
+          for expected in 1 0; do
+            if ! npx wrangler d1 execute friendbook-db --remote --command "$sql" --json > "$RUNNER_TEMP/fcm-claim-write.json"; then
+              echo '::error::Production D1 rejected the synthetic claim write.'; exit 1
+            fi
+            node -e 'const r=require(process.argv[1])[0];const n=r?.meta?.changes;console.log(`::notice::D1 claim expected ${process.argv[2]}, got ${n} (success=${r?.success})`);if(!r?.success||Number(n)!==Number(process.argv[2]))process.exit(1)' "$RUNNER_TEMP/fcm-claim-write.json" "$expected"
+          done
+          cleanup
+          trap - EXIT
 
       - name: Audit copied D1 collection coverage without exporting user data
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-feed-audit]')
