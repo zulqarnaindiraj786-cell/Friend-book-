@@ -62,22 +62,33 @@ public final class PushManager {
         new Thread(() -> {
             String report;
             try {
-                String token = com.google.android.gms.tasks.Tasks.await(com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                String device = FCMTokenManager.deviceId(context);
                 String bearer = PushGateway.idToken();
-                if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
-                PushGateway.Response registration = PushGateway.call(new org.json.JSONObject().put("action", "register")
-                        .put("device_id", FCMTokenManager.deviceId(context)).put("token", token), bearer);
-                if (registration.status != 200 || !registration.data.optBoolean("registered")) {
-                    report = "Registration failed (HTTP " + registration.status + ")";
-                } else {
+                report = "Push test unavailable";
+                com.google.firebase.messaging.FirebaseMessaging messaging = com.google.firebase.messaging.FirebaseMessaging.getInstance();
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    String token = com.google.android.gms.tasks.Tasks.await(messaging.getToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                    if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
+                    PushGateway.Response registration = PushGateway.call(new org.json.JSONObject().put("action", "register")
+                            .put("device_id", device).put("token", token), bearer);
+                    if (registration.status != 200 || !registration.data.optBoolean("registered")) {
+                        report = "Registration failed (HTTP " + registration.status + ")";
+                        break;
+                    }
                     if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
                     PushGateway.Response test = PushGateway.call(new org.json.JSONObject().put("action", "self_test")
-                            .put("device_id", FCMTokenManager.deviceId(context)), bearer);
+                            .put("device_id", device), bearer);
                     org.json.JSONArray reasons = test.data.optJSONArray("reasons");
+                    String reason = reasons == null ? "" : reasons.optString(0);
+                    String code = test.data.optString("error", "HTTP " + test.status);
+                    if (attempt == 0 && actor.equals(Fb.uid()) && ("NO_VALID_RECIPIENT_DEVICE".equals(code) || "SENDER_ID_MISMATCH".equals(reason))) {
+                        com.google.android.gms.tasks.Tasks.await(messaging.deleteToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                        continue;
+                    }
                     report = test.data.optInt("accepted") > 0 ? "FCM accepted the test. Check your notification shade."
                             : test.data.optInt("duplicate") > 0 ? "Already sent this minute. Retry after a minute."
-                            : "Push test failed: " + test.data.optString("error", "HTTP " + test.status)
-                            + (reasons != null && reasons.length() > 0 ? " (" + reasons.optString(0) + ")" : "");
+                            : "Push test failed: " + code + (reason.isEmpty() ? "" : " (" + reason + ")");
+                    break;
                 }
             } catch (Exception error) { report = "Couldn't reach the push service. Tap to retry."; }
             final String text = report;

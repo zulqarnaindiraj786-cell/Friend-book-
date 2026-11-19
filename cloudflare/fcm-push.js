@@ -114,6 +114,24 @@ function fresh(ts) {
   return Number.isFinite(ms) && Date.now() - ms <= 86400000 && ms <= Date.now() + 30000;
 }
 
+export function buildFcmMessage(target, data) {
+  return { ...target, data, android: { priority: 'HIGH', ttl: '86400s' } };
+}
+
+async function sendFcm(env, access, message) {
+  const send = bearer => fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
+    method:'POST', headers:{Authorization:`Bearer ${bearer}`, 'Content-Type':'application/json'},
+    body:JSON.stringify({message}), signal:AbortSignal.timeout(8000),
+  });
+  let response=await send(access);
+  if(response.status===401) {
+    await response.body?.cancel().catch(()=>{});
+    if(cachedToken===access){cachedToken='';tokenUntil=0;}
+    response=await send(await googleToken(env));
+  }
+  return response;
+}
+
 async function sendToDevices(env, db, actor, target, data, event, deviceId = null) {
   const devices = await (deviceId
     ? db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ? AND device_id = ?').bind(target,deviceId)
@@ -137,12 +155,7 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
       } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
       if (!claim) { duplicate++; continue; }
       try {
-        const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: '86400s' } } }),
-          signal: AbortSignal.timeout(15000),
-        });
+        const r = await sendFcm(env, access, buildFcmMessage({token:device.token}, data));
         const result = await r.json().catch(() => ({}));
         if (r.ok && result.name) { accepted++; continue; }
         const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
@@ -152,7 +165,6 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
         } else {
           reasons.add(code === 'SENDER_ID_MISMATCH' ? 'SENDER_ID_MISMATCH'
             : [400,401,403,404,429,500,503].includes(r.status) ? `FCM_HTTP_${r.status}` : 'FCM_PROVIDER_ERROR');
-          if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
           failed++;
           await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
         }

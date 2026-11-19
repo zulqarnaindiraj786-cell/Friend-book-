@@ -16,8 +16,8 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
   sql.prepare('INSERT INTO friendbook_cf_fcm_devices VALUES (?,?,?,?)').run('dev1','bob','x'.repeat(30),1);
   const key=generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
   const env={DB:db,FIREBASE_ADMIN_SERVICE_ACCOUNT:JSON.stringify({project_id:'friendbook-17551',client_email:'fake@example.test',private_key:key})};
-  let sends=0,fail=false;const original=globalThis.fetch;
-  globalThis.fetch=async url=>String(url).includes('oauth2.googleapis.com')?Response.json({access_token:'fake',expires_in:3600}):(sends++,fail?Response.json({error:{}},{status:503}):Response.json({name:'messages/success'}));
+  let sends=0,fail=false,expire=false,oauth=0;const original=globalThis.fetch;
+  globalThis.fetch=async url=>String(url).includes('oauth2.googleapis.com')?Response.json({access_token:`fake${++oauth}`,expires_in:3600}):(sends++,expire?(expire=false,Response.json({error:{}},{status:401})):fail?Response.json({error:{}},{status:503}):Response.json({name:'messages/success'}));
   const send=()=>fcmGateway(new Request('https://example.test/functions/v1/send-fcm-notification',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target_user_id:'bob',data:{notificationId:'n1'}})}),env,{uid:'alice'});
   try {
     const pair=await Promise.all([send(),send()]);assert.deepEqual(pair.map(r=>r.status),[200,200]);
@@ -31,5 +31,8 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
     assert.equal((await selfTest('wrong_device')).status,409);
     assert.equal((await selfTest('dev1')).status,200);
     assert.equal(sends,4);
+    sql.prepare('DELETE FROM friendbook_cf_push_claims').run();expire=true;const oldOauth=oauth;
+    assert.equal((await send()).status,200);
+    assert.equal(oauth,oldOauth+1);assert.equal(sends,6);
   } finally {globalThis.fetch=original;sql.close();}
 });
