@@ -1238,6 +1238,26 @@ async function adminModeration(request,env,uid,now) {
   }
 }
 
+const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);
+function adsView(doc) { return Object.fromEntries(Object.entries(doc||{}).filter(([key])=>adsFields.has(key))); }
+async function writeAdsConfig(db,env,uid,path,body,now) {
+  if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
+  const data=body?.data;
+  if(!data || typeof data!=='object' || Array.isArray(data) || Object.keys(data).some(key=>!adsFields.has(key))
+    || data.updatedBy!==uid || typeof data.ads_enabled_v3!=='boolean'
+    || ['appId','feed_native_unit_v3','reels_native_unit_v3','websiteUrl','appAdsTxtUrl'].some(k=>typeof data[k]!=='string' || data[k].length>256)) return json({error:'Invalid config'},400);
+  try {
+    const existing=await readRow(db,path),old=existing?decodeValue(JSON.parse(existing.document_json)):null;
+    const next=applySet(old,data,Boolean(body.merge),body.mergeFields||null,now);
+    next.updatedBy=uid;next.updatedAt={__type:'timestamp',millis:now};
+    const row=await writeRow(db,path,next,now,existing,true);
+    const response=rowToDocument(row);response.data=adsView(response.data);return json(response);
+  } catch(error) {
+    if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||'')))return json({error:'Config changed. Please retry.'},409);
+    return json({error:'Config unavailable'},503);
+  }
+}
+
 // Story viewers may only record their own view/reaction. Guard every document
 // used by authorization and the friendship ledger within the same D1 batch.
 async function storyEngagement(request,env,uid,now) {
@@ -1462,7 +1482,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }
     catch { return json({error:'Read unavailable'},503); }
     if (view === null) return json({ error: 'Forbidden' }, 403);
-    document.data = view;
+    document.data = parts[0]==='config' ? adsView(view) : view;
     return json(document);
   }
 
@@ -1475,6 +1495,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid body' }, 400);
+    if (splitPath(docPath)[0]==='config') return await writeAdsConfig(db,env,uid,docPath,body,now);
     if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='users')
       return await mutateProfile(db,uid,docPath,body,'PUT',now);
     if (splitPath(docPath).length===2 && ['posts','reels'].includes(splitPath(docPath)[0]))
@@ -1519,7 +1540,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (['friend_requests','friends','reports','feedback'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['friend_requests','friends','reports','feedback','config'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({error:'Invalid body'},400);
@@ -1554,7 +1575,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const docPath = url.searchParams.get('path') || '';
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
-    if (['friends','payments'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['friends','payments','config'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(splitPath(docPath)[0])) {
       if (!canReadReports(env,uid)) return json({error:'Forbidden'},403);
       if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
@@ -1803,7 +1824,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     for (const op of ops) {
       const p = op.path;
       if (!isDocumentPath(p)) return json({ error: 'Invalid path' }, 400);
-      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments','groups','reports','feedback'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
+      if (!supportedDocumentPath(p) || ['friend_requests','friends','payments','groups','reports','feedback','config'].includes(splitPath(p)[0])) return json({error:'Forbidden'},403);
       if (!finalDocs.has(p)) {
         const existingRow = cache.get(p) || null;
         const existingDoc = existingRow ? decodeValue(JSON.parse(existingRow.document_json)) : null;

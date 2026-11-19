@@ -69,6 +69,14 @@ function legacyComment(row, uid, resource) {
   };
   return dto(rowData,uid);
 }
+function legacyReactions(doc) {
+  const reactions=new Map();
+  if(doc.reactions && typeof doc.reactions==='object' && !Array.isArray(doc.reactions))
+    for(const [actor,type] of Object.entries(doc.reactions))if(validId(actor) && types.has(type))reactions.set(actor,type);
+  if(Array.isArray(doc.likedBy))for(const actor of doc.likedBy)if(validId(actor) && !reactions.has(actor))reactions.set(actor,'like');
+  return reactions;
+}
+
 // Promote a single legacy D1 comment only when somebody interacts with it.
 // Its original row remains untouched; a compare-and-swap guard prevents a
 // stale copy from overwriting a concurrent edit or a newer canonical comment.
@@ -82,11 +90,7 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
   if(!old || blocked.includes(old.uid))return null;
   const doc=toPlainDocument(source.document_json,id);
   if(old.parentId && !(await promoteLegacy(db,resource,old.parentId,uid,blocked,seen)))return null;
-  const reactions=new Map();
-  if(doc.reactions && typeof doc.reactions==='object' && !Array.isArray(doc.reactions)) {
-    for(const [actor,type] of Object.entries(doc.reactions))if(validId(actor) && types.has(type))reactions.set(actor,type);
-  }
-  if(Array.isArray(doc.likedBy))for(const actor of doc.likedBy)if(validId(actor) && !reactions.has(actor))reactions.set(actor,'like');
+  const reactions=legacyReactions(doc);
   // D1 has a bounded batch. Never discard known actors merely to make a large
   // historical row fit; return an error and leave the source untouched.
   if(reactions.size>80)throw Error('Legacy comment has too many reactions');
@@ -118,6 +122,28 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
   }
   return await read();
 }
+// Historical updated_at is not the comment creation time. Page through all
+// matching legacy rows by indexed storage order, retaining only the 21 newest
+// matches for the requested creation-time cursor. This avoids silently losing
+// older comments beyond an arbitrary first thousand rows.
+async function legacyPage(db,resource,uid,blocked,before) {
+  let storageCursor=null, best=[];
+  for(let batch=0;batch<100;batch++) {
+    const extra=storageCursor?' AND (a.updated_at<? OR (a.updated_at=? AND a.path<?))':'';
+    const args=legacyBindings(resource,blocked);
+    if(storageCursor)args.push(storageCursor.updated_at,storageCursor.updated_at,storageCursor.path);
+    const rows=(await db.prepare(`SELECT a.path,a.doc_id,a.document_json,a.updated_at FROM friendbook_cf_documents a WHERE ${legacyWhere}${extra} ORDER BY a.updated_at DESC,a.path DESC LIMIT 500`).bind(...args).all()).results||[];
+    for(const row of rows) {
+      const comment=legacyComment(row,uid,resource),time=comment?.createdAt||0;
+      if(comment && (time<before[0] || (time===before[0] && comment.id<before[1])))best.push(comment);
+    }
+    best.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0));
+    if(best.length>21)best=best.slice(0,21);
+    if(rows.length<500)return best;
+    storageCursor=rows.at(-1);
+  }
+  throw Error('Legacy comment page exceeds safe scan limit');
+}
 function input(data) {
   const text = data.text, media = data.mediaUrl || '', mentions=data.mentions || [];
   if(typeof text!=='string' || text.length>5000 || (!text.trim() && !media) || typeof media!=='string' || media.length>4096 ||
@@ -146,21 +172,16 @@ export async function commentsAPI(request, db, identity, resource, data, context
     }
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
-    const [page,legacy,pinned]=await Promise.all([
+    const [page,old,pinned]=await Promise.all([
       db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
         AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all(),
-      db.prepare(`SELECT a.doc_id,a.document_json FROM friendbook_cf_documents a WHERE ${legacyWhere}
-        ORDER BY a.updated_at DESC LIMIT 1001`).bind(...legacyBindings(resource,context.blocked)).all(),
-      pin(),
+      legacyPage(db,resource,uid,context.blocked||[],before),pin(),
     ]);
-    const blocked=new Set(context.blocked||[]);
-    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,resource)).filter(c=>c && !blocked.has(c.authorId)
-      && (c.createdAt<before[0] || (c.createdAt===before[0] && c.id<before[1])));
     const current=page.results.map(row=>normalized(row,uid));
-    const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || b.id.localeCompare(a.id));
+    const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0));
     const comments=merged.slice(0,20);
     const last=comments.at(-1);
-    const hasMore=merged.length>20 || page.results.length===20 || (legacy.results||[]).length===1001;
+    const hasMore=merged.length>20 || page.results.length===20;
     return reply({comments,pinned,next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);
@@ -230,7 +251,23 @@ export async function commentsAPI(request, db, identity, resource, data, context
 export async function reactorsAPI(request,db,resource,context={}) {
   const url=new URL(request.url),id=url.searchParams.get('commentId'),after=url.searchParams.get('after')||'';
   if(after.length>128 || (id!==null && !validId(id)))return reply({error:'Invalid cursor/ID'},400);
-  if(id!==null){const row=await db.prepare('SELECT c.id,c.uid FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0').bind(resource,id).first();if(!row||(context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);}
+  if(id!==null){
+    const read=()=>db.prepare('SELECT c.id,c.uid,COALESCE(d.removed,0) AS removed FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=?').bind(resource,id).first();
+    let row=await read();
+    if(!row){
+      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${id}`).first();
+      row=await read();
+      if(!row){
+        const old=source&&legacyComment(source,'',resource);
+        if(!old || (context.blocked||[]).includes(old.uid))return reply({error:'Not found'},404);
+        const reactions=legacyReactions(toPlainDocument(source.document_json,id)),blocked=new Set(context.blocked||[]);
+        const actors=Array.from(reactions,([uid,type])=>({uid,type})).filter(r=>r.uid>after && !blocked.has(r.uid)).sort((a,b)=>a.uid<b.uid?-1:a.uid>b.uid?1:0);
+        const page=actors.slice(0,30);
+        return reply({reactors:page,historicalUnattributed:Math.max(0,(Number(old.likes)||0)-reactions.size),next:actors.length>30?page.at(-1).uid:null});
+      }
+    }
+    if(row.removed || (context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);
+  }
   const page=id===null?await db.prepare(`SELECT r.uid,r.type,CASE WHEN COALESCE(h.timestamp_known,1)=0 THEN NULL ELSE r.updated_at END AS createdAt,
     COALESCE(h.timestamp_known,1) AS timestampKnown FROM friendbook_cf_reactions r
     LEFT JOIN friendbook_cf_reaction_history h ON h.resource=r.resource AND h.uid=r.uid

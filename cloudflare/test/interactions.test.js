@@ -220,6 +220,8 @@ test('legacy D1 comments remain readable and support authorized replies and reac
   f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('comments/old','comments','old','user2',raw,1);
   const single=await call(f.env,'comments','GET',undefined,{query:'?id=old'});
   assert.equal(single.status,200);assert.equal((await single.json()).comment.content,'old comment');
+  const reactors=await (await call(f.env,'reactors','GET',undefined,{query:'?commentId=old'})).json();
+  assert.deepEqual(reactors.reactors,[{uid:'user2',type:'love'}]);assert.equal(reactors.historicalUnattributed,2);
   assert.equal((await call(f.env,'comments','PUT',{op:'edit',id:'old',text:'spoof',mentions:[]})).status,403);
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,0,'denied edits do not promote the source');
   assert.equal((await call(f.env,'comments','POST',{id:'old',text:'shadow'})).status,409);
@@ -251,4 +253,19 @@ test('legacy promotion fails safely for blocked or cyclic parents and changed so
  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_comments WHERE id='change'").get().n,0);
  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'change',type:'like'})).status,200);
  assert.equal((await (await call(f.env,'comments','GET',undefined,{query:'?id=change'})).json()).comment.content,'new');
+});
+
+test('legacy comment cursor does not drop records beyond first thousand storage updates', async t=>{
+ const f=fixture();t.after(f.close);
+ const insert=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ for(let i=0;i<1201;i++){
+  const id='old_'+String(i).padStart(4,'0');
+  // The last storage row is actually the newest comment; all other times tie.
+  insert.run(`comments/${id}`,'comments',id,'user2',JSON.stringify({postId:'p1',authorId:'user2',content:id,createdAt:i===0?200:100}),i);
+ }
+ const first=await (await call(f.env,'comments')).json();assert.equal(first.comments.length,20);assert.equal(first.comments[0].id,'old_0000');
+ assert.equal(first.comments[1].id,'old_1200');
+ const second=await (await call(f.env,'comments','GET',undefined,{query:'?before='+encodeURIComponent(first.next)})).json();
+ assert.equal(second.comments.length,20);assert.equal(new Set([...first.comments,...second.comments].map(c=>c.id)).size,40);
+ assert.equal(second.comments[0].id,'old_1181');
 });
