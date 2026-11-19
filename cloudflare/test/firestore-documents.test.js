@@ -2064,8 +2064,15 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const filters=[{field:'toUserId',op:'==',value:'alice'},{field:'isRead',op:'==',value:false}];
- const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return (await res.json()).documents;};
- const first=await query({});const last=first.at(-1);const second=await query({startAfter:[last.data.createdAt,last.id]});
+ const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return await res.json();};
+ const first=(await query({})).documents;const last=first.at(-1);const second=(await query({startAfter:[last.data.createdAt,last.id]})).documents;
  assert.equal(rows,40);const actual=[...first,...second].map(d=>d.id);
- assert.deepEqual(actual,Array.from({length:200},(_,i)=>199-i).filter(i=>i%3!==0).slice(0,20).map(i=>'n'+i));sql.close();
+ assert.deepEqual(actual,Array.from({length:200},(_,i)=>199-i).filter(i=>i%3!==0).slice(0,20).map(i=>'n'+i));
+ const initial=await query({knownRevisions:{}});
+ const unchanged=await query({knownRevisions:initial.revisions});
+ assert.deepEqual(unchanged.order,initial.order);assert.equal(unchanged.documents.length,0);
+ const removed=initial.order[0];sql.prepare('DELETE FROM friendbook_cf_documents WHERE doc_id=?').run(removed);
+ const delta=await query({knownRevisions:initial.revisions});
+ assert.ok(!delta.order.includes(removed));assert.equal(delta.documents.length,1);
+ sql.close();
 });

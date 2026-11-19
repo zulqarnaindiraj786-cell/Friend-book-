@@ -2096,6 +2096,20 @@ async function createLiveChat(db, roomId, uid, input, now) {
   return json({exists:true,id,path:docPath,parent,collection:'chat',data:message,createTime:now,updateTime:now},201);
 }
 
+// A bounded listener can reuse unchanged authorized rows. The server still
+// evaluates visibility and ordering; removed IDs are omitted from the new order.
+async function queryResponse(parent, documents, known) {
+  if (!known || typeof known!=='object' || Array.isArray(known) || documents.length>40
+      || Object.keys(known).length>40) return json({parent,documents});
+  const encoder=new TextEncoder();
+  const entries=await Promise.all(documents.map(async doc=>{
+    const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(JSON.stringify(doc))));
+    return [doc.id,btoa(String.fromCharCode(...digest)),doc];
+  }));
+  return json({parent,order:entries.map(([id])=>id),revisions:Object.fromEntries(entries.map(([id,rev])=>[id,rev])),
+    documents:entries.filter(([id,rev])=>!Object.hasOwn(known,id)||known[id]!==rev).map(([, ,doc])=>doc)});
+}
+
 export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -2443,7 +2457,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body);
-        if (page!==null) return json({parent,documents:await feedEngagement(db,env,uid,body,page)});
+        if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body);
       }
     }
@@ -2478,13 +2492,13 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         for(let i=0;i<ordered.length && allowed.length<body.limit;i+=20)
           allowed.push(...await visibleDocuments(db,uid,parent,ordered.slice(i,i+20),userReads,archiveQuery));
       } catch { return json({error:'Read unavailable'},503); }
-      return json({parent,documents:await feedEngagement(db,env,uid,body,allowed.slice(0,body.limit))});
+      return queryResponse(parent,await feedEngagement(db,env,uid,body,allowed.slice(0,body.limit)),body.knownRevisions);
     }
     try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});
     const result = applyQuery(visible, spec);
-    return json({ parent, documents: await feedEngagement(db,env,uid,body,result) });
+    return queryResponse(parent,await feedEngagement(db,env,uid,body,result),body.knownRevisions);
   }
 
   // GET /v1/firestore/count?parent=...&filters=...

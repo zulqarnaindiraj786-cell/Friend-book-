@@ -12,7 +12,7 @@ import { interactions } from './cloudflare/interactions.js';
 import { appDocuments } from './cloudflare/app-documents.js';
 import { drainBroadcastPush } from './cloudflare/fcm-push.js';
 import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
-import { fcmGateway } from './cloudflare/fcm-push.js';
+import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
 import { isPaymentAdmin } from './cloudflare/payment-access.js';
@@ -129,7 +129,14 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (live) return openLiveRelay(request,env,uid,live[1],live[2]);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
-      if (firestore) return firestoreDocuments(request, env, { uid, suspended, token: bearer[1] });
+      if (firestore) {
+        const response=await firestoreDocuments(request, env, { uid, suspended, token: bearer[1] });
+        if(path==='/v1/chat/call' && response.ok && ctx?.waitUntil){
+          const call=await response.clone().json();
+          if(call.status==='ringing') ctx.waitUntil(pushIncomingCall(env,call).catch(()=>{}));
+        }
+        return response;
+      }
       if (fcm) return fcmGateway(request, env, { uid, token: bearer[1] });
       if (docs) return appDocuments(request, env, { uid, suspended, token: bearer[1] });
       if (views) {

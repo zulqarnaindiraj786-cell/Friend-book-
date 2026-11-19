@@ -28,6 +28,7 @@ public class App extends Application implements SensorEventListener {
 
     private int startedCount = 0;
     private volatile int resumedCount = 0;
+    private long backgroundSince = -5000L;
     private final Handler timeHandler = new Handler(Looper.getMainLooper());
     private final Runnable deferredOffline = () -> {
         if (startedCount <= 0) {
@@ -85,6 +86,8 @@ public class App extends Application implements SensorEventListener {
                     timeHandler.postDelayed(timeTick, 30_000L);
                 }
                 resumedCount++;
+                if (resumedCount==1 && android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
+                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
                 com.friendbook.social.core.SoundEffects.warmUp(App.this);
             }
             @Override public void onActivityPaused(Activity a) {
@@ -93,6 +96,7 @@ public class App extends Application implements SensorEventListener {
                 }
                 resumedCount = Math.max(0, resumedCount - 1);
                 if (resumedCount == 0) {
+                    backgroundSince=android.os.SystemClock.elapsedRealtime();
                     timeHandler.removeCallbacks(timeTick);
                     com.friendbook.social.core.SoundEffects.stopAll();
                 }

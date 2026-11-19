@@ -85,6 +85,9 @@ public class D1DocumentStore {
         final AtomicBoolean inFlight = new AtomicBoolean(false);
         final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
+        org.json.JSONObject revisions = new org.json.JSONObject();
+        org.json.JSONArray priorRows = new org.json.JSONArray();
+
         QueryListenerEntry(Query query, EventListener<QuerySnapshot> listener) {
             this.query = query;
             this.listener = listener;
@@ -93,21 +96,14 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
-        // Use a separate cadence for foreground chat messages.
-        poller.scheduleWithFixedDelay(this::pollChatMessages, 2, 2, TimeUnit.SECONDS);
     }
 
-    private void pollChatMessages() {
-        if (!com.friendbook.social.App.isForeground()) return;
-        long now = android.os.SystemClock.elapsedRealtime();
-        if (!D1DocumentTransport.periodicAllowed(now)) return;
-        for (QueryListenerEntry e : queryListeners) {
-            String path = e.query.parentPath;
-            if (e.active && ListenerPollingPolicy.isChatMessages(path)
-                    && e.budget.due(path, true, now - e.lastAttemptMs)) {
-                scheduleQueryRead(e);
-            }
-        }
+    /** A single authenticated refresh when the process actually returns to foreground. */
+    public void refreshOnForeground() {
+        long now=android.os.SystemClock.elapsedRealtime();
+        for (CopyOnWriteArrayList<DocListenerEntry> entries : docListeners.values())
+            for (DocListenerEntry e : entries) if (now-e.lastAttemptMs>5000) scheduleDocRead(e);
+        for (QueryListenerEntry e : queryListeners) if (now-e.lastAttemptMs>5000) scheduleQueryRead(e);
     }
 
     public static D1DocumentStore getInstance() {
@@ -388,6 +384,7 @@ public class D1DocumentStore {
         long now = android.os.SystemClock.elapsedRealtime();
         if (!D1DocumentTransport.periodicAllowed(now)) return;
         boolean foreground = com.friendbook.social.App.isForeground();
+        if (!foreground) return;
         for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
             for (DocListenerEntry e : list) {
                 if (e.budget.due(e.ref.getPath(), foreground, now - e.lastAttemptMs)) scheduleDocRead(e);
@@ -465,7 +462,33 @@ public class D1DocumentStore {
     private void deliverQuery(QueryListenerEntry entry) {
         if (!entry.active) return;
         try {
-            org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
+            org.json.JSONObject body=toQueryJson(entry.query);
+            org.json.JSONArray arr;
+            if(entry.query.limitValue!=null && entry.query.limitValue<=40) {
+                body.put("knownRevisions",entry.revisions);
+                org.json.JSONObject response=D1DocumentTransport.listenerQuery(body);
+                arr=response.getJSONArray("documents");
+                org.json.JSONArray order=response.optJSONArray("order");
+                if(order!=null) {
+                    java.util.Map<String,org.json.JSONObject> byId=new java.util.HashMap<>();
+                    for(int i=0;i<entry.priorRows.length();i++) {
+                        org.json.JSONObject row=entry.priorRows.getJSONObject(i);byId.put(row.getString("id"),row);
+                    }
+                    for(int i=0;i<arr.length();i++) {
+                        org.json.JSONObject row=arr.getJSONObject(i);byId.put(row.getString("id"),row);
+                    }
+                    org.json.JSONArray merged=new org.json.JSONArray();
+                    for(int i=0;i<order.length();i++) {
+                        org.json.JSONObject row=byId.get(order.getString(i));
+                        if(row==null) { entry.revisions=new org.json.JSONObject(); throw new org.json.JSONException("Incomplete listener delta"); }
+                        merged.put(row);
+                    }
+                    arr=merged;
+                }
+                org.json.JSONObject versions=response.optJSONObject("revisions");
+                entry.revisions=versions==null?new org.json.JSONObject():versions;
+                entry.priorRows=arr;
+            } else arr=D1DocumentTransport.query(body);
             if (!entry.actor.equals(authenticatedUid())) return;
             String fp = arr.toString();
             cacheQuery(queryCacheKey(entry.query, entry.actor), fp);

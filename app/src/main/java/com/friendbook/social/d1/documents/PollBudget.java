@@ -21,14 +21,8 @@ final class PollBudget {
 
     boolean due(String path, boolean foreground, long elapsed, boolean visibleList) {
         long base = ListenerPollingPolicy.intervalMs(path, foreground);
-        if (foreground && visibleList) base = 15_000L;
         if (base == Long.MAX_VALUE) return false;
         if (failures > 0) return elapsed >= Math.min(300_000L, Math.max(15_000L, base) << failures);
-        if (foreground && visibleList) return elapsed >= (idle == 0 ? base : 30_000L);
-        if ("chats".equals(path)) {
-            // Inbox doubles as incoming-call fallback; keep even idle inbox delay bounded.
-            return elapsed >= Math.min(foreground ? 15_000L : 20_000L, base << idle);
-        }
         if (path.startsWith("chats/") || path.equals("lives") || path.startsWith("lives/")) return elapsed >= base;
         return elapsed >= Math.min(240_000L, base << idle);
     }

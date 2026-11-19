@@ -104,7 +104,7 @@ function fresh(ts) {
 }
 
 export function buildFcmMessage(target, data) {
-  return { ...target, data: Object.fromEntries(Object.entries(data).map(([key,value])=>[key,typeof value==='string'?value:''])), android: { priority: 'HIGH', ttl: '86400s' } };
+  return { ...target, data: Object.fromEntries(Object.entries(data).map(([key,value])=>[key,typeof value==='string'?value:''])), android: { priority: 'HIGH', ttl: data.type==='incoming_call'?'40s':'86400s' } };
 }
 
 async function sendFcm(env, access, message) {
@@ -167,6 +167,13 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
   if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid, ...(event.startsWith('selftest_') ? { reasons:[...reasons] } : {}) } };
   if (!accepted && !duplicate) return { status: 409, body: { error: 'NO_VALID_RECIPIENT_DEVICE', accepted, invalid } };
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
+}
+
+export async function pushIncomingCall(env,call) {
+  const {chatId,callId,callerId,calleeId,callerName}=call;
+  const event=`call_${chatId}_${callId}`;
+  return sendToDevices(env,env.DB,callerId,calleeId,{type:'incoming_call',chatId,callId,
+    toUserId:calleeId,fromUserId:callerId,eventId:event,title:callerName||'FriendBook',body:'Incoming call · Tap to open'},event);
 }
 
 // Scheduled delivery only: the outbox can be populated only by the admin broadcast

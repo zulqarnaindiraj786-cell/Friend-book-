@@ -109,7 +109,7 @@ public class CallActivity extends Activity implements LiveStreamEngine.Listener 
      */
     @SuppressWarnings("unchecked")
     public static void maybeHandleIncomingFromRoomDoc(@Nullable Context c, @Nullable DocumentSnapshot roomDoc) {
-        if (c == null || roomDoc == null || !roomDoc.exists()) return;
+        if (c == null || roomDoc == null || !roomDoc.exists() || roomDoc.getMetadata().isFromCache()) return;
         String me = Fb.uid();
         if (me == null || activeCallScreenOpen) return;
 

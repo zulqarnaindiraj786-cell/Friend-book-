@@ -129,7 +129,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                if(dy>0 && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-4) loadMore();
+                if(dy>0 && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-7) loadMore();
             }
         });
         rv.setBackgroundColor(Ui.bg(a));

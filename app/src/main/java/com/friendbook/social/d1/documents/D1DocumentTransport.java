@@ -172,6 +172,10 @@ final class D1DocumentTransport {
         return request("POST", "/v1/firestore/document?parent=" + enc(parent), body);
     }
 
+    static JSONObject listenerQuery(JSONObject body) throws Exception {
+        return read("POST", "/v1/firestore/query", body);
+    }
+
     static JSONArray query(JSONObject body) throws Exception {
         JSONObject data = read("POST", "/v1/firestore/query", body);
         JSONArray arr = data.optJSONArray("documents");

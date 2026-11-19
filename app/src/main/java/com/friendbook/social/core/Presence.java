@@ -261,24 +261,12 @@ public class Presence {
                     // fields. Refresh the separately authorized presence endpoint
                     // after a profile change instead of leaving peers offline.
                     if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED && allowed)
-                        H.postDelayed(() -> fetchCloudflarePresence(uid,h,fsSeen,fsOnline,fsLastSeen,profileRevision,emit),1000L);
+                        H.postDelayed(() -> { if (com.friendbook.social.App.isForeground()) fetchCloudflarePresence(uid,h,fsSeen,fsOnline,fsLastSeen,profileRevision,emit); },1000L);
                 });
 
-        // Cloudflare HTTP presence polling (real-time WebSocket state)
-        if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
-            h.ticker = () -> {
-                if (!h.closed) {
-                    if (com.friendbook.social.App.isForeground())
-                        fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, profileRevision, emit);
-                    H.postDelayed(h.ticker, 30_000L); // poll every 30s
-                }
-            };
-            H.post(h.ticker); // immediate first fetch
-        } else {
-            // Fallback: just use Firestore
-            h.ticker = () -> { if (!h.closed) emit.run(); };
-            H.postDelayed(h.ticker, 10_000L);
-        }
+        // One authorized initial read; the profile listener refreshes it on a change.
+        if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED && com.friendbook.social.App.isForeground())
+            H.post(() -> fetchCloudflarePresence(uid,h,fsSeen,fsOnline,fsLastSeen,profileRevision,emit));
 
         return h;
     }
@@ -409,7 +397,7 @@ public class Presence {
         if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
             h.ticker = () -> {
                 if (!h.closed) {
-                    fetchCloudflareTyping(chatId, myUid, h, cfTyping, emit);
+                    if (com.friendbook.social.App.isForeground()) fetchCloudflareTyping(chatId, myUid, h, cfTyping, emit);
                     H.postDelayed(h.ticker, 3_000L); // poll every 3s
                 }
             };

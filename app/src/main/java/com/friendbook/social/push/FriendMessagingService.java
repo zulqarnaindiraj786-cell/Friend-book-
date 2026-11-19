@@ -18,6 +18,16 @@ public class FriendMessagingService extends FirebaseMessagingService {
         if (com.friendbook.social.App.isForeground() && actor != null && actor.equals(data.get("toUserId"))) {
             com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();
             String type = data.get("type");
+            if ("incoming_call".equals(type)) {
+                String room=data.get("chatId");
+                if(room!=null && room.matches("[A-Za-z0-9_-]{1,200}"))
+                    com.friendbook.social.core.Fb.db().collection("chats").document(room).get(com.friendbook.social.d1.documents.Source.SERVER)
+                        .addOnSuccessListener(doc -> {
+                            if(com.friendbook.social.App.isForeground() && actor.equals(com.friendbook.social.core.Fb.uid()))
+                                com.friendbook.social.chat.CallActivity.maybeHandleIncomingFromRoomDoc(this,doc);
+                        });
+                return;
+            }
             if ("message".equals(type)) store.refreshChatFromPush(data.get("chatId"));
             if (data.get("notificationId") != null || !"message".equals(type)) store.refreshInboxFromPush(type);
         }

@@ -11,12 +11,12 @@ public class ListenerPollingPolicyTest {
  }
  @Test public void backsOffDiscoveryAndConfigWithoutLosingCallSignaling() {
   assertFalse(ListenerPollingPolicy.due("posts", true, 5_000));
-  assertTrue(ListenerPollingPolicy.due("posts", true, 30_000));
-  assertTrue(ListenerPollingPolicy.due("config/ads", true, 60_000));
+  assertFalse(ListenerPollingPolicy.due("posts", true, 30_000));
+  assertFalse(ListenerPollingPolicy.due("config/ads", true, 60_000));
   assertFalse(ListenerPollingPolicy.due("posts", false, 3_600_000));
-  assertTrue(ListenerPollingPolicy.due("chats", false, 10_000));
-  assertTrue(ListenerPollingPolicy.due("chats/a_b", true, 5_000));
-  assertTrue(ListenerPollingPolicy.due("chats/a_b/messages", true, 2_000));
+  assertFalse(ListenerPollingPolicy.due("chats", false, 10_000));
+  assertFalse(ListenerPollingPolicy.due("chats/a_b", true, 5_000));
+  assertFalse(ListenerPollingPolicy.due("chats/a_b/messages", true, 2_000));
   assertFalse(ListenerPollingPolicy.due("chats/a_b/messages", false, 30_000));
  }
 }

@@ -1,18 +1,15 @@
 package com.friendbook.social.d1.documents;
 
-/** Chat messages already have their own faster schedule; never also poll them on the general tick. */
+/** Ordinary lists are push-driven. Only active signaling can use foreground periodic reads. */
 final class ListenerPollingPolicy {
     private ListenerPollingPolicy() { }
     static long intervalMs(String path, boolean foreground) {
-        if (path == null) return Long.MAX_VALUE;
-        boolean chatRoom = "chats".equals(path) || (path.startsWith("chats/") && path.indexOf('/', 6) < 0);
-        if (chatRoom) return foreground ? 5_000 : 10_000; // Ringing still uses the inbox, not FCM.
-        if (!foreground) return Long.MAX_VALUE; // Explicit writes/FCM bypass the periodic schedule.
-        if (isChatMessages(path)) return 2_000;
+        if (!foreground || path == null) return Long.MAX_VALUE;
         if (path.equals("lives") || path.startsWith("lives/")) return 5_000;
-        if (path.equals("notifications") || path.equals("stories")) return 15_000;
-        if (path.startsWith("config/")) return 60_000;
-        return 30_000;
+        // Direct room state is still used during active call signaling.
+        if (path.startsWith("chats/") && path.indexOf('/', 6) < 0
+                && com.friendbook.social.chat.CallActivity.isBusy()) return 5_000;
+        return Long.MAX_VALUE;
     }
 
     static boolean due(String path, boolean foreground, long elapsedMs) {
