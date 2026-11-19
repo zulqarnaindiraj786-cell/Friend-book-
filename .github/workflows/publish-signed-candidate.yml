@@ -35,9 +35,7 @@ jobs:
           for name in friendbook.apk friendbook-playstore.aab; do
             if [ ! -s "files/$name" ]; then echo "::error::Missing artifact $name"; exit 1; fi
           done
-          if ! output=$(gh release create friendbook-signed-3ad6dae files/friendbook.apk files/friendbook-playstore.aab \
-            --repo "$GH_REPO" --target 3ad6daecaf73f5ce0fd8b29502b8357907b3f70a \
-            --prerelease --title 'FriendBook signed candidate' \
-            --notes 'Owner-requested signed candidate. Automated tests passed; real old/new account and device flows have not been verified. Not a production readiness certification.' 2>&1); then
+          if ! output=$(gh release upload friendbook-signed-3ad6dae files/friendbook.apk files/friendbook-playstore.aab \
+            --repo "$GH_REPO" --clobber 2>&1); then
             echo "::error::Release publish failed: $output"; exit 1
           fi
