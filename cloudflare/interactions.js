@@ -1,4 +1,4 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyPage } from './comment-api.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -92,11 +92,14 @@ export async function interactions(request, env, identity, match, authorize = au
         .bind(identity.uid, resource, JSON.stringify(context.blocked || [])).first();
       const typesList = JSON.parse(combined?.types_json || '[]');
       const previewRows = JSON.parse(combined?.preview_json || '[]');
+      const legacyPreview = await legacyPage(db,resource,identity.uid,context.blocked||[],[Number.MAX_SAFE_INTEGER,'']);
+      const preview = [...previewRows.map(row => normalized(row, identity.uid)), ...legacyPreview]
+        .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
       const payload = {
         owner: context.owner,
         types: typesList,
         comments: Number(combined?.total_comments || 0) + await legacyCommentCount(db,resource,context.blocked),
-        preview: previewRows.map(row => normalized(row, identity.uid)),
+        preview,
       };
       return json(payload);
     }

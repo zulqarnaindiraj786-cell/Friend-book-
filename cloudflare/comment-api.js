@@ -126,7 +126,7 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
 // matching legacy rows by indexed storage order, retaining only the 21 newest
 // matches for the requested creation-time cursor. This avoids silently losing
 // older comments beyond an arbitrary first thousand rows.
-async function legacyPage(db,resource,uid,blocked,before) {
+export async function legacyPage(db,resource,uid,blocked,before) {
   let storageCursor=null, best=[];
   for(let batch=0;batch<100;batch++) {
     const extra=storageCursor?' AND (a.updated_at<? OR (a.updated_at=? AND a.path<?))':'';

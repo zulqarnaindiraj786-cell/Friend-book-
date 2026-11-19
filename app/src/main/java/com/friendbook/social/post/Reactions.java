@@ -174,7 +174,7 @@ public class Reactions {
     /** 1-tap Like toggle: removes `currentUserId`'s reaction if present, otherwise immediately adds "like". */
     public static void tapLike(Context c, Models.Post post) {
         if (post == null || post.id == null) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.apply(c,"posts",post.id,"like",false,()->D1Reactions.hydrate(post));return;}
+        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.tapLike(c,"posts",post.id,()->D1Reactions.hydrate(post));return;}
         hydrateFromPostInstant(post);
         String prev = resolveCurrentUserReaction(post);
         apply(c, post, prev != null ? null : "like");

@@ -96,6 +96,7 @@ test('legacy root app comments are merged into authorized D1 comment pages witho
   assert.deepEqual(page.comments.map(c=>c.id),['same','wrapped','old']);
   const summary=await (await call(f.env,'reactions','GET',undefined,{authorize})).json();
   assert.equal(summary.comments,3,'feed count includes visible legacy comments but not blocked, deleted or shadowed records');
+  assert.deepEqual(summary.preview.map(c=>c.id),['same','wrapped'],'preview merges canonical and visible historical comments in creation order');
   assert.equal(page.comments.find(c=>c.id==='same').content,'canonical version');
   assert.equal(page.comments.find(c=>c.id==='old').authorName,'Legacy friend');
   assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_comments WHERE id='old'").get().n,0,

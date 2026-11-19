@@ -32,6 +32,13 @@ public class D1AndroidTest {
   assertEquals(9,D1Reactions.total(data));assertEquals("love",D1Reactions.mine(data));
   assertNull(D1Reactions.mine(D1Client.object("types",new JSONArray())));
  }
+ @Test public void postLikeTapRemovesAnyExistingReactionButPickerCanChangeIt(){
+  assertEquals("like",D1Reactions.nextReaction(null,"like",true));
+  assertNull(D1Reactions.nextReaction("love","like",true));
+  assertNull(D1Reactions.nextReaction("like","like",true));
+  assertEquals("like",D1Reactions.nextReaction("love","like",false));
+  assertNull(D1Reactions.nextReaction("love","love",false));
+ }
  @Test public void feedParsesCloudflareTimestampMaps(){
   Map<String,Object> timestamp=new HashMap<>();timestamp.put("__type","timestamp");timestamp.put("millis",1700000000123L);
   Map<String,Object> post=new HashMap<>();post.put("createdAt",timestamp);
