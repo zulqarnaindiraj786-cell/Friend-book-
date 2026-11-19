@@ -57,7 +57,7 @@ public class FirebaseOffRoutingTest {
    Query query=mock(Query.class);DocumentSnapshot parentData=mock(DocumentSnapshot.class),doc=mock(DocumentSnapshot.class);QuerySnapshot page=mock(QuerySnapshot.class);SnapshotMetadata metadata=mock(SnapshotMetadata.class);
    when(db.collection("posts")).thenReturn(posts);when(posts.document("p1")).thenReturn(parent);when(parent.collection("comments")).thenReturn(comments);
    when(parent.get()).thenReturn(Tasks.forResult(parentData));when(parentData.exists()).thenReturn(false);
-   when(comments.orderBy("createdAt",Query.Direction.DESCENDING)).thenReturn(query);when(query.limit(50)).thenReturn(query);
+   when(comments.orderBy("createdAt",Query.Direction.DESCENDING)).thenReturn(query);when(query.limit(10)).thenReturn(query);
    ListenerRegistration registration=mock(ListenerRegistration.class);
    ArgumentCaptor<com.friendbook.social.d1.documents.EventListener<QuerySnapshot>> callback=ArgumentCaptor.forClass(com.friendbook.social.d1.documents.EventListener.class);
    when(query.addSnapshotListener(callback.capture())).thenReturn(registration);
