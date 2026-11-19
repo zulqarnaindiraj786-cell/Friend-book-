@@ -43,6 +43,8 @@ jobs:
   signed-candidate:
     if: "github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[signed-candidate]'))"
     needs: verify
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -62,23 +64,23 @@ jobs:
             test -x "$SDKM"
             "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
           fi
-      - name: Sign candidate with the existing release key
-        env:
-          FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
-          FRIENDBOOK_RELEASE_STORE_PASSWORD: ${{ secrets.FB_KEYSTORE_PASSWORD || secrets.FRIENDBOOK_RELEASE_STORE_PASSWORD }}
-          FRIENDBOOK_RELEASE_KEY_ALIAS: ${{ secrets.FB_KEY_ALIAS || secrets.FRIENDBOOK_RELEASE_KEY_ALIAS }}
-          FRIENDBOOK_RELEASE_KEY_PASSWORD: ${{ secrets.FB_KEY_PASSWORD || secrets.FRIENDBOOK_RELEASE_KEY_PASSWORD }}
+      - name: Sign candidate with the original v2.8.89 key
         run: |
           set -euo pipefail
-          : "${FB_KEYSTORE_B64:?Missing existing release keystore secret}"
-          : "${FRIENDBOOK_RELEASE_STORE_PASSWORD:?Missing release store password secret}"
-          : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing release key alias secret}"
-          : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing release key password secret}"
+          set +x
           umask 077
+          baseline=6306172bb107bfa3f2b499f418d3cf9e3970d95a
+          git fetch --no-tags --depth=1 origin "$baseline"
           export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-candidate.p12"
           trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
-          printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
-          unset FB_KEYSTORE_B64
+          git show "$baseline:app/friendbook-release.p12" > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          export FRIENDBOOK_RELEASE_STORE_PASSWORD="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*storePassword /{print $2;exit}')"
+          export FRIENDBOOK_RELEASE_KEY_ALIAS="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyAlias /{print $2;exit}')"
+          export FRIENDBOOK_RELEASE_KEY_PASSWORD="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyPassword /{print $2;exit}')"
+          : "${FRIENDBOOK_RELEASE_STORE_PASSWORD:?Missing historical store configuration}"
+          : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing historical alias configuration}"
+          : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing historical key configuration}"
+          printf '::add-mask::%s\n' "$FRIENDBOOK_RELEASE_STORE_PASSWORD" "$FRIENDBOOK_RELEASE_KEY_PASSWORD"
           if ! gradle :app:assembleRelease :app:bundleRelease -PfriendbookUnshrunkCandidate=true --max-workers=2 --no-daemon --console=plain > android-release.log 2>&1; then
             tail -100 android-release.log
             grep -Ei 'error|exception|daemon|failed|what went wrong|killed' android-release.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
@@ -93,3 +95,16 @@ jobs:
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
+      - name: Publish direct APK and AAB links (prerelease only)
+        if: github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && contains(github.event.head_commit.message, '[publish-candidate]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="friendbook-2.8.89-cloudflare-${GITHUB_SHA:0:7}"
+          gh release create "$tag" \
+            app/build/outputs/apk/release/app-release.apk#FriendBook.apk \
+            app/build/outputs/bundle/release/app-release.aab#FriendBook.aab \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "FriendBook 2.8.89 Cloudflare test candidate" \
+            --notes "Signed with the original v2.8.89 key. Test candidate; not the production release."

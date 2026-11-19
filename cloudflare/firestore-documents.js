@@ -1489,7 +1489,7 @@ async function createLiveChat(db, roomId, uid, input, now) {
   const statements=[await chatDocumentGuard(db,path,roomRow)];
   if (room.slowMode===true && !host && !mod && ['chat','qa'].includes(type)) {
     statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
-      SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path=? AND owner_uid=? AND create_time>?
+      SELECT 1 FROM friendbook_cf_firestore_documents WHERE collection_id='chat' AND parent_path=? AND owner_uid=? AND create_time>?
         AND json_extract(document_json,'$.type') IN ('chat','qa')
     ) THEN 1 ELSE 0 END`).bind(parent,uid,now-5000));
   }

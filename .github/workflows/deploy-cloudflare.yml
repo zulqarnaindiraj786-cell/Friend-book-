@@ -2,7 +2,7 @@
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book') && !contains(github.event.head_commit.message, '[no-deploy]')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -136,6 +136,16 @@ jobs:
           npx wrangler d1 list 2>&1 | tee -a "$log"
           d1_list_status=${PIPESTATUS[0]}
           printf '%s\n' "d1_list_exit_code=$d1_list_status" | tee -a "$log"
+          if [ "$GITHUB_REF" = refs/heads/arena/7c7ddb7b-friend-book ]; then
+            pending=$(npx wrangler d1 migrations list friendbook-db --remote 2>&1)
+            if [ "$?" -ne 0 ] || printf '%s\n' "$pending" | grep -Eq '00([012][0-9]|3[0-3])_[a-z_]+\.sql'; then
+              echo 'Remote schema must already be at migration 0033; refusing to replay older migrations.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}
           printf '%s\n' "migration_exit_code=$migration_status" | tee -a "$log"
