@@ -87,9 +87,13 @@ public class WriteBatch {
         return this;
     }
 
-    public Task<Void> commit() {
+    public Task<Void> commit() { return commit(false); }
+
+    public Task<Void> commitChatSend() { return commit(true); }
+
+    private Task<Void> commit(boolean chatSend) {
         JSONArray ops = new JSONArray(operations);
-        return firestore.runAsync(() -> {
+        java.util.concurrent.Callable<Void> task = () -> {
             D1DocumentTransport.batch(ops);
             for (int i = 0; i < ops.length(); i++) {
                 JSONObject o = ops.optJSONObject(i);
@@ -102,6 +106,7 @@ public class WriteBatch {
                 }
             }
             return null;
-        });
+        };
+        return chatSend ? firestore.runChatSend(task) : firestore.runAsync(task);
     }
 }

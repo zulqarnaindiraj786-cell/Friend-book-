@@ -855,8 +855,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        batch.commitChatSend().addOnSuccessListener(x -> {
+            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
         })
                 .addOnFailureListener(e -> {
                     reconcileUncertainSend(msgRef, me, e, "Voice note", null);
@@ -953,9 +953,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit()
+        batch.commitChatSend()
                 .addOnSuccessListener(x -> {
-                    if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+                    if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
                 })
                 .addOnFailureListener(e -> {
                     reconcileUncertainSend(msgRef, me, e, "Sticker", null);
@@ -1034,8 +1034,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(msgRef, msg);
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
-        batch.commit().addOnSuccessListener(x -> {
-            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId());
+        batch.commitChatSend().addOnSuccessListener(x -> {
+            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
         }).addOnFailureListener(e -> {
             reconcileUncertainSend(msgRef, me, e, "Message", () -> {
                 if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);
@@ -1061,7 +1061,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     == ChatSendRecovery.State.CONFIRMED) {
                 // It committed despite the failed response. Push is an idempotent hint;
                 // the normal authenticated listener remains authoritative for display.
-                com.friendbook.social.push.FCMPush.message(chatId, ref.getId());
+                com.friendbook.social.push.FCMPush.message(chatId, ref.getId(), isGroupChat ? null : peerId);
                 Fb.db().refreshChatFromPush(chatId);
             } else {
                 // A still-running server transaction can commit after this read.

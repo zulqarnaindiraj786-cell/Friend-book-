@@ -93,9 +93,15 @@ public final class ConsentManager {
                                 }
                         );
                     },
-                    requestConsentError -> Log.w(AdsConfig.LOG_TAG, "UMP consent update notice: code="
-                            + requestConsentError.getErrorCode() + " msg="
-                            + requestConsentError.getMessage())
+                    requestConsentError -> {
+                        Log.w(AdsConfig.LOG_TAG, "UMP consent update notice: code="
+                                + requestConsentError.getErrorCode() + " msg=" + requestConsentError.getMessage());
+                        // UMP can still permit ads using the previous session's consent.
+                        if (!activity.isFinishing() && !activity.isDestroyed() && consentInfo.canRequestAds()) {
+                            AdsConfig.notifyChange();
+                            if (onAdsReady != null) onAdsReady.run();
+                        }
+                    }
             );
         } catch (Throwable t) {
             Log.w(AdsConfig.LOG_TAG, "UMP check skipped: " + t.getMessage());

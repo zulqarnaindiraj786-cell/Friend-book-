@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private final Fragment[] tabFragments = new Fragment[5];
     private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
+    private long foregroundStartedAt;
     private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
@@ -553,7 +554,13 @@ public class MainActivity extends Activity {
                 .limit(BADGE_WINDOW)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
-                    if (snap == null || !me.equals(Fb.uid())) return;
+                    if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
+                        for (com.friendbook.social.d1.documents.DocumentChange change : snap.getDocumentChanges()) {
+                            if (change.getType() == com.friendbook.social.d1.documents.DocumentChange.Type.ADDED) {
+                                com.friendbook.social.push.PushManager.showForegroundInbox(this, change.getDocument(), foregroundStartedAt);
+                            }
+                        }
+                    }
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
@@ -756,6 +763,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        foregroundStartedAt = System.currentTimeMillis();
         if (!isFinishing()) appUpdates.onResume(this);
         permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);

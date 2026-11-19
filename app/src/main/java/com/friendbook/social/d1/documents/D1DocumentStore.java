@@ -37,6 +37,13 @@ public class D1DocumentStore {
     private final ExecutorService inboxExecutor = new java.util.concurrent.ThreadPoolExecutor(
             3, 3, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(32),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    // A chat send must not sit behind slow feed, profile or discovery requests.
+    private final ExecutorService chatWriteExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(24),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    private final ExecutorService chatReadExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            2, 2, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(16),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, DocumentSnapshot> docCache = java.util.Collections.synchronizedMap(
@@ -244,14 +251,18 @@ public class D1DocumentStore {
         });
     }
 
-    <T> Task<T> runAsync(Callable<T> task) {
+    <T> Task<T> runAsync(Callable<T> task) { return runAsync(executor, task); }
+
+    <T> Task<T> runChatSend(Callable<T> task) { return runAsync(chatWriteExecutor, task); }
+
+    private <T> Task<T> runAsync(ExecutorService lane, Callable<T> task) {
         TaskCompletionSource<T> tcs = new TaskCompletionSource<>();
         // Capture the caller when work is queued, not when a worker eventually
         // starts it. Otherwise a sign-out/account switch can execute an old
         // screen's queued write with the new account's token.
         final String actor=authenticatedUid();
         try {
-            executor.execute(() -> {
+            lane.execute(() -> {
                 try {
                     tcs.setResult(D1DocumentTransport.runForActor(actor, task));
                 } catch (Exception e) {
@@ -403,7 +414,9 @@ public class D1DocumentStore {
         String path = entry.query.parentPath;
         boolean inbox = ListenerPollingPolicy.isChatMessages(path) || "chats".equals(path)
                 || "notifications".equals(path) || "friend_requests".equals(path);
-        try { (inbox ? inboxExecutor : listenerExecutor).execute(() -> {
+        ExecutorService lane = ListenerPollingPolicy.isChatMessages(path) ? chatReadExecutor
+                : inbox ? inboxExecutor : listenerExecutor;
+        try { lane.execute(() -> {
             // A push arriving after this point must get one follow-up read, even
             // when the current HTTP request returns the pre-message snapshot.
             entry.refreshPending.set(false);

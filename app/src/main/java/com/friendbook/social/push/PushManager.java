@@ -42,6 +42,28 @@ public final class PushManager {
             manager.createNotificationChannel(n);
         }
     }
+    /** Fallback for a fresh server-authenticated inbox event observed while Main is visible. */
+    public static void showForegroundInbox(Context c, com.friendbook.social.d1.documents.DocumentSnapshot doc, long since) {
+        if (doc.getMetadata().isFromCache() || doc.getMetadata().hasPendingWrites() || Prefs.quiet(c)) return;
+        long at = com.friendbook.social.core.Format.ts(doc.get("createdAt"));
+        long now = System.currentTimeMillis();
+        if (at < Math.max(since, now - 30_000L) || at > now + 5_000L) return;
+        String type = doc.getString("type");
+        if (type == null || "announcement".equals(type) || "message".equals(type)) return;
+        java.util.HashMap<String,String> payload = new java.util.HashMap<>();
+        for (String key : new String[]{"type","toUserId","fromUserId","postId","contentType","groupId"}) {
+            String value = doc.getString(key);
+            if (value != null) payload.put(key, value);
+        }
+        payload.put("eventId", "notification_" + doc.getId());
+        payload.put("notificationId", doc.getId());
+        String title = doc.getString("fromUserName");
+        String body = doc.getString("text");
+        if (title != null && !title.isEmpty()) payload.put("title", title);
+        if (body != null && !body.isEmpty()) payload.put("body", body);
+        show(c, payload);
+    }
+
     public static synchronized void show(Context c, Map<String, String> d) {
         String uid = Fb.uid();
         if (uid == null || !uid.equals(d.get("toUserId"))) {

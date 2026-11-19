@@ -24,7 +24,7 @@ class SoundEffectsTest(unittest.TestCase):
             self.assertFalse((ROOT/f'app/src/main/res/raw/{name}.wav').exists())
     def test_all_chat_sends_remain_immediate(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);\n        batch.commit()'),3)
+        self.assertEqual(chat.count('SoundManager.action(this, "sent", me);\n        batch.commitChatSend()'),3)
         self.assertIn('SoundManager.playNewMessage(this)',chat)
         self.assertIn('MetadataChanges.INCLUDE',chat)
         self.assertIn('snap.getMetadata().hasPendingWrites()',chat)

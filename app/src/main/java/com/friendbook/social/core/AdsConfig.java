@@ -941,6 +941,10 @@ public class AdsConfig {
         return polled;
     }
 
+    public static synchronized boolean isCurrentFeedSlotAd(int slot, com.google.android.gms.ads.nativead.NativeAd ad) {
+        return ad != null && FEED_SLOT_ADS.get(slot) == ad;
+    }
+
     public static synchronized boolean hasFeedSlotAd(int slotOrdinal) {
         return FEED_SLOT_ADS.containsKey(slotOrdinal);
     }

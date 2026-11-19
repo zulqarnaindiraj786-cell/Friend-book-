@@ -129,7 +129,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                if(dy>0 && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-4) loadMore();
+                if(dy>0 && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-4) loadMore();
             }
         });
         rv.setBackgroundColor(Ui.bg(a));
@@ -210,7 +210,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
         if (firstPos <= 1) {
             if (adapter.getPosts().isEmpty()) applyFilterOnCachedFeed();
-            adapter.refreshSponsoredAds();
         } else if (freshPill != null) {
             freshPill.setVisibility(View.GONE);
         }
@@ -238,7 +237,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 // Tapping Home while already at top triggers a fresh algorithm refresh!
                 refreshWithFriendbookAlgorithm(true);
             } else {
-                if (adapter != null) adapter.refreshSponsoredAds();
                 rv.scrollToPosition(0);
             }
         }
@@ -252,7 +250,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         } else if (adapter != null && isResumed()) {
             refreshPostsIfNeeded();
             startVisibleHomeContent();
-            adapter.refreshSponsoredAds();
         }
     }
 

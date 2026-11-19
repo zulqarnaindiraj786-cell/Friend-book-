@@ -27,8 +27,16 @@ public final class FCMPush {
     public static void friendPost(String postId) {
         PushFanoutWorker.enqueue("friend_post", postId, "");
     }
-    public static void message(String chatId, String messageId) {
-        PushFanoutWorker.enqueue("chat", chatId, messageId);
+    public static void message(String chatId, String messageId, String directPeer) {
+        if (directPeer == null || directPeer.isEmpty()) {
+            PushFanoutWorker.enqueue("chat", chatId, messageId);
+            return;
+        }
+        // The Worker still verifies the stored message and both room members.
+        try {
+            invoke(directPeer, "friendbook", "New message", new JSONObject().put("type", "message")
+                    .put("chatId", chatId).put("messageId", messageId));
+        } catch (org.json.JSONException ignored) { }
     }
     static void invoke(String target, String title, String message, JSONObject data) {
         try {

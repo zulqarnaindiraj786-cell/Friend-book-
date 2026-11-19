@@ -103,7 +103,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (idx >= 0 && idx < posts.size()) {
             Models.Post p = posts.get(idx);
             if (p != null && p.id != null && !p.id.isEmpty()) {
-                return (((long) p.id.hashCode()) << 20) ^ idx;
+                long id = 0xcbf29ce484222325L;
+                for (int i = 0; i < p.id.length(); i++) id = (id ^ p.id.charAt(i)) * 0x100000001b3L;
+                return id & Long.MAX_VALUE;
             }
         }
         return position;
@@ -285,7 +287,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
-        if ((lives == null || lives.isEmpty()) && activeLives.isEmpty()) return;
+        if ((lives == null || lives.isEmpty()) ? activeLives.isEmpty() : activeLives.equals(lives)) return;
         activeLives.clear();
         if (lives != null) activeLives.addAll(lives);
         if (showHeader) notifyItemChanged(0);
@@ -324,8 +326,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Triggers fresh Native Ad requests on Feed refresh — rotates in preloaded ads from pool. */
     public void refreshSponsoredAds() {
+        if (!adsActive()) return;
         com.friendbook.social.core.AdsConfig.clearFeedSlotAds(null);
-        notifyDataSetChanged();
+        for (int slot = 0; slot < getItemCount() - offset() - footerCount(); slot++)
+            if (isAdSlot(slot)) notifyItemChanged(offset() + slot);
+        com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(activity);
     }
 
     public void clearCachedNativeAds() {
@@ -2592,7 +2597,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 collapse();
                 return;
             }
-            if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
+            if (this.boundSlotOrdinal == slotOrdinal
+                    && com.friendbook.social.core.AdsConfig.isCurrentFeedSlotAd(slotOrdinal, currentNativeAd)) {
                 if (boundNativeAdViewTarget != currentNativeAd) {
                     expand(ctx);
                     populateNativeAdView(currentNativeAd, ctx);
