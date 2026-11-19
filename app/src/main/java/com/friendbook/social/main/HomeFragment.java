@@ -926,6 +926,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void openStoryGroup(StoriesAdapter.Group g) {
         Intent i = new Intent(getActivity(), StoryViewerActivity.class);
         i.putExtra("author", g.authorId);
+        if (g.stories.size()==1) {
+            i.putExtra("story_id",g.stories.get(0).id);
+            i.putExtra("active_story_only",true);
+        }
         startActivity(i);
     }
 
