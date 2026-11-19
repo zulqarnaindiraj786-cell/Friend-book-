@@ -28,6 +28,6 @@ class ChatAutoplayUx(unittest.TestCase):
         reel=(JAVA/'reels/ReelsFragment.java').read_text()
         self.assertNotIn('userRequestedVideo',reel);self.assertNotIn('▶ Tap to play',reel)
         self.assertIn('this.wantPlay=autoPlayNow;',reel)
-        self.assertIn('if(!visible.getAsBoolean()){pauseAll(pager);return;}',reel)
+        self.assertIn('if(!visible.getAsBoolean() || (pager!=null && pager.getScrollState()!=ViewPager2.SCROLL_STATE_IDLE)){pauseAll(pager);return;}',reel)
         self.assertIn('getBindingAdapterPosition()!=playingPos',reel)
         self.assertNotIn('ReelVideoCache.prefetchWindow(',reel)

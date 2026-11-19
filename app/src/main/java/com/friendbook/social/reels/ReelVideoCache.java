@@ -38,7 +38,7 @@ public final class ReelVideoCache {
     private static final long MAX_CACHE_BYTES = 240L * 1024L * 1024L; // 240 MB persistent LRU cache
     private static final long MAX_PREFETCH_FILE_BYTES = 45L * 1024L * 1024L; // cap single prefetch safety
 
-    private static final ExecutorService PREFETCH_POOL = Executors.newFixedThreadPool(3, r -> {
+    private static final ExecutorService PREFETCH_POOL = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "reel-turbo-prefetch");
         t.setDaemon(true);
         t.setPriority(Thread.NORM_PRIORITY - 1);
@@ -94,6 +94,19 @@ public final class ReelVideoCache {
         boolean weak = tier == FastCache.NetTier.NET_2G || tier == FastCache.NetTier.NET_3G || Prefs.dataSaver(c) || Prefs.turbo2g(c);
         if (weak) return lowBandwidthUrl(u);
         return tier == FastCache.NetTier.NET_4G ? mobileBandwidthUrl(u) : u;
+    }
+
+    static String startup480Url(String url) {
+        return boundedCloudinaryUrl(url, "h_480,c_limit,br_650k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    static String upgrade720Url(String url) {
+        return boundedCloudinaryUrl(url, "h_720,c_limit,br_1200k,f_mp4,vc_h264,ac_aac,q_auto:good");
+    }
+
+    static boolean canUpgrade(Context context) {
+        return !Prefs.dataSaver(context) && !Prefs.turbo2g(context)
+                && (FastCache.netTier(context)==FastCache.NetTier.WIFI || FastCache.netTier(context)==FastCache.NetTier.NET_4G);
     }
 
     static String lowBandwidthUrl(String url) {
@@ -217,6 +230,9 @@ public final class ReelVideoCache {
         });
     }
 
+    private static volatile String wantedWarmKey="";
+    public static void cancelUpcomingWarm() { wantedWarmKey=""; }
+
     /** Asynchronously downloads a single Reel video into the persistent SSD cache if not cached yet. */
     public static void prefetchSingle(final Context c, final String rawVideoUrl) {
         if (!canPrefetch(c) || rawVideoUrl == null || rawVideoUrl.isEmpty()) return;
@@ -224,6 +240,7 @@ public final class ReelVideoCache {
         final Context appCtx = c.getApplicationContext();
         final String key = cacheKey(rawVideoUrl);
         if (key.isEmpty()) return;
+        wantedWarmKey=key;
         File existing = new File(cacheDir(appCtx), key + ".mp4");
         if (existing.exists() && existing.length() > 1024L) return;
         if (IN_FLIGHT.putIfAbsent(key, Boolean.TRUE) != null) return;
@@ -234,23 +251,14 @@ public final class ReelVideoCache {
             File part = new File(dir, key + ".part");
             HttpURLConnection conn = null;
             try {
-                if (!canPrefetch(appCtx) || (dest.exists() && dest.length() > 1024L)) return;
-                String streamUrl = optimizeStreamUrl(appCtx, rawVideoUrl);
+                if (!key.equals(wantedWarmKey) || !canPrefetch(appCtx) || (dest.exists() && dest.length() > 1024L)) return;
+                String streamUrl = startup480Url(rawVideoUrl);
                 conn = (HttpURLConnection) new URL(streamUrl).openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(45000);
                 conn.setRequestProperty("Accept", "video/mp4,video/*,*/*");
                 int code = conn.getResponseCode();
-                if (code < 200 || code >= 300) {
-                    // Fallback to raw URL if transformed URL returned 4xx
-                    conn.disconnect();
-                    conn = (HttpURLConnection) new URL(rawVideoUrl).openConnection();
-                    conn.setInstanceFollowRedirects(true);
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(45000);
-                    code = conn.getResponseCode();
-                }
                 if (code >= 200 && code < 300) {
                     long contentLen = conn.getContentLengthLong();
                     if (contentLen > MAX_PREFETCH_FILE_BYTES) return;
@@ -261,6 +269,7 @@ public final class ReelVideoCache {
                         long total = 0L;
                         int n;
                         while ((n = in.read(buf)) != -1) {
+                            if(!key.equals(wantedWarmKey)) { part.delete(); return; }
                             out.write(buf, 0, n);
                             total += n;
                             if (total > MAX_PREFETCH_FILE_BYTES) {

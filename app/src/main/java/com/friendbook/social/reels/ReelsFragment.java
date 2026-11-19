@@ -172,7 +172,7 @@ public class ReelsFragment extends Fragment {
         pager = new ViewPager2(a);
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
         // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes & prebound Ads!
-        pager.setOffscreenPageLimit(2);
+        pager.setOffscreenPageLimit(1);
         AdsConfig.warmUpPools(a);
         if (pager.getChildAt(0) instanceof RecyclerView) {
             ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
@@ -326,11 +326,18 @@ public class ReelsFragment extends Fragment {
 
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override
+            public void onPageScrollStateChanged(int state) {
+                if (adapter == null || pager == null) return;
+                if (state == ViewPager2.SCROLL_STATE_IDLE) adapter.playOnly(pager,pager.getCurrentItem());
+                else adapter.pauseAll(pager);
+            }
+
+            @Override
             public void onPageSelected(int position) {
                 if (adapter.isAdPos(position) || adapter.isAdPos(position + 1) || adapter.isAdPos(position + 2)) {
                     AdsConfig.ensureReelsPoolReplenished(getActivity());
                 }
-                adapter.playOnly(pager, position);
+                if(pager.getScrollState()==ViewPager2.SCROLL_STATE_IDLE) adapter.playOnly(pager, position);
                 Models.Reel cur = adapter.reelAtPosition(position);
                 if (cur != null && cur.id != null) {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
@@ -926,6 +933,7 @@ public class ReelsFragment extends Fragment {
         }
 
         void pauseAll(ViewPager2 pager) {
+            ReelVideoCache.cancelUpcomingWarm();
             playingPos = -1;
             if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
             RecyclerView rv = (RecyclerView) pager.getChildAt(0);
@@ -937,22 +945,20 @@ public class ReelsFragment extends Fragment {
         }
 
         void playOnly(ViewPager2 pager, int pos) {
-            if(!visible.getAsBoolean()){pauseAll(pager);return;}
+            if(!visible.getAsBoolean() || (pager!=null && pager.getScrollState()!=ViewPager2.SCROLL_STATE_IDLE)){pauseAll(pager);return;}
+            if(playingPos!=pos) ReelVideoCache.cancelUpcomingWarm();
             playingPos = pos;
             if (pager == null || !(pager.getChildAt(0) instanceof RecyclerView)) return;
             RecyclerView rv = (RecyclerView) pager.getChildAt(0);
-            for (int i = 0; i < rv.getChildCount(); i++) {
-                RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
-                if (h instanceof VH) {
-                    VH vh = (VH) h;
-                    if (!isAdPos(pos) && vh.getAdapterPosition() == pos) vh.play();
-                    else vh.pause();
-                } else if (h instanceof ReelAdVH) {
-                    ReelAdVH avh = (ReelAdVH) h;
-                    if (isAdPos(pos) && avh.getAdapterPosition() == pos) avh.playAdVideo();
-                    else avh.pauseAdVideo();
-                }
+            RecyclerView.ViewHolder selected=null;
+            for (int i=0;i<rv.getChildCount();i++) {
+                RecyclerView.ViewHolder holder=rv.getChildViewHolder(rv.getChildAt(i));
+                if(holder.getBindingAdapterPosition()==pos) { selected=holder; continue; }
+                if(holder instanceof VH) ((VH)holder).pause();
+                else if(holder instanceof ReelAdVH) ((ReelAdVH)holder).pauseAdVideo();
             }
+            if(selected instanceof VH) ((VH)selected).play();
+            else if(selected instanceof ReelAdVH) ((ReelAdVH)selected).playAdVideo();
         }
 
         @Override public int getItemCount() { return data.size() + adCount(); }
@@ -1496,6 +1502,10 @@ public class ReelsFragment extends Fragment {
                         try {
                             int dur = activeMp.getDuration();
                             int pos = activeMp.getCurrentPosition();
+                            int advanced=pos-qualityLastPosition;
+                            if(qualityLastPosition>=0 && advanced>0 && advanced<=400) watchedPlaybackMs+=advanced;
+                            qualityLastPosition=pos;
+                            if(watchedPlaybackMs>=2000 && !upgradeAttempted) tryQualityUpgrade();
                             if (reel != null && reel.trimEndMs > reel.trimStartMs && pos >= reel.trimEndMs) {
                                 activeMp.seekTo(Math.max(0, reel.trimStartMs));
                                 pos = reel.trimStartMs;
@@ -2009,6 +2019,7 @@ public class ReelsFragment extends Fragment {
                 this.wantPlay=autoPlayNow;
                 boundVideoUrl = r.videoUrl != null ? r.videoUrl : "";
                 triedRawFallback = false;
+                upgradeAttempted = false;
                 scrubBar.setProgress(0);
 
                 // 0.0ms Instant Poster Frame without downloading remote .mp4 via Glide in parallel with MediaPlayer!
@@ -2040,6 +2051,69 @@ public class ReelsFragment extends Fragment {
                     }
                     prepareMediaPlayerAsync();
                 }
+            }
+
+            private MediaPlayer upgradePlayer;
+            private boolean upgradeAttempted;
+            private int watchedPlaybackMs;
+            private int qualityLastPosition = -1;
+
+            private void cancelQualityUpgrade() {
+                watchedPlaybackMs=0;qualityLastPosition=-1;
+                if(upgradePlayer!=null){
+                    try{upgradePlayer.release();}catch(RuntimeException ignored){}
+                    upgradePlayer=null;
+                }
+            }
+
+            private void tryQualityUpgrade() {
+                if(upgradeAttempted || !wantPlay || userPaused || getBindingAdapterPosition()!=playingPos
+                        || reel==null || activeMp==null || videoSurface==null || triedRawFallback) return;
+                Context ctx=itemView.getContext();
+                String raw=reel.videoUrl;
+                if(raw==null || !ReelVideoCache.canUpgrade(ctx)) return;
+                String high=ReelVideoCache.upgrade720Url(raw);
+                if(raw.equals(high)) return;
+                MediaPlayer low=activeMp;
+                try {
+                    if(!low.isPlaying()) return;
+                    upgradeAttempted=true;
+                    MediaPlayer candidate=new MediaPlayer();upgradePlayer=candidate;
+                    candidate.setLooping(true);
+                    candidate.setOnErrorListener((mp,what,extra)->{
+                        if(mp==upgradePlayer) cancelQualityUpgrade();
+                        else if(mp==activeMp) reportStartupFailure(ctx);
+                        return true;
+                    });
+                    candidate.setOnPreparedListener(mp->{
+                        if(mp!=upgradePlayer || low!=activeMp || !wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || videoSurface==null) return;
+                        try {
+                            mp.setOnSeekCompleteListener(seeked->{
+                                if(seeked!=upgradePlayer || low!=activeMp || !wantPlay || userPaused || getBindingAdapterPosition()!=playingPos || videoSurface==null) return;
+                                try {
+                                    boolean external=reel.audioUrl!=null&&!reel.audioUrl.trim().isEmpty();
+                                    seeked.setVolume(muted||external?0f:1f,muted||external?0f:1f);
+                                    low.pause();low.setSurface(null);
+                                    seeked.setSurface(videoSurface);
+                                    if(speed!=1f) seeked.setPlaybackParams(seeked.getPlaybackParams().setSpeed(speed));
+                                    seeked.start();
+                                    activeMp=seeked;upgradePlayer=null;
+                                    videoW=seeked.getVideoWidth();videoH=seeked.getVideoHeight();
+                                    applyVideoTransform(textureView.getWidth(),textureView.getHeight());
+                                    try { low.release(); } catch(RuntimeException ignored) {}
+                                } catch(RuntimeException error){
+                                    cancelQualityUpgrade();
+                                    try{low.setSurface(videoSurface);low.start();}catch(RuntimeException ignored){}
+                                }
+                            });
+                            int position=Math.min(low.getCurrentPosition(),Math.max(0,mp.getDuration()-1));
+                            if(android.os.Build.VERSION.SDK_INT>=26) mp.seekTo(position,MediaPlayer.SEEK_CLOSEST);
+                            else mp.seekTo(position);
+                        } catch(RuntimeException ignored){cancelQualityUpgrade();}
+                    });
+                    candidate.setDataSource(ctx,Uri.parse(high));candidate.prepareAsync();
+                    uiHandler.postDelayed(()->{if(upgradePlayer==candidate)cancelQualityUpgrade();},8000L);
+                }catch(Exception ignored){cancelQualityUpgrade();}
             }
 
             private Runnable startupWatchdog;
@@ -2156,11 +2230,11 @@ public class ReelsFragment extends Fragment {
                     } else {
                         String fastUrl = triedRawFallback
                                 ? targetUrl
-                                : ReelVideoCache.optimizeStreamUrl(ctx, targetUrl);
+                                : ReelVideoCache.startup480Url(targetUrl);
                         mp.setDataSource(ctx, Uri.parse(fastUrl));
                         // One stream only: a parallel full download competes with playback on mobile data.
                     }
-                    watchStartup(mp,ctx,targetUrl,cached==null && !targetUrl.equals(ReelVideoCache.optimizeStreamUrl(ctx,targetUrl)));
+                    watchStartup(mp,ctx,targetUrl,cached==null && !targetUrl.equals(ReelVideoCache.startup480Url(targetUrl)));
                     mp.prepareAsync();
                 } catch (Throwable t) {
                     bufferingSpinner.setVisibility(View.GONE);
@@ -2317,6 +2391,7 @@ public class ReelsFragment extends Fragment {
                 try {
                     if (activeMp.isPlaying()) {
                         userPaused = true;
+                        cancelQualityUpgrade();
                         activeMp.pause();
                         if (externalAudioMp != null && externalAudioMp.isPlaying()) {
                             try { externalAudioMp.pause(); } catch (Throwable ignored) {}
@@ -2350,6 +2425,7 @@ public class ReelsFragment extends Fragment {
 
             void pause() {
                 wantPlay = false;
+                cancelQualityUpgrade();
                 if (!mpPrepared) releasePlayerOnly();
                 uiHandler.removeCallbacks(progressTicker);
                 bufferingSpinner.setVisibility(View.GONE);
@@ -2367,6 +2443,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void releasePlayerOnly() {
+                cancelQualityUpgrade();
                 cancelStartupWatchdog();
                 uiHandler.removeCallbacks(progressTicker);
                 mpPrepared = false;
