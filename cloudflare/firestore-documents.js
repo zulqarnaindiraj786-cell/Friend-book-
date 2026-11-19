@@ -259,10 +259,14 @@ function appDocumentToFirestoreRow(row) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeStored(item)]));
   };
   const decodeFields = fields => Object.fromEntries(Object.entries(fields || {}).map(([key, value]) => [key, decodeStored(value)]));
+  const sourceCreatedAt=typeof doc?.createTime==='string' ? Date.parse(doc.createTime) : NaN;
   if (doc?.fields && typeof doc.fields === 'object' && !Array.isArray(doc.fields)) doc = decodeFields(doc.fields);
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
   const parts = String(row.path || '').split('/');
   if (parts.length !== 2) return null;
+  if (parts[0]==='posts' && (doc.createdAt===undefined || doc.createdAt===null) && Number.isSafeInteger(sourceCreatedAt)) {
+    doc.createdAt={__type:'timestamp',millis:sourceCreatedAt};
+  }
   delete doc.id; // Firestore document identity is its path/ID, not an extra payload field.
   return {
     path: row.path, parent_path: parts[0], collection_id: row.collection,

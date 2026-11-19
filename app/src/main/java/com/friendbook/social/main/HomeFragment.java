@@ -562,8 +562,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     // The first feed page may arrive before the friendship graph.
                     // Reapply visibility once membership is known instead of hiding
                     // friends-only posts until a later manual refresh.
-                    if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty())
+                    if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty()) {
+                        LinearLayoutManager layout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
+                        if (layout==null || layout.findFirstVisibleItemPosition()<=1) forceReRank=true;
                         consumePostsSnapshot(lastPostDocs,true,false);
+                    }
                 });
     }
 
@@ -719,6 +722,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             for(DocumentSnapshot doc:snapshot.getDocuments()) loadedPostIds.add(doc.getId());
             moreAvailable=snapshot.size()==PAGE;
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            // The cached first paint should not lock the first authoritative D1 page
+            // into chronological order. Keep the session lock for live refreshes mid-scroll.
+            LinearLayoutManager firstLayout=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
+            if (firstLayout==null || firstLayout.findFirstVisibleItemPosition()<=1) forceReRank=true;
             consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
             LinearLayoutManager current=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
             if(pendingFeedRefresh && (current==null || current.findFirstVisibleItemPosition()<=1)){
@@ -971,8 +978,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 if(!loadedPostIds.add(doc.getId())) continue;
                 Models.Post post=Models.Post.fromDoc(doc);
                 if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
-                if(visible(post) && matchesFilter(post,filter)) { page.add(post); sessionOrderIds.add(post.id); }
+                if(visible(post) && matchesFilter(post,filter)) page.add(post);
             }
+            page = rankAccordingToMode(getActivity(), page);
+            for (Models.Post post : page) sessionOrderIds.add(post.id);
             pageError=moreAvailable && page.isEmpty();
             adapter.addPosts(page);
             updatePagingUi();

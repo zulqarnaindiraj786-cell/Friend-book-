@@ -1946,3 +1946,33 @@ test('referral attribution is single-use and only the inviter can read their own
   assert.equal((await (await call('admin','/v1/firestore/query',{parent:'referrals'})).json()).documents.length,1);
   sql.close();
 });
+
+test('copied D1 post timestamps retain order, media and privacy without overwriting mirrors', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema]) sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const old=1700000000000, newer=old+1000;
+  put.run('users/owner','users','users','owner','owner','{"displayName":"Creator"}',1,1);
+  put.run('users/viewer','users','users','viewer','viewer','{"displayName":"Viewer"}',1,1);
+  const insert=(id,data)=>put.run(`posts/${id}`,'posts','posts',id,'owner',JSON.stringify({authorId:'owner',...data}),1,1);
+  insert('newer',{createdAt:newer,mediaUrl:'https://res.cloudinary.com/example/image/upload/original.jpg'});
+  insert('older',{createdAt:{__type:'timestamp',millis:old}});
+  insert('private',{createdAt:newer+3000,privacy:'Only me'});
+  legacy.run('posts/private','posts','private','owner',JSON.stringify({authorId:'owner',createdAt:newer+3000,privacy:'Public'}),1);
+  legacy.run('posts/historical','posts','historical','owner',JSON.stringify({createTime:new Date(newer+1000).toISOString(),fields:{authorId:{stringValue:'owner'}}}),1);
+  const ddl=readFileSync(new URL('../migrations/0047_legacy_post_feed_timestamps.sql',import.meta.url),'utf8');
+  sql.exec(ddl);sql.exec(ddl);
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+  const app=createWorker(async()=> 'viewer');
+  const query=async startAfter=>{
+    const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,startAfter})}),{DB:db,FIREBASE_PROJECT_ID:'test'});
+    assert.equal(res.status,200);
+    return (await res.json()).documents;
+  };
+  const first=await query();assert.deepEqual(first.map(d=>d.id),['historical','newer']);
+  assert.equal(first[1].data.createdAt.millis,newer);
+  assert.equal(first[1].data.mediaUrl,'https://res.cloudinary.com/example/image/upload/original.jpg');
+  assert.deepEqual((await query([first[1].data.createdAt,first[1].id])).map(d=>d.id),['older']);
+  sql.close();
+});
