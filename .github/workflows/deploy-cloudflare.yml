@@ -1,4 +1,4 @@
-# Deploy only after the additive D1 migrations and Worker test suite pass.
+# Deploy with additive D1 migrations after Worker validation.
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
