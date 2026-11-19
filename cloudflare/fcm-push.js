@@ -24,7 +24,7 @@ function b64url(bytes) {
 }
 let cachedToken = '';
 let tokenUntil = 0;
-async function googleToken(env) {
+export async function googleToken(env) {
   if (cachedToken && Date.now() < tokenUntil) return cachedToken;
   const raw = env.FIREBASE_ADMIN_SERVICE_ACCOUNT;
   if (!raw) throw new Error('FCM_NOT_CONFIGURED');
@@ -122,6 +122,7 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
   if (!devices.length) return { status: 409, body: { error: 'RECIPIENT_NOT_REGISTERED', accepted: 0 } };
   const access = await googleToken(env);
   let accepted = 0, duplicate = 0, invalid = 0, failed = 0;
+  const reasons = new Set();
   let index = 0;
   await Promise.all(Array.from({length:Math.min(3, devices.length)}, async () => {
     while (index < devices.length) {
@@ -133,7 +134,7 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
       try {
         claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
           VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
-      } catch { failed++; continue; }
+      } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
       if (!claim) { duplicate++; continue; }
       try {
         const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
@@ -149,17 +150,20 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
           await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
           invalid++;
         } else {
+          reasons.add(code === 'SENDER_ID_MISMATCH' ? 'SENDER_ID_MISMATCH'
+            : [400,401,403,404,429,500,503].includes(r.status) ? `FCM_HTTP_${r.status}` : 'FCM_PROVIDER_ERROR');
           if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
           failed++;
           await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
         }
       } catch {
+        reasons.add("FCM_NETWORK_ERROR");
         failed++;
         await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
       }
     }
   }));
-  if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid } };
+  if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid, ...(event.startsWith('selftest_') ? { reasons:[...reasons] } : {}) } };
   if (!accepted && !duplicate) return { status: 409, body: { error: 'NO_VALID_RECIPIENT_DEVICE', accepted, invalid } };
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
 }

@@ -66,46 +66,51 @@ public final class ConsentManager {
         if (activity == null || activity.isFinishing()) return;
         final Context appCtx = activity.getApplicationContext();
 
-        // Always ensure MobileAds SDK is initialized so real ad requests are never blocked
-        initializeMobileAdsOnce(appCtx, onAdsReady);
-
+        initializeMobileAdsOnce(appCtx, null);
+        if (!consentInFlight.compareAndSet(false,true)) {
+            if (onAdsReady != null) onAdsReady.run();
+            return;
+        }
+        lastConsentAttempt = android.os.SystemClock.elapsedRealtime();
+        consentDiagnostic = "Checking Google UMP…";
         try {
             ConsentRequestParameters params = new ConsentRequestParameters.Builder()
-                    .setTagForUnderAgeOfConsent(false)
-                    .build();
-
-            final ConsentInformation consentInfo = UserMessagingPlatform.getConsentInformation(activity);
-            consentInfo.requestConsentInfoUpdate(
-                    activity,
-                    params,
-                    () -> {
-                        if (activity.isFinishing() || activity.isDestroyed()) return;
-                        UserMessagingPlatform.loadAndShowConsentFormIfRequired(
-                                activity,
-                                loadAndShowError -> {
-                                    if (loadAndShowError != null) {
-                                        Log.w(AdsConfig.LOG_TAG, "UMP consent form notice: code="
-                                                + loadAndShowError.getErrorCode() + " msg="
-                                                + loadAndShowError.getMessage());
-                                    }
-                                    AdsConfig.notifyChange();
-                                    if (onAdsReady != null) onAdsReady.run();
-                                }
-                        );
-                    },
-                    requestConsentError -> {
-                        Log.w(AdsConfig.LOG_TAG, "UMP consent update notice: code="
-                                + requestConsentError.getErrorCode() + " msg=" + requestConsentError.getMessage());
-                        // UMP can still permit ads using the previous session's consent.
-                        if (!activity.isFinishing() && !activity.isDestroyed() && consentInfo.canRequestAds()) {
-                            AdsConfig.notifyChange();
-                            if (onAdsReady != null) onAdsReady.run();
-                        }
-                    }
-            );
-        } catch (Throwable t) {
-            Log.w(AdsConfig.LOG_TAG, "UMP check skipped: " + t.getMessage());
+                    .setTagForUnderAgeOfConsent(false).build();
+            UserMessagingPlatform.getConsentInformation(activity).requestConsentInfoUpdate(activity, params, () -> {
+                if (activity.isFinishing() || activity.isDestroyed()) {
+                    finishConsent(appCtx, "Consent screen closed; reopen FriendBook", onAdsReady);
+                    return;
+                }
+                try {
+                    UserMessagingPlatform.loadAndShowConsentFormIfRequired(activity, error ->
+                            finishConsent(appCtx, error == null ? "Consent check complete" : "UMP form error " + error.getErrorCode() + ": " + error.getMessage(), onAdsReady));
+                } catch (RuntimeException error) {
+                    finishConsent(appCtx, "UMP could not open the consent form", onAdsReady);
+                }
+            }, error -> finishConsent(appCtx, "UMP update error " + error.getErrorCode() + ": " + error.getMessage(), onAdsReady));
+        } catch (RuntimeException error) {
+            finishConsent(appCtx, "UMP could not start the consent check", onAdsReady);
         }
+    }
+
+    private static final AtomicBoolean consentInFlight = new AtomicBoolean(false);
+    private static volatile long lastConsentAttempt = -60_000L;
+    private static volatile String consentDiagnostic = "Consent has not been checked yet";
+
+    public static String consentDiagnostic() { return consentDiagnostic; }
+
+    public static void retryConsentOnResume(Activity activity) {
+        if (!canRequestAds(activity) && android.os.SystemClock.elapsedRealtime() - lastConsentAttempt >= 60_000L) {
+            gatherConsentAndInitAds(activity, null);
+        }
+    }
+
+    private static void finishConsent(Context context, String status, Runnable callback) {
+        consentDiagnostic = status;
+        consentInFlight.set(false);
+        if (canRequestAds(context)) AdsConfig.warmUpPools(context);
+        AdsConfig.notifyChange();
+        if (callback != null) callback.run();
     }
 
     public static boolean canRequestAds(Context context) {

@@ -73,9 +73,11 @@ public final class PushManager {
                     if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
                     PushGateway.Response test = PushGateway.call(new org.json.JSONObject().put("action", "self_test")
                             .put("device_id", FCMTokenManager.deviceId(context)), bearer);
+                    org.json.JSONArray reasons = test.data.optJSONArray("reasons");
                     report = test.data.optInt("accepted") > 0 ? "FCM accepted the test. Check your notification shade."
                             : test.data.optInt("duplicate") > 0 ? "Already sent this minute. Retry after a minute."
-                            : "Push test failed: " + test.data.optString("error", "HTTP " + test.status);
+                            : "Push test failed: " + test.data.optString("error", "HTTP " + test.status)
+                            + (reasons != null && reasons.length() > 0 ? " (" + reasons.optString(0) + ")" : "");
                 }
             } catch (Exception error) { report = "Couldn't reach the push service. Tap to retry."; }
             final String text = report;

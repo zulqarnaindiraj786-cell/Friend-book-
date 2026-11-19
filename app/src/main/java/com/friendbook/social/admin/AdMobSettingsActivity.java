@@ -66,26 +66,33 @@ public class AdMobSettingsActivity extends Activity {
         final TextView fillCheck = Ui.btn(this, "Run Real Ad Fill Check");
         fillCheck.setOnClickListener(v -> {
             fillCheck.setEnabled(false);
-            fillCheck.setText("Requesting real ads… wait 8 seconds");
-            AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);
-            AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);
-            AdsConfig.startPoolTopUpTicker(getApplicationContext());
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            fillCheck.setText("Checking Google consent…");
+            com.friendbook.social.core.ConsentManager.gatherConsentAndInitAds(this, () -> {
                 if (isFinishing() || isDestroyed()) return;
-                fillCheck.setEnabled(true);
-                fillCheck.setText("Run Real Ad Fill Check");
-                if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
-                new android.app.AlertDialog.Builder(this)
-                        .setTitle("Real Ad Fill Check")
-                        .setMessage(AdsConfig.statsSummary(this) + "\n\n"
-                                + "How to read this:\n"
-                                + "• Loaded > 0 and Pool > 0 = real ads are arriving; the Feed slot shows one after every 3 posts.\n"
-                                + "• Code 3 = AdMob has no ad to serve for this app/unit right now (new unit, app still in review, or no advertiser demand). The app keeps asking every 30s while open.\n"
-                                + "• Code 0 with a message = the request itself was rejected; the message tells us why.\n"
-                                + "• Requests 0 = the SDK never asked, which points at consent/initialization, not at AdMob fill.")
-                        .setPositiveButton("OK", null)
-                        .show();
-            }, 8000L);
+                if (com.friendbook.social.core.ConsentManager.canRequestAds(this)) {
+                    AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);
+                    AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);
+                }
+                fillCheck.setText(com.friendbook.social.core.ConsentManager.canRequestAds(this)
+                        ? "Requesting real ads…" : "Consent does not allow requests");
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    fillCheck.setEnabled(true);
+                    fillCheck.setText("Run Real Ad Fill Check");
+                    if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
+                    new android.app.AlertDialog.Builder(this)
+                            .setTitle("Real Ad Fill Check")
+                            .setMessage(AdsConfig.statsSummary(this) + "\n"
+                                    + com.friendbook.social.core.ConsentManager.consentDiagnostic() + "\n\n"
+                                    + "How to read this:\n"
+                                    + "• Loaded > 0 and Pool > 0 = real ads are arriving; the Feed slot shows one after every 3 posts.\n"
+                                    + "• Code 3 = AdMob has no ad to serve for this app/unit right now (new unit, app still in review, or no advertiser demand). The app keeps asking every 30s while open.\n"
+                                    + "• Code 0 with a message = the request itself was rejected; the message tells us why.\n"
+                                    + "• Requests 0 = the SDK never asked, which points at consent/initialization, not at AdMob fill.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                }, com.friendbook.social.core.ConsentManager.canRequestAds(this) ? 8000L : 0L);
+            });
         });
         body.addView(fillCheck, Ui.lpw(-2));
         body.addView(statsCard, Ui.lpw(-2));

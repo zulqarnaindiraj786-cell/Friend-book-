@@ -112,6 +112,22 @@ jobs:
           set +x
           python3 -c 'import json,os,sys; d=json.loads(os.environ["FIREBASE_ADMIN_SERVICE_ACCOUNT"]); sys.exit(0 if d.get("type")=="service_account" and d.get("project_id")=="friendbook-17551" and d.get("private_key") and d.get("client_email") else 1)'
           printf '%s' "$FIREBASE_ADMIN_SERVICE_ACCOUNT" | npx wrangler secret put FIREBASE_ADMIN_SERVICE_ACCOUNT
+          # Validate the send API without a real device, user payload or delivery.
+          node --input-type=module <<'JS'
+          import { googleToken } from './cloudflare/fcm-push.js';
+          try {
+            const access = await googleToken(process.env);
+            const r = await fetch('https://fcm.googleapis.com/v1/projects/friendbook-17551/messages:send', {
+              method: 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ validate_only:true, message:{ token:'synthetic-invalid-token', data:{ probe:'1' } } }),
+              signal: AbortSignal.timeout(12000),
+            });
+            const body = await r.json();
+            const reason = body.error?.details?.map(d=>d.reason).find(x=>['SERVICE_DISABLED','IAM_PERMISSION_DENIED','ACCESS_TOKEN_SCOPE_INSUFFICIENT'].includes(x));
+            console.log(`FCM validate-only: HTTP ${r.status}${reason ? ' ' + reason : ''}`);
+            if (r.status!==400 && !r.ok) console.warn('::warning::FCM send API did not accept the validation probe.');
+          } catch { console.warn('::warning::FCM validation probe could not reach the send API.'); }
+          JS
 
       - name: Diagnose Cloudflare auth and apply pending D1 migrations
         id: d1_diagnostics
