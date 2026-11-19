@@ -25,9 +25,33 @@ function legacyMillis(value) {
   }
   return 0;
 }
-function legacyComment(row, uid, postId) {
-  const doc=toPlainDocument(row.document_json,row.doc_id);
-  if(!doc || (doc.postId!==postId && doc.post_id!==postId && doc.resource!==`posts/${postId}`)) return null;
+// Old root comments can be plain app documents or archived Firestore-shaped
+// documents. Use the same selector for the comment page and feed count.
+const legacyField = name => `CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${name}.stringValue') ELSE json_extract(a.document_json,'$.${name}') END`;
+const legacyFlag = name => `CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${name}.booleanValue') ELSE json_extract(a.document_json,'$.${name}') END`;
+const legacyAuthor=`COALESCE(NULLIF(${legacyField('authorId')},''),NULLIF(${legacyField('userId')},''),NULLIF(${legacyField('uid')},''))`;
+const legacyWhere=`json_valid(a.document_json)
+ AND a.path IN (
+  SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('postId')}=?
+  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('post_id')}=?
+  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('resource')}=?
+ )
+ AND COALESCE(${legacyFlag('removed')},0)=0 AND COALESCE(${legacyFlag('deleted')},0)=0 AND COALESCE(${legacyFlag('isDeleted')},0)=0
+ AND typeof(${legacyAuthor})='text' AND length(${legacyAuthor})>0
+ AND ${legacyAuthor} NOT IN (SELECT value FROM json_each(?))
+ AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=? AND c.id=a.doc_id)`;
+function legacyBindings(resource,blocked) {
+  const id=resource.slice(resource.indexOf('/')+1);
+  return [id,id,resource,JSON.stringify(blocked||[]),resource];
+}
+export async function legacyCommentCount(db,resource,blocked=[]) {
+  const row=await db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyWhere}`)
+    .bind(...legacyBindings(resource,blocked)).first();
+  return Number(row?.n)||0;
+}
+function legacyComment(row, uid, resource) {
+  const doc=toPlainDocument(row.document_json,row.doc_id),postId=resource.slice(resource.indexOf('/')+1);
+  if(!doc || (doc.postId!==postId && doc.post_id!==postId && doc.resource!==resource)) return null;
   if(doc.removed || doc.deleted || doc.isDeleted) return null;
   const author=doc.authorId || doc.userId || doc.uid;
   if(typeof author!=='string' || !author) return null;
@@ -45,6 +69,55 @@ function legacyComment(row, uid, postId) {
   };
   return dto(rowData,uid);
 }
+// Promote a single legacy D1 comment only when somebody interacts with it.
+// Its original row remains untouched; a compare-and-swap guard prevents a
+// stale copy from overwriting a concurrent edit or a newer canonical comment.
+async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
+  const read=()=>db.prepare(commentSelect+' WHERE c.resource=? AND c.id=?').bind(uid,resource,id).first();
+  const existing=await read();if(existing)return !existing.removed && !blocked.includes(existing.uid) ? existing : null;
+  if(!validId(id) || seen.has(id) || seen.size>=20)return null;
+  seen.add(id);
+  const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${id}`).first();
+  const old=source && legacyComment(source,uid,resource);
+  if(!old || blocked.includes(old.uid))return null;
+  const doc=toPlainDocument(source.document_json,id);
+  if(old.parentId && !(await promoteLegacy(db,resource,old.parentId,uid,blocked,seen)))return null;
+  const reactions=new Map();
+  if(doc.reactions && typeof doc.reactions==='object' && !Array.isArray(doc.reactions)) {
+    for(const [actor,type] of Object.entries(doc.reactions))if(validId(actor) && types.has(type))reactions.set(actor,type);
+  }
+  if(Array.isArray(doc.likedBy))for(const actor of doc.likedBy)if(validId(actor) && !reactions.has(actor))reactions.set(actor,'like');
+  // D1 has a bounded batch. Never discard known actors merely to make a large
+  // historical row fit; return an error and leave the source untouched.
+  if(reactions.size>80)throw Error('Legacy comment has too many reactions');
+  const unattributed=Math.max(0,Math.max(Number(old.likes)||0,reactions.size)-reactions.size);
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.document_json));
+  const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+  const statements=[
+    db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
+      EXISTS(SELECT 1 FROM friendbook_cf_documents WHERE path=? AND collection='comments' AND document_json=?)
+      AND NOT EXISTS(SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=?) THEN 1 ELSE 0 END`)
+      .bind(`comments/${id}`,source.document_json,resource,id),
+    db.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)')
+      .bind(resource,id,old.uid,old.text,old.parentId||null,old.createdAt||0),
+    db.prepare('INSERT INTO friendbook_cf_comment_details(resource,id,media_url,mentions,name,photo,edited,removed) VALUES(?,?,?,?,?,?,?,0)')
+      .bind(resource,id,old.imageUrl,JSON.stringify(old.mentions),old.authorName,old.authorPhoto,old.edited?1:0),
+    db.prepare('INSERT INTO friendbook_cf_comment_history(resource,id,created_at_known) VALUES(?,?,?)')
+      .bind(resource,id,old.createdAtKnown?1:0),
+    db.prepare('INSERT INTO friendbook_cf_comment_legacy_aggregates(resource,id,unattributed_count,source_path,source_sha256,snapshot_batch) VALUES(?,?,?,?,?,?)')
+      .bind(resource,id,unattributed,`comments/${id}`,hash,'live-d1'),
+    ...Array.from(reactions,([actor,type])=>db.prepare('INSERT INTO friendbook_cf_comment_reactions(resource,id,uid,type) VALUES(?,?,?,?)').bind(resource,id,actor,type)),
+    db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
+  ];
+  try { await db.batch(statements); }
+  catch(error) {
+    // If a concurrent request already promoted the same ID, its row is now
+    // authoritative. Other failures must not be hidden as successful writes.
+    const current=await read();if(current)return current;
+    throw error;
+  }
+  return await read();
+}
 function input(data) {
   const text = data.text, media = data.mediaUrl || '', mentions=data.mentions || [];
   if(typeof text!=='string' || text.length>5000 || (!text.trim() && !media) || typeof media!=='string' || media.length>4096 ||
@@ -60,22 +133,28 @@ export async function commentsAPI(request, db, identity, resource, data, context
   const pin = async () => (await db.prepare('SELECT id FROM friendbook_cf_comment_pins WHERE resource=?').bind(resource).first())?.id || '';
   if(request.method==='GET') {
     const url=new URL(request.url), single=url.searchParams.get('id');
-    if(single!==null){if(!validId(single))return reply({error:'Invalid ID'},400);const row=await read(single);return row&&!row.removed&&!(context.blocked||[]).includes(row.uid)?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);}
+    if(single!==null){
+      if(!validId(single))return reply({error:'Invalid ID'},400);
+      const row=await read(single);
+      if(row)return !row.removed&&!(context.blocked||[]).includes(row.uid)?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);
+      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${single}`).first();
+      // A tombstone or promoted row may have appeared while the legacy row was read.
+      const current=await read(single);
+      if(current)return !current.removed&&!(context.blocked||[]).includes(current.uid)?reply({comment:normalized(current,uid)}):reply({error:'Not found'},404);
+      const old=source && legacyComment(source,uid,resource);
+      return old && !(context.blocked||[]).includes(old.uid)?reply({comment:old}):reply({error:'Not found'},404);
+    }
     let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
     if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
-    const postId=resource.slice(resource.indexOf('/')+1);
     const [page,legacy,pinned]=await Promise.all([
       db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
         AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1]).all(),
-      db.prepare(`SELECT a.doc_id,a.document_json FROM friendbook_cf_documents a
-        WHERE a.collection='comments' AND json_valid(a.document_json)
-          AND (json_extract(a.document_json,'$.postId')=? OR json_extract(a.document_json,'$.post_id')=? OR json_extract(a.document_json,'$.resource')=?)
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=? AND c.id=a.doc_id)
-        ORDER BY a.updated_at DESC LIMIT 1001`).bind(postId,postId,resource,resource).all(),
+      db.prepare(`SELECT a.doc_id,a.document_json FROM friendbook_cf_documents a WHERE ${legacyWhere}
+        ORDER BY a.updated_at DESC LIMIT 1001`).bind(...legacyBindings(resource,context.blocked)).all(),
       pin(),
     ]);
     const blocked=new Set(context.blocked||[]);
-    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,postId)).filter(c=>c && !blocked.has(c.authorId)
+    const old=(legacy.results||[]).map(row=>legacyComment(row,uid,resource)).filter(c=>c && !blocked.has(c.authorId)
       && (c.createdAt<before[0] || (c.createdAt===before[0] && c.id<before[1])));
     const current=page.results.map(row=>normalized(row,uid));
     const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || b.id.localeCompare(a.id));
@@ -89,13 +168,23 @@ export async function commentsAPI(request, db, identity, resource, data, context
     if(Object.keys(data).some(k=>!['id','text','mediaUrl','mentions','parentId'].includes(k)))return reply({error:'Invalid fields'},400);
     let content;try{content=input(data);}catch{return reply({error:'Invalid comment'},400);}
     const parent=data.parentId || null;
-    if(parent && (!validId(parent) || !(await read(parent)) || (await read(parent)).removed))return reply({error:'Parent not found'},400);
-    const replyTo=parent?(await read(parent))?.uid||'':'';
+    if(parent && !validId(parent))return reply({error:'Parent not found'},400);
+    const parentRow=parent ? await promoteLegacy(db,resource,parent,uid,context.blocked||[]) : null;
+    if(parent && !parentRow)return reply({error:'Parent not found'},400);
+    const replyTo=parentRow?.uid||'';
     const existing=await read(data.id);
     if(existing){return existing.uid===uid && !existing.removed && existing.text===content.text && existing.parent_id===parent &&
       (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo}):reply({error:'Comment ID conflict'},409);}
+    // A root legacy row may share an ID even if it belongs to another resource.
+    // Never shadow that historical record through a newly supplied comment ID.
+    const oldId=await db.prepare("SELECT doc_id FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${data.id}`).first();
+    if(oldId)return reply({error:'Comment ID conflict'},409);
     await db.batch([
-      db.prepare(`INSERT INTO friendbook_cf_comments VALUES(?,?,?,?,?,?) ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now()),
+      db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
+        SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=? AND collection='comments')
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+          WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0))
+        ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now(),`comments/${data.id}`,parent,resource,parent),
       db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,media_url,mentions,name,photo)
         SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=? AND uid=? AND text=? AND parent_id IS ?)
         ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,content.media,content.mentions,context.name||'',context.photo||'',resource,data.id,uid,content.text,parent)
@@ -104,7 +193,20 @@ export async function commentsAPI(request, db, identity, resource, data, context
     if(saved?.uid!==uid || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
     return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo});
   }
-  const row=await read(data.id);if(!row || row.removed)return reply({error:'Not found'},404);
+  if(!['react','pin','remove','edit'].includes(data.op))return reply({error:'Unknown operation'},400);
+  if(data.op==='react' && data.type!==null && !types.has(data.type))return reply({error:'Invalid reaction'},400);
+  if(data.op==='pin' && (context.owner!==uid || typeof data.pin!=='boolean'))return reply({error:'Forbidden'},403);
+  let row=await read(data.id);
+  if(!row) {
+    const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${data.id}`).first();
+    const old=source && legacyComment(source,uid,resource);
+    if(!old || (context.blocked||[]).includes(old.uid))return reply({error:'Not found'},404);
+    if(data.op==='edit' && old.uid!==uid)return reply({error:'Forbidden'},403);
+    if(data.op==='remove' && old.uid!==uid && context.owner!==uid && !context.moderator)return reply({error:'Forbidden'},403);
+    if(data.op==='edit'){try{input({...data,mediaUrl:old.imageUrl||''});}catch{return reply({error:'Invalid edit'},400);}}
+    row=await promoteLegacy(db,resource,data.id,uid,context.blocked||[]);
+  }
+  if(!row || row.removed || (context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);
   if(data.op==='react') {
     if(data.type!==null && !types.has(data.type))return reply({error:'Invalid reaction'},400);
     await db.prepare(`INSERT INTO friendbook_cf_comment_reactions VALUES(?,?,?,?) ON CONFLICT(resource,id,uid) DO UPDATE SET type=excluded.type`).bind(resource,data.id,uid,data.type).run();

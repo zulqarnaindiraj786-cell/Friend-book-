@@ -87,11 +87,15 @@ test('legacy root app comments are merged into authorized D1 comment pages witho
   add('same',{id:'same',postId:'p1',authorId:'user2',authorName:'Legacy',content:'stale copy',createdAt:10});
   add('old',{id:'old',postId:'p1',authorId:'user2',authorName:'Legacy friend',content:'historical comment',createdAt:20});
   add('blocked',{id:'blocked',postId:'p1',authorId:'blocked',content:'private from blocked author',createdAt:30});
+  add('wrapped',{fields:{postId:{stringValue:'p1'},authorId:{stringValue:'user2'},content:{stringValue:'wrapped comment'},createdAt:{integerValue:'25'}}});
+  add('deleted',{postId:'p1',authorId:'user2',content:'deleted',removed:true});
   const authorize=async (_identity,_collection,_id,_unused,context)=>{context.blocked=['blocked'];return true;};
   const response=await call(f.env,'comments','GET',undefined,{authorize});
   assert.equal(response.status,200);
   const page=await response.json();
-  assert.deepEqual(page.comments.map(c=>c.id),['same','old']);
+  assert.deepEqual(page.comments.map(c=>c.id),['same','wrapped','old']);
+  const summary=await (await call(f.env,'reactions','GET',undefined,{authorize})).json();
+  assert.equal(summary.comments,3,'feed count includes visible legacy comments but not blocked, deleted or shadowed records');
   assert.equal(page.comments.find(c=>c.id==='same').content,'canonical version');
   assert.equal(page.comments.find(c=>c.id==='old').authorName,'Legacy friend');
   assert.equal(f.sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_comments WHERE id='old'").get().n,0,
@@ -197,4 +201,54 @@ test('reaction and comment totals reflect writes from other isolates and recheck
   assert.deepEqual(updated.types,[{type:'like',count:1,mine:0}]);assert.equal(updated.comments,1);
   f.sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/p1'").run();
   assert.equal((await call(f.env,'reactions')).status,503);
+});
+
+test('legacy comment count uses the lookup indexes rather than scanning all root comments', async t => {
+  const f=fixture();t.after(f.close);
+  f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
+  const {legacyCommentCount}=await import('../comment-api.js');
+  let plan='';const db={prepare(query){const stmt=f.sql.prepare(query);return{bind(...args){plan=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\n');return{first:async()=>stmt.get(...args)||null};}};}};
+  assert.equal(await legacyCommentCount(db,'posts/p1',[]),0);
+  for(const name of ['idx_cf_comment_lookup_post','idx_cf_comment_lookup_post_legacy','idx_cf_comment_lookup_resource'])assert.match(plan,new RegExp(name));
+  assert.match(plan,/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_documents_1 \(path=\?\)/);
+});
+
+test('legacy D1 comments remain readable and support authorized replies and reactions without overwriting sources', async t => {
+  const f=fixture();t.after(f.close);
+  const original={postId:'p1',authorId:'user2',content:'old comment',createdAt:12,likes:3,reactions:{user2:'love'},likedBy:['user2']};
+  const raw=JSON.stringify(original);
+  f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('comments/old','comments','old','user2',raw,1);
+  const single=await call(f.env,'comments','GET',undefined,{query:'?id=old'});
+  assert.equal(single.status,200);assert.equal((await single.json()).comment.content,'old comment');
+  assert.equal((await call(f.env,'comments','PUT',{op:'edit',id:'old',text:'spoof',mentions:[]})).status,403);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,0,'denied edits do not promote the source');
+  assert.equal((await call(f.env,'comments','POST',{id:'old',text:'shadow'})).status,409);
+  const reply=await call(f.env,'comments','POST',{id:'reply',text:'hello',parentId:'old'});
+  assert.equal(reply.status,200);assert.equal((await reply.json()).replyTo,'user2');
+  assert.equal(f.sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='comments/old'").get().document_json,raw);
+  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'old',type:'like'})).status,200);
+  const after=await (await call(f.env,'comments','GET',undefined,{query:'?id=old'})).json();
+  assert.equal(after.comment.likes,4);assert.equal(after.comment.reactions.user1,'like');
+  assert.equal(f.sql.prepare("SELECT unattributed_count n FROM friendbook_cf_comment_legacy_aggregates WHERE id='old'").get().n,2);
+  assert.equal((await (await call(f.env,'reactions')).json()).comments,2,'promotion does not double-count legacy and canonical records');
+  const owner=async(_a,_b,_c,_d,ctx)=>{ctx.owner='user1';return true;};
+  assert.equal((await call(f.env,'comments','PUT',{op:'remove',id:'old'},{authorize:owner})).status,200);
+  assert.equal((await call(f.env,'comments','GET',undefined,{query:'?id=old'})).status,404);
+  assert.equal((await (await call(f.env,'comments')).json()).comments.some(c=>c.id==='old'),false,'removed canonical tombstone suppresses old source');
+});
+
+test('legacy promotion fails safely for blocked or cyclic parents and changed source', async t => {
+ const f=fixture();t.after(f.close);const add=(id,doc)=>f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run(`comments/${id}`,'comments',id,'user2',JSON.stringify(doc),1);
+ add('blocked',{postId:'p1',authorId:'blocked',content:'x'});add('a',{postId:'p1',authorId:'user2',content:'a',parentId:'b'});add('b',{postId:'p1',authorId:'user2',content:'b',parentId:'a'});
+ const auth=async(_a,_b,_c,_d,ctx)=>{ctx.blocked=['blocked'];return true;};
+ assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'blocked',type:'like'},{authorize:auth})).status,404);
+ assert.equal((await call(f.env,'comments','POST',{id:'new',text:'reply',parentId:'a'},{authorize:auth})).status,400);
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,0);
+ add('change',{postId:'p1',authorId:'user2',content:'old'});
+ const originalBatch=f.env.DB.batch;let race=true;
+ f.env.DB.batch=async entries=>{if(race){race=false;f.sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='comments/change'").run(JSON.stringify({postId:'p1',authorId:'user2',content:'new'}));}return originalBatch(entries);};
+ assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'change',type:'like'})).status,503);
+ assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_comments WHERE id='change'").get().n,0);
+ assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'change',type:'like'})).status,200);
+ assert.equal((await (await call(f.env,'comments','GET',undefined,{query:'?id=change'})).json()).comment.content,'new');
 });

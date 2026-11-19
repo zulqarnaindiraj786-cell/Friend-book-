@@ -252,6 +252,8 @@ public class AddStoryActivity extends Activity {
 
     private void upload() {
         if (busy) return;
+        final String actor=Fb.uid();
+        if (actor==null) { Ui.toast(this,"Sign in to share a story"); return; }
         if ("text".equals(mediaType)) {
             String txt = textStoryInput.getText().toString().trim();
             if (txt.isEmpty()) { Ui.toast(this, "Write something for your text story"); return; }
@@ -264,7 +266,7 @@ public class AddStoryActivity extends Activity {
             busy = true;
             share.setText("Sharing…");
             Map<String, Object> m = new HashMap<>();
-            m.put("authorId", Fb.uid());
+            m.put("authorId", actor);
             m.put("authorName", Fb.myName());
             m.put("authorPhotoUrl", Fb.myPhoto());
             m.put("mediaUrl", "");
@@ -277,9 +279,7 @@ public class AddStoryActivity extends Activity {
             m.put("viewedBy", new ArrayList<String>());
             m.put("createdAt", FieldValue.serverTimestamp());
             m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-            Fb.db().collection("stories").add(m)
-                    .addOnSuccessListener(x -> { Ui.toast(this, "Text story shared 📖"); finish(); })
-                    .addOnFailureListener(e -> fail());
+            publishStory(actor, m, "Text story shared 📖");
             return;
         }
         if (mediaUri == null) { Ui.toast(this, "Choose Aa Text, Photo or Video first"); return; }
@@ -291,6 +291,7 @@ public class AddStoryActivity extends Activity {
         com.friendbook.social.core.ContentSafetyEngine.scanMediaAsync(
                 this, single, "video".equals(mediaType), cap, v -> {
                     if (isFinishing()) return;
+                    if (!actor.equals(Fb.uid())) { failAccountChanged(); return; }
                     if (v.unsafe) {
                         video.stopPlayback();
                         video.setVisibility(View.GONE);
@@ -304,11 +305,12 @@ public class AddStoryActivity extends Activity {
                     }
                     share.setText("Sharing…");
                     String ext = "video".equals(mediaType) ? ".mp4" : ".jpg";
-                    String path = "stories/" + Fb.uid() + "/" + System.currentTimeMillis() + ext;
+                    String path = "stories/" + actor + "/" + System.currentTimeMillis() + ext;
                     com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, mediaUri)
                             .addOnSuccessListener(url -> {
+                                if (!actor.equals(Fb.uid())) { failAccountChanged(); return; }
                                 Map<String, Object> m = new HashMap<>();
-                                m.put("authorId", Fb.uid());
+                                m.put("authorId", actor);
                                 m.put("authorName", Fb.myName());
                                 m.put("authorPhotoUrl", Fb.myPhoto());
                                 m.put("mediaUrl", url.toString());
@@ -319,12 +321,37 @@ public class AddStoryActivity extends Activity {
                                 m.put("viewedBy", new ArrayList<String>());
                                 m.put("createdAt", FieldValue.serverTimestamp());
                                 m.put("expiresAt", new Timestamp(new Date(System.currentTimeMillis() + 24L * 3600_000L)));
-                                Fb.db().collection("stories").add(m)
-                                        .addOnSuccessListener(x -> { Ui.toast(this, "Story shared ✓"); finish(); })
-                                        .addOnFailureListener(e -> fail());
+                                publishStory(actor, m, "Story shared ✓");
                             })
                             .addOnFailureListener(e -> fail());
                 });
+    }
+
+    private void publishStory(String actor, Map<String,Object> data, String successMessage) {
+        if (!actor.equals(Fb.uid())) { failAccountChanged(); return; }
+        com.friendbook.social.d1.documents.DocumentReference ref=Fb.db().collection("stories").document();
+        Runnable success=() -> { if (!isFinishing() && actor.equals(Fb.uid())) { Ui.toast(this,successMessage); finish(); } };
+        ref.set(data).addOnSuccessListener(v -> {
+            if (actor.equals(Fb.uid())) success.run();
+            else if (!isFinishing()) { busy=false; share.setText("Share story"); Ui.toast(this,"Account changed. Check the original account for your story."); }
+        }).addOnFailureListener(error -> {
+            if (!actor.equals(Fb.uid())) { if (!isFinishing()) { busy=false; share.setText("Share story"); Ui.toast(this,"Account changed. Check the original account for your story."); } return; }
+            ref.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(snapshot -> {
+                if (isFinishing() || !actor.equals(Fb.uid())) return;
+                if (snapshot.exists() && actor.equals(snapshot.getString("authorId"))) success.run();
+                else fail();
+            }).addOnFailureListener(readError -> {
+                if (isFinishing() || !actor.equals(Fb.uid())) return;
+                busy=false; share.setText("Share story");
+                Ui.toast(this,"Couldn't confirm story. Check your stories before retrying.");
+            });
+        });
+    }
+
+    private void failAccountChanged() {
+        busy = false;
+        share.setText("Share story");
+        Ui.toast(this, "Account changed. Story was not published.");
     }
 
     private void fail() {

@@ -273,7 +273,12 @@ public class StoryViewerActivity extends Activity {
             if(advanceAfterPage){advanceAfterPage=false;int found=-1;for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))found=i;
                 if(found+1<stories.size())index=found+1;else if(!more){finish();return;}
             }else if(current!=null){for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))index=i;}
-            if(stories.isEmpty()){if(!more)finish();return;}
+            // A page can contain only expired or audience-filtered stories. Do
+            // not leave an empty viewer waiting for the user to discover paging.
+            if(stories.isEmpty()){
+                if(!more)finish();else if(storyPages!=null)storyPages.next();
+                return;
+            }
             index=Math.min(index,stories.size()-1);show();
         });storyPages.start();
     }

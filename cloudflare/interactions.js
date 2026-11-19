@@ -1,4 +1,4 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount } from './comment-api.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -76,7 +76,8 @@ export async function interactions(request, env, identity, match, authorize = au
           LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
         (SELECT COUNT(*) FROM friendbook_cf_comments c
           LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
-          WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0) AS total_comments,
+          WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+            AND c.uid NOT IN (SELECT value FROM json_each(?3))) AS total_comments,
         COALESCE((SELECT json_group_array(json_object(
           'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
           'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
@@ -92,7 +93,7 @@ export async function interactions(request, env, identity, match, authorize = au
       const payload = {
         owner: context.owner,
         types: typesList,
-        comments: Number(combined?.total_comments || 0),
+        comments: Number(combined?.total_comments || 0) + await legacyCommentCount(db,resource,context.blocked),
         preview: previewRows.map(row => normalized(row, identity.uid)),
       };
       return json(payload);
