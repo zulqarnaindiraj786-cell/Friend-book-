@@ -371,6 +371,8 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const chats=await (await call('eve','/v1/firestore/query','POST',{parent:'chats'})).json();assert.deepEqual(chats.documents,[]);
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','eve']}})).status,403);
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','bob','eve']}})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=chats/bypass','PUT',{data:{participants:['alice','bob','eve']}})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=chats/solo','PUT',{data:{participants:['alice']}})).status,403);
   assert.equal((await call('eve','/v1/firestore/batch','POST',batch([{op:'set',path:'chats/c1/messages/m2',data:{senderId:'eve',text:'spoof'}}]))).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{text:'tamper'}}]))).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{isSeen:true}}]))).status,200);

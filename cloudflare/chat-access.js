@@ -55,7 +55,9 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
     if (!before) {
       if (!after || !member(after,uid) || !validList(after.participants)) return false;
       if (after.isGroup===true) return validGroupRoom(after) && after.createdBy===uid && equal(after.adminIds,[uid]);
-      return !after.createdBy && !after.creatorId && !after.adminIds && !after.onlyAdminsCanSend;
+      // A direct chat is exactly two distinct people. Otherwise callers could
+      // create an ungoverned multi-person room without group membership ACLs.
+      return after.participants.length===2 && !after.createdBy && !after.creatorId && !after.adminIds && !after.onlyAdminsCanSend;
     }
     if (!member(before,uid)) return false;
     if (!after) return before.isGroup===true && validGroupRoom(before) && before.createdBy===uid && await groupChatOwner(db,path)===uid;
@@ -65,7 +67,7 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
       // Direct-chat clients serialize [sender, recipient], so the same two
       // participants can legitimately appear in opposite order on replies.
       if (!validList(before.participants) || !validList(after.participants)
-          || before.participants.length!==after.participants.length
+          || before.participants.length!==2 || before.participants.length!==after.participants.length
           || !before.participants.every(id=>after.participants.includes(id))) return false;
       return protectedFields.filter(k=>k!=='participants').every(k=>equal(before[k],after[k]));
     }
