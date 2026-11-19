@@ -27,7 +27,9 @@ public final class CursorPager {
     public CursorPager(Query query,int size,String key,Listener listener) {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
-    public void start() {
+    public void start() { start(false); }
+    public void startObserved() { start(true); }
+    private void start(boolean observed) {
         CachedPage cached=CACHE.get(key);
         if(cached!=null){for(DocumentSnapshot doc:cached.docs)records.put(doc.getId(),doc);more=cached.more;emit("");}
         if (cached==null) query.limit(size).get(Source.CACHE).addOnSuccessListener(page -> {
@@ -35,7 +37,24 @@ public final class CursorPager {
             for (DocumentSnapshot doc:page) records.put(doc.getId(),doc);
             if (!records.isEmpty()) { boolean wasLoading=loading;loading=false;emit("");loading=wasLoading; }
         });
-        more=true;next();
+        more=true;
+        if (!observed) next();
+    }
+    /** Reuse the verified first page already fetched by the section listener. */
+    public void acceptObservedFirstPage(QuerySnapshot page) {
+        if (!active() || page == null || page.getMetadata().isFromCache()) return;
+        requestGeneration++;
+        if (timeout != null) timeoutHandler.removeCallbacks(timeout);
+        loading=false; serverReceived=true; more=page.size()==size;
+        records.clear();
+        List<DocumentSnapshot> docs=page.getDocuments();
+        cursor=docs.isEmpty()?null:docs.get(docs.size()-1);
+        for(DocumentSnapshot doc:docs) records.put(doc.getId(),doc);
+        CACHE.put(key,new CachedPage(new ArrayList<>(docs),more));
+        emit("");
+    }
+    public void observedError() {
+        if (active() && !serverReceived && !loading) emit("Couldn't load this page. Tap to retry.");
     }
     public void next() {
         if(closed || loading || !more || !Objects.equals(actor,Fb.uid())) return;

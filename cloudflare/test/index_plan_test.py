@@ -20,6 +20,13 @@ class IndexPlans(unittest.TestCase):
                 ('idx_cf_legacy_page_owner', f"SELECT doc_id FROM {archive} WHERE collection='pages' AND (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.ownerId.stringValue') ELSE json_extract(document_json,'$.ownerId') END)=?", ('owner',)),
                 ('idx_cf_comment_reply_parent', 'SELECT id FROM friendbook_cf_comments WHERE resource=? AND parent_id=? ORDER BY created_at DESC,id DESC', ('posts/post', 'root')),
             ]
+            def legacy(field):
+                return f"(CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.{field}.stringValue') ELSE json_extract(document_json,'$.{field}') END)"
+            for direction, uid, peer in [('in', 'toUid', 'fromUid'), ('out', 'fromUid', 'toUid')]:
+                checks.extend([
+                    (f'idx_cf_request_canonical_{direction}_status', f"SELECT * FROM {table} WHERE parent_path='friend_requests' AND json_extract(document_json,'$.{uid}')=? AND json_extract(document_json,'$.status')=?", ('actor','pending')),
+                    (f'idx_cf_request_legacy_{direction}_status', f"SELECT * FROM {archive} a WHERE a.collection='friend_requests' AND {legacy(uid)}=? AND {legacy('status')}=? AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.path=a.path)", ('actor','pending')),
+                ])
             for index, sql, args in checks:
                 with self.subTest(index=index):
                     plan = db.execute('EXPLAIN QUERY PLAN ' + sql, args).fetchall()

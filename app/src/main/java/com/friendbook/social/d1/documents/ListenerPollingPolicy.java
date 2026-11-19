@@ -10,7 +10,7 @@ final class ListenerPollingPolicy {
         if (!foreground) return Long.MAX_VALUE; // Explicit writes/FCM bypass the periodic schedule.
         if (isChatMessages(path)) return 2_000;
         if (path.equals("lives") || path.startsWith("lives/")) return 5_000;
-        if (path.equals("notifications") || path.equals("friend_requests") || path.equals("stories")) return 15_000;
+        if (path.equals("notifications") || path.equals("stories")) return 15_000;
         if (path.startsWith("config/")) return 60_000;
         return 30_000;
     }

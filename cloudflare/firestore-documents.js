@@ -336,6 +336,32 @@ async function boundedChatRows(db,parent,spec) {
   return result?.results || [];
 }
 
+// Participant and status filters must run before loading historical request payloads.
+async function filteredRequestRows(db,uid,filters) {
+  if (!Array.isArray(filters)) return null;
+  const eq=field=>filters.find(f=>f.field===field && f.op==='==' && typeof f.value==='string');
+  const status=eq('status');
+  const own=['toUid','fromUid'].find(field=>eq(field)?.value===uid);
+  if (!own || !status) return null;
+  const other=own==='toUid'?'fromUid':'toUid';
+  const peer=eq(other);
+  const candidates=filters.find(f=>f.field===other && f.op==='in' && Array.isArray(f.value)
+      && f.value.length>0 && f.value.length<=20 && f.value.every(v=>typeof v==='string'));
+  const ids=peer?[peer.value]:candidates?.value || [];
+  const expr=(field,legacy)=>legacy
+    ? `(CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.${field}.stringValue') ELSE json_extract(document_json,'$.${field}') END)`
+    : `json_extract(document_json,'$.${field}')`;
+  const predicate=legacy=>`${expr(own,legacy)}=? AND ${expr('status',legacy)}=?`
+    +(ids.length ? ` AND ${expr(other,legacy)} IN (${ids.map(()=>'?').join(',')})` : '');
+  const values=[uid,status.value,...ids];
+  const [canonical,legacy]=await Promise.all([
+    db.prepare(`SELECT * FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND ${predicate(false)}`).bind(...values).all(),
+    db.prepare(`SELECT a.* FROM friendbook_cf_documents a WHERE a.collection='friend_requests' AND ${predicate(true)}
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(...values).all(),
+  ]);
+  return [...(canonical.results||[]), ...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+}
+
 async function readCollectionRows(db, parent, uid, filters, spec) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
@@ -373,6 +399,8 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'friend_requests') {
+    const filtered=await filteredRequestRows(db,uid,filters);
+    if (filtered!==null) return filtered;
     // Only participants can read requests, regardless of query filter supplied by the client.
     const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=?
@@ -2214,7 +2242,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
             db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
           ]);
         } catch (error) {
-          if (/CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Request already pending'},409);
+          if (/CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'ALREADY_EXISTS'},409);
           throw error;
         }
         return json({exists:true,id,path:docPath,parent,collection:parent,data:next,createTime:now,updateTime:now},201);

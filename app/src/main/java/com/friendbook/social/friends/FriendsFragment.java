@@ -60,15 +60,13 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void watchRequestPage(Query query, String actor, int selected) {
         if (selected != SEC_REQUESTS && selected != SEC_SENT) { stopRequestWatch(); return; }
         String key = actor + ":" + selected;
-        if (key.equals(requestWatchKey)) return;
         stopRequestWatch();
         requestWatchKey = key;
-        final boolean[] first = {true};
+        final int token=generation;
         requestWatch = query.limit(20).addSnapshotListener((snapshot, error) -> {
-            if (snapshot == null || snapshot.getMetadata().isFromCache()) return;
-            if (first[0]) { first[0] = false; return; }
-            if (started && !isHidden() && section == selected && key.equals(requestWatchKey)
-                    && java.util.Objects.equals(actor, Fb.uid())) startSection();
+            if (!current(token,actor) || section!=selected || !key.equals(requestWatchKey) || activePager==null) return;
+            if (error!=null) activePager.observedError();
+            else activePager.acceptObservedFirstPage(snapshot);
         });
     }
 
@@ -189,7 +187,6 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
-        watchRequestPage(query,me,selected);
         activePager=new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20,"friends-section:"+selected,(docs,more,loading,error)->{
             if(!current(token,me) || section!=selected)return;
             pageMore=more;pageLoading=loading;pageError=error;
@@ -204,7 +201,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 if(!me.equals(other) && !removedFriendIds.contains(other) && !friendIds.contains(other)){friendIds.add(other);ensureUser(other);}}
             else consumeSuggestions(docs,me,token);
             render();
-        });render();activePager.start();
+        });render();
+        if(selected==SEC_REQUESTS || selected==SEC_SENT){
+            activePager.startObserved();
+            watchRequestPage(query,me,selected);
+        }else{stopRequestWatch();activePager.start();}
         if(selected==SEC_REQUESTS && (pullRefresh || suggestions.isEmpty())){
             suggestionPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING),10,"friends-section:"+SEC_SUGGESTIONS,(docs,more,loading,error)->{
                 if(!current(token,me) || section!=SEC_REQUESTS)return;
@@ -383,15 +384,19 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     private void sendRequest(Models.User target) {
         String me=Fb.uid();if(me==null || !requestWrites.add(target.uid))return;render();
-        Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("toUid",target.uid).whereEqualTo("status","pending").limit(1).get().addOnSuccessListener(page->{
-            if(!me.equals(Fb.uid()) || getActivity()==null)return;
-            if(page.getMetadata().isFromCache()){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Reconnect to verify this request. Nothing changed.");return;}
-            if(!page.isEmpty()){requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Ui.toast(getActivity(),"Request already sent");return;}
-            Fb.db().collection("friend_requests").add(Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",FieldValue.serverTimestamp()))
-                .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
-                    requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
-                }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't send. Try again.");}});
-        }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){requestWrites.remove(target.uid);render();Ui.toast(getActivity(),"Couldn't check request. Try again.");}});
+        // D1 already checks duplicates in the same transaction as the insert.
+        Fb.db().collection("friend_requests").add(Fb.map("fromUid",me,"toUid",target.uid,"fromUserName",Fb.myName(),"fromUserPhotoUrl",Fb.myPhoto(),"status","pending","createdAt",FieldValue.serverTimestamp()))
+            .addOnSuccessListener(ref->{if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                requestWrites.remove(target.uid);candidateOutgoing.add(target.uid);render();
+                Notify.send(target.uid,"friend_request","sent you a friend request");Ui.toast(getActivity(),"Friend request sent ✓");
+            }).addOnFailureListener(error->{
+                if(!me.equals(Fb.uid()) || getActivity()==null)return;
+                requestWrites.remove(target.uid);
+                boolean duplicate=error instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                    && ((com.friendbook.social.d1.documents.D1DocumentStoreException)error).getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS;
+                if(duplicate) candidateOutgoing.add(target.uid);
+                render();Ui.toast(getActivity(),duplicate?"Request already sent":"Couldn't send. Try again.");
+            });
     }
 
     private void cancelRequest(UsersAdapter.Row row) {
