@@ -413,8 +413,17 @@ public class StoryViewerActivity extends Activity {
                 video.start();
             });
             video.setOnCompletionListener(mp -> {if(token==playbackToken && ready)step(1);});
-            video.setOnErrorListener((mp,what,extra)->{H.post(()->failed(token));return true;});
-            video.setVideoURI(Uri.parse(s.mediaUrl));
+            String stream = com.friendbook.social.reels.ReelVideoCache.optimizeStreamUrl(this, s.mediaUrl);
+            boolean[] fallback = {stream.equals(s.mediaUrl)};
+            video.setOnErrorListener((mp,what,extra)->{
+                H.post(() -> {
+                    if (token != playbackToken) return;
+                    if (!fallback[0]) { fallback[0] = true; video.setVideoURI(Uri.parse(s.mediaUrl)); }
+                    else failed(token);
+                });
+                return true;
+            });
+            video.setVideoURI(Uri.parse(stream));
         } else {
             video.stopPlayback();
             video.setVisibility(View.GONE);

@@ -95,6 +95,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private TextView topTitleTv, editTopIcon, guardBadge;
     private TextView nameT, categoryT, bioT, statsT, presenceT;
+    private String boundAvatarUrl, boundCoverUrl;
+    private Map<String, Object> boundProfileFields;
     private ImageView nameTick, cover, avatar;
     private View coverCamBtn, avatarCamBtn;
     private LinearLayout ownActionsCol, visitorActionsRow, moneyRow;
@@ -260,6 +262,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
         statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
+        statsT.setLines(2);
+        statsT.setEllipsize(android.text.TextUtils.TruncateAt.END);
         rightNameCol.addView(statsT);
 
         presenceT = Ui.tv(this, "", 12, Ui.GREEN);
@@ -896,11 +900,15 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         nameT.setText("User not found");
                         return;
                     }
+                    Map<String, Object> fields = new java.util.HashMap<>(d.getData());
+                    for (String volatileField : new String[]{"lastSeen", "lastSeenMs", "isOnline", "isActive"}) fields.remove(volatileField);
+                    if (fields.equals(boundProfileFields)) return;
+                    boundProfileFields = fields;
                     user = Models.User.fromDoc(d);
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
-                    if (postsAdapter != null) postsAdapter.notifyDataSetChanged();
+                    applyPostsFilter();
                     if(activeTab==3 && friendPager==null)startFriendPages();
                 });
         startPostsWatcher();
@@ -964,8 +972,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         final int generation=profileStartGeneration;
         postCountReg=null;
         if(postPager!=null) postPager.close();
+        final long requestedAt = android.os.SystemClock.elapsedRealtime();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
-                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),10,"profile-posts:"+uid,(docs,more,loading,error)-> {
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING).withFeedEngagement(),10,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
             if (!error.isEmpty() && docs.isEmpty()) {
                 Ui.toast(this,error);
@@ -975,7 +984,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
+                            com.friendbook.social.post.D1Reactions.seedFeed(this, d, requestedAt);
                             Models.Post p = Models.Post.fromDoc(d);
+                            com.friendbook.social.post.D1Reactions.hydrate(p);
                             allLoadedPosts.add(p);
                         }
                     }
@@ -1098,7 +1109,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         appendBoldStat(sb, Format.count(followers), " followers · ");
         appendBoldStat(sb, Format.count(following), " following · ");
         appendBoldStat(sb, userPostCount<0 ? "—" : Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
-        statsT.setText(sb);
+        if (!android.text.TextUtils.equals(statsT.getText(), sb)) statsT.setText(sb);
         statsT.setOnClickListener(v -> Ui.choose(this, user.displayName, new String[]{
                 "👥 Followers (" + Format.count(followers) + ")",
                 "🚶 Following (" + Format.count(following) + ")",
@@ -1145,17 +1156,23 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         com.friendbook.social.core.LinkUtils.makeLinksClickable(bioT);
         bioT.setVisibility(hasBio ? View.VISIBLE : View.GONE);
 
-        Ui.avatarLarge(this, avatar, user.photoUrl);
+        if (!java.util.Objects.equals(boundAvatarUrl, user.photoUrl)) {
+            boundAvatarUrl = user.photoUrl;
+            Ui.avatarLarge(this, avatar, user.photoUrl);
+        }
         if (guardBadge != null) {
             guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
         }
-        if (Ui.hasRealPhoto(user.coverUrl)) {
-            Ui.img(this, cover, user.coverUrl);
-        } else {
-            try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
-            cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                    new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
+        if (!java.util.Objects.equals(boundCoverUrl, user.coverUrl)) {
+            boundCoverUrl = user.coverUrl;
+            if (Ui.hasRealPhoto(user.coverUrl)) {
+                Ui.img(this, cover, user.coverUrl);
+            } else {
+                try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
+                cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
+            }
         }
         renderVisiblePhotos();
 

@@ -92,7 +92,7 @@ public final class D1Reactions {
   if(WRITING.contains(key))return;
   if(CACHE.get(key)==null || CACHE.get(key).optBoolean("reactionStateUnknown")){
    String uid=Fb.uid();WRITING.add(key);
-   D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
+   D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
     if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);apply(context,collection,id,requested,onlyAdd,toggleAny,render);
    }).addOnFailureListener(e->{if(Objects.equals(uid,Fb.uid())){WRITING.remove(key);Ui.toast(context,"Couldn't load reaction. Check connection and try again.");}});
    return;
@@ -105,7 +105,7 @@ public final class D1Reactions {
     if(type.equals(old))count--;if(type.equals(next))count++;if(count>0)adjusted.put(D1Client.object("type",type,"count",count,"mine",type.equals(next)?1:0));}
    optimistic.put("types",adjusted);remember(context.getApplicationContext(),collection,id,optimistic);render.run();
   }catch(JSONException ignored){}
-  D1Client.request(collection,id,"reactions","PUT",D1Client.object("type",next),null).addOnSuccessListener(data->{
+  D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",next)).addOnSuccessListener(data->{
    if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
    String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
    D1Client.changed(key);

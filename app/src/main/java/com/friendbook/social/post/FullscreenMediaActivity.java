@@ -90,7 +90,15 @@ public class FullscreenMediaActivity extends Activity {
             MediaController mc = new MediaController(this);
             mc.setAnchorView(vv);
             vv.setMediaController(mc);
-            vv.setVideoURI(Uri.parse(url));
+            String stream = com.friendbook.social.reels.ReelVideoCache.optimizeStreamUrl(this, url);
+            vv.setOnErrorListener((mp, what, extra) -> {
+                if (stream.equals(url)) return false;
+                vv.setOnErrorListener(null);
+                vv.setVideoURI(Uri.parse(url));
+                vv.start();
+                return true;
+            });
+            vv.setVideoURI(Uri.parse(stream));
             vv.setOnPreparedListener(mp -> { mp.setLooping(true); vv.start(); });
         } else {
             final ImageView iv = new ImageView(this);

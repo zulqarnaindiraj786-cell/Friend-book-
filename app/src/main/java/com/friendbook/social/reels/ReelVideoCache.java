@@ -92,17 +92,26 @@ public final class ReelVideoCache {
         if (c == null) return u;
         FastCache.NetTier tier = FastCache.netTier(c);
         boolean weak = tier == FastCache.NetTier.NET_2G || tier == FastCache.NetTier.NET_3G || Prefs.dataSaver(c) || Prefs.turbo2g(c);
-        return weak ? lowBandwidthUrl(u) : u;
+        if (weak) return lowBandwidthUrl(u);
+        return tier == FastCache.NetTier.NET_4G ? mobileBandwidthUrl(u) : u;
     }
 
     static String lowBandwidthUrl(String url) {
+        return boundedCloudinaryUrl(url, "h_144,c_limit,br_95k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    static String mobileBandwidthUrl(String url) {
+        return boundedCloudinaryUrl(url, "h_360,c_limit,br_420k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    private static String boundedCloudinaryUrl(String url, String transform) {
         try {
             java.net.URI parsed = java.net.URI.create(url);
             if (!"https".equalsIgnoreCase(parsed.getScheme()) || !"res.cloudinary.com".equalsIgnoreCase(parsed.getHost())
                     || parsed.getRawQuery()!=null || parsed.getRawFragment()!=null || parsed.getRawUserInfo()!=null) return url;
             String path=parsed.getRawPath();
             if (!path.matches("/[A-Za-z0-9_-]+/video/upload/v[0-9]+/[A-Za-z0-9_./%-]+\\.mp4")) return url;
-            return url.replace("/video/upload/", "/video/upload/h_144,c_limit,br_95k,f_mp4,vc_h264,ac_aac,q_auto:eco/");
+            return url.replace("/video/upload/", "/video/upload/" + transform + "/");
         } catch (IllegalArgumentException error) { return url; }
     }
 
