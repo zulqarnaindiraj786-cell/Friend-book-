@@ -21,7 +21,7 @@ import java.util.Map;
 
 /**
  * 🔐 Where you're logged in — friendbook security page:
- * list of devices/sessions (recorded at login) + "Log out of all sessions".
+ * list of recent login records and local device sign-out. Login records are not revocable sessions.
  * Firestore: users/{uid}/sessions/{auto} {device, model, at, appVersion}.
  */
 public class SessionsActivity extends Activity {
@@ -60,9 +60,9 @@ public class SessionsActivity extends Activity {
         sv.addView(list);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        TextView logoutAll = Ui.btn(this, "🚪 Log out of all sessions");
-        logoutAll.setOnClickListener(v -> Ui.confirm(this, "Log out everywhere?",
-                "Aapko dobara login karna parega — is phone pe bhi.",
+        TextView logoutAll = Ui.btn(this, "🚪 Log out on this phone");
+        logoutAll.setOnClickListener(v -> Ui.confirm(this, "Log out on this phone?",
+                "Other devices remain signed in. Change your password to secure your account.",
                 "Log out", () -> {
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
@@ -93,12 +93,15 @@ public class SessionsActivity extends Activity {
                 .orderBy("at", Query.Direction.DESCENDING).limit(30)
                 .addSnapshotListener((snap, err) -> {
                     while (list.getChildCount() > 2) list.removeViewAt(2);
+                    if (err != null) {
+                        list.addView(Ui.tv(this, "Couldn't load login history. Please try again.", 13, Ui.sub(this)));
+                        return;
+                    }
                     if (snap == null || snap.isEmpty()) {
-                        TextView e = Ui.tv(this, "No sessions recorded yet.", 13, Ui.sub(this));
+                        TextView e = Ui.tv(this, "No login records yet.", 13, Ui.sub(this));
                         list.addView(e);
                         return;
                     }
-                    int i = 0;
                     for (DocumentSnapshot d : snap.getDocuments()) {
                         Map<String, Object> m = d.getData();
                         LinearLayout card = Ui.row(this);
@@ -112,9 +115,7 @@ public class SessionsActivity extends Activity {
                         t.addView(Ui.tv(this, Format.str(m, "model") + " · "
                                 + Format.ago(Format.ts(m == null ? null : m.get("at"))), 12, Ui.sub(this)));
                         card.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
-                        if (i == 0) card.addView(Ui.roundChip(this, "Current", 0x2231A24C, Ui.GREEN, 11));
                         list.addView(card);
-                        i++;
                     }
                 });
     }
