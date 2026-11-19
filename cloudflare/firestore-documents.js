@@ -830,7 +830,12 @@ async function feedEngagement(db, env, uid, body, docs) {
         if (!state && !engagement.types.length && (Number(doc.data.likes)>0 || Object.keys(doc.data.reactionsMap||{}).length)) {
           engagement.reactionStateUnknown=true;
         }
-        return {...doc,engagement};
+        // Home already has the verified viewer-specific summary and preview.
+        // Keep legacy fallbacks intact on unverified or failed reads and leave
+        // ordinary document/detail responses and stored documents untouched.
+        if (state!=='verified') return {...doc,engagement};
+        const {commentsMap,commentsList,lastComment,reactionsMap,reactions,likedBy,...compact}=doc.data;
+        return {...doc,data:compact,engagement};
       }
       catch { return doc; } // A summary failure must not hide an authorized post.
     })));

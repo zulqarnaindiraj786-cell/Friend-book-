@@ -288,6 +288,10 @@ test('Home returns authorized reaction state and comment previews with the bound
   for(const [id,owner,privacy] of [['p1','author','public'],['p2','author','public'],['secret','author','only me']]) {
     doc.run(`posts/${id}`,'posts','posts',id,owner,JSON.stringify({authorId:owner,privacy,createdAt:1}),1,1);
   }
+  const payload=JSON.stringify({authorId:'author',privacy:'public',createdAt:1,mediaUrl:'https://example.test/photo.webp',
+    commentsMap:{old:{content:'historical long text '.repeat(500)}},reactionsMap:{legacy:{type:'like'}}});
+  f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p1'").run(payload);
+  f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p2'").run(payload);
   await call(f.env,'reactions','PUT',{type:'love'});
   const insert=f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at) VALUES (?,?,?,?,?)');
   insert.run('posts/p1','first','author','first visible',1);
@@ -301,6 +305,12 @@ test('Home returns authorized reaction state and comment previews with the bound
   const {documents}=await r.json();
   assert.deepEqual(documents.map(d=>d.id),['p2','p1']);
   assert.equal(documents[0].engagement,undefined);
+  assert.ok(documents[0].data.commentsMap.old.content);
+  assert.equal(documents[1].data.commentsMap,undefined);
+  assert.equal(documents[1].data.reactionsMap,undefined);
+  assert.equal(documents[1].data.mediaUrl,'https://example.test/photo.webp');
+  assert.ok(Buffer.byteLength(JSON.stringify(documents[1])) < Buffer.byteLength(payload)/5);
+  assert.ok(JSON.parse(f.sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p1'").get().document_json).commentsMap);
   assert.deepEqual(documents[1].engagement.types,[{type:'love',count:1,mine:1}]);
   assert.equal(documents[1].engagement.comments,1);
   assert.deepEqual(documents[1].engagement.preview.map(c=>c.id),['first']);

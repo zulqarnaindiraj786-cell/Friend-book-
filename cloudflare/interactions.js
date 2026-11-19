@@ -48,24 +48,28 @@ export async function engagementSummary(db, resource, uid, owner, blocked = []) 
       AND c.uid NOT IN (SELECT value FROM json_each(?3))
       ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
     .bind(uid, resource, JSON.stringify(blocked || [])).first();
-  let combined;
-  try {
-    combined = await query(`COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
-      ${blocked.length ? `- ${countFor('IN')}` : ''}`);
-  } catch (error) {
-    if (!String(error).includes('no such table: friendbook_cf_visible_comment_totals')) throw error;
-    combined = await query(countFor('NOT IN'));
-  }
+  const canonicalSummary = async () => {
+    try {
+      return await query(`COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
+        ${blocked.length ? `- ${countFor('IN')}` : ''}`);
+    } catch (error) {
+      if (!String(error).includes('no such table: friendbook_cf_visible_comment_totals')) throw error;
+      return query(countFor('NOT IN'));
+    }
+  };
+  const legacySummary = async () => {
+    const count = await legacyCommentCount(db,resource,blocked);
+    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : []};
+  };
+  const [combined,legacy] = await Promise.all([canonicalSummary(),legacySummary()]);
   const typesList = JSON.parse(combined?.types_json || '[]');
   const previewRows = JSON.parse(combined?.preview_json || '[]');
-  const legacyCount = await legacyCommentCount(db,resource,blocked);
-  const legacyPreview = legacyCount ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : [];
-  const preview = [...previewRows.map(row => normalized(row, uid)), ...legacyPreview]
+  const preview = [...previewRows.map(row => normalized(row, uid)), ...legacy.preview]
     .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
   return {
     owner: owner,
     types: typesList,
-    comments: Number(combined?.total_comments || 0) + legacyCount,
+    comments: Number(combined?.total_comments || 0) + legacy.count,
     preview,
   };
 }
