@@ -1788,6 +1788,21 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const archiveQuery=parent==='posts' && filters.some(f=>f.field==='authorId' && f.op==='==' && f.value===uid)
       && filters.some(f=>(f.field==='archived' && f.op==='==' && f.value===true)
         || (f.field==='trashedAt' && f.op==='>' && f.value===0));
+    // Some historical posts have nonstandard timestamps, so the indexed feed
+    // path above intentionally falls back to the compatible JS ordering. Sort
+    // and apply value cursors first, then authorize in bounded chunks until a
+    // page is full. This keeps privacy checks before LIMIT without reading each
+    // of hundreds of unrelated posts on every feed request.
+    const valueCursors=['startAfter','startAt','endBefore','endAt'].every(k=>!body[k] || Array.isArray(body[k]));
+    if(parent==='posts' && Number.isInteger(body.limit) && body.limit>0 && body.limit<=100 && !body.limitToLast && valueCursors){
+      const ordered=applyQuery(docs,{...body,limit:null});
+      const allowed=[],userReads=new Map();
+      try {
+        for(let i=0;i<ordered.length && allowed.length<body.limit;i+=20)
+          allowed.push(...await visibleDocuments(db,uid,parent,ordered.slice(i,i+20),userReads,archiveQuery));
+      } catch { return json({error:'Read unavailable'},503); }
+      return json({parent,documents:allowed.slice(0,body.limit)});
+    }
     try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});

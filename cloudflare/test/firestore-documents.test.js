@@ -1198,8 +1198,8 @@ test('bounded feed pages fill after privacy checks and preserve legacy precedenc
  }
  // A stale public mirror cannot override the newer private canonical row.
  a.run('posts/p098','posts','p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
- let batchReads=0,maxRows=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>stmt.get(...args)||null};}};}};
+ let batchReads=0,maxRows=0,postReads=0;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith('posts/'))postReads++;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=async(spec,full=false)=>{let body={parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
  const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);
@@ -1207,7 +1207,13 @@ test('bounded feed pages fill after privacy checks and preserve legacy precedenc
  let prior=batchReads;
  // Fractional timestamp must use the old JS comparator, which truncates millis.
  f.run('posts/odd','posts','posts','odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
- assert.deepEqual((await query({})).map(d=>d.id),(await query({},true)).map(d=>d.id));assert.equal(batchReads,prior);
+ postReads=0;
+ const fallback=await query({});const fallbackReads=postReads;
+ assert.deepEqual(fallback.map(d=>d.id),(await query({},true)).map(d=>d.id));assert.equal(batchReads,prior);
+ assert.ok(fallbackReads<100,`fallback should authorize only enough rows to fill the page, not every post: ${fallbackReads}`);
+ const next=await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]});
+ assert.deepEqual(next.map(d=>d.id),(await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]},true)).map(d=>d.id));
+ assert.equal(new Set([...fallback,...next].map(d=>d.id)).size,24);
  sql.close();
 });
 
