@@ -98,6 +98,16 @@ jobs:
           fi
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
           jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+      - name: Check packaged hardware features are optional
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release.apk > "$RUNNER_TEMP/friendbook-badging.txt"
+          for feature in android.hardware.screen.portrait android.hardware.wifi; do
+            grep -Fx "uses-feature-not-required: name='$feature'" "$RUNNER_TEMP/friendbook-badging.txt"
+            if grep -F "name='$feature'" "$RUNNER_TEMP/friendbook-badging.txt" | grep -E '^uses-(implied-)?feature:'; then
+              echo "Packaged manifest still requires $feature" >&2
+              exit 1
+            fi
+          done
       - name: Report compressed APK size by component
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
