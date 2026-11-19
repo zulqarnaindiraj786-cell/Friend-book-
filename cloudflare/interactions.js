@@ -27,6 +27,49 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
+// Shared by explicit post details and the bounded Home response; no writes here.
+export async function engagementSummary(db, resource, uid, owner, blocked = []) {
+  const countFor = condition => `(SELECT COUNT(*) FROM friendbook_cf_comments c
+      LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
+      WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+        AND c.uid ${condition} (SELECT value FROM json_each(?3)))`;
+  const query = count => db.prepare(`SELECT
+    COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
+      FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
+      LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
+    ${count} AS total_comments,
+    COALESCE((SELECT json_group_array(json_object(
+      'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
+      'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
+      'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
+      'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
+      'likes', p.likes, 'mine', p.mine
+    )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+      AND c.uid NOT IN (SELECT value FROM json_each(?3))
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
+    .bind(uid, resource, JSON.stringify(blocked || [])).first();
+  let combined;
+  try {
+    combined = await query(`COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
+      ${blocked.length ? `- ${countFor('IN')}` : ''}`);
+  } catch (error) {
+    if (!String(error).includes('no such table: friendbook_cf_visible_comment_totals')) throw error;
+    combined = await query(countFor('NOT IN'));
+  }
+  const typesList = JSON.parse(combined?.types_json || '[]');
+  const previewRows = JSON.parse(combined?.preview_json || '[]');
+  const legacyCount = await legacyCommentCount(db,resource,blocked);
+  const legacyPreview = legacyCount ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : [];
+  const preview = [...previewRows.map(row => normalized(row, uid)), ...legacyPreview]
+    .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
+  return {
+    owner: owner,
+    types: typesList,
+    comments: Number(combined?.total_comments || 0) + legacyCount,
+    preview,
+  };
+}
+
 export async function interactions(request, env, identity, match, authorize = authorizePost) {
   // BOTH a deployment gate and independently verified resource migration are required.
   if (env.D1_INTERACTIONS_ENABLED !== 'true') return json({ error: 'D1 interactions not enabled' }, 503);
@@ -74,36 +117,7 @@ export async function interactions(request, env, identity, match, authorize = au
             .bind(resource, identity.uid)
         ]);
       }
-      const combined = await db.prepare(`SELECT
-        COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
-          FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
-          LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
-        (SELECT COUNT(*) FROM friendbook_cf_comments c
-          LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
-          WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
-            AND c.uid NOT IN (SELECT value FROM json_each(?3))) AS total_comments,
-        COALESCE((SELECT json_group_array(json_object(
-          'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
-          'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
-          'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
-          'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
-          'likes', p.likes, 'mine', p.mine
-        )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
-          AND c.uid NOT IN (SELECT value FROM json_each(?3))
-          ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
-        .bind(identity.uid, resource, JSON.stringify(context.blocked || [])).first();
-      const typesList = JSON.parse(combined?.types_json || '[]');
-      const previewRows = JSON.parse(combined?.preview_json || '[]');
-      const legacyPreview = await legacyPage(db,resource,identity.uid,context.blocked||[],[Number.MAX_SAFE_INTEGER,'']);
-      const preview = [...previewRows.map(row => normalized(row, identity.uid)), ...legacyPreview]
-        .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
-      const payload = {
-        owner: context.owner,
-        types: typesList,
-        comments: Number(combined?.total_comments || 0) + await legacyCommentCount(db,resource,context.blocked),
-        preview,
-      };
-      return json(payload);
+      return json(await engagementSummary(db, resource, identity.uid, context.owner, context.blocked || []));
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }
 }

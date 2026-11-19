@@ -278,3 +278,35 @@ test('legacy comment cursor does not drop records beyond first thousand storage 
  assert.equal(second.comments.length,20);assert.equal(new Set([...first.comments,...second.comments].map(c=>c.id)).size,40);
  assert.equal(second.comments[0].id,'old_1181');
 });
+
+test('Home returns authorized reaction state and comment previews with the bounded post page', async t => {
+  const f=fixture();t.after(f.close);
+  f.sql.exec(readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url),'utf8'));
+  f.sql.exec(readFileSync(new URL('../migrations/0051_feed_exception_indexes.sql', import.meta.url),'utf8'));
+  const doc=f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  for(const uid of ['user1','author','other']) doc.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid,...(uid==='user1'?{blocked:['other']}:{})}),1,1);
+  for(const [id,owner,privacy] of [['p1','author','public'],['p2','author','public'],['secret','author','only me']]) {
+    doc.run(`posts/${id}`,'posts','posts',id,owner,JSON.stringify({authorId:owner,privacy,createdAt:1}),1,1);
+  }
+  await call(f.env,'reactions','PUT',{type:'love'});
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at) VALUES (?,?,?,?,?)');
+  insert.run('posts/p1','first','author','first visible',1);
+  insert.run('posts/p1','second','other','blocked content',2);
+  insert.run('posts/p1','third','author','removed content',3);
+  f.sql.exec("INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES('posts/p1','third',1)");
+  assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,2);
+  const worker=createWorker(async token=>token);
+  const get=(uid,limit)=>worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'posts',feedEngagement:true,limit,orderBy:[{field:'createdAt',direction:'DESCENDING'}]})}),{...f.env,FIREBASE_PROJECT_ID:'test'});
+  const r=await get('user1',7);assert.equal(r.status,200,await r.clone().text());
+  const {documents}=await r.json();
+  assert.deepEqual(documents.map(d=>d.id),['p2','p1']);
+  assert.equal(documents[0].engagement,undefined);
+  assert.deepEqual(documents[1].engagement.types,[{type:'love',count:1,mine:1}]);
+  assert.equal(documents[1].engagement.comments,1);
+  assert.deepEqual(documents[1].engagement.preview.map(c=>c.id),['first']);
+  const another=await (await get('author',7)).json();
+  assert.equal(another.documents.find(d=>d.id==='p1').engagement.types[0].mine,0);
+  assert.ok((await (await get('user1',8)).json()).documents.every(d=>!d.engagement));
+  f.sql.exec("UPDATE friendbook_cf_comment_details SET removed=0 WHERE resource='posts/p1' AND id='third'");
+  assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,3);
+});

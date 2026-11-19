@@ -218,23 +218,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return posts;
     }
 
-    /** Refresh only currently visible post cards; no full feed redraw or media restart. */
-    public void refreshVisibleEngagement(RecyclerView list) {
-        if(list==null || !com.friendbook.social.core.D1Client.enabled("posts"))return;
-        for(int i=0;i<list.getChildCount();i++) {
-            View child=list.getChildAt(i); RecyclerView.ViewHolder holder=list.getChildViewHolder(child);
-            if(!(holder instanceof PostVH))continue;
-            PostVH vh=(PostVH)holder;Object tag=vh.itemView.getTag();if(!(tag instanceof String))continue;
-            Models.Post post=null;for(Models.Post p:posts)if(p!=null && tag.equals(p.id)){post=p;break;}
-            if(post==null)continue; final Models.Post selected=post;
-            D1Reactions.loadPost(activity,selected,()->{
-                if(!selected.id.equals(vh.itemView.getTag()))return;
-                renderReactionBar(activity,vh,selected,Reactions.resolveCurrentUserReaction(selected),
-                        com.friendbook.social.core.FastCache.getReactionTotal(selected.id,selected.likes));
-                bindInlineComments(activity,vh,selected);
-            });
-        }
-    }
+    /** Home receives engagement with the page; detail adapters still hydrate on demand. */
+    public boolean feedEngagementInPage;
 
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
@@ -1212,7 +1197,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
-        if (com.friendbook.social.core.D1Client.enabled("posts")) {
+        if (!feedEngagementInPage && com.friendbook.social.core.D1Client.enabled("posts")) {
             D1Reactions.loadPost(c, p, () -> {
                 if (!p.id.equals(vh.itemView.getTag())) return;
                 renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),

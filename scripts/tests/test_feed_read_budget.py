@@ -13,6 +13,15 @@ class FeedReadBudgetTest(unittest.TestCase):
         self.assertNotIn('addSnapshotListener',first)
         self.assertIn('generation!=feedGeneration',first)
         self.assertIn('FieldPath.documentId()',first)
+    def test_home_uses_page_engagement_without_background_engagement_reads(self):
+        source=(JAVA/'main/HomeFragment.java').read_text()
+        self.assertIn('feedQuery=query.withFeedEngagement()', source)
+        self.assertIn('D1Reactions.seedFeed', source)
+        self.assertNotIn('refreshVisibleEngagement', source)
+        self.assertNotIn('watchLatestPosts', source)
+        self.assertIn('>=120_000L', source)
+        adapter=(JAVA/'post/FeedAdapter.java').read_text()
+        self.assertIn('!feedEngagementInPage &&', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         more=source.split('public void loadMore()',1)[1].split('public boolean hasMore()',1)[0]

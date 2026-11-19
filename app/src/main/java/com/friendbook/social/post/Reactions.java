@@ -159,7 +159,12 @@ public class Reactions {
 
     /** Returns ONLY the reaction given by `currentUserId` (`Fb.uid()`), or `null` if `currentUserId` has not reacted. */
     public static String resolveCurrentUserReaction(Models.Post post) {
-        if(post!=null && com.friendbook.social.core.D1Client.enabled("posts"))return D1Reactions.mine("posts",post.id);
+        if(post!=null && com.friendbook.social.core.D1Client.enabled("posts")) {
+            org.json.JSONObject summary=D1Reactions.cached("posts",post.id);
+            if(summary!=null && !summary.optBoolean("reactionStateUnknown"))return D1Reactions.mine(summary);
+            Map<String,Object> embedded=post.reactionsMap.get(Fb.uid());
+            return embedded==null?null:Models.normalizeReactionType(embedded.get("type"),"like");
+        }
         String me = Fb.uid();
         if (me == null || me.isEmpty() || post == null || post.id == null) return null;
         if (!FastCache.isLocalReactionInFlight(post.id)

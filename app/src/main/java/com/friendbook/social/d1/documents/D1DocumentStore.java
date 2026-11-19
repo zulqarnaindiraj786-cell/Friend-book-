@@ -355,7 +355,11 @@ public class D1DocumentStore {
         }
     }
 
+    private final java.util.concurrent.atomic.AtomicLong postWriteVersion = new java.util.concurrent.atomic.AtomicLong();
+    public long postWriteVersion() { return postWriteVersion.get(); }
+
     void notifyCollectionListeners(String parentPath) {
+        if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
                 e.refreshPending.set(true);

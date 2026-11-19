@@ -42,6 +42,7 @@ public class Query {
     final D1DocumentStore firestore;
     final String parentPath;
     final String postTag;
+    private final boolean feedEngagement;
     final List<FilterSpec> filters;
     final List<OrderSpec> orders;
     final Integer limitValue;
@@ -52,15 +53,16 @@ public class Query {
     final Object[] endAtValues;
 
     Query(D1DocumentStore firestore, String parentPath) {
-        this(firestore, parentPath, new ArrayList<>(), new ArrayList<>(), null, false, null, null, null, null, null);
+        this(firestore, parentPath, new ArrayList<>(), new ArrayList<>(), null, false, null, null, null, null, null, false);
     }
 
     Query(D1DocumentStore firestore, String parentPath, List<FilterSpec> filters, List<OrderSpec> orders,
           Integer limitValue, boolean limitToLastFlag,
-          Object[] startAfterValues, Object[] startAtValues, Object[] endBeforeValues, Object[] endAtValues, String postTag) {
+          Object[] startAfterValues, Object[] startAtValues, Object[] endBeforeValues, Object[] endAtValues, String postTag, boolean feedEngagement) {
         this.firestore = firestore;
         this.parentPath = parentPath;
         this.postTag = postTag;
+        this.feedEngagement = feedEngagement;
         this.filters = filters;
         this.orders = orders;
         this.limitValue = limitValue;
@@ -73,12 +75,17 @@ public class Query {
 
     private Query copy(List<FilterSpec> f, List<OrderSpec> o, Integer lim, boolean ltl,
                        Object[] sa, Object[] sat, Object[] eb, Object[] eat) {
-        return new Query(firestore, parentPath, f, o, lim, ltl, sa, sat, eb, eat, postTag);
+        return new Query(firestore, parentPath, f, o, lim, ltl, sa, sat, eb, eat, postTag, feedEngagement);
     }
 
     public Query matchingPostTag(String tag) {
         return new Query(firestore, parentPath, filters, orders, limitValue, limitToLastFlag,
-                startAfterValues, startAtValues, endBeforeValues, endAtValues, tag);
+                startAfterValues, startAtValues, endBeforeValues, endAtValues, tag, feedEngagement);
+    }
+
+    public Query withFeedEngagement() {
+        return new Query(firestore, parentPath, filters, orders, limitValue, limitToLastFlag,
+                startAfterValues, startAtValues, endBeforeValues, endAtValues, postTag, true);
     }
 
     private Query addFilter(String field, String op, Object value) {
@@ -186,6 +193,7 @@ public class Query {
         JSONObject body = new JSONObject();
         try {
             body.put("parent", parentPath);
+            if (feedEngagement) body.put("feedEngagement", true);
             if (postTag != null) body.put("postTag", postTag);
             body.put("filters", filtersJson());
             JSONArray ord = new JSONArray();
@@ -226,6 +234,11 @@ public class Query {
                 String p = item.optString("path", "");
                 String id = item.optString("id", "");
                 Map<String, Object> data = D1DocumentJson.decodeMap(item.optJSONObject("data"));
+                if (feedEngagement && data != null) {
+                    data.remove("__feedEngagement");
+                    JSONObject summary=item.optJSONObject("engagement");
+                    if (summary != null) data.put("__feedEngagement",summary.toString());
+                }
                 long ct = item.optLong("createTime", 0L);
                 long ut = item.optLong("updateTime", 0L);
                 docs.add(new QueryDocumentSnapshot(firestore, p, id, data, meta, ct, ut));

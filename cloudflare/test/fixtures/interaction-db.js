@@ -10,6 +10,7 @@ export function fixture() {
   sql.exec(readFileSync(new URL('../../migrations/0008_additive_legacy_comment_totals.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0018_social_guards.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../../migrations/0050_comment_totals.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");
   const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);

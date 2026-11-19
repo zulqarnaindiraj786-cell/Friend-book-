@@ -1,3 +1,5 @@
+import { engagementSummary } from './interactions.js';
+import { readD1DocumentFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
@@ -805,6 +807,37 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   return docs.filter((_,i)=>allowed[i]);
 }
 
+// Enrich only a bounded page that already passed the authoritative post ACL.
+async function feedEngagement(db, env, uid, body, docs) {
+  if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
+      || body.limit<1 || body.limit>7 || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
+  try {
+    const resources=docs.map(d=>`posts/${d.id}`);
+    const [viewer,states]=await Promise.all([
+      readD1DocumentFields(db,`users/${uid}`),
+      db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources WHERE resource IN (${resources.map(()=>'?').join(',')})`).bind(...resources).all(),
+    ]);
+    const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
+    const blocked=[...(viewer?.blocked?.arrayValue?.values||[]),...(viewer?.blockedUsers?.arrayValue?.values||[])].map(v=>v.stringValue).filter(v=>typeof v==='string');
+    const output=[];
+    for (let i=0;i<docs.length;i+=3) output.push(...await Promise.all(docs.slice(i,i+3).map(async doc=>{
+      const resource=`posts/${doc.id}`;
+      const state=stateByResource.get(resource);
+      if (state && state!=='verified') return doc;
+      try {
+        const engagement=await engagementSummary(db,resource,uid,doc.data.authorId,blocked);
+        // Missing import metadata is not proof that a historical post had zero likes.
+        if (!state && !engagement.types.length && (Number(doc.data.likes)>0 || Object.keys(doc.data.reactionsMap||{}).length)) {
+          engagement.reactionStateUnknown=true;
+        }
+        return {...doc,engagement};
+      }
+      catch { return doc; } // A summary failure must not hide an authorized post.
+    })));
+    return output;
+  } catch { return docs; }
+}
+
 // Feed fast path: fetch small indexed batches from each store, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
@@ -832,10 +865,19 @@ async function boundedFeedPage(db,uid,spec) {
   const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
-  const canonicalBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='posts'${byAuthor}
-    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard}) LIMIT 1`).bind(...authorArgs).first();
-  const legacyBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='posts'${byLegacyAuthor}
-    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard}) LIMIT 1`).bind(...authorArgs).first();
+  const probe=async (table,index,where,args)=>{
+    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
+    catch(error) {
+      if (!String(error).includes(`no such index: ${index}`)) throw error;
+      return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
+    }
+  };
+  const [canonicalBad,legacyBad]=await Promise.all([
+    probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='posts'${byAuthor}
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard})`,authorArgs),
+    probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='posts'${byLegacyAuthor}
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`,authorArgs),
+  ]);
   if (canonicalBad || legacyBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
@@ -2292,7 +2334,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
         const page=await boundedFeedPage(db,uid,body);
-        if (page!==null) return json({parent,documents:page});
+        if (page!==null) return json({parent,documents:await feedEngagement(db,env,uid,body,page)});
         rows = await readCollectionRows(db, parent, uid, body?.filters, body);
       }
     }
@@ -2327,13 +2369,13 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         for(let i=0;i<ordered.length && allowed.length<body.limit;i+=20)
           allowed.push(...await visibleDocuments(db,uid,parent,ordered.slice(i,i+20),userReads,archiveQuery));
       } catch { return json({error:'Read unavailable'},503); }
-      return json({parent,documents:allowed.slice(0,body.limit)});
+      return json({parent,documents:await feedEngagement(db,env,uid,body,allowed.slice(0,body.limit))});
     }
     try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});
     const result = applyQuery(visible, spec);
-    return json({ parent, documents: result });
+    return json({ parent, documents: await feedEngagement(db,env,uid,body,result) });
   }
 
   // GET /v1/firestore/count?parent=...&filters=...
