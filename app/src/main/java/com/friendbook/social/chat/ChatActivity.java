@@ -478,8 +478,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (isGroupChat) {
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
-                        if (d == null) return; // a transient read failure is not a deleted room
-                        if (!d.exists()) { finish(); return; }
+                        if (d == null) {
+                            if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) finish();
+                            return; // a transient read failure is not a deleted room
+                        }
+                        if (!d.exists()) { if (!d.getMetadata().isFromCache()) finish(); return; }
                         CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         groupRoom = Models.ChatRoom.fromDoc(d);
                         peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())

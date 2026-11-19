@@ -925,20 +925,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendsReg=Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
                     java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
                 if (snap==null) return; // keep the last confirmed relationship on a transient error
+                if (snap.getMetadata().isFromCache()) return; // a partial cache is not authoritative relationship state
                 friendIds.clear();if(!snap.isEmpty())friendIds.add(uid);
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
             outReg = Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
-                        if (snap == null) return;
+                        if (snap == null || snap.getMetadata().isFromCache()) return;
                         hasOut = !snap.isEmpty();
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
-                        if (snap == null) return;
+                        if (snap == null || snap.getMetadata().isFromCache()) return;
                         hasIn = !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
