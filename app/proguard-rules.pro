@@ -19,3 +19,7 @@
 -dontwarn com.google.android.ump.**
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# Meta Audience Network carries compile-time Infer nullability metadata.
+-dontwarn com.facebook.infer.annotation.Nullsafe
+-dontwarn com.facebook.infer.annotation.Nullsafe$Mode
