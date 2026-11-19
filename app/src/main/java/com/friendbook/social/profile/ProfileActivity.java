@@ -1074,8 +1074,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void updateStatsLine() {
         if (user == null) return;
-        int followers = user.followers != null ? user.followers.size() : 0;
-        int following = user.following != null ? user.following.size() : 0;
+        int followers = user.followerCount;
+        int following = user.followingCount;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();
         appendBoldStat(sb, Format.count(followers), " followers · ");
@@ -1083,7 +1083,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         appendBoldStat(sb, userPostCount<0 ? "—" : Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
         statsT.setText(sb);
         statsT.setOnClickListener(v -> Ui.choose(this, user.displayName, new String[]{
-                "👥 Followers (" + Format.count(user.followers != null ? user.followers.size() : 0) + ")",
+                "👥 Followers (" + Format.count(followers) + ")",
                 "🚶 Following (" + Format.count(following) + ")",
                 "🤝 Friends (" + Format.count(user.friendsCount) + ")"
         }, w -> {
@@ -1433,7 +1433,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             case "incoming": primaryBtn.setText("✔ Respond"); break;
             default: primaryBtn.setText("＋ Add friend"); break;
         }
-        boolean following = user.followers != null && user.followers.contains(Fb.uid());
+        boolean following = user.followedByMe;
         secondaryBtn.setText(following ? "Following ✓" : "＋ Follow");
     }
 
@@ -1534,7 +1534,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         String me = Fb.uid();
         if (me == null) return;
-        boolean following = user.followers != null && user.followers.contains(me);
+        boolean following = user.followedByMe;
         Notify.follow(uid, !following).addOnFailureListener(e -> {
             if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't update follow. Please try again.");
         });
@@ -1842,7 +1842,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "💞", user.relationship);
         if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
         addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
-        addAboutRow(card, "🚶", Format.count(user.followers.size()) + " followers · " + Format.count(user.following.size()) + " following");
+        addAboutRow(card, "🚶", Format.count(user.followerCount) + " followers · " + Format.count(user.followingCount) + " following");
 
         boolean canSeeContact = (mine && !viewAsPublic)
                 || "Public".equalsIgnoreCase(user.contactInfoPrivacy)

@@ -77,6 +77,8 @@ public class Models {
         }
         public List<String> followers = new ArrayList<>();
         public List<String> following = new ArrayList<>();
+        public int followerCount, followingCount;
+        public boolean followedByMe;
         public List<String> blocked = new ArrayList<>();
 
         public static User fromDoc(DocumentSnapshot d) {
@@ -160,6 +162,9 @@ public class Models {
             u.lastBonusAt = lb instanceof Number ? ((Number) lb).longValue() : Format.ts(lb);
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
+            u.followerCount = m != null && m.get("followerCount") instanceof Number ? Math.max(0, Format.intOf(m,"followerCount")) : u.followers.size();
+            u.followingCount = m != null && m.get("followingCount") instanceof Number ? Math.max(0, Format.intOf(m,"followingCount")) : u.following.size();
+            u.followedByMe = m != null && m.get("followedByMe") instanceof Boolean ? Format.boolOf(m,"followedByMe") : u.followers.contains(com.friendbook.social.core.Fb.uid());
             u.blocked = Format.listOf(m, "blockedUsers");
             return u;
         }

@@ -7,16 +7,28 @@ const PUBLIC_FIELDS = new Set([
 const SERVER_FIELDS = new Set([
   'isAdmin','isModerator','banned','deactivated','isVerified','tickLevel',
   'suspendedUntil','suspendedLifetime','stars','dailyStreak','lastBonusAt',
-  'verificationStatus','admin','role','friendsCount','followers','following'
+  'verificationStatus','admin','role','friendsCount','followers','following',
+  'followerCount','followingCount','followedByMe'
 ]);
 const ADMIN_FIELDS = new Set([...PUBLIC_FIELDS, 'email','banned','deactivated','isAdmin','isModerator','suspendedUntil','suspendedLifetime']);
+// Summary is computed from server-maintained arrays, never a client-written count.
+// It allows a locked profile to show counts and the viewer's own follow state
+// without exposing the private membership lists.
+function withFollowSummary(view,data,uid) {
+  const followers=Array.isArray(data.followers)?data.followers:[];
+  const following=Array.isArray(data.following)?data.following:[];
+  view.followerCount=followers.length;
+  view.followingCount=following.length;
+  view.followedByMe=followers.includes(uid);
+  return view;
+}
 export function profileReadView(path, uid, data, admin = false) {
   const parts=path.split('/');
   if ((parts[0] === 'users' || parts[0] === 'pushDevices') && parts[1] === uid) return data;
   if (admin && parts[0]==='users' && parts.length===2 && data) {
     const view={};
     for (const [key,value] of Object.entries(data)) if (ADMIN_FIELDS.has(key)) view[key]=value;
-    return view;
+    return withFollowSummary(view,data,uid);
   }
   if (parts[0] === 'stories' && data && data.authorId !== uid) {
     const {viewedBy, reactions, ...publicStory}=data;
@@ -29,7 +41,7 @@ export function profileReadView(path, uid, data, admin = false) {
   for (const [k,v] of Object.entries(data)) {
     if (PUBLIC_FIELDS.has(k) && !(data.profileLocked === true && ['bio','coverUrl','pinnedPostId','followers','following'].includes(k))) result[k]=v;
   }
-  return result;
+  return withFollowSummary(result,data,uid);
 }
 export function profileWriteAllowed(path, uid, before, after) {
   const parts=path.split('/');
