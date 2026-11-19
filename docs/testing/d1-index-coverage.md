@@ -25,3 +25,8 @@ Admin payment approval can atomically approve an existing pending paid subscript
 - `0041` maintains a Unicode FTS5 index for post text in both D1 stores. Standalone `#tag` and `@mention` searches use exact indexed tokens, then the existing post visibility and pagination rules. Mentions are text tokens, not verified account links.
 
 - Ordinary live-room social gifts use the existing indexed live-chat table (`0035` sender/time index for cooldown checks). The Worker fixes catalog values, prevents replay from incrementing points twice, and commits the event and non-cash room points together. No wallet, earnings, payout, or PK score is written.
+
+- `0043` stores live PK invitations and scores with room/status/expiry indexes; audio and video stay on the authenticated relay.
+- `0044` adds author-plus-cursor indexes for profile post pages. Header and posts load independently.
+- `0045` tracks verified moderator grants and indexed account-action audits. Profile flags alone never grant moderation rights.
+- `0046` indexes referral history and enforces one referral claim per account. Referral counts do not expose other members’ records or perform payouts.
