@@ -19,4 +19,9 @@ The Android `collection(...)` paths are not SQL table names. D1 stores most appl
 
 `cloudflare/test/index_plan_test.py` applies every migration to throwaway SQLite and asserts the selected group, story, old page and reply query plans. API tests cover notification privacy, read state and canonical precedence.
 
-Admin payment approval can atomically approve an existing pending paid subscription and activate its linked subscription with a server-set expiry. It does not create payments or claim to verify an external charge. Official broadcast fanout and independent normalized relationship/search tables are outside this migration.
+Admin payment approval can atomically approve an existing pending paid subscription and activate its linked subscription with a server-set expiry. It does not create payments or claim to verify an external charge. Migration 0039 adds account-ID cursor indexes for the server-owned official broadcast. The Worker atomically saves the private inbox notification, Team chat message, unread count and job progress; migration `0042` also queues an indexed FCM outbox entry in the same transaction. Scheduled maintenance leases due rows and retries transient failures. FCM acceptance is not a device receipt. Independent normalized relationship/search tables are not implemented.
+
+- `0040` maintains a reverse chat membership projection with a participant-first primary key and a chat-path maintenance index. Canonical documents override historical mirrors; existing room ACLs still decide visibility.
+- `0041` maintains a Unicode FTS5 index for post text in both D1 stores. Standalone `#tag` and `@mention` searches use exact indexed tokens, then the existing post visibility and pagination rules. Mentions are text tokens, not verified account links.
+
+- Ordinary live-room social gifts use the existing indexed live-chat table (`0035` sender/time index for cooldown checks). The Worker fixes catalog values, prevents replay from incrementing points twice, and commits the event and non-cash room points together. No wallet, earnings, payout, or PK score is written.

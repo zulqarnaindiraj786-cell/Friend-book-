@@ -874,24 +874,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
-        final int generation=++profileStartGeneration;
-        final String actor=Fb.uid();
-        final java.util.concurrent.atomic.AtomicBoolean started=new java.util.concurrent.atomic.AtomicBoolean();
-        Runnable fallback=() -> {
-            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
-            if(started.compareAndSet(false,true)) startProfileListeners();
-        };
-        // Do not block the whole profile on a slow combined request. Existing listeners
-        // are the fallback and continue to refresh all changes after initial hydration.
-        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(fallback,1500);
-        if (actor==null || uid==null) { fallback.run(); return; }
-        Fb.db().fetchProfileBootstrap(uid).addOnSuccessListener(result -> {
-            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
-            if(started.compareAndSet(false,true)) {
-                Fb.db().cacheProfileBootstrap(uid,actor,result);
-                startProfileListeners();
-            }
-        }).addOnFailureListener(error -> fallback.run());
+        ++profileStartGeneration;
+        // Start header and first posts independently; a slow page must not delay the header.
+        startProfileListeners();
     }
 
     private void startProfileListeners() {
@@ -918,6 +903,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     if (postsAdapter != null) postsAdapter.notifyDataSetChanged();
                     if(activeTab==3 && friendPager==null)startFriendPages();
                 });
+        startPostsWatcher();
         watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
@@ -957,7 +943,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             });
         }
         if(activeTab==3)startFriendPages();
-        startPostsWatcher();
         if(activeTab==1) startReelsWatcher();
     }
 
@@ -977,15 +962,23 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private void startPostsWatcher() {
         if(postCountReg!=null)postCountReg.remove();
         final int generation=profileStartGeneration;
-        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
-            if(generation!=profileStartGeneration || isFinishing())return;
-            userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
-            if(user!=null)updateStatsLine();
-        });
+        postCountReg=null;
         if(postPager!=null) postPager.close();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
+            if (postCountReg==null && error.isEmpty()) {
+                postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
+                    if(generation!=profileStartGeneration || isFinishing())return;
+                    userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
+                    if(user!=null)updateStatsLine();
+                });
+            }
+            if (!error.isEmpty() && docs.isEmpty()) {
+                Ui.toast(this,error);
+                return;
+            }
+
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {

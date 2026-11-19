@@ -131,7 +131,7 @@ public class AdminReportsActivity extends Activity {
     }
 
     private void dismissAfterAction(DocumentSnapshot report, String successMessage) {
-        report.getReference().delete()
+        Fb.db().moderate("delete_content", "reports", report.getId())
                 .addOnSuccessListener(v -> Ui.toast(this, successMessage))
                 .addOnFailureListener(e -> Ui.toast(this, "Couldn't dismiss report. Please try again."));
     }

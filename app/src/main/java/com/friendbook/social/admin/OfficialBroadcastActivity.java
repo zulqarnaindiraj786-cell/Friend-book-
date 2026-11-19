@@ -9,7 +9,7 @@ import android.provider.OpenableColumns;
 import android.widget.*;
 import com.friendbook.social.core.*;
 import com.friendbook.social.d1.documents.*;
-import java.util.*;
+import java.util.UUID;
 
 /** Admin-only composer: one shared upload, image/video + linked text in official Team chats. */
 public final class OfficialBroadcastActivity extends Activity {
@@ -125,21 +125,12 @@ public final class OfficialBroadcastActivity extends Activity {
     @Override protected void onStart() { super.onStart(); observeUpload(); }
     private void queue(String text, String uid) {
         if (!uid.equals(Fb.uid()) || !Admin.isAdmin()) { fail("Admin account changed; broadcast stopped"); return; }
-        DocumentReference ref = Fb.db().collection("officialBroadcasts").document(jobId);
-        Map<String, Object> spec = new HashMap<>();
-        spec.put("adminId", uid); spec.put("text", text); spec.put("mediaUrl", mediaUrl);
-        spec.put("mediaType", mediaType); spec.put("storagePath", uploadPath);
-        if (mediaUrl.startsWith("https://res.cloudinary.com/")) spec.put("mediaProvider", "cloudinary");
-        else if (mediaUrl.startsWith("https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev/videos/")) {
-            spec.put("mediaProvider", "r2"); spec.put("mediaRetention", "forever");
-        }
-        spec.put("createdAt", FieldValue.serverTimestamp()); spec.put("status", "queued"); spec.put("processed", 0);
-        Fb.db().runTransaction(tx -> { if (!tx.get(ref).exists()) tx.set(ref, spec); return null; })
+        Fb.db().queueOfficialBroadcast(jobId, text, mediaUrl, mediaType)
                 .addOnSuccessListener(v -> {
                     OfficialBroadcastWorker.enqueue(getApplicationContext(), jobId, uid);
                     if (!isDestroyed()) status.setText("Queued. Background sending will continue while this admin account is signed in.");
                 }).addOnFailureListener(e -> {
-                    if (!isDestroyed()) fail("Could not queue broadcast. Check deployed Firestore rules and connection.");
+                    if (!isDestroyed()) fail("Could not queue broadcast. Check Cloudflare access and connection.");
                 });
     }
     private void fail(String reason) { busy = false; send.setEnabled(true); message.setEnabled(true); status.setText(reason); }
@@ -150,7 +141,7 @@ public final class OfficialBroadcastActivity extends Activity {
             status.setText("Broadcast: " + state + " • " + doc.getLong("processed") + " accounts processed");
             if ("complete".equals(state) || "queued".equals(state) || "sending".equals(state) || "retrying".equals(state)) {
                 busy = true; send.setEnabled(false); message.setEnabled(false);
-            } else if ("permission_denied".equals(state)) fail("Broadcast stopped: Firestore permission denied. Deploy the admin rules before retrying.");
+            } else if ("permission_denied".equals(state)) fail("Broadcast stopped: Cloudflare admin access denied.");
         });
     }
     @Override protected void onSaveInstanceState(Bundle out) {

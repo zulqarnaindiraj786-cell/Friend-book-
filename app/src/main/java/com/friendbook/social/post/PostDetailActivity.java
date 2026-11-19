@@ -193,6 +193,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         mainRv.setLayoutManager(new LinearLayoutManager(this));
         mainRv.setItemAnimator(null);
         commentsAdapter = new CommentsAdapter(this, this);
+        commentsAdapter.setShowEmptyWhenNone(false);
         commentsAdapter.counterCollection = "posts";
         commentsAdapter.counterId = postId;
         commentsAdapter.postAuthorId = post != null ? post.authorId : "";
@@ -340,6 +341,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
     private void loadPostAndComments(final boolean forceHeader) {
         initialLoaded = true;
+        commentsAdapter.setShowEmptyWhenNone(false);
+        commentsAdapter.notifyDataSetChanged();
         if (postReg != null) { postReg.remove(); postReg = null; }
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
@@ -375,21 +378,25 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
         // Latest canonical page stays live; older pages are explicit one-shot reads.
         commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+            if (commentsHandle==null) return;
             updateCommentPager();
-            if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentsHandle.isLoading())return;
             if(commentSwipe!=null)commentSwipe.setRefreshing(false);
+            if(!commentsHandle.hasInitialPage())return;
+            commentsAdapter.setShowEmptyWhenNone(true);
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
         });
+        updateCommentPager();
     }
 
     private void updateCommentPager() {
         if(olderCommentsButton==null || commentsHandle==null) return;
         olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
-                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+                !commentsHandle.error.isEmpty()?(commentsHandle.hasInitialPage()?"Retry older comments":"Retry loading comments"):commentsHandle.hasMore()?"View more comments":"All comments loaded");
         olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 

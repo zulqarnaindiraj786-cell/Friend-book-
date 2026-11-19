@@ -48,6 +48,30 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final List<String> friendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
     private final List<Models.User> suggestions = new ArrayList<>();
+    private com.friendbook.social.d1.documents.ListenerRegistration requestWatch;
+    private String requestWatchKey = "";
+
+    private void stopRequestWatch() {
+        if (requestWatch != null) requestWatch.remove();
+        requestWatch = null;
+        requestWatchKey = "";
+    }
+
+    private void watchRequestPage(Query query, String actor, int selected) {
+        if (selected != SEC_REQUESTS && selected != SEC_SENT) { stopRequestWatch(); return; }
+        String key = actor + ":" + selected;
+        if (key.equals(requestWatchKey)) return;
+        stopRequestWatch();
+        requestWatchKey = key;
+        final boolean[] first = {true};
+        requestWatch = query.limit(20).addSnapshotListener((snapshot, error) -> {
+            if (snapshot == null || snapshot.getMetadata().isFromCache()) return;
+            if (first[0]) { first[0] = false; return; }
+            if (started && !isHidden() && section == selected && key.equals(requestWatchKey)
+                    && java.util.Objects.equals(actor, Fb.uid())) startSection();
+        });
+    }
+
     private com.friendbook.social.core.CursorPager activePager;
     private com.friendbook.social.core.CursorPager suggestionPager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
@@ -144,10 +168,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
 
     @Override public void onHiddenChanged(boolean hidden){
         super.onHiddenChanged(hidden);
-        if(hidden)closePage();else if(started && adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
+        if(hidden){ stopRequestWatch(); closePage(); }else if(started && adapter!=null){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}
     }
     @Override public void onStart(){super.onStart();started=true;if(!isHidden()){com.friendbook.social.main.MainActivity.clearFriendsBadgeNow();startSection();}}
-    @Override public void onStop(){started=false;closePage();super.onStop();}
+    @Override public void onStop(){started=false;stopRequestWatch();closePage();super.onStop();}
 
     private void startSection(){
         String me=Fb.uid();if(me==null || !started || getActivity()==null || isHidden()){if(swipe!=null)swipe.setRefreshing(false);return;}
@@ -165,6 +189,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         else if(selected==SEC_SENT)query=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereEqualTo("status","pending");
         else if(selected==SEC_FRIENDS)query=Fb.db().collection("friends").whereArrayContains("participants",me);
         else query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
+        watchRequestPage(query,me,selected);
         activePager=new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20,"friends-section:"+selected,(docs,more,loading,error)->{
             if(!current(token,me) || section!=selected)return;
             pageMore=more;pageLoading=loading;pageError=error;

@@ -6,7 +6,7 @@ export function canReadNotification(path, uid, data) {
 export function notificationWriteAllowed(path, uid, before, after) {
   const parts = path.split('/');
   if (parts.length !== 2 || parts[0] !== 'notifications') return true;
-  if (!before) return !!after && after.fromUserId === uid && typeof after.toUserId === 'string'
+  if (!before) return !parts[1].startsWith('broadcast_') && !!after && after.fromUserId === uid && typeof after.toUserId === 'string'
     && after.toUserId.length > 0 && after.toUserId.length <= 512
     && !/[\\/\x00-\x1f]/.test(after.toUserId) && after.isRead === false;
   if (before.toUserId !== uid) return false;

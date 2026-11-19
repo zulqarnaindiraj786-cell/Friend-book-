@@ -1,3 +1,4 @@
+import { drainBroadcastPush } from './fcm-push.js';
 import { retryVideoCleanup } from './video-r2.js';
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -22,8 +23,8 @@ export async function pruneExpiredRealtime(db, now) {
   if (results.some(result => result.status === 'rejected')) throw new Error('Realtime maintenance incomplete');
 }
 
-export async function runMaintenance(env, {now = Date.now(), videoCleanup = retryVideoCleanup, report = console.error} = {}) {
-  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now)], ['temporary-video', () => videoCleanup(env)]];
+export async function runMaintenance(env, {now = Date.now(), videoCleanup = retryVideoCleanup, broadcastPush = drainBroadcastPush, report = console.error} = {}) {
+  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now)], ['temporary-video', () => videoCleanup(env)], ['broadcast-push', () => broadcastPush(env,now)]];
   await Promise.all(jobs.map(async ([job, run]) => {
     try { await run(); }
     catch { report(JSON.stringify({event:'friendbook.maintenance_failed',job})); }

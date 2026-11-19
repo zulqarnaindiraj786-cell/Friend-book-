@@ -177,6 +177,7 @@ public class NotificationsFragment extends Fragment {
     }
     private void startPages() {
         if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
+        if (reg != null && !java.util.Objects.equals(loadedActor, me)) { reg.remove(); reg = null; data.clear(); }
         loadedActor = me;
         initialLoaded = true;
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
@@ -187,8 +188,8 @@ public class NotificationsFragment extends Fragment {
             final boolean[] first = {true};
             reg = query.limit(20).addSnapshotListener((snapshot, error) -> {
                 if (snapshot == null) return;
-                if (first[0]) { first[0] = false; return; }
                 if (snapshot.getMetadata().isFromCache()) return;
+                if (first[0]) { first[0] = false; return; }
                 if (!isHidden() && java.util.Objects.equals(me, Fb.uid())) startPages();
             });
         }

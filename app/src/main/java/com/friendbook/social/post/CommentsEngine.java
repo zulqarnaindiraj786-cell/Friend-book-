@@ -65,7 +65,7 @@ public class CommentsEngine {
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, loading, more=true, cursorReady;
         private int legacyLoaded=50, visible=50;
-        private boolean d1Mode,loadedOlderD1;private String collection,docId,key,nextD1;
+        private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
         private long revision;
         private final Set<String> pendingD1=new HashSet<>();
         private final android.os.Handler d1PollHandler=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -97,7 +97,7 @@ public class CommentsEngine {
                     }else older.putAll(received);
                     if(!first){visible+=20;loadedOlderD1=true;}
                     if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
-                    error="";pinned=data.optString("pinned");emit();
+                    error="";if(first)firstPageReady=true;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
             }).addOnFailureListener(e->{if(active()){loading=false;if(!background){error="D1 page unavailable. Tap to retry.";emit();}}});
         }
@@ -109,7 +109,8 @@ public class CommentsEngine {
             Set<String> loaded=new HashSet<>(older.keySet()); loaded.addAll(latest.keySet()); loaded.removeAll(deleted);
             return more || legacyLoaded<legacy.size() || loaded.size()>visible;
         }
-        public boolean isLoading() { return loading; }
+        public boolean isLoading() { return loading || (!firstPageReady && error.isEmpty()); }
+        public boolean hasInitialPage() { return firstPageReady; }
         private void emit() {
             if(!active()) return;
             Map<String,Models.Comment> all=new LinkedHashMap<>();
@@ -174,7 +175,7 @@ public class CommentsEngine {
             handle.latest.clear();
             for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.more=page.size()==50;
+                handle.cursorReady=true; handle.firstPageReady=true; handle.error=""; handle.more=page.size()==50;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();

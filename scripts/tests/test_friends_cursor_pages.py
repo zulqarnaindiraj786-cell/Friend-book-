@@ -3,11 +3,13 @@ from pathlib import Path
 import unittest
 JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/social'
 class FriendsCursorPages(unittest.TestCase):
-    def test_twenty_per_visible_section_and_no_list_listeners(self):
+    def test_twenty_per_visible_section_and_bounded_request_listener(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20','NearEndPaging.attach(rv','if(hidden)closePage()','if(loading){requestRender();return;}','swipe.setOnRefreshListener(this::startSection)','People you may know','suggestionPager.start()']:
+        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,selected==SEC_SUGGESTIONS?10:20','NearEndPaging.attach(rv','if(hidden){ stopRequestWatch(); closePage(); }','if(loading){requestRender();return;}','swipe.setOnRefreshListener(this::startSection)','People you may know','suggestionPager.start()']:
             self.assertIn(token,code)
-        self.assertNotIn('addSnapshotListener',code)
+        self.assertEqual(code.count('addSnapshotListener'),1)
+        self.assertIn('query.limit(20).addSnapshotListener',code)
+        self.assertIn('selected != SEC_REQUESTS && selected != SEC_SENT',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
         for token in ['offset+=10','FriendCandidatePages.pairs(me,ids)','Tasks.whenAllSuccess','a.getMetadata().isFromCache()','a.size()==20','if(!current(token,me) || !checkingUsers.containsAll(ids))return','},20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:

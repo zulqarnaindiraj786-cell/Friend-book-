@@ -34,6 +34,9 @@ public class D1DocumentStore {
     private final ExecutorService listenerExecutor = new java.util.concurrent.ThreadPoolExecutor(
             4, 4, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(128),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    private final ExecutorService inboxExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            3, 3, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(32),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, DocumentSnapshot> docCache = new ConcurrentHashMap<>();
@@ -50,6 +53,7 @@ public class D1DocumentStore {
         volatile boolean active = true;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
+        final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
             this.ref = ref;
@@ -137,14 +141,50 @@ public class D1DocumentStore {
         }
     }
 
+    public Task<Void> claimReferral(String inviter) {
+        return runAsync(() -> {
+            D1DocumentTransport.request("POST", "/v1/firestore/claim-referral",
+                    new org.json.JSONObject().put("inviter", inviter));
+            return null;
+        });
+    }
+
+    public Task<org.json.JSONObject> livePk(org.json.JSONObject body) {
+        final String actor=authenticatedUid();
+        return runAsync(() -> {
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED, "Account changed");
+            return D1DocumentTransport.request("POST", "/v1/live/pk", body);
+        });
+    }
+
+    public Task<Void> queueOfficialBroadcast(String id, String text, String mediaUrl, String mediaType) {
+        return runAsync(() -> {
+            D1DocumentTransport.request("POST", "/v1/admin/broadcast", new org.json.JSONObject()
+                    .put("action", "queue").put("id", id).put("text", text)
+                    .put("mediaUrl", mediaUrl).put("mediaType", mediaType));
+            notifyDocListeners("officialBroadcasts/" + id);
+            return null;
+        });
+    }
+
+    public Task<Boolean> advanceOfficialBroadcast(String id) {
+        return runAsync(() -> D1DocumentTransport.request("POST", "/v1/admin/broadcast", new org.json.JSONObject()
+                .put("action", "advance").put("id", id)).getBoolean("complete"));
+    }
+
     /** Moderation is authorized by the Worker using the verified admin UID, not UI state. */
     public Task<Void> moderate(String action, String collection, String id) {
+        return moderate(action, collection, id, null);
+    }
+
+    public Task<Void> moderate(String action, String collection, String id, Object value) {
         final String actor=authenticatedUid();
         return runAsync(() -> {
             if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
                     D1DocumentStoreException.Code.CANCELLED, "Account changed before moderation");
             D1DocumentTransport.request("POST", "/v1/admin/moderation",
-                    new org.json.JSONObject().put("action",action).put("collection",collection).put("id",id));
+                    new org.json.JSONObject().put("action",action).put("collection",collection).put("id",id).put("value",value));
             if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
                     D1DocumentStoreException.Code.CANCELLED, "Account changed during moderation");
             invalidateDoc(collection + "/" + id);
@@ -283,11 +323,21 @@ public class D1DocumentStore {
     public void refreshChatFromPush(String chatId) {
         if (chatId == null || !chatId.matches("[A-Za-z0-9_-]{1,128}")) return;
         notifyCollectionListeners("chats/" + chatId + "/messages");
+        notifyCollectionListeners("chats");
+    }
+
+    public void refreshInboxFromPush(String type) {
+        notifyCollectionListeners("notifications");
+        if ("friend_request".equals(type) || "friend_accept".equals(type) || "friend_accepted".equals(type)) {
+            notifyCollectionListeners("friend_requests");
+            notifyCollectionListeners("friends");
+        }
     }
 
     void notifyCollectionListeners(String parentPath) {
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
+                e.refreshPending.set(true);
                 scheduleQueryRead(e);
             }
         }
@@ -315,9 +365,19 @@ public class D1DocumentStore {
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { listenerExecutor.execute(() -> {
+        String path = entry.query.parentPath;
+        boolean inbox = ListenerPollingPolicy.isChatMessages(path) || "chats".equals(path)
+                || "notifications".equals(path) || "friend_requests".equals(path);
+        try { (inbox ? inboxExecutor : listenerExecutor).execute(() -> {
+            // A push arriving after this point must get one follow-up read, even
+            // when the current HTTP request returns the pre-message snapshot.
+            entry.refreshPending.set(false);
             try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry); return null; }); }
-            catch (Exception ignored) { entry.inFlight.set(false); }
+            catch (Exception ignored) { }
+            finally {
+                entry.inFlight.set(false);
+                if (entry.refreshPending.get()) scheduleQueryRead(entry);
+            }
         }); }
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
@@ -349,7 +409,7 @@ public class D1DocumentStore {
     }
 
     private void deliverQuery(QueryListenerEntry entry) {
-        if (!entry.active) { entry.inFlight.set(false); return; }
+        if (!entry.active) return;
         try {
             org.json.JSONArray arr = D1DocumentTransport.query(toQueryJson(entry.query));
             if (!entry.actor.equals(authenticatedUid())) return;
@@ -370,8 +430,6 @@ public class D1DocumentStore {
             mainHandler.post(() -> {
                 if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(null, ffe);
             });
-        } finally {
-            entry.inFlight.set(false);
         }
     }
 

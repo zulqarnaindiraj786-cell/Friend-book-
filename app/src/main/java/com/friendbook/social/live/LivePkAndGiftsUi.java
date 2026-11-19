@@ -194,7 +194,7 @@ public final class LivePkAndGiftsUi {
             GiftItem g = GIFTS[selectedIdx[0]];
             String who = (pkActive && targetSideB[0] && hostBName != null && !hostBName.isEmpty())
                     ? shortName(hostBName) : shortName(hostAName);
-            sendCta.setText("Send " + g.name + " (" + g.coins + " Stars) to " + who);
+            sendCta.setText("Send " + g.name + " (" + g.coins + " non-cash points) to " + who);
         };
 
         for (int rowIdx = 0; rowIdx < 2; rowIdx++) {

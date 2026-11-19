@@ -334,6 +334,22 @@ async function boundedChatRows(db,parent,spec) {
 async function readCollectionRows(db, parent, uid, filters, spec) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
+  if (parent === 'chats') {
+    // Canonical membership wins over stale legacy mirrors. The normal document
+    // ACL still runs before results are returned to the caller.
+    try {
+      const canonical=await db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m
+        JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
+        WHERE m.participant_uid=? AND m.source=1`).bind(uid).all();
+      const legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m
+        JOIN friendbook_cf_documents a ON a.path=m.chat_path
+        WHERE m.participant_uid=? AND m.source=0
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all();
+      return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    } catch (error) {
+      if (!String(error).includes('no such table: friendbook_cf_chat_participants')) throw error;
+    }
+  }
   if (parent === 'friends') {
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
@@ -370,7 +386,7 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
   }
   // Only hard-coded root/field pairs can be interpolated into SQL. Privacy
   // filtering still happens after candidate selection, before the page limit.
-  const indexedFields={posts:['groupId','authorId'],reels:['authorId'],stories:['authorId'],pages:['ownerId']};
+  const indexedFields={posts:['groupId','authorId'],reels:['authorId'],stories:['authorId'],pages:['ownerId'],referrals:['refBy']};
   const indexedField=(Object.hasOwn(indexedFields,parent)?indexedFields[parent]:[]).find(field=>
     Array.isArray(filters) && filters.some(f=>f?.field===field && f.op==='==' && typeof f.value==='string'));
   if (indexedField) {
@@ -760,9 +776,16 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
 async function boundedFeedPage(db,uid,spec) {
+  const filters=Array.isArray(spec?.filters)?spec.filters:[];
+  const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
+  const authorArgs=author===null?[]:[author];
+  const authorField="json_extract(document_json,'$.authorId')";
+  const legacyAuthor="CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') ELSE json_extract(document_json,'$.authorId') END";
+  const byAuthor=author===null?'':` AND ${authorField}=?`;
+  const byLegacyAuthor=author===null?'':` AND (${legacyAuthor})=?`;
   if (spec?.parent!=='posts' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
       || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
-      || (Array.isArray(spec.filters) && spec.filters.length) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || (filters.length && author===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
       || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
   let cursor=null;
   if (spec.startAfter) {
@@ -776,10 +799,10 @@ async function boundedFeedPage(db,uid,spec) {
   const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
-  const canonicalBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='posts'
-    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard}) LIMIT 1`).bind().first();
-  const legacyBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='posts'
-    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard}) LIMIT 1`).bind().first();
+  const canonicalBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='posts'${byAuthor}
+    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard}) LIMIT 1`).bind(...authorArgs).first();
+  const legacyBad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='posts'${byLegacyAuthor}
+    AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard}) LIMIT 1`).bind(...authorArgs).first();
   if (canonicalBad || legacyBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
@@ -787,13 +810,13 @@ async function boundedFeedPage(db,uid,spec) {
   const visible=[], requestUserReads=new Map();
   for (;;) {
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
-    const args=[...(cursor||[]),chunk];
+    const args=[...authorArgs,...(cursor||[]),chunk];
     const [canonical,legacy]=await Promise.all([
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${bound}
+        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
       db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a WHERE a.collection='posts'${bound}
+        FROM friendbook_cf_documents a WHERE a.collection='posts'${byLegacyAuthor}${bound}
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
     ]);
@@ -1252,32 +1275,67 @@ async function chatDocumentGuard(db,path,row) {
 }
 // Moderation authority comes exclusively from the configured verified UID list.
 // Preserve the original document in a private audit record before changing it.
+async function verifiedModerator(db,uid) {
+  try {
+    const grant=await db.prepare('SELECT uid FROM friendbook_cf_admin_moderators WHERE uid=?').bind(uid).first();
+    const user=grant && await readRow(db,`users/${uid}`);
+    const profile=user && decodeValue(JSON.parse(user.document_json));
+    return !!profile && profile.banned!==true && profile.deactivated!==true;
+  } catch { return false; }
+}
 async function adminModeration(request,env,uid,now) {
   const db=env.DB;
-  if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
+  const admin=isPaymentAdmin(env,uid);
+  if (!admin && !await verifiedModerator(db,uid)) return json({error:'Forbidden'},403);
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   let input; try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
   if (!input || typeof input!=='object' || Array.isArray(input)
-      || Object.keys(input).some(k=>!['action','collection','id'].includes(k))
+      || Object.keys(input).some(k=>!['action','collection','id','value'].includes(k))
       || !validSegment(input.id) || input.id.length>128) return json({error:'Invalid request'},400);
   const isBan=['ban_user','unban_user'].includes(input.action);
+  const control=['set_tick','set_suspension','set_moderator','deactivate_user','reactivate_user'].includes(input.action);
   const endLive=input.action==='end_live' && input.collection==='lives';
-  if ((isBan && input.collection!=='users') || (!isBan && !endLive && (input.action!=='delete_content'
-      || !['posts','reels','stories'].includes(input.collection)))) return json({error:'Invalid request'},400);
-  if (isBan && (uid===input.id || isPaymentAdmin(env,input.id))) return json({error:'Protected account'},403);
+  if (!admin && !(isBan || (input.action==='delete_content' && ['posts','reels','stories'].includes(input.collection)))) return json({error:'Forbidden'},403);
+  if (control && (input.collection!=='users' || (input.action==='set_tick' && !['none','blue','gold','diamond'].includes(input.value))
+      || (input.action==='set_suspension' && ![0,1,7,30,60,'lifetime'].includes(input.value))
+      || (input.action==='set_moderator' && typeof input.value!=='boolean'))) return json({error:'Invalid account control'},400);
+  if (!control && Object.hasOwn(input,'value')) return json({error:'Invalid request'},400);
+  if (!control && ((isBan && input.collection!=='users') || (!isBan && !endLive && (input.action!=='delete_content'
+      || !['posts','reels','stories','reports','feedback'].includes(input.collection))))) return json({error:'Invalid request'},400);
+  if ((isBan || (control && input.action!=='set_tick')) && (uid===input.id || isPaymentAdmin(env,input.id))) return json({error:'Protected account'},403);
   const path=`${input.collection}/${input.id}`;
   try {
     const row=await readRow(db,path);
     if (!row) return json({error:'NOT_FOUND'},404);
     const before=decodeValue(JSON.parse(row.document_json));
+    if (!admin && input.action==='delete_content' && (!before.authorId || isPaymentAdmin(env,before.authorId))) return json({error:'Protected content'},403);
     const guard=await chatDocumentGuard(db,path,row);
-    const auditTable=endLive ? 'friendbook_cf_live_moderation_audit' : 'friendbook_cf_moderation_audit';
+    const auditTable=control ? 'friendbook_cf_admin_account_audit' : endLive ? 'friendbook_cf_live_moderation_audit' : 'friendbook_cf_moderation_audit';
     const audit=db.prepare(`INSERT INTO ${auditTable}(id,admin_uid,action,target_path,original_json,created_at) VALUES (?,?,?,?,?,?)`)
       .bind(crypto.randomUUID(),uid,input.action,path,row.document_json,now);
     const statements=[guard,audit];
+    if (!admin) {
+      const actor=await readRow(db,`users/${uid}`);
+      if (!actor || !await verifiedModerator(db,uid)) return json({error:'Forbidden'},403);
+      statements.unshift(await chatDocumentGuard(db,actor.path,actor),db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
+        SELECT EXISTS(SELECT 1 FROM friendbook_cf_admin_moderators WHERE uid=?)`).bind(uid));
+    }
+
     if (endLive && before.status==='ended') return json({ok:true,action:input.action,path});
-    if (isBan || endLive) {
+    if (control) {
+      const v=input.value;
+      const next={...before};
+      if (input.action==='set_tick') Object.assign(next,{tickLevel:v,isVerified:v!=='none'});
+      if (input.action==='set_suspension') Object.assign(next,{suspendedLifetime:v==='lifetime',suspendedUntil:v==='lifetime'?9999999999999:v?now+v*86400000:0});
+      if (input.action==='reactivate_user') next.deactivated=false;
+      if (input.action==='deactivate_user') Object.assign(next,{deactivated:true,isModerator:false});
+      if (input.action==='set_moderator') next.isModerator=v;
+      if (input.action==='set_moderator' && v) statements.push(db.prepare(`INSERT INTO friendbook_cf_admin_moderators(uid,granted_by,granted_at) VALUES (?,?,?)
+        ON CONFLICT(uid) DO UPDATE SET granted_by=excluded.granted_by,granted_at=excluded.granted_at`).bind(input.id,uid,now));
+      else if (input.action==='set_moderator' || input.action==='deactivate_user') statements.push(db.prepare('DELETE FROM friendbook_cf_admin_moderators WHERE uid=?').bind(input.id));
+      statements.push(...broadcastWrites(db,path,next,input.id,row,now));
+    } else if (isBan || endLive) {
       const next=endLive ? {...before,status:'ended',endedAt:{__type:'timestamp',millis:now},pkActive:false,pkBattleId:''} : {...before,banned:input.action==='ban_user'};
       const serialized=JSON.stringify(next), collection=input.collection, owner=endLive ? before.hostId : input.id;
       statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
@@ -1294,6 +1352,136 @@ async function adminModeration(request,env,uid,now) {
   } catch (error) {
     if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Content changed. Please retry.'},409);
     return json({error:'Moderation unavailable'},503);
+  }
+}
+
+const broadcastTeam='friendbook_team';
+const broadcastAvatar='friendbook_team_logo';
+function broadcastPayload(env, data) {
+  if (typeof data.text!=='string' || data.text.length>4000 || typeof data.mediaUrl!=='string' || data.mediaUrl.length>2048
+      || !['','text','image','video'].includes(data.mediaType)) return null;
+  const text=data.text.trim(), mediaUrl=data.mediaUrl, mediaType=data.mediaType||'text';
+  if (!text && !mediaUrl) return null;
+  if (mediaUrl) {
+    let url;
+    try { url=new URL(mediaUrl); } catch { return null; }
+    if (url.protocol!=='https:' || url.username || url.password || url.port || !['image','video'].includes(mediaType)) return null;
+    const cloudinary=url.hostname==='res.cloudinary.com' && env.CLOUDINARY_CLOUD_NAME
+      && url.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/${mediaType}/upload/`);
+    const r2=mediaType==='video' && url.hostname==='pub-88ab0a56178742af95cbbf62df152a67.r2.dev' && url.pathname.startsWith('/videos/');
+    if (!cloudinary && !r2) return null;
+  } else if (mediaType!=='text') return null;
+  return {text,mediaUrl,mediaType};
+}
+function broadcastWrites(db,path,data,owner,row,now) {
+  const parent=parentPath(path), collection=collectionIdOf(path), id=docIdOf(path);
+  const writes=[db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+    VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+    .bind(path,parent,collection,id,owner,JSON.stringify(data),row?.create_time||now,now)];
+  if (isRootDocument(path)) writes.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+    VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
+    .bind(path,collection,id,owner,JSON.stringify({...data,id}),now));
+  return writes;
+}
+async function claimReferral(request,db,uid,now) {
+  if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  let body; try { body=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
+  const inviter=body?.inviter;
+  if (!validSegment(inviter) || inviter.length>128 || inviter===uid) return json({error:'Invalid inviter'},400);
+  try {
+    const claimed=await db.prepare('SELECT inviter_uid FROM friendbook_cf_referral_claims WHERE referred_uid=?').bind(uid).first();
+    if (claimed) return claimed.inviter_uid===inviter ? json({ok:true}) : json({error:'Referral already recorded'},409);
+    const [signup,referrer]=await Promise.all([readRow(db,`users/${uid}`),readRow(db,`users/${inviter}`)]);
+    const profile=referrer && decodeValue(JSON.parse(referrer.document_json));
+    // Canonical create_time is assigned by the Worker, unlike the client-visible createdAt field.
+    const signupRow=await db.prepare('SELECT create_time FROM friendbook_cf_firestore_documents WHERE path=?').bind(`users/${uid}`).first();
+    if (!signup || !signupRow || signupRow.create_time<now-600000 || signupRow.create_time>now
+        || !profile || profile.banned===true || profile.deactivated===true) return json({error:'Referral unavailable'},403);
+    const date={__type:'timestamp',millis:now},path=`referrals/claim_${uid}`;
+    const guard=await chatDocumentGuard(db,path,null);
+    await db.batch([guard,await chatDocumentGuard(db,signup.path,signup),await chatDocumentGuard(db,referrer.path,referrer),
+      db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT NOT EXISTS(
+        SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='referrals' AND json_extract(document_json,'$.refTo')=?
+        UNION ALL SELECT 1 FROM friendbook_cf_documents WHERE collection='referrals'
+        AND (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.refTo.stringValue') ELSE json_extract(document_json,'$.refTo') END)=?
+      )`).bind(uid,uid),
+      db.prepare('INSERT INTO friendbook_cf_referral_claims(referred_uid,inviter_uid,created_at) VALUES (?,?,?)').bind(uid,inviter,now),
+      ...broadcastWrites(db,path,{refBy:inviter,refTo:uid,status:'completed',date,createdAt:date},uid,null,now),
+      db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+    return json({ok:true},201);
+  } catch (error) {
+    if (/constraint failed|Document changed/i.test(String(error?.message||''))) return json({error:'Referral already recorded or changed'},409);
+    return json({error:'Referral unavailable'},503);
+  }
+}
+
+async function adminBroadcast(request,env,uid,now) {
+  if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
+  if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  const db=env.DB;
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
+  let input;
+  try {input=await request.json();} catch {return json({error:'Invalid JSON'},400);}
+  if (!input || typeof input.id!=='string' || !/^[A-Za-z0-9-]{1,64}$/.test(input.id) || !['queue','advance'].includes(input.action)) return json({error:'Invalid broadcast'},400);
+  const path=`officialBroadcasts/${input.id}`;
+  try {
+    const jobRow=await readRow(db,path), job=jobRow?decodeValue(JSON.parse(jobRow.document_json)):null;
+    if (job && job.adminId!==uid) return json({error:'Forbidden'},403);
+    if (input.action==='queue') {
+      const payload=broadcastPayload(env,input);
+      if (!payload) return json({error:'Invalid broadcast content'},400);
+      if (job) return ['text','mediaUrl','mediaType'].every(key=>job[key]===payload[key]) ? json({ok:true}) : json({error:'Broadcast already exists'},409);
+      const next={...payload,adminId:uid,cursor:'',status:'queued',processed:0,createdAt:{__type:'timestamp',millis:now}};
+      await db.batch([await chatDocumentGuard(db,path,null),...broadcastWrites(db,path,next,uid,null,now),db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+      return json({ok:true},201);
+    }
+    if (!job || !broadcastPayload(env,job)) return json({error:'Broadcast unavailable'},404);
+    if (job.status==='complete') return json({complete:true,processed:job.processed});
+    const cursor=typeof job.cursor==='string'?job.cursor:'';
+    const a=await db.prepare("SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT 1").bind(cursor).first();
+    const b=await db.prepare("SELECT doc_id FROM friendbook_cf_documents WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT 1").bind(cursor).first();
+    const to=[a?.doc_id,b?.doc_id].filter(Boolean).sort((x,y)=>x===y?0:x<y?-1:1)[0];
+    const statements=[await chatDocumentGuard(db,path,jobRow)];
+    const next={...job,status:to?'sending':'complete',processed:Number.isSafeInteger(job.processed)?job.processed:0};
+    if (to) {
+      next.cursor=to;
+      const account=validSegment(to)&&to!==broadcastTeam ? await readRow(db,`users/${to}`):null;
+      const user=account?decodeValue(JSON.parse(account.document_json)):null;
+      if (user && user.banned!==true && user.deactivated!==true) {
+        const note=`notifications/broadcast_${input.id}_${to}`, chat=`chats/team_${to}`, message=`${chat}/messages/broadcast_${input.id}`;
+        const [noteRow,chatRow,msgRow]=await Promise.all([readRow(db,note),readRow(db,chat),readRow(db,message)]);
+        if (!noteRow && !msgRow) {
+          const room=chatRow?decodeValue(JSON.parse(chatRow.document_json)):{};
+          const conflict=chatRow && (room.isGroup===true || !Array.isArray(room.participants) || room.participants.length!==2
+              || !room.participants.includes(to) || !room.participants.includes(broadcastTeam));
+          if (conflict) next.skipped=(Number.isSafeInteger(job.skipped)?job.skipped:0)+1;
+          else {
+            const time={__type:'timestamp',millis:now}, title='friendbook Team';
+            const unread=room.unreadCount && typeof room.unreadCount==='object' && !Array.isArray(room.unreadCount)?room.unreadCount:{};
+            const roomNext={...room,participants:[broadcastTeam,to],participantNames:{...room.participantNames,[broadcastTeam]:title},
+              participantPhotos:{...room.participantPhotos,[broadcastTeam]:broadcastAvatar},lastMessage:job.text||(job.mediaType==='video'?'Video':'Photo'),
+              lastMessageTime:time,lastMessageTimeMs:now,unreadCount:{...unread,[to]:(Number.isSafeInteger(unread[to])?unread[to]:0)+1}};
+            statements.push(await chatDocumentGuard(db,`users/${to}`,account),await chatDocumentGuard(db,note,null),
+              await chatDocumentGuard(db,chat,chatRow),await chatDocumentGuard(db,message,null));
+            statements.push(...broadcastWrites(db,note,{toUserId:to,fromUserId:broadcastTeam,fromUserName:title,fromUserPhotoUrl:broadcastAvatar,
+              type:'announcement',text:job.text,isRead:false,broadcastId:input.id,mediaUrl:job.mediaUrl,mediaType:job.mediaType,createdAt:time},to,null,now));
+            statements.push(db.prepare(`INSERT INTO friendbook_cf_broadcast_push
+              (notification_id,recipient_uid,created_at,next_attempt_at) VALUES (?,?,?,?)`).bind(docIdOf(note),to,now,now));
+            statements.push(...broadcastWrites(db,chat,roomNext,to,chatRow,now));
+            statements.push(...broadcastWrites(db,message,{senderId:broadcastTeam,senderName:title,senderPhoto:broadcastAvatar,receiverId:to,
+              text:job.text,type:job.mediaType,imageUrl:job.mediaType==='image'?job.mediaUrl:'',videoUrl:job.mediaType==='video'?job.mediaUrl:'',
+              isDelivered:true,isSeen:false,broadcastId:input.id,createdAt:time,createdAtMs:now},broadcastTeam,null,now));
+          }
+        }
+        next.processed++;
+      }
+    }
+    statements.push(...broadcastWrites(db,path,next,uid,jobRow,now),db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+    await db.batch(statements);
+    return json({complete:next.status==='complete',processed:next.processed});
+  } catch (error) {
+    if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Broadcast changed. Please retry.'},409);
+    return json({error:'Broadcast unavailable'},503);
   }
 }
 
@@ -1492,17 +1680,121 @@ async function recoverLegacySocial(request,env,uid,now) {
   } catch { return json({error:'Recovery changed or unavailable'},409); }
 }
 
+// Social gifts are not wallet credits or earnings. Only the server determines points.
+const LIVE_GIFTS=new Map(Object.entries({rose:['Rose','rose',1],heart:['Finger Heart','heart',5],
+  donut:['Doughnut','donut',30],crown:['Gold Crown','crown',99],confetti:['Party Pop','confetti',199],
+  airplane:['Private Jet','jet',299],lion:['Golden Lion','lion',500],universe:['Universe','rocket',1000]}));
+
+// PK invitations and transitions are separate from chat messages and client-owned fields.
+async function livePk(request,db,uid,now) {
+  let input;
+  if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
+  const action=input?.action;
+  if (!['invite','accept','decline','end','status','room'].includes(action)) return json({error:'Invalid PK action'},400);
+  const validRoom=x=>typeof x==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(x);
+  if (action==='invite' && (!validRoom(input.roomA) || !validRoom(input.roomB) || (input.roomA===input.roomB && !validSegment(input.guestUid))
+      || !Number.isInteger(input.durationSec) || input.durationSec<60 || input.durationSec>600)) return json({error:'Invalid PK rooms'},400);
+  if (action!=='invite' && !validRoom(action==='room'?input.room:input.id)) return json({error:'Invalid PK ID'},400);
+  try {
+    if (action==='room') {
+      const row=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE status='active' AND expires_at>? AND (room_a=? OR room_b=?) LIMIT 1`).bind(now,input.room,input.room).first();
+      if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch') || !await authorizeLiveMedia(db,row.room_b,uid,'watch')
+          || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish') || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish')) return json({status:'idle'});
+      const [a,b]=await Promise.all([readRow(db,`users/${row.host_a}`),readRow(db,`users/${row.host_b}`)]);
+      const name=r=>r ? String(decodeValue(JSON.parse(r.document_json)).displayName||'').slice(0,200) : '';
+      return json({...row,name_a:name(a)||'Host A',name_b:name(b)||'Host B'});
+    }
+    const load=id=>db.prepare('SELECT * FROM friendbook_cf_live_pk WHERE id=?').bind(id).first();
+    const battle=action==='invite'?null:await load(input.id);
+    if (action!=='invite' && !battle) return json({error:'PK match unavailable'},404);
+    const roomA=battle?.room_a ?? input.roomA,roomB=battle?.room_b ?? input.roomB;
+    if (action==='status') {
+      if (![battle.host_a,battle.host_b].includes(uid) && (battle.status!=='active' || battle.expires_at<=now
+          || !await authorizeLiveMedia(db,roomA,uid,'watch') || !await authorizeLiveMedia(db,roomB,uid,'watch'))) return json({error:'Forbidden'},403);
+      return json({...battle,status:['invited','active'].includes(battle.status) && battle.expires_at<=now?'ended':battle.status});
+    }
+    const [a,b]=await Promise.all([readRow(db,`lives/${roomA}`),readRow(db,`lives/${roomB}`)]);
+    if (!a || !b) return json({error:'PK rooms unavailable'},404);
+    const aa=decodeValue(JSON.parse(a.document_json)),bb=decodeValue(JSON.parse(b.document_json));
+    const guest=roomA===roomB;
+    const guards=[await chatDocumentGuard(db,a.path,a),...(guest?[]:[await chatDocumentGuard(db,b.path,b)])];
+    const clear=db.prepare('DELETE FROM friendbook_cf_social_guards').bind();
+    if (action==='invite') {
+      const target=guest ? input.guestUid : bb.hostId;
+      if (aa.hostId!==uid || uid===target || (guest && aa.coHostUid) || bb.pkInvitesEnabled===false
+          || !await authorizeLiveMedia(db,roomA,uid,'publish') || !await authorizeLiveMedia(db,roomB,target,guest?'watch':'publish')
+          || !await authorizeLiveMedia(db,roomB,uid,'watch') || !await authorizeLiveMedia(db,roomA,target,'watch')) return json({error:'Forbidden'},403);
+      const id=autoId();
+      const inviteId=autoId();
+      const profile=await readRow(db,`users/${uid}`);
+      const actor=profile?decodeValue(JSON.parse(profile.document_json)):{};
+      const msg={type:'pk_invite',uid,name:String(actor.displayName||'').slice(0,200),targetUid:target,pkBattleId:id,
+        text:'sent a PK battle invitation',durationSec:input.durationSec,createdAt:now,createdAtMs:now};
+      await db.batch([...guards,db.prepare(`INSERT INTO friendbook_cf_live_pk(id,room_a,room_b,host_a,host_b,status,duration_sec,created_at,expires_at)
+        SELECT ?,?,?,?,?,'invited',?,?,? WHERE NOT EXISTS (
+          SELECT 1 FROM friendbook_cf_live_pk WHERE status IN ('invited','active') AND expires_at>? AND (room_a IN (?,?) OR room_b IN (?,?))
+        )`).bind(id,roomA,roomB,uid,target,input.durationSec,now,now+90000,now,roomA,roomB,roomA,roomB),
+        db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT EXISTS(SELECT 1 FROM friendbook_cf_live_pk WHERE id=?)`).bind(id),
+        ...broadcastWrites(db,`lives/${roomB}/chat/${inviteId}`,msg,uid,null,now),clear]);
+      return json({id,status:'invited'},201);
+    }
+    if (aa.hostId!==battle.host_a || (!guest && bb.hostId!==battle.host_b) || (action==='end'?![battle.host_a,battle.host_b].includes(uid):uid!==battle.host_b)) return json({error:'Forbidden'},403);
+    const accepting=action==='accept';
+    if (accepting && ((guest && aa.coHostUid) || bb.pkInvitesEnabled===false || !await authorizeLiveMedia(db,roomA,battle.host_a,'publish')
+        || !await authorizeLiveMedia(db,roomB,battle.host_b,guest?'watch':'publish') || !await authorizeLiveMedia(db,roomA,battle.host_b,'watch')
+        || !await authorizeLiveMedia(db,roomB,battle.host_a,'watch'))) return json({error:'Forbidden'},403);
+    const status=accepting?'active':action==='decline'?'declined':'ended';
+    const expected=action==='end'?'active':'invited';
+    const expires=accepting?now+battle.duration_sec*1000:now;
+    await db.batch([...guards,db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT EXISTS(
+      SELECT 1 FROM friendbook_cf_live_pk WHERE id=? AND status=? AND expires_at>?)`).bind(battle.id,expected,now),
+      db.prepare(`UPDATE friendbook_cf_live_pk SET status=?,expires_at=? WHERE id=?`).bind(status,expires,battle.id),clear]);
+    return json({id:battle.id,status,expiresAt:expires});
+  } catch (error) {
+    if (/Document changed|CHECK constraint failed: ok/i.test(String(error?.message||''))) return json({error:'PK match changed or busy'},409);
+    return json({error:'PK match unavailable'},503);
+  }
+}
+
 async function createLiveChat(db, roomId, uid, input, now) {
   const path=`lives/${roomId}`;
   const roomRow=await readRow(db,path);
   if (!roomRow || !await authorizeLiveMedia(db,roomId,uid,'watch')) return json({error:'Forbidden'},403);
   const room=decodeValue(JSON.parse(roomRow.document_json));
   const type=input?.type;
-  const text=typeof input?.text==='string' ? input.text.trim() : '';
+  if (type==='cohost_accept' || type==='cohost_remove') {
+    const host=room.hostId===uid;
+    const accepting=type==='cohost_accept';
+    if ((!host && (accepting || room.coHostUid!==uid)) || (!accepting && input.targetUid!==room.coHostUid)) return json({error:'Forbidden'},403);
+    let target='', name='', requestRow=null;
+    if (accepting) {
+      if (room.coHostAllowed===false || room.coHostUid || !validSegment(input.requestId)) return json({error:'Co-host unavailable'},409);
+      requestRow=await readRow(db,`${path}/chat/${input.requestId}`);
+      const req=requestRow && decodeValue(JSON.parse(requestRow.document_json));
+      if (!req || req.type!=='cohost_req' || req.uid===uid || req.uid!==input.targetUid || req.createdAtMs<now-300000
+          || !await authorizeLiveMedia(db,roomId,req.uid,'watch')) return json({error:'Invalid co-host request'},403);
+      target=req.uid;name=req.name;
+    }
+    const next={...room,coHostUid:target,coHostName:name,coHostGrant:target?autoId():''};
+    const writes=[await chatDocumentGuard(db,path,roomRow)];
+    if (requestRow) {
+      writes.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT NOT EXISTS(
+        SELECT 1 FROM friendbook_cf_live_pk WHERE room_a=? AND room_b=? AND status='active' AND expires_at>?)`).bind(roomId,roomId,now));
+      writes.push(await chatDocumentGuard(db,requestRow.path,requestRow),db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(requestRow.path));
+    }
+    try {
+      await db.batch([...writes,...broadcastWrites(db,path,next,room.hostId,roomRow,now),db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+    } catch { return json({error:'Co-host room changed'},409); }
+    return json({exists:true,id:roomId,path,parent:'lives',collection:'lives',data:next,updateTime:now});
+  }
+  const gift=type==='gift' ? LIVE_GIFTS.get(input.giftId) : null;
+  const text=gift ? `sent ${gift[0]} (${gift[2]} points)!` : typeof input?.text==='string' ? input.text.trim() : '';
   const host=room.hostId===uid;
   const mod=Array.isArray(room.moderatorIds) && room.moderatorIds.includes(uid);
-  if (!['chat','qa','reaction','system'].includes(type) || !text || text.length>500 || input.uid!==uid) return json({error:'Invalid live message'},400);
-  if (room.status!=='live' || (type==='system' && !host && !mod) || (!host && !mod && (
+  if (!['chat','qa','reaction','system','gift','cohost_req','pk_req'].includes(type) || !text || text.length>500 || input.uid!==uid
+      || (type==='gift' && (!gift || !validSegment(input.requestId) || !/^[0-9a-f-]{36}$/.test(input.requestId)))) return json({error:'Invalid live message'},400);
+  if (room.status!=='live' || (type==='pk_req' && (host || room.pkInvitesEnabled===false)) || (type==='cohost_req' && (host || room.coHostAllowed===false || room.coHostUid)) || (type==='gift' && (host || room.giftsEnabled===false)) || (type==='system' && !host && !mod) || (!host && !mod && (
       (type==='chat' && room.commentsEnabled===false) || (type==='qa' && room.qaEnabled===false)
       || (Array.isArray(room.mutedUserIds) && room.mutedUserIds.includes(uid))))) return json({error:'Forbidden'},403);
   if (type==='reaction' && text.length>16) return json({error:'Invalid reaction'},400);
@@ -1513,18 +1805,53 @@ async function createLiveChat(db, roomId, uid, input, now) {
   const actor=decodeValue(JSON.parse(profile.document_json));
   const message={type,text,uid,name:typeof actor.displayName==='string'?actor.displayName.slice(0,200):'',
     photo:typeof actor.photoUrl==='string'?actor.photoUrl.slice(0,2048):'',isHost:host,isMod:mod,createdAt:now,createdAtMs:now};
-  const parent=`${path}/chat`, id=autoId(), docPath=`${parent}/${id}`;
+  const parent=`${path}/chat`;
+  const id=gift ? `gift_${input.requestId}` : autoId(), docPath=`${parent}/${id}`;
   const statements=[await chatDocumentGuard(db,path,roomRow)];
+  if (gift) {
+    const existing=await readRow(db,docPath);
+    if (existing) {
+      const saved=rowToDocument(existing);
+      return saved?.data?.uid===uid && saved.data.type==='gift' && saved.data.giftId===input.giftId && (saved.data.pkBattleId??null)===(input.pkId??null) && (input.pkSide===undefined || saved.data.pkSide===input.pkSide)
+        ? json(saved) : json({error:'Gift request already used'},409);
+    }
+    if (input.pkId!==undefined) {
+      if (!validSegment(input.pkId)) return json({error:'Invalid PK match'},400);
+      const battle=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE id=? AND status='active' AND expires_at>?`).bind(input.pkId,now).first();
+      if (!battle || ![battle.room_a,battle.room_b].includes(roomId) || [battle.host_a,battle.host_b].includes(uid)
+          || !await authorizeLiveMedia(db,battle.room_a,uid,'watch') || !await authorizeLiveMedia(db,battle.room_b,uid,'watch')
+          || !await authorizeLiveMedia(db,battle.room_a,battle.host_a,'publish') || !await authorizeLiveMedia(db,battle.room_b,battle.host_b,battle.room_a===battle.room_b?'watch':'publish')) return json({error:'PK gift unavailable'},403);
+      const score=battle.room_a===battle.room_b ? (input.pkSide==='B'?'score_b':'score_a') : battle.room_a===roomId?'score_a':'score_b';
+      statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT EXISTS(
+        SELECT 1 FROM friendbook_cf_live_pk WHERE id=? AND status='active' AND expires_at>?)`).bind(battle.id,now),
+        db.prepare(`UPDATE friendbook_cf_live_pk SET ${score}=${score}+? WHERE id=?`).bind(gift[2],battle.id));
+      message.pkBattleId=battle.id;
+      message.pkSide=score==='score_b'?'B':'A';
+    }
+    Object.assign(message,{giftId:input.giftId,giftName:gift[0],giftEmoji:gift[1],stars:gift[2],nonCash:true});
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
+      SELECT 1 FROM friendbook_cf_firestore_documents WHERE collection_id='chat' AND parent_path=? AND owner_uid=? AND create_time>?
+        AND json_extract(document_json,'$.type')='gift'
+    ) THEN 1 ELSE 0 END`).bind(parent,uid,now-2000));
+  }
+  if (type==='cohost_req' || type==='pk_req') {
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
+      SELECT 1 FROM friendbook_cf_firestore_documents WHERE collection_id='chat' AND parent_path=? AND owner_uid=? AND create_time>?
+        AND json_extract(document_json,'$.type')=?
+    ) THEN 1 ELSE 0 END`).bind(parent,uid,now-30000,type));
+  }
   if (room.slowMode===true && !host && !mod && ['chat','qa'].includes(type)) {
     statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
       SELECT 1 FROM friendbook_cf_firestore_documents WHERE collection_id='chat' AND parent_path=? AND owner_uid=? AND create_time>?
         AND json_extract(document_json,'$.type') IN ('chat','qa')
     ) THEN 1 ELSE 0 END`).bind(parent,uid,now-5000));
   }
-  if (type==='reaction') {
+  if (type==='reaction' || gift) {
     const likes=(Number.isSafeInteger(room.likesCount) && room.likesCount>=0 ? room.likesCount : 0)+1;
-    const canonical=JSON.stringify({...room,likesCount:likes});
-    const mirror=JSON.stringify({...room,likesCount:likes,id:roomId});
+    const points=Number.isSafeInteger(room.socialGiftPoints) && room.socialGiftPoints>=0 ? room.socialGiftPoints : 0;
+    const next=gift ? {...room,socialGiftPoints:points+gift[2]} : {...room,likesCount:likes};
+    const canonical=JSON.stringify(next);
+    const mirror=JSON.stringify({...next,id:roomId});
     statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
       VALUES (?,'lives','lives',?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json,update_time=excluded.update_time`)
       .bind(path,roomId,room.hostId,canonical,roomRow.create_time||now,now),db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
@@ -1549,8 +1876,16 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   const path = url.pathname;
   const db = env.DB;
   const now = Date.now();
+  const writingContent=value=>typeof value==='string' && /^(posts|reels|stories|lives)(?:\/|$)/.test(value);
+  if (identity.suspended && (path==='/v1/live/pk' || (path==='/v1/firestore/document'
+      && ['POST','PUT','PATCH'].includes(request.method)
+      && writingContent(url.searchParams.get('path') || url.searchParams.get('parent'))))) return json({error:'Account suspended'},403);
 
+
+  if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
+  if (path === '/v1/live/pk') return livePk(request,db,uid,now);
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
+  if (path === '/v1/admin/broadcast') return adminBroadcast(request,env,uid,now);
   if (path === '/v1/admin/moderation') return adminModeration(request,env,uid,now);
   if (path === '/v1/firestore/story-engagement') return storyEngagement(request,env,uid,now);
 
@@ -1573,7 +1908,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
-    if (['reports','feedback','gifts','referrals'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts','referrals','officialBroadcasts'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
@@ -1586,6 +1921,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { if (!(await contentReadAllowed(db,uid,docPath,undefined,true))) return json({error:'Forbidden'},403); }
     catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
+    if (parts[0]==='officialBroadcasts' && document.data?.adminId!==uid) return json({error:'Forbidden'},403);
     if (parts[0]==='subscriptions' && !canReadSubscription(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
@@ -1690,7 +2026,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!isDocumentPath(docPath)) return json({ error: 'Invalid path' }, 400);
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     if (['friends','payments','config'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
-    if (['gifts','referrals','subscriptions'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
+    if (['gifts','referrals','subscriptions','officialBroadcasts'].includes(splitPath(docPath)[0])) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(splitPath(docPath)[0])) {
       if (!canReadReports(env,uid)) return json({error:'Forbidden'},403);
       if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
@@ -1853,7 +2189,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback','gifts','referrals'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
@@ -1863,19 +2199,33 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
     }
+    if (parent==='referrals' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     let rows;
     try {
-      const page=await boundedFeedPage(db,uid,body);
-      if (page!==null) return json({parent,documents:page});
-      rows = await readCollectionRows(db, parent, uid, body?.filters, body);
+      const tag=body?.postTag;
+      if (tag!==undefined && (parent!=='posts' || typeof tag!=='string' || !/^[#@][\p{L}\p{N}_]{1,80}$/u.test(tag))) return json({error:'Invalid post tag'},400);
+      if (tag!==undefined) {
+        const match=`"${tag}"`;
+        const canonical=await db.prepare(`SELECT f.* FROM friendbook_cf_post_search s JOIN friendbook_cf_firestore_documents f ON f.path=s.path
+          WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all();
+        const legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_post_search s JOIN friendbook_cf_documents a ON a.path=s.path
+          WHERE friendbook_cf_post_search MATCH ? AND s.source=0
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(match).all();
+        rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+      } else {
+        const page=await boundedFeedPage(db,uid,body);
+        if (page!==null) return json({parent,documents:page});
+        rows = await readCollectionRows(db, parent, uid, body?.filters, body);
+      }
     }
     catch { return json({ error: 'Read unavailable' }, 503); }
+    const moderator=parent==='users' && !isPaymentAdmin(env,uid) && await verifiedModerator(db,uid);
     let docs;
     const ownFollowFilters=Array.isArray(body?.filters) ? body.filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
       const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,body?.filters).map(async doc => {
-        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
+        const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid), moderator);
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
@@ -1913,7 +2263,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const parent = url.searchParams.get('parent') || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
-    if (['reports','feedback','gifts','referrals'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    if (['reports','feedback','gifts'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
     if (parts?.length===3 && parts[0]==='lives') {
       try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
@@ -1927,6 +2277,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { filters = JSON.parse(url.searchParams.get('filters') ?? '[]'); }
     catch { return json({error:'Invalid filters'},400); }
     if (!validQueryFilters(filters)) return json({error:'Invalid filters'},400);
+    if (parent==='referrals' && !canReadReports(env,uid) && (filters.length!==1
+        || filters[0].field!=='refBy' || filters[0].op!=='==' || filters[0].value!==uid)) return json({error:'Forbidden'},403);
     let rows;
     try { rows = await readCollectionRows(db, parent, uid, filters); }
     catch { return json({ error: 'Read unavailable' }, 503); }
@@ -1952,6 +2304,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     const ops = Array.isArray(body?.operations) ? body.operations : [];
     if (ops.length === 0 || ops.length > 500) return json({ error: 'Invalid operations' }, 400);
+    if (identity.suspended && ops.some(op=>writingContent(op?.path) && (op.op||op.type)!=='delete')) return json({error:'Account suspended'},403);
     if (ops.some(op=>splitPath(op?.path)?.[0]==='users' && ['followers','following'].some(k=>Object.prototype.hasOwnProperty.call(op.data||op.fields||op.updates||{},k)))) {
       try { return await followBatch(db,uid,ops,now); }
       catch { return json({error:'Follow state changed or unavailable'},409); }

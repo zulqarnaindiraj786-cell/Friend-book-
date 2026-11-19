@@ -99,6 +99,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         rv.setBackgroundColor(Ui.card(this));
         rv.setLayoutManager(new LinearLayoutManager(this));
         adapter = new CommentsAdapter(this, this);
+        adapter.setShowEmptyWhenNone(false);
         adapter.counterCollection = collection;
         adapter.counterId = reelId;
         adapter.postAuthorId = author == null ? "" : author;
@@ -201,23 +202,29 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
 
     private void loadComments() {
         initialLoaded = true;
+        adapter.setShowEmptyWhenNone(false);
+        adapter.notifyDataSetChanged();
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         commentsHandle = CommentsEngine.watch(collection, reelId, commentsKey, (all, pinnedId) -> {
+            if (commentsHandle==null) return;
             updateCommentPager();
-            if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentsHandle.isLoading())return;
             if(commentSwipe!=null)commentSwipe.setRefreshing(false);
+            if(!commentsHandle.hasInitialPage())return;
+            adapter.setShowEmptyWhenNone(true);
             rawComments.clear();
             rawComments.addAll(all);
             adapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             updateHeaderText();
             adapter.setAll(rawComments);
         });
+        updateCommentPager();
     }
 
     private void updateCommentPager() {
         if(olderCommentsButton==null || commentsHandle==null) return;
         olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
-                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+                !commentsHandle.error.isEmpty()?(commentsHandle.hasInitialPage()?"Retry older comments":"Retry loading comments"):commentsHandle.hasMore()?"View more comments":"All comments loaded");
         olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 

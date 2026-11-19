@@ -3,10 +3,11 @@ import { isSelfArrayChange } from './social-access.js';
 import { authorizePost } from './firebase-post-access.js';
 
 // Access is denied by default: add a collection only after its read and write policy exists.
-const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels','stories','friend_requests','friends','payments','groups','reports','feedback','config','events','pages','lives','gifts','referrals','subscriptions']);
+const SUPPORTED = new Set(['users','pushDevices','chats','messages','notifications','posts','reels','stories','friend_requests','friends','payments','groups','reports','feedback','config','events','pages','lives','gifts','referrals','subscriptions','officialBroadcasts']);
 export function supportedDocumentPath(path) {
   const p=path.split('/');
   if (!SUPPORTED.has(p[0])) return false;
+  if (p[0]==='officialBroadcasts') return p.length===2;
   if (p[0]==='lives') return p.length===2 || (p.length===4 && p[2]==='chat');
   if (p[0]==='chats') return p.length===2 || (p.length===4 && p[2]==='messages');
   if (p[0]==='config') return p.length===2 && p[1]==='ads';
@@ -16,7 +17,7 @@ export function supportedDocumentPath(path) {
 }
 export function supportedCollectionPath(path) {
   const p=path.split('/');
-  if (!SUPPORTED.has(p[0]) || p[0]==='config') return false;
+  if (!SUPPORTED.has(p[0]) || ['config','officialBroadcasts'].includes(p[0])) return false;
   if (p[0]==='lives') return p.length===1 || (p.length===3 && p[2]==='chat');
   if (p[0]==='chats') return p.length===1 || (p.length===3 && p[2]==='messages');
   if (['messages','notifications','friend_requests','friends','payments','groups','stories','reports','feedback','events','pages','lives','gifts','referrals','subscriptions'].includes(p[0])) return p.length===1;
@@ -31,12 +32,14 @@ export async function contentReadAllowed(db, uid, path, requestUserReads, includ
 }
 export function contentWriteAllowed(path, uid, before, after) {
   const p=path.split('/');
-  if (['gifts','referrals','subscriptions'].includes(p[0])) return false;
+  if (['gifts','referrals','subscriptions','officialBroadcasts'].includes(p[0])) return false;
   if (p[0]==='lives') return p.length===2 && !!after && after.hostId===uid
     && (!before ? (after.likesCount===undefined || after.likesCount===0) : (before.hostId===uid && before.status==='live' && after.likesCount===before.likesCount))
+    && ['coHostUid','coHostName','coHostGrant'].every(key=>before ? after[key]===before[key] : !after[key])
+    && (!before ? after.socialGiftPoints===undefined : after.socialGiftPoints===before.socialGiftPoints)
     && (after.status==='live' || (!!before && after.status==='ended'))
     && ['public','friends'].includes(after.privacy)
-    && !['liveFrameB64','audioB64','coFrameB64','coAudioB64'].some(key=>after[key]);
+    && !['liveFrameB64','audioB64','coFrameB64','coAudioB64','coHostFrameB64','coHostAudioB64'].some(key=>after[key]);
   if (p[0]==='events' || p[0]==='pages') {
     if (p.length!==2) return false;
     const page=p[0]==='pages';

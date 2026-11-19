@@ -37,11 +37,13 @@ export async function interactions(request, env, identity, match, authorize = au
   let db;const context={};
   try {
     db = env.DB.withSession('first-primary');
-    const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+    // Keep a primary-first session, but overlap the independent readiness and access reads.
+    const [ready,allowed] = await Promise.all([
+      db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first(),
+      authorize({...identity,db}, collection, id, undefined, context),
+    ]);
     if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
-    // Authorization and engagement reads must use the same primary-first D1
-    // session; a stale replica must not make a freshly created post disappear.
-    if (!await authorize({...identity,db}, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
+    if (!allowed) return json({ error: 'Forbidden' }, 403);
     if (!ready) {
       await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
         .bind(resource).run();

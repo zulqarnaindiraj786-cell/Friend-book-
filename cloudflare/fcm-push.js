@@ -106,7 +106,7 @@ function fresh(ts) {
 
 async function sendToDevices(env, db, actor, target, data, event) {
   const devices = await db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(target).all()
-    .then(r => r?.results || []).catch(() => []);
+    .then(r => r?.results || []);
   if (!devices.length) return { status: 409, body: { error: 'RECIPIENT_NOT_REGISTERED', accepted: 0 } };
   const access = await googleToken(env);
   let accepted = 0, duplicate = 0, invalid = 0, failed = 0;
@@ -146,6 +146,42 @@ async function sendToDevices(env, db, actor, target, data, event) {
   if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid } };
   if (!accepted && !duplicate) return { status: 409, body: { error: 'NO_VALID_RECIPIENT_DEVICE', accepted, invalid } };
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
+}
+
+// Scheduled delivery only: the outbox can be populated only by the admin broadcast
+// transaction. A due-time lease makes parallel maintenance runs safe.
+export async function drainBroadcastPush(env, now = Date.now(), send = sendToDevices) {
+  const db=env.DB;
+  if (!db) return;
+  const {results=[]}=await db.prepare(`SELECT notification_id,recipient_uid,created_at,next_attempt_at,attempts
+    FROM friendbook_cf_broadcast_push WHERE next_attempt_at<=? ORDER BY next_attempt_at,notification_id LIMIT 64`).bind(now).all();
+  let cursor=0;
+  await Promise.all(Array.from({length:Math.min(8,results.length)},async()=>{
+    while (cursor<results.length) {
+      const row=results[cursor++];
+      const id=row.notification_id;
+      const next=now+Math.min(3600000,300000*2**Math.min(row.attempts,4));
+      const claim=await db.prepare(`UPDATE friendbook_cf_broadcast_push SET attempts=attempts+1,next_attempt_at=?
+        WHERE notification_id=? AND next_attempt_at=? RETURNING notification_id`).bind(next,id,row.next_attempt_at).first();
+      if (!claim) continue;
+      const discard=()=>db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?').bind(id,next).run();
+      if (row.created_at<now-86400000 || row.attempts>=8) { await discard(); continue; }
+      const note=await d1Doc(db,`notifications/${id}`);
+      if (!note || note.fromUserId!=='friendbook_team' || note.type!=='announcement' || note.toUserId!==row.recipient_uid) {
+        // Do not send without a matching persisted inbox event; stale jobs expire.
+        continue;
+      }
+      const target=row.recipient_uid, event=`notification_${id}`;
+      try {
+        const result=await send(env,db,'friendbook_team',target,{
+          type:'message',notificationId:id,chatId:`team_${target}`,isGroup:'false',
+          toUserId:target,fromUserId:'friendbook_team',eventId:event,title:'friendbook Team',
+          body:String(note.text || (note.mediaType==='video'?'Sent a video':'Sent a photo')).slice(0,500),
+        },event);
+        if (result.status===200 || result.status===409) await discard();
+      } catch { /* Retry on the next due maintenance run. */ }
+    }
+  }));
 }
 
 export async function fcmGateway(request, env, identity) {

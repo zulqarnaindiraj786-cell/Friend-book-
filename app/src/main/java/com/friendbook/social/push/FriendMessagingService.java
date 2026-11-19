@@ -13,8 +13,12 @@ public class FriendMessagingService extends FirebaseMessagingService {
         // content or bypasses the Worker's authenticated membership check.
         java.util.Map<String,String> data=message.getData();
         String actor=com.friendbook.social.core.Fb.uid();
-        if (actor != null && actor.equals(data.get("toUserId")) && "message".equals(data.get("type")))
-            com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshChatFromPush(data.get("chatId"));
+        if (actor != null && actor.equals(data.get("toUserId"))) {
+            com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();
+            String type = data.get("type");
+            if ("message".equals(type)) store.refreshChatFromPush(data.get("chatId"));
+            if (data.get("notificationId") != null || !"message".equals(type)) store.refreshInboxFromPush(type);
+        }
         PushManager.show(this, data);
     }
 }

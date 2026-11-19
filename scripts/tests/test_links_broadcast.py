@@ -16,8 +16,11 @@ class LinksBroadcastTest(unittest.TestCase):
             ET.parse(path)
     def test_broadcast_is_paginated_and_transactionally_replay_safe(self):
         worker = (JAVA/'admin/OfficialBroadcastWorker.java').read_text()
-        for token in ['limit(100)', 'startAfter(cursor)', 'runTransaction', 'tx.get(note).exists()', 'tx.get(message).exists()', 'uid.equals(Fb.uid())', 'Result.retry()']:
+        for token in ['advanceOfficialBroadcast(id)', 'uid.equals(Fb.uid())', 'Result.retry()']:
             self.assertIn(token,worker)
+        backend = (ROOT/'cloudflare/firestore-documents.js').read_text()
+        for token in ['ORDER BY doc_id LIMIT 1', 'chatDocumentGuard(db,path,jobRow)', '!noteRow && !msgRow', 'await db.batch(statements)']:
+            self.assertIn(token,backend)
         self.assertNotIn('limit(400)', (JAVA/'admin/AdminPanelActivity.java').read_text())
     def test_media_model_and_recycling_key_include_video(self):
         self.assertIn('m0.videoUrl = Format.str(m, "videoUrl")', (JAVA/'models/Models.java').read_text())

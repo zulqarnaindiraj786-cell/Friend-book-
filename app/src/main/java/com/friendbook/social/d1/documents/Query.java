@@ -41,6 +41,7 @@ public class Query {
 
     final D1DocumentStore firestore;
     final String parentPath;
+    final String postTag;
     final List<FilterSpec> filters;
     final List<OrderSpec> orders;
     final Integer limitValue;
@@ -51,14 +52,15 @@ public class Query {
     final Object[] endAtValues;
 
     Query(D1DocumentStore firestore, String parentPath) {
-        this(firestore, parentPath, new ArrayList<>(), new ArrayList<>(), null, false, null, null, null, null);
+        this(firestore, parentPath, new ArrayList<>(), new ArrayList<>(), null, false, null, null, null, null, null);
     }
 
     Query(D1DocumentStore firestore, String parentPath, List<FilterSpec> filters, List<OrderSpec> orders,
           Integer limitValue, boolean limitToLastFlag,
-          Object[] startAfterValues, Object[] startAtValues, Object[] endBeforeValues, Object[] endAtValues) {
+          Object[] startAfterValues, Object[] startAtValues, Object[] endBeforeValues, Object[] endAtValues, String postTag) {
         this.firestore = firestore;
         this.parentPath = parentPath;
+        this.postTag = postTag;
         this.filters = filters;
         this.orders = orders;
         this.limitValue = limitValue;
@@ -71,7 +73,12 @@ public class Query {
 
     private Query copy(List<FilterSpec> f, List<OrderSpec> o, Integer lim, boolean ltl,
                        Object[] sa, Object[] sat, Object[] eb, Object[] eat) {
-        return new Query(firestore, parentPath, f, o, lim, ltl, sa, sat, eb, eat);
+        return new Query(firestore, parentPath, f, o, lim, ltl, sa, sat, eb, eat, postTag);
+    }
+
+    public Query matchingPostTag(String tag) {
+        return new Query(firestore, parentPath, filters, orders, limitValue, limitToLastFlag,
+                startAfterValues, startAtValues, endBeforeValues, endAtValues, tag);
     }
 
     private Query addFilter(String field, String op, Object value) {
@@ -179,6 +186,7 @@ public class Query {
         JSONObject body = new JSONObject();
         try {
             body.put("parent", parentPath);
+            if (postTag != null) body.put("postTag", postTag);
             body.put("filters", filtersJson());
             JSONArray ord = new JSONArray();
             for (OrderSpec os : orders) {

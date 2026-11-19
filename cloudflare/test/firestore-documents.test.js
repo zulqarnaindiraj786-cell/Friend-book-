@@ -1,3 +1,4 @@
+import { drainBroadcastPush } from '../fcm-push.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -148,6 +149,13 @@ test('Firestore-style query cursors preserve equal-timestamp ordering across pag
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
   const app=createWorker(async()=> 'u1');
   const query=(cursor)=>new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,...(cursor?{startAfter:cursor}:{})})});
+  add.run('posts/other','posts','other','u1',JSON.stringify({authorId:'u2',createdAt:200}),200);
+  add.run('users/u2','users','u2','u2',JSON.stringify({displayName:'Other'}),1);
+  sql.exec(readFileSync(new URL('../migrations/0044_profile_post_page_indexes.sql',import.meta.url),'utf8'));
+  const authorPage=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',filters:[{field:'authorId',op:'==',value:'u1'}],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2})}),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(authorPage.status,200);
+  assert.deepEqual((await authorPage.json()).documents.map(d=>d.id),['c','b']);
+  sql.exec("DELETE FROM friendbook_cf_documents WHERE path='posts/other'");
   const first=await app.fetch(query(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   const firstRows=(await first.json()).documents;
   assert.deepEqual(firstRows.map(row=>row.id),['c','b']);
@@ -1418,8 +1426,38 @@ test('admin moderation requires configured UID, preserves audit and atomically b
    assert.equal((await (await call('admin','/v1/firestore/query','POST',{parent:collection})).json()).documents.length,1);
    assert.equal((await call('admin',path,'DELETE')).status,403);
  }
+ for (const collection of ['reports','feedback']) {
+   add(collection,'item',{text:'private inbox item'});
+   const action={action:'delete_content',collection,id:'item'};
+   assert.equal((await mod('alice',action)).status,403);
+   assert.equal((await mod('admin',action)).status,200);
+   assert.equal((await mod('admin',action)).status,404);
+   assert.equal(sql.prepare('SELECT 1 FROM friendbook_cf_documents WHERE path=?').get(`${collection}/item`),undefined);
+ }
+ sql.exec(readFileSync(new URL('../migrations/0045_admin_account_controls.sql',import.meta.url),'utf8'));
+ add('users','mod',{uid:'mod',isModerator:true,displayName:'Mod'});
+ add('users','bob',{uid:'bob',displayName:'Bob'});
+ const modBan={action:'ban_user',collection:'users',id:'bob'};
+ assert.equal((await mod('mod',modBan)).status,403);
+ assert.equal((await mod('admin',{action:'set_moderator',collection:'users',id:'mod',value:true})).status,200);
+ assert.equal((await mod('mod',modBan)).status,200);
+ assert.equal((await mod('mod',{...modBan,id:'admin'})).status,403);
+ const modView=await (await call('mod','/v1/firestore/query','POST',{parent:'users'})).json();
+ assert.equal(modView.documents.find(d=>d.id==='bob').data.banned,true);
+ assert.equal(modView.documents.find(d=>d.id==='alice').data.email,undefined);
+ assert.equal((await mod('admin',{action:'set_moderator',collection:'users',id:'mod',value:false})).status,200);
+ assert.equal((await mod('mod',{...modBan,action:'unban_user'})).status,403);
+ assert.equal((await mod('admin',{action:'set_tick',collection:'users',id:'alice',value:'gold'})).status,200);
+ assert.equal((await mod('admin',{action:'set_suspension',collection:'users',id:'alice',value:1})).status,200);
+ assert.equal((await call('alice','/v1/firestore/document?path=posts/new','PUT',{data:{authorId:'alice'}})).status,403);
+ assert.equal((await call('alice','/v1/firestore/document?path=users/alice')).status,200);
+ assert.equal((await mod('admin',{action:'set_suspension',collection:'users',id:'alice',value:0})).status,200);
+ assert.equal((await call('alice','/v1/firestore/document?path=posts/new','PUT',{data:{authorId:'alice'}})).status,200);
+ assert.equal((await mod('admin',{action:'deactivate_user',collection:'users',id:'alice'})).status,200);
+ assert.equal((await call('alice','/v1/firestore/document?path=posts/new')).status,403);
+ assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_admin_account_audit').get().n,6);
  const audit=sql.prepare('SELECT action,original_json FROM friendbook_cf_moderation_audit ORDER BY rowid').all();
- assert.deepEqual(audit.map(x=>x.action),['ban_user','unban_user','delete_content']);assert.equal(JSON.parse(audit[2].original_json).content,'sensitive');
+ assert.deepEqual(audit.map(x=>x.action),['ban_user','unban_user','delete_content','delete_content','delete_content','ban_user']);assert.equal(JSON.parse(audit[2].original_json).content,'sensitive');
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_live_moderation_audit').get().n,1);
  sql.close();
 });
@@ -1755,11 +1793,156 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   assert.equal((await call('bob',send,'POST',{data:{...msg,type:'reaction',text:'heart'}})).status,201);
   assert.equal((await (await call('bob',doc)).json()).data.likesCount,1);
   assert.equal((await (await call('bob','/v1/docs/lives/room')).json()).document.likesCount,1);
+  const gift={type:'gift',uid:'bob',giftId:'rose',requestId:'11111111-1111-4111-8111-111111111111',stars:9999};
+  assert.equal((await call('alice',send,'POST',{data:{...gift,uid:'alice'}})).status,403);
+  const giftResponse=await call('bob',send,'POST',{data:gift});
+  assert.equal(giftResponse.status,201);
+  assert.equal((await giftResponse.json()).data.stars,1);
+  assert.equal((await call('bob',send,'POST',{data:gift})).status,200);
+  assert.equal((await call('bob',send,'POST',{data:{...gift,giftId:'lion'}})).status,409);
+  assert.equal((await call('bob',send,'POST',{data:{...gift,requestId:'22222222-2222-4222-8222-222222222222'}})).status,409);
+  assert.equal((await (await call('bob',doc)).json()).data.socialGiftPoints,1);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{socialGiftPoints:999}})).status,403);
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='gifts'").get().n,0);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{giftsEnabled:false}})).status,200);
+  assert.equal((await call('bob',send,'POST',{data:gift})).status,403);
   assert.equal((await call('alice',doc,'PATCH',{fields:{likesCount:999}})).status,403);
   assert.equal((await call('bob',doc,'PATCH',{fields:{status:'ended'}})).status,403);
   assert.equal((await call('alice',doc,'PATCH',{fields:{audioB64:'cannot store media'}})).status,403);
+  for(const field of ['coHostFrameB64','coHostAudioB64']) {
+    assert.equal((await call('alice',doc,'PATCH',{fields:{[field]:'cannot store media'}})).status,403);
+  }
+  for(const type of ['cohost_media','pk_invite']) {
+    assert.equal((await call('bob',send,'POST',{data:{type,uid:'bob',text:'legacy control'}})).status,400);
+  }
+  assert.equal((await call('alice','/v1/firestore/document?path=chats/pkbattle_test','PUT',{data:{hostAUid:'alice',hostBUid:'bob',status:'invited'}})).status,403);
   assert.equal((await call('alice',doc,'PATCH',{fields:{status:'ended'}})).status,200);
   assert.equal((await (await call('bob',doc)).json()).data.status,'ended');
   assert.equal((await call('alice',doc,'PATCH',{fields:{status:'live'}})).status,403);
+  sql.close();
+});
+
+test('official broadcast advances an indexed D1 cursor and writes private Team messages exactly once', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for (const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0039_broadcast_recipient_indexes.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0042_broadcast_push_outbox.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for (const [uid, data] of [['alice',{}],['bob',{banned:true}],['cara',{}]]) legacy.run(`users/${uid}`,'users',uid,uid,JSON.stringify(data),1);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice','{}',1,1);
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test',PAYMENT_ADMIN_UIDS:'admin',CLOUDINARY_CLOUD_NAME:'example'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const post=(uid,body)=>call(uid,'/v1/admin/broadcast','POST',body);
+  const queue={action:'queue',id:'job',text:'Team update',mediaType:'',mediaUrl:''};
+  assert.equal((await post('alice',queue)).status,403);
+  assert.equal((await post('admin',{...queue,mediaType:'image',mediaUrl:'https://other.example/image.png'})).status,400);
+  assert.equal((await call('alice','/v1/firestore/document?path=chats/team_cara','PUT',{data:{participants:['alice','cara']}})).status,403);
+  assert.equal((await call('alice','/v1/firestore/document?path=notifications/broadcast_job_cara','PUT',{data:{fromUserId:'alice',toUserId:'cara',isRead:false}})).status,403);
+  assert.equal((await post('admin',queue)).status,201);
+  assert.equal((await post('admin',queue)).status,200);
+  assert.equal((await post('admin',{...queue,text:'mutated'})).status,409);
+  const readJob='/v1/firestore/document?path=officialBroadcasts/job';
+  assert.equal((await call('alice',readJob)).status,403);
+  assert.equal((await call('admin',readJob)).status,200);
+  assert.equal((await call('admin',readJob,'PATCH',{fields:{processed:999}})).status,403);
+  sql.exec("CREATE TRIGGER fail_team_message BEFORE INSERT ON friendbook_cf_firestore_documents WHEN NEW.collection_id='messages' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;");
+  assert.equal((await post('admin',{action:'advance',id:'job'})).status,503);
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE parent_path IN ('notifications','chats')").get().n,0);
+  assert.equal((await (await call('admin',readJob)).json()).data.cursor,'');
+  sql.exec('DROP TRIGGER fail_team_message;');
+  for (const expected of [false,false,false,true,true]) {
+    const result=await post('admin',{action:'advance',id:'job'});
+    assert.equal(result.status,200,await result.clone().text());
+    assert.equal((await result.json()).complete,expected);
+  }
+  assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE collection_id='messages'").get().n,2);
+  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,2);
+  const pushes=[];
+  const send=async(_env,_db,actor,target,data,event)=>{
+    pushes.push({actor,target,data,event});
+    return {status:target==='alice' && pushes.filter(p=>p.target==='alice').length===1?503:200};
+  };
+  const now=Date.now()+1;
+  await drainBroadcastPush(env,now,send);
+  assert.equal(pushes.length,2);
+  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,1);
+  await drainBroadcastPush(env,now+300000,send);
+  assert.equal(pushes.filter(p=>p.target==='alice').length,2);
+  assert.equal(pushes.find(p=>p.target==='alice').data.chatId,'team_alice');
+  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,0);
+  const inbox='/v1/firestore/document?path=notifications/broadcast_job_alice';
+  assert.equal((await call('cara',inbox)).status,403);
+  assert.equal((await (await call('alice',inbox)).json()).data.fromUserId,'friendbook_team');
+  const team='/v1/firestore/document?path=chats/team_alice';
+  assert.equal((await (await call('alice',team)).json()).data.unreadCount.alice,1);
+  assert.equal((await call('alice',team,'PATCH',{fields:{unreadCount:{alice:0}}})).status,200);
+  assert.equal((await call('alice',team,'PATCH',{fields:{participantNames:{friendbook_team:'fake'}}})).status,403);
+  sql.close();
+});
+
+test('chat membership migration backfills both stores and maintains indexed lookups', () => {
+  const sql=new DatabaseSync(':memory:');
+  for (const ddl of [appSchema,schema]) sql.exec(ddl);
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  legacy.run('chats/old','chats','old','alice',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'alice'}, 'malformed']}}}}),1);
+  sql.exec(readFileSync(new URL('../migrations/0040_chat_participant_lookup.sql',import.meta.url),'utf8'));
+  const byUser=sql.prepare('SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=?');
+  assert.deepEqual(byUser.all('alice').map(r=>r.chat_path),['chats/old']);
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  insert.run('chats/new','chats','chats','new','alice','{"participants":["alice","bob"]}',1,1);
+  assert.equal(byUser.get('bob').chat_path,'chats/new');
+  sql.exec(`UPDATE friendbook_cf_firestore_documents SET document_json='{"participants":["alice"]}' WHERE path='chats/new'`);
+  assert.equal(byUser.get('bob'),undefined);
+  sql.exec("DELETE FROM friendbook_cf_firestore_documents WHERE path='chats/new'");
+  assert.deepEqual(byUser.all('alice').map(r=>r.chat_path),['chats/old']);
+  assert.match(sql.prepare('EXPLAIN QUERY PLAN SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=?').get('alice').detail,/SEARCH.*PRIMARY KEY/);
+  sql.close();
+});
+
+test('indexed tag search observes private posts, canonical precedence and edits', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema]) sql.exec(ddl);
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  legacy.run('users/alice','users','alice','alice','{"displayName":"Alice"}',1);
+  legacy.run('users/bob','users','bob','bob','{"displayName":"Bob"}',1);
+  for(const [id,content,privacy] of [['visible','#دوستی @Alice','Public'],['private','#دوستی @Alice','Only me'],['prefix','@Alice2','Public'],['shadow','@Alice','Public']]) {
+    legacy.run(`posts/${id}`,'posts',id,'alice',JSON.stringify({authorId:'alice',createdAt:1,content,privacy}),1);
+  }
+  sql.exec(readFileSync(new URL('../migrations/0041_post_tag_search.sql',import.meta.url),'utf8'));
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('posts/shadow','posts','posts','shadow','alice','{"authorId":"alice","createdAt":1,"content":"no tag"}',1,1);
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+  const app=createWorker(async()=> 'bob');
+  const search=async postTag=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',postTag,limit:10})}),{DB:db,FIREBASE_PROJECT_ID:'test'});
+    assert.equal(response.status,200,await response.clone().text());
+    return (await response.json()).documents.map(d=>d.path);
+  };
+  assert.deepEqual(await search('@alice'),['posts/visible']);
+  assert.deepEqual(await search('#دوستی'),['posts/visible']);
+  sql.exec(`UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.content','@Carol') WHERE path='posts/visible'`);
+  assert.deepEqual(await search('@alice'),[]);
+  assert.deepEqual(await search('@carol'),['posts/visible']);
+  sql.close();
+});
+
+test('referral attribution is single-use and only the inviter can read their own count', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0046_referral_attribution.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const now=Date.now();
+  for(const [uid,time] of [['new',now],['alice',1],['bob',1],['old',1]]) put.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({displayName:uid}),time,time);
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test',PAYMENT_ADMIN_UIDS:'admin'};
+  const call=(uid,path,body)=>app.fetch(new Request(`https://example.test${path}`,{method:body?'POST':'GET',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const claim=(uid,inviter)=>call(uid,'/v1/firestore/claim-referral',{inviter});
+  assert.equal((await claim('new','new')).status,400);
+  assert.equal((await claim('old','alice')).status,403);
+  const first=await claim('new','alice');assert.equal(first.status,201,await first.clone().text());
+  assert.equal((await claim('new','alice')).status,200);
+  assert.equal((await claim('new','bob')).status,409);
+  const count='/v1/firestore/count?parent=referrals&filters='+encodeURIComponent(JSON.stringify([{field:'refBy',op:'==',value:'alice'}]));
+  assert.equal((await call('bob',count)).status,403);
+  assert.equal((await (await call('alice',count)).json()).count,1);
+  assert.equal((await call('alice','/v1/firestore/query',{parent:'referrals'})).status,403);
+  assert.equal((await (await call('admin','/v1/firestore/query',{parent:'referrals'})).json()).documents.length,1);
   sql.close();
 });

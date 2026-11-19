@@ -68,13 +68,13 @@ test('scheduled maintenance prunes bounded expired rows and retains the presence
   for (let i=0;i<101;i++) typing.run('room','alice',String(i),1,1);
   typing.run('room','bob','fresh',1,now);
   const alarms=[];
-  await runMaintenance({DB:db()},{now,videoCleanup:async()=>{throw new Error('private details');},report:v=>alarms.push(JSON.parse(v))});
+  await runMaintenance({DB:db()},{now,broadcastPush:async()=>{},videoCleanup:async()=>{throw new Error('private details');},report:v=>alarms.push(JSON.parse(v))});
   assert.deepEqual(alarms,[{event:'friendbook.maintenance_failed',job:'temporary-video'}]);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions').get().n,2);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_presence_sessions').get().n,2);
   assert.equal((await readPresence(db(),'alice',now)).online,true);
   assert.deepEqual(await readPresence(db(),'bob',now),{uid:'bob',online:false,lastSeen:0});
-  await runMaintenance({DB:db()},{now,videoCleanup:async()=>{},report:()=>assert.fail('unexpected maintenance error')});
+  await runMaintenance({DB:db()},{now,broadcastPush:async()=>{},videoCleanup:async()=>{},report:()=>assert.fail('unexpected maintenance error')});
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions').get().n,1);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions WHERE updated_at=?').get(now).n,1);
   sql.close();

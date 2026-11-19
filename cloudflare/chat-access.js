@@ -51,6 +51,14 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
   const id=chatIdFor(path,before || after);
   if (id === null) return true;
   if (!id) return false;
+  if (id.startsWith('team_')) {
+    if (parts[0]==='chats' && parts.length===2) {
+      // Clients must not reserve Team room IDs or change the official identity.
+      return !!before && !!after && member(before,uid) && sameExcept(before,after,new Set(['unreadCount']));
+    }
+    // Team conversations are read-only, except normal delivery/read receipts.
+    if (!before) return false;
+  }
   if (parts[0] === 'chats' && parts.length === 2) {
     if (!before) {
       if (!after || !member(after,uid) || !validList(after.participants)) return false;
