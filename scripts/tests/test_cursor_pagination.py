@@ -4,7 +4,7 @@ ROOT=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class CursorContracts(unittest.TestCase):
     def test_pager_closes_and_does_not_advance_failed_or_offline_cursor(self):
         code=(ROOT/'core/CursorPager.java').read_text()
-        for token in ['page.startAfter(cursor)','page.limit(size).get()','Objects.equals(actor,Fb.uid())','if(!offline && !result.isEmpty())cursor=', 'public void close(){closed=true;}','LruCache<>(24)']:
+        for token in ['page.startAfter(cursor)','page.limit(size).get()','Objects.equals(actor,Fb.uid())','if(!offline && !result.isEmpty())cursor=', 'public void close(){closed=true;requestGeneration++;','timeoutHandler.postDelayed(timeout,20000L)','request!=requestGeneration','LruCache<>(24)']:
             self.assertIn(token,code)
         self.assertNotIn('cursor=',code.split('.addOnFailureListener',1)[1])
     def test_requested_list_pages_and_controls(self):

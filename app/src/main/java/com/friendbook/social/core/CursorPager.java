@@ -21,6 +21,9 @@ public final class CursorPager {
     private final LinkedHashMap<String,DocumentSnapshot> records=new LinkedHashMap<>();
     private DocumentSnapshot cursor;
     private boolean more=true,loading,closed,serverReceived;
+    private int requestGeneration;
+    private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable timeout;
     public CursorPager(Query query,int size,String key,Listener listener) {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
@@ -37,8 +40,11 @@ public final class CursorPager {
     public void next() {
         if(closed || loading || !more || !Objects.equals(actor,Fb.uid())) return;
         loading=true;if(cursor!=null || records.isEmpty())emit("");Query page=query;if(cursor!=null)page=page.startAfter(cursor);
+        final int request=++requestGeneration;
+        timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
+        timeoutHandler.postDelayed(timeout,20000L);
         page.limit(size).get().addOnSuccessListener(result -> {
-            if(!active())return;loading=false;serverReceived=true;
+            if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;serverReceived=true;
             boolean offline=result.getMetadata().isFromCache();
             if(!offline)more=result.size()==size;
             // An offline cache can be incomplete or empty; it cannot prove that
@@ -52,7 +58,7 @@ public final class CursorPager {
                 CACHE.put(key,new CachedPage(first,records.size()>size || more));
             }
             emit(offline?"Showing cached results. Reconnect and tap to retry.":"");
-        }).addOnFailureListener(error -> {if(active()){loading=false;emit("Couldn't load this page. Tap to retry.");}});
+        }).addOnFailureListener(error -> {if(active() && request==requestGeneration){timeoutHandler.removeCallbacks(timeout);loading=false;emit("Couldn't load this page. Tap to retry.");}});
     }
     private boolean active(){return !closed && Objects.equals(actor,Fb.uid());}
     private void emit(String error){
@@ -68,5 +74,5 @@ public final class CursorPager {
     }
     public void forget(String id){records.remove(id);CACHE.remove(key);}
     public boolean hasMore(){return more;}
-    public void close(){closed=true;}
+    public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);}
 }

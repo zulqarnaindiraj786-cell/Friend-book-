@@ -921,7 +921,26 @@ async function acceptFriendBatch(db, uid, ops, now) {
   }
   const [low,high]=[uid,other].sort();
   const ledger=db.prepare('INSERT INTO friendbook_cf_trusted_friendships(uid_low,uid_high,friend_path) VALUES (?,?,?)').bind(low,high,prior?.path||friendOp.path);
-  await db.batch([...guards,ledger,...writes,db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+  // Older clients could create several identical pending requests. Accepting one
+  // is a recipient-authorized decision for the same sender/recipient pair, so
+  // resolve those duplicates in the same transaction without deleting history.
+  const duplicateCanonical=db.prepare(`UPDATE friendbook_cf_firestore_documents SET
+    document_json=json_set(document_json,'$.status','accepted'),update_time=?
+    WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=?
+      AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.status')='pending'`).bind(now,other,uid);
+  const duplicateLegacy=db.prepare(`UPDATE friendbook_cf_documents AS a SET
+    document_json=CASE WHEN json_type(document_json,'$.fields')='object'
+      THEN json_set(document_json,'$.fields.status.stringValue','accepted')
+      ELSE json_set(document_json,'$.status','accepted') END, updated_at=?
+    WHERE collection='friend_requests'
+      AND COALESCE(json_extract(document_json,'$.fields.fromUid.stringValue'),json_extract(document_json,'$.fromUid'))=?
+      AND COALESCE(json_extract(document_json,'$.fields.toUid.stringValue'),json_extract(document_json,'$.toUid'))=?
+      AND COALESCE(json_extract(document_json,'$.fields.status.stringValue'),json_extract(document_json,'$.status'))='pending'
+      AND (NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+        OR EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path
+          AND json_extract(f.document_json,'$.fromUid')=? AND json_extract(f.document_json,'$.toUid')=?
+          AND json_extract(f.document_json,'$.status')='accepted'))`).bind(now,other,uid,other,uid);
+  await db.batch([...guards,ledger,...writes,duplicateCanonical,duplicateLegacy,db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
   return json({ok:true,operations:ops.length});
 }
 
@@ -1702,10 +1721,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
             AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
             AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
             AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending')
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='friend_requests'
-            AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
-            AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
-            AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending')
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents a WHERE a.collection='friend_requests'
+            AND COALESCE(json_extract(a.document_json,'$.fromUid'),json_extract(a.document_json,'$.fields.fromUid.stringValue'))=?
+            AND COALESCE(json_extract(a.document_json,'$.toUid'),json_extract(a.document_json,'$.fields.toUid.stringValue'))=?
+            AND COALESCE(json_extract(a.document_json,'$.status'),json_extract(a.document_json,'$.fields.status.stringValue'))='pending'
+            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path))
           THEN 1 ELSE 0 END`).bind(uid,next.toUid,uid,next.toUid);
         try {
           await db.batch([

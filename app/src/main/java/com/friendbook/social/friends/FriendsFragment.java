@@ -215,19 +215,24 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         List<String> unchecked=new ArrayList<>();for(Models.User u:suggestions)if(!checkedCandidates.contains(u.uid) && !checkingUsers.contains(u.uid) && !failedCandidates.contains(u.uid))unchecked.add(u.uid);
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
+            frameHandler.postDelayed(()->{
+                if(current(token,me) && checkingUsers.containsAll(ids)){
+                    checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+                }
+            },20000L);
             List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
             com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(20).get();
             com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(20).get();
             com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(20).get();
             com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
-                if(!current(token,me))return;checkingUsers.removeAll(ids);
+                if(!current(token,me) || !checkingUsers.containsAll(ids))return;checkingUsers.removeAll(ids);
                 com.friendbook.social.d1.documents.QuerySnapshot a=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(0),b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
                 // Saturated legacy duplicate data is not evidence that other candidates have no relationship.
                 if(a.getMetadata().isFromCache() || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || a.size()==20 || b.size()==20 || c.size()==20){failedCandidates.addAll(ids);requestRender();return;}
                 for(DocumentSnapshot doc:a)for(String other:Models.ChatRoom.fromDoc(doc).participants)if(!other.equals(me))candidateFriends.add(other);
                 for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
                 checkedCandidates.addAll(ids);requestRender();
-            }).addOnFailureListener(error->{if(current(token,me)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
+            }).addOnFailureListener(error->{if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
         }
     }
 
@@ -397,8 +402,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         batch.update(Fb.db().collection("users").document(from), "friendsCount", FieldValue.increment(1));
         batch.commit().addOnSuccessListener(x -> {
             if(!me.equals(Fb.uid()) || getActivity()==null)return;
+            // The server atomically resolves historical duplicates from the same sender.
+            for(Models.FriendRequest duplicate:new ArrayList<>(incoming))if(from.equals(duplicate.fromUid))removeRequestOptimistic(duplicate.id);
             Notify.send(from, "friend_accept", "accepted your friend request");
             Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
+            startSection();
         }).addOnFailureListener(error->{if(me.equals(Fb.uid()) && getActivity()!=null){dismissedReqIds.remove(rid);friendIds.remove(from);candidateFriends.remove(from);Ui.toast(getActivity(),"Couldn't confirm. Try again.");startSection();}});
     }
 

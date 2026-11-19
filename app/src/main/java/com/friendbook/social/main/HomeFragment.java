@@ -701,6 +701,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 :query.orderBy(com.friendbook.social.d1.documents.FieldPath.documentId());
         feedQuery=query;
         final Query first=query.limit(PAGE);
+        // A queued or stalled request must not leave pull-to-refresh spinning forever.
+        engagementHandler.postDelayed(()->{
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
+            feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
+            if(getActivity()!=null)Ui.toast(getActivity(),"Feed is taking too long — pull down to retry");
+        },20000L);
         if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
             if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty())
                 consumePostsSnapshot(cache.getDocuments(),ordered,false);
@@ -949,7 +955,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             return;
         }
         pageError=false;loadingPosts=true;updatePagingUi();
-        final int generation=feedGeneration; final String actor=feedAccount;
+        final int generation=++feedGeneration; final String actor=feedAccount;
+        engagementHandler.postDelayed(()->{
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
+            feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
+        },20000L);
         feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             loadingPosts=false;

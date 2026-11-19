@@ -10,7 +10,7 @@ class FriendsCursorPages(unittest.TestCase):
         self.assertNotIn('addSnapshotListener',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['offset+=10','FriendCandidatePages.pairs(me,ids)','Tasks.whenAllSuccess','a.getMetadata().isFromCache()','a.size()==20','if(!current(token,me))return','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
+        for token in ['offset+=10','FriendCandidatePages.pairs(me,ids)','Tasks.whenAllSuccess','a.getMetadata().isFromCache()','a.size()==20','if(!current(token,me) || !checkingUsers.containsAll(ids))return','},20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
             self.assertIn(token,code)
     def test_action_targets_and_account_guards(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()

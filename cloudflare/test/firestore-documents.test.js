@@ -492,6 +492,11 @@ test('friend acceptance commits only a recipient-authorized pending request once
   assert.equal(await hasD1Friendship(db,'alice','bob'),null);
   const created=await call('alice','/v1/firestore/document?parent=friend_requests','POST',{data:{fromUid:'alice',toUid:'bob',status:'pending'}});
   const {id}=await created.json();
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  legacy.run('friend_requests/olddup','friend_requests','olddup','alice',JSON.stringify({fields:{fromUid:{stringValue:'alice'},toUid:{stringValue:'bob'},status:{stringValue:'pending'},fromUserName:{stringValue:'A'}}}),1);
+  legacy.run('friend_requests/unrelated','friend_requests','unrelated','mallory',JSON.stringify({fromUid:'mallory',toUid:'bob',status:'pending'}),1);
+  legacy.run('friend_requests/shadow','friend_requests','shadow','alice',JSON.stringify({fromUid:'alice',toUid:'bob',status:'pending'}),1);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('friend_requests/shadow','friend_requests','friend_requests','shadow','mallory',JSON.stringify({fromUid:'mallory',toUid:'bob',status:'pending'}),1,1);
   const ops=[{op:'update',path:`friend_requests/${id}`,updates:{status:'accepted'}},
     {op:'set',path:'friends/random1',data:{participants:['bob','alice'],createdAt:{__fieldValue:'serverTimestamp'}}},
     ...['bob','alice'].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:1}}}))];
@@ -504,6 +509,10 @@ test('friend acceptance commits only a recipient-authorized pending request once
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/alice').document_json).friendsCount,1);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').document_json).friendsCount,1);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`friend_requests/${id}`).document_json).status,'accepted');
+  const duplicate=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('friend_requests/olddup').document_json);
+  assert.equal(duplicate.fields.status.stringValue,'accepted'); assert.equal(duplicate.fields.fromUserName.stringValue,'A');
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('friend_requests/unrelated').document_json).status,'pending');
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('friend_requests/shadow').document_json).status,'pending','a conflicting canonical document must not authorize updating a shadowed row');
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:ops})).status,403);
   const second=await call('alice','/v1/firestore/document?parent=friend_requests','POST',{data:{fromUid:'alice',toUid:'bob',status:'pending'}});
   const secondId=(await second.json()).id;

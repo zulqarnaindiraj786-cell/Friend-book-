@@ -10,6 +10,12 @@ class IntermittentDataTests(unittest.TestCase):
   self.assertIn('if (snap.getMetadata().isFromCache()) return; // a partial cache',s)
   self.assertGreaterEqual(s.count('if (snap == null || snap.getMetadata().isFromCache()) return;'),2)
   self.assertIn('Math.max(user.followerCount, user.friendsCount)',s)
+ def test_feed_and_candidate_timeouts_ignore_stale_callbacks(self):
+  home=(ROOT/'main/HomeFragment.java').read_text()
+  friends=(ROOT/'friends/FriendsFragment.java').read_text()
+  self.assertGreaterEqual(home.count('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();'),2)
+  self.assertIn('if(!current(token,me) || !checkingUsers.containsAll(ids))return;',friends)
+  self.assertIn('checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();',friends)
  def test_reel_engagement_refreshes_visible_item_without_recursive_cached_render(self):
   reactions=(ROOT/'post/D1Reactions.java').read_text()
   reels=(ROOT/'reels/ReelsFragment.java').read_text()
