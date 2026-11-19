@@ -472,8 +472,8 @@ public class D1DocumentStore {
         return cached;
     }
 
-    void cacheQuery(String key, String json) {
-        queryCache.put(key, json);
+    synchronized void cacheQuery(String key, String json) {
+        if (json.equals(queryCache.put(key, json))) return;
         while (queryCache.size() > 32) {
             String evict = queryCache.keySet().iterator().next();
             queryCache.remove(evict);

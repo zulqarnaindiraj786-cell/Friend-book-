@@ -47,13 +47,17 @@ final class D1DocumentTransport {
     static JSONObject request(String method, String pathAndQuery, JSONObject body) throws Exception {
         String actor=REQUEST_ACTOR.get();
         if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
-        try { return requestOnce(method,pathAndQuery,body,actor,false); }
+        JSONObject response;
+        try { response=requestOnce(method,pathAndQuery,body,actor,false); }
         catch (D1DocumentStoreException error) {
             if (error.getCode()!=D1DocumentStoreException.Code.UNAUTHENTICATED) throw error;
             // Worker authenticates before touching D1. Retry a rejected token once,
             // without replaying successful or ambiguous writes.
-            return requestOnce(method,pathAndQuery,body,actor,true);
+            response=requestOnce(method,pathAndQuery,body,actor,true);
         }
+        if (!"GET".equals(method) && !"/v1/firestore/query".equals(pathAndQuery)
+                && !pathAndQuery.startsWith("/v1/firestore/count?")) READ_EPOCH.incrementAndGet();
+        return response;
     }
 
     private static JSONObject requestOnce(String method,String pathAndQuery,JSONObject body,String actor,boolean refresh) throws Exception {
@@ -115,13 +119,14 @@ final class D1DocumentTransport {
         return android.net.Uri.encode(s);
     }
 
+    private static final java.util.concurrent.atomic.AtomicLong READ_EPOCH = new java.util.concurrent.atomic.AtomicLong();
     private static final ReadCoalescer READS = new ReadCoalescer();
 
     private static JSONObject read(String method, String path, JSONObject body) throws Exception {
         String actor=REQUEST_ACTOR.get();
         if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
         requireActor(actor);
-        String key=actor+"\n"+method+"\n"+path+"\n"+(body==null?"":body.toString());
+        String key=READ_EPOCH.get()+"\n"+actor+"\n"+method+"\n"+path+"\n"+(body==null?"":body.toString());
         String response=READS.read(key, () -> request(method,path,body).toString());
         requireActor(actor);
         return new JSONObject(response); // Never share mutable JSON across consumers.
