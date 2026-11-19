@@ -75,8 +75,9 @@ export async function presenceRealtime(request, env, identity) {
     let chatId;
     try { chatId = decodeURIComponent(typing[1]); } catch { return json({ error: 'Invalid chat' }, 400); }
     if (!validId(chatId)) return json({ error: 'Invalid chat' }, 400);
+    let room;
     try {
-      const room = await loadChat(env.DB, chatId);
+      room = await loadChat(env.DB, chatId);
       if (!Array.isArray(room?.participants) || !room.participants.includes(uid)) return json({ error: 'Forbidden' }, 403);
     } catch { return json({ error: 'Presence unavailable' }, 503); }
     const now = Date.now();
@@ -92,18 +93,15 @@ export async function presenceRealtime(request, env, identity) {
           WHERE excluded.updated_at>friendbook_cf_typing_sessions.updated_at
           OR (excluded.updated_at=friendbook_cf_typing_sessions.updated_at AND friendbook_cf_typing_sessions.typing=1 AND excluded.typing=0)`)
           .bind(chatId,uid,session,body.typing?1:0,now).run();
-        if (Math.random()<0.01) {
-          try { await env.DB.prepare('DELETE FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid=? AND updated_at<?')
-            .bind(chatId,uid,now-7*24*60*60*1000).run(); } catch { /* best-effort cleanup */ }
-        }
         return json({ chatId, typing: body.typing });
       } catch { return json({error:'Typing unavailable'},503); }
     }
     if (request.method === 'GET') {
       try {
-        const row=await env.DB.prepare('SELECT 1 AS active FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=? LIMIT 1')
-          .bind(chatId,uid,now-TYPING_TTL_MS,now).first();
-        return json({ chatId, typing: Boolean(row?.active) });
+        const rows=await env.DB.prepare('SELECT DISTINCT uid FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=?')
+          .bind(chatId,uid,now-TYPING_TTL_MS,now).all();
+        const members = new Set(room.participants);
+        return json({ chatId, typing: rows.results.some(row => members.has(row.uid)) });
       } catch { return json({error:'Typing unavailable'},503); }
     }
     return json({ error: 'Method not allowed' }, 405);
@@ -116,9 +114,8 @@ export async function presenceRealtime(request, env, identity) {
     const [client, server] = Object.values(pair);
     server.accept();
     const state = { uid, session: crypto.randomUUID(), active: true, visible: true, lastSeen: Date.now(), lastWrite: 0, lastMessage: 0 };
-    // Bounded per-account cleanup; never remove a potentially fresh session.
-    env.DB.prepare('DELETE FROM friendbook_cf_presence_sessions WHERE uid=? AND last_seen<?')
-      .bind(uid,state.lastSeen-7*24*60*60*1000).run().catch(() => {});
+    // Scheduled maintenance compacts old sessions without deleting the last
+    // canonical row, even if this socket's first write fails.
     writePresence(env.DB, uid, state.session, true, true, state.lastSeen).then(() => { state.lastWrite = state.lastSeen; }).catch(() => {});
 
     server.addEventListener('message', async event => {

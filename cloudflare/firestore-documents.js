@@ -1,3 +1,4 @@
+import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
@@ -232,7 +233,7 @@ function applySet(existing, data, merge, mergeFields, now) {
 }
 function ownerOf(doc, fallback) {
   const d = doc || {};
-  const v = d.authorId || d.uid || d.senderId || d.from || d.toUserId || d.toUid || d.userId || d.creatorId || d.hostId;
+  const v = d.authorId || d.uid || d.senderId || d.from || d.toUserId || d.toUid || d.userId || d.creatorId || d.hostId || d.ownerId;
   return typeof v === 'string' && v ? v : (fallback || '');
 }
 
@@ -596,6 +597,11 @@ function valuesEqual(a, b) {
   if (typeof a === 'object') return JSON.stringify(a) === JSON.stringify(b);
   return a === b;
 }
+const FILTER_OPERATORS = new Set(['==','!=','<','<=','>','>=','in','array-contains','array-contains-any']);
+function validQueryFilters(filters) {
+  return Array.isArray(filters) && filters.every(filter => filter && typeof filter.field === 'string'
+    && filter.field.length > 0 && FILTER_OPERATORS.has(filter.op) && Object.hasOwn(filter,'value'));
+}
 function matchesFilter(doc, filter, docId) {
   const field = filter.field;
   const op = filter.op;
@@ -731,6 +737,7 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
     return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`) ? docs : [];
   }
+  if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return await authorizeLiveRoom(db,parts[1],uid) ? docs : [];
   const allowed=new Array(docs.length).fill(false);
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
@@ -1457,6 +1464,55 @@ async function recoverLegacySocial(request,env,uid,now) {
   } catch { return json({error:'Recovery changed or unavailable'},409); }
 }
 
+async function createLiveChat(db, roomId, uid, input, now) {
+  const path=`lives/${roomId}`;
+  const roomRow=await readRow(db,path);
+  if (!roomRow || !await authorizeLiveMedia(db,roomId,uid,'watch')) return json({error:'Forbidden'},403);
+  const room=decodeValue(JSON.parse(roomRow.document_json));
+  const type=input?.type;
+  const text=typeof input?.text==='string' ? input.text.trim() : '';
+  const host=room.hostId===uid;
+  const mod=Array.isArray(room.moderatorIds) && room.moderatorIds.includes(uid);
+  if (!['chat','qa','reaction','system'].includes(type) || !text || text.length>500 || input.uid!==uid) return json({error:'Invalid live message'},400);
+  if (room.status!=='live' || (type==='system' && !host && !mod) || (!host && !mod && (
+      (type==='chat' && room.commentsEnabled===false) || (type==='qa' && room.qaEnabled===false)
+      || (Array.isArray(room.mutedUserIds) && room.mutedUserIds.includes(uid))))) return json({error:'Forbidden'},403);
+  if (type==='reaction' && text.length>16) return json({error:'Invalid reaction'},400);
+  const blocked=typeof room.blockedKeywords==='string' ? room.blockedKeywords.split(',').map(v=>v.trim().toLowerCase()).filter(Boolean) : [];
+  if (['chat','qa'].includes(type) && blocked.some(word=>text.toLowerCase().includes(word))) return json({error:'Message blocked'},403);
+  const profile=await readRow(db,`users/${uid}`);
+  if (!profile) return json({error:'Forbidden'},403);
+  const actor=decodeValue(JSON.parse(profile.document_json));
+  const message={type,text,uid,name:typeof actor.displayName==='string'?actor.displayName.slice(0,200):'',
+    photo:typeof actor.photoUrl==='string'?actor.photoUrl.slice(0,2048):'',isHost:host,isMod:mod,createdAt:now,createdAtMs:now};
+  const parent=`${path}/chat`, id=autoId(), docPath=`${parent}/${id}`;
+  const statements=[await chatDocumentGuard(db,path,roomRow)];
+  if (room.slowMode===true && !host && !mod && ['chat','qa'].includes(type)) {
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
+      SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path=? AND owner_uid=? AND create_time>?
+        AND json_extract(document_json,'$.type') IN ('chat','qa')
+    ) THEN 1 ELSE 0 END`).bind(parent,uid,now-5000));
+  }
+  if (type==='reaction') {
+    const likes=(Number.isSafeInteger(room.likesCount) && room.likesCount>=0 ? room.likesCount : 0)+1;
+    const canonical=JSON.stringify({...room,likesCount:likes});
+    const mirror=JSON.stringify({...room,likesCount:likes,id:roomId});
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+      VALUES (?,'lives','lives',?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json,update_time=excluded.update_time`)
+      .bind(path,roomId,room.hostId,canonical,roomRow.create_time||now,now),db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+      VALUES (?,'lives',?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json,updated_at=excluded.updated_at`)
+      .bind(path,roomId,room.hostId,mirror,now));
+  }
+  statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+    VALUES (?,?,?,?,?,?,?,?)`).bind(docPath,parent,'chat',id,uid,JSON.stringify(message),now,now),db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
+  try { await db.batch(statements); }
+  catch (error) {
+    if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'Room changed or slow mode is active'},409);
+    throw error;
+  }
+  return json({exists:true,id,path:docPath,parent,collection:'chat',data:message,createTime:now,updateTime:now},201);
+}
+
 export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -1504,7 +1560,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
-    if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
+    try {
+      if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
+    } catch { return json({error:'Chat access unavailable'},503); }
     let view;
     try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }
     catch { return json({error:'Read unavailable'},503); }
@@ -1555,7 +1613,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
-      const row = await writeRow(db, docPath, next, now, existing, splitPath(docPath)[0]==='stories');
+      const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
     } catch (e) {
       return json({ error: e.message === 'Document too large' ? 'Document too large' : 'Write unavailable' }, e.message === 'Document too large' ? 413 : 503);
@@ -1590,7 +1648,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
-      const row = await writeRow(db, docPath, next, now, existing, splitPath(docPath)[0]==='stories');
+      const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
     } catch {
       return json({ error: 'Update unavailable' }, 503);
@@ -1643,7 +1701,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       try { const row=await readRow(db,docPath); if (row && decodeValue(JSON.parse(row.document_json))?.groupId) return await writeGroupPost(db,uid,docPath,row,null,now); }
       catch { return json({error:'Post changed or unavailable'},409); }
     }
-    if (['notifications','users','pushDevices','chats','messages','posts','reels','stories'].includes(splitPath(docPath)?.[0])) {
+    if (['notifications','users','pushDevices','chats','messages','posts','reels','stories','events','pages','lives'].includes(splitPath(docPath)?.[0])) {
       let existing;
       try { existing = await readRow(db, docPath); }
       catch { return json({ error: 'Read unavailable' }, 503); }
@@ -1652,7 +1710,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!existing || !notificationWriteAllowed(docPath, uid, before, null) || !profileWriteAllowed(docPath, uid, before, null) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, before, null)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) { try { return await writeChatMessage(db,docPath,null,now,existing,chatAuth,uid,true); } catch { return json({error:'Message changed or unavailable'},503); } }
       if (splitPath(docPath)[0]==='chats' && splitPath(docPath).length===2) { try { return await deleteChatRoot(db,docPath,existing); } catch { return json({error:'Group changed or unavailable'},503); } }
-      if (['posts','reels','stories'].includes(splitPath(docPath)[0])) {
+      if (['posts','reels','stories','events','pages','lives'].includes(splitPath(docPath)[0])) {
         if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
         try {
           const guard=await chatDocumentGuard(db,docPath,existing);
@@ -1683,6 +1741,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
+    const liveChat=/^lives\/([^/]+)\/chat$/.exec(parent);
+    if (liveChat) {
+      try { return await createLiveChat(db,liveChat[1],uid,body?.data,now); }
+      catch { return json({error:'Live chat unavailable'},503); }
+    }
     if (parent === 'friends') return json({error:'Forbidden'},403);
     const id = autoId();
     const docPath = `${parent}/${id}`;
@@ -1745,7 +1808,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (!notificationWriteAllowed(docPath, uid, null, next) || !profileWriteAllowed(docPath, uid, null, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, null, next)) return json({ error: 'Forbidden' }, 403);
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,null,chatAuth,uid);
       if (parent === 'chats') return await writeChatRoot(db,docPath,next,now,null,uid);
-      const row = await writeRow(db, docPath, next, now, null, parent==='stories');
+      const row = await writeRow(db, docPath, next, now, null, ['stories','events','pages','lives'].includes(parent));
       return json(rowToDocument(row), 201);
     } catch {
       return json({ error: 'Write unavailable' }, 503);
@@ -1756,11 +1819,16 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
   if (path === '/v1/firestore/query' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
+    if (body?.filters !== undefined && !validQueryFilters(body.filters)) return json({error:'Invalid filters'},400);
     const parent = body?.parent || '';
     if (!isCollectionPath(parent)) return json({ error: 'Invalid parent' }, 400);
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
+    if (parts?.length===3 && parts[0]==='lives') {
+      try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
+      catch { return json({error:'Live chat unavailable'},503); }
+    }
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
@@ -1817,12 +1885,18 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (!supportedCollectionPath(parent)) return json({error:'Forbidden'},403);
     if (['reports','feedback'].includes(parent) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     const parts = splitPath(parent);
+    if (parts?.length===3 && parts[0]==='lives') {
+      try { if (!await authorizeLiveRoom(db,parts[1],uid)) return json({error:'Forbidden'},403); }
+      catch { return json({error:'Live chat unavailable'},503); }
+    }
     if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
       try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
       catch { return json({error:'Chat access unavailable'},503); }
     }
     let filters = [];
-    try { filters = JSON.parse(url.searchParams.get('filters') || '[]'); } catch { filters = []; }
+    try { filters = JSON.parse(url.searchParams.get('filters') ?? '[]'); }
+    catch { return json({error:'Invalid filters'},400); }
+    if (!validQueryFilters(filters)) return json({error:'Invalid filters'},400);
     let rows;
     try { rows = await readCollectionRows(db, parent, uid, filters); }
     catch { return json({ error: 'Read unavailable' }, 503); }
@@ -1937,7 +2011,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       const statements = [];
       const roomPaths=order.filter(p=>splitPath(p).length===2 && splitPath(p)[0]==='chats');
       const messagePaths=order.filter(p=>chatAuths.get(p).roomPath);
-      const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels','stories'].includes(splitPath(p)[0]));
+      const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels','stories','events','pages','lives'].includes(splitPath(p)[0]));
       if ((roomPaths.length || messagePaths.length || guardedPaths.length) && typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
       for (const p of guardedPaths) statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
       for (const roomPath of roomPaths) {

@@ -86,3 +86,15 @@ D1 row, Firebase login or Cloudinary upload changes accompany this routing fix.
 See `docs/testing/hybrid-interactions.md` for the guarded likes/comments backend
 and its release blockers. Android remains on Firebase; do not enable the new
 flag merely because the Worker builds successfully. No production copy is run.
+
+### Local WebSocket smoke test
+
+From the repository root, run `npm ci`, then:
+
+```sh
+WRANGLER_SEND_METRICS=false npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
+npm install --prefix /tmp/friendbook-smoke --no-audit --no-fund miniflare@4
+MINIFLARE=/tmp/friendbook-smoke/node_modules/miniflare node cloudflare/test/live-runtime-smoke.cjs /tmp/friendbook-worker/worker.js
+```
+
+The smoke test uses fixture identities and a disposable Cloudflare runtime with D1 and a Durable Object. It verifies room creation, publisher/watcher access, forwarding both packet types, and denial after a broadcast ends. It does not validate Android codecs, Google Sign-In, or production configuration.

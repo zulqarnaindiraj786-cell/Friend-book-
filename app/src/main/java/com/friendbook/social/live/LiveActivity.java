@@ -303,6 +303,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private int myVotedOption = -1;
 
     // Listeners & Timers
+    private LiveRelayClient liveRelay;
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
     private ListenerRegistration pkBattleReg;
@@ -346,7 +347,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 hb.put("viewerIds", new ArrayList<>(activeViewerIds));
                 hb.put("viewerCount", Math.max(1, currentViewers));
                 hb.put("peakViewers", peakViewers);
-                hb.put("likesCount", totalLikes);
                 Fb.db().collection("lives").document(liveId).update(hb);
                 uiHandler.postDelayed(this, 8000L);
             }
@@ -1395,15 +1395,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         hostTopName.setText(hostNameStr);
 
         docRef.set(doc).addOnSuccessListener(unused -> {
-            setupRtdbFastLane();
-            attachRoomListeners();
-            // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
-            engine.startBroadcasting(true);
-            engine.startSpeakerPlayback();
-            uiHandler.post(durationTicker);
-            uiHandler.postDelayed(hostHeartbeatTask, 8000L);
-            postSystemChat(hostNameStr + " started a live video & voice broadcast!");
-            notifyFollowersGoingLive();
+            if (isFinishing() || isDestroyed() || isEnded) return;
+            openLiveRelay(true, () -> {
+                attachRoomListeners();
+                // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
+                engine.startBroadcasting(true);
+                engine.startSpeakerPlayback();
+                uiHandler.post(durationTicker);
+                uiHandler.postDelayed(hostHeartbeatTask, 8000L);
+                postSystemChat(hostNameStr + " started a live video & voice broadcast!");
+                notifyFollowersGoingLive();
+            });
         }).addOnFailureListener(e -> {
             // A rejected room creation is not a running broadcast. In particular,
             // onDestroy must not attempt to end a room that was never created.
@@ -1426,31 +1428,32 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // ==================== VIEWER JOINING REAL-TIME VIDEO + VOICE ROOM ====================
 
     private void joinExistingLiveAsViewer() {
-        isLiveStarted = true;
-        engine.startSpeakerPlayback();
-        setupRtdbFastLane();
-        attachRoomListeners();
-
-        // Update `viewers` (100% allowed by deployed firestore.rules!) + post join packet in `chat`!
-        viewerCountJoined = true;
-        Fb.db().collection("lives").document(liveId)
-                .update("viewers", FieldValue.increment(1));
-
-        Map<String, Object> joinPkt = new HashMap<>();
-        joinPkt.put("type", "join");
-        joinPkt.put("uid", Fb.uid());
-        joinPkt.put("name", Fb.myName());
-        joinPkt.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
-        joinPkt.put("text", "joined the live");
-        joinPkt.put("createdAtMs", System.currentTimeMillis());
-        joinPkt.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(joinPkt);
+        openLiveRelay(false, () -> {
+            isLiveStarted = true;
+            engine.startSpeakerPlayback();
+            attachRoomListeners();
+        });
     }
 
-    // ==================== DUAL-LANE STREAMING (RTDB FAST LANE + FIRESTORE GUARANTEED LANE) ====================
-
-    // Low-latency media signaling now uses the D1-backed snapshot lane below.
-    private void setupRtdbFastLane() { /* D1 snapshot listeners are installed by the reliable lane. */ }
+    private void openLiveRelay(boolean publish, Runnable ready) {
+        liveRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+            @Override public void ready() {
+                if (!isFinishing() && !isEnded) ready.run();
+            }
+            @Override public void packet(String kind, String data, long seq) {
+                if (isFinishing() || isDestroyed()) return;
+                if (kind.equals("video")) engine.decodeRemoteFrame(data, seq, false);
+                else engine.enqueueRemoteAudio(data, seq, false);
+            }
+            @Override public void disconnected() {
+                if (!isFinishing() && !isEnded) {
+                    Ui.toast(LiveActivity.this, "Live connection unavailable");
+                    finish();
+                }
+            }
+        });
+        liveRelay.open(liveId, publish);
+    }
 
     @Override
     public void onEncodedVideoFrame(String base64Webp, int width, int height) {
@@ -1458,21 +1461,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (isHost) {
             long seq = ++frameSeqOut;
             long now = System.currentTimeMillis();
-            if (rtdbStreamRef != null) {
-                Map<String, Object> fast = new HashMap<>();
-                fast.put("v", base64Webp);
-                fast.put("vs", seq);
-                fast.put("camOff", false);
-                rtdbStreamRef.updateChildren(fast);
-            }
-            // Guaranteed Firestore real-time stream (100% allowed for hostId == request.auth.uid!)
-            Map<String, Object> upd = new HashMap<>();
-            upd.put("liveFrameB64", base64Webp);
-            upd.put("frameSeq", seq);
-            upd.put("frameTs", now);
-            upd.put("cameraPaused", false);
-            upd.put("filterIndex", currentFilterIdx);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            if (liveRelay != null) liveRelay.send("video", base64Webp, seq);
 
             // Also publish to shared 2-User PK Battle Media Channel when PK is active!
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
@@ -1497,17 +1486,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if (isEnded || !isLiveStarted || liveId == null) return;
         if (isHost) {
             long seq = ++audioSeqOut;
-            if (rtdbStreamRef != null) {
-                Map<String, Object> fast = new HashMap<>();
-                fast.put("a", base64Ulaw);
-                fast.put("as", seq);
-                rtdbStreamRef.updateChildren(fast);
-            }
-            Map<String, Object> upd = new HashMap<>();
-            upd.put("audioB64", base64Ulaw);
-            upd.put("audioSeq", seq);
-            upd.put("audioLevel", voiceLevel);
-            Fb.db().collection("lives").document(liveId).update(upd);
+            if (liveRelay != null) liveRelay.send("audio", base64Ulaw, seq);
 
             if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
                 String sideKey = "B".equals(pkRole) ? "b" : "a";
@@ -1677,7 +1656,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
         totalStarsReceived = Math.max(Format.intOf(m, "stars"), Format.intOf(m, "totalStars"));
         int docLikes = Format.intOf(m, "likesCount");
-        if (docLikes > totalLikes) totalLikes = docLikes;
+        totalLikes = docLikes;
         if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
         hostTopSub.setText(Format.count(totalStarsReceived) + " Stars  ·  " + Format.count(totalLikes) + " Likes");
 
@@ -1810,8 +1789,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 activeViewerIds.remove(uid);
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
-                    totalLikes++;
-                    if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
                     if (!uid.equals(Fb.uid())) {
                         spawnFloatingEmoji(text.isEmpty() ? "heart" : text);
                     }
@@ -2409,12 +2386,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void sendHeartLike() {
         spawnFloatingEmoji("heart");
         spawnFloatingEmoji("heart");
-        totalLikes++;
-        if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
         if (liveId == null || isEnded) return;
-        // `likesCount` is explicitly allowed for any signed-in viewer in deployed firestore.rules!
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2431,8 +2403,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         spawnFloatingEmoji(emoji);
         if (liveId == null || isEnded) return;
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -3927,6 +3897,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     @Override
     protected void onDestroy() {
+        if (liveRelay != null) liveRelay.close();
         uiHandler.removeCallbacksAndMessages(null);
         if (liveDocReg != null) { liveDocReg.remove(); liveDocReg = null; }
         if (chatColReg != null) { chatColReg.remove(); chatColReg = null; }

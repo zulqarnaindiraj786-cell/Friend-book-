@@ -85,7 +85,7 @@ test('realtime presence routes require verified Firebase identity and return fre
       if (sql.includes('friendbook_cf_trusted_friendships')) return {friend_path:'friends/verified'};
       if (sql.includes('document_json')) return {document_json:JSON.stringify(id.startsWith('chats/') ? {participants:['verified-user','peer-1']} : {displayName:'User'})};
       return null;
-    } }; } };
+    }, all: async () => ({results: []}) }; } };
   } } };
   assert.equal((await call('/v1/presence/me', env)).status, 401);
   const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
@@ -100,4 +100,12 @@ test('realtime presence routes require verified Firebase identity and return fre
   const outsider = createWorker(async () => 'outsider');
   assert.equal((await call('/v1/presence/typing/room', env, { Authorization: 'Bearer test' }, 'GET', outsider)).status, 403);
   assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
+});
+
+test('Android public config keeps only its public boolean and rejects missing settings', async () => {
+  const response=await call('/v1/android-config',{ADS_ENABLED_V3:'false',OTHER_SETTING:'not public'});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ads_enabled_v3:false});
+  assert.equal((await call('/v1/android-config')).status,503);
+  assert.equal((await call('/v1/android-config',{}, {},'POST')).status,405);
 });

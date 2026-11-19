@@ -225,18 +225,7 @@ public class MainActivity extends Activity {
             notificationPermissionHandler.postDelayed(
                     () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
                     2000L);
-            try {
-                com.friendbook.social.d1.config.D1RemoteConfig rc =
-                        com.friendbook.social.d1.config.D1RemoteConfig.getInstance();
-                rc.setConfigSettingsAsync(new com.friendbook.social.d1.config.D1RemoteConfigSettings.Builder()
-                        .setMinimumFetchIntervalInSeconds(3600).build());
-                rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled_v3", true))
-                        .addOnCompleteListener(dt -> rc.fetchAndActivate().addOnCompleteListener(t -> {
-                            String raw = rc.getString("ads_enabled_v3");
-                            boolean allow = !"false".equalsIgnoreCase(raw == null ? "" : raw.trim());
-                            AdsConfig.setRemoteAllowed(allow);
-                        }));
-            } catch (Throwable ignored) { }
+            com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
         });
 

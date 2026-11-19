@@ -1504,13 +1504,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             default:
+                String requestActor = Fb.uid();
+                if (requestActor == null) return;
                 Map<String, Object> m = Fb.map(
-                        "fromUid", Fb.uid(), "toUid", uid,
+                        "fromUid", requestActor, "toUid", uid,
                         "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
                         "status", "pending", "createdAt", FieldValue.serverTimestamp());
                 Fb.db().collection("friend_requests").add(m).addOnSuccessListener(x -> {
+                    if (!requestActor.equals(Fb.uid()) || isFinishing()) return;
                     Notify.send(uid, "friend_request", "sent you a friend request");
                     Ui.toast(this, "Friend request sent ✓");
+                }).addOnFailureListener(e -> {
+                    if (requestActor.equals(Fb.uid()) && !isFinishing()) {
+                        Ui.toast(this, "Couldn't send friend request. Please retry.");
+                    }
                 });
                 break;
         }

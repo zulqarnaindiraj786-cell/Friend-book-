@@ -1592,3 +1592,129 @@ test('transient authorization reads never turn feed or chat data into empty succ
  fail=''; assert.equal((await (await chat()).json()).documents.length,1);
  sql.close();
 });
+
+test('unrecognized chat subcollections are denied without attempting to read or write their data', async () => {
+  const app = createWorker(async () => 'alice');
+  const env = {FIREBASE_PROJECT_ID:'friendbook-test', DB:{prepare(query) {
+    assert.match(query,/SELECT document_json/);
+    return {bind(path) { assert.equal(path,'users/alice'); return {first:async()=>null}; }};
+  }}};
+  const headers = {authorization:'Bearer token','content-type':'application/json'};
+  for (const [route, method, body] of [
+    ['document?path=chats/room/internal/item','GET'],
+    ['document?path=chats/room/internal/item','PUT',{data:{senderId:'alice'}}],
+    ['query','POST',{parent:'chats/room/internal'}],
+    ['count?parent=chats/room/internal','GET'],
+  ]) {
+    const result = await app.fetch(new Request(`https://example.test/v1/firestore/${route}`, {
+      method,headers,...(body ? {body:JSON.stringify(body)} : {}),
+    }),env);
+    assert.equal(result.status,403,`${method} ${route}`);
+  }
+});
+
+test('direct chat reads fail closed with a JSON 503 when membership lookup fails', async () => {
+  const app = createWorker(async () => 'alice');
+  const env = {FIREBASE_PROJECT_ID:'friendbook-test', DB:{prepare(query) {
+    return {bind(path) { return {first:async()=>{
+      if (path==='users/alice') return null;
+      assert.equal(path,'chats/room');
+      if (query.startsWith('SELECT document_json')) throw new Error('private storage diagnostic');
+      return {path,doc_id:'room',parent_path:'chats',collection_id:'chats',document_json:'{"participants":["alice","bob"]}'};
+    }}; }};
+  }}};
+  const response=await app.fetch(new Request('https://example.test/v1/firestore/document?path=chats/room',{
+    headers:{authorization:'Bearer token'},
+  }),env);
+  assert.equal(response.status,503);
+  assert.deepEqual(await response.json(),{error:'Chat access unavailable'});
+});
+
+test('query and count reject malformed filters rather than falling back to an unfiltered read', async () => {
+  const app = createWorker(async () => 'alice');
+  const env = {FIREBASE_PROJECT_ID:'friendbook-test',DB:{prepare() {
+    return {bind(path) { assert.equal(path,'users/alice'); return {first:async()=>null}; }};
+  }}};
+  const headers={authorization:'Bearer token','content-type':'application/json'};
+  const base='https://example.test/v1/firestore/';
+  for (const filters of [null,{},[null],[{field:'authorId',op:'invalid',value:'alice'}],[{field:'authorId',op:'=='}]]) {
+    const query=await app.fetch(new Request(base+'query',{method:'POST',headers,body:JSON.stringify({parent:'posts',filters})}),env);
+    assert.equal(query.status,400);
+    const count=await app.fetch(new Request(base+'count?parent=posts&filters='+encodeURIComponent(JSON.stringify(filters)),{headers}),env);
+    assert.equal(count.status,400);
+  }
+  const broken=await app.fetch(new Request(base+'count?parent=posts&filters=%5B',{headers}),env);
+  assert.equal(broken.status,400);
+});
+
+test('Cloudflare restores event RSVP and page follows without granting ownership or verification', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for (const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,route,method='GET',body)=>app.fetch(new Request(`https://example.test/v1/firestore/${route}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  for (const [collection,owner,members] of [['events','hostId','interested'],['pages','ownerId','followers']]) {
+    const create=`document?parent=${collection}`;
+    assert.equal((await call('bob',create,'POST',{data:{[owner]:'alice'}})).status,403);
+    assert.equal((await call('alice',create,'POST',{data:{[owner]:'alice',[members]:['bob']}})).status,403);
+    const created=await call('alice',create,'POST',{data:{[owner]:'alice',[members]:['alice'],...(collection==='pages'?{tickLevel:'none'}:{})}});
+    assert.equal(created.status,201,await created.clone().text());
+    const {path}=await created.json(), doc=`document?path=${path}`;
+    assert.equal((await call('bob','query','POST',{parent:collection})).status,200);
+    assert.equal((await call('bob',doc,'PATCH',{fields:{[members]:{__fieldValue:'arrayUnion',values:['bob']}}})).status,200);
+    assert.deepEqual((await (await call('bob',doc)).json()).data[members],['alice','bob']);
+    assert.equal((await call('bob',doc,'PATCH',{fields:{[members]:['bob']}})).status,403);
+    assert.equal((await call('bob',doc,'PATCH',{fields:{[owner]:'bob'}})).status,403);
+    assert.equal((await call('bob',doc,'DELETE')).status,403);
+    if (collection==='pages') assert.equal((await call('alice',doc,'PATCH',{fields:{tickLevel:'gold'}})).status,403);
+    assert.equal((await call('alice',doc,'DELETE')).status,200);
+    assert.equal((await (await call('bob',doc)).json()).exists,false);
+  }
+  sql.close();
+});
+
+test('live room creation, discovery and end transitions enforce host and viewer permissions', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for (const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
+  const doc='/v1/firestore/document?path=lives/room';
+  const data={hostId:'alice',status:'live',privacy:'friends'};
+  assert.equal((await call('bob',doc,'PUT',{data})).status,403);
+  assert.equal((await call('alice',doc,'PUT',{data})).status,200);
+  assert.equal((await call('bob',doc)).status,403);
+  assert.deepEqual((await (await call('bob','/v1/docs?collection=lives')).json()).documents,[]);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{privacy:'public'}})).status,200);
+  assert.equal((await call('bob',doc)).status,200);
+  const chat='lives/room/chat', send=`/v1/firestore/document?parent=${chat}`;
+  const msg={type:'chat',uid:'bob',text:'Hello',name:'Fake Host',isHost:true};
+  const created=await call('bob',send,'POST',{data:msg});
+  assert.equal(created.status,201);
+  const saved=(await created.json()).data;
+  assert.equal(saved.name,'bob');
+  assert.equal(saved.isHost,false);
+  assert.equal((await call('bob',send,'POST',{data:{...msg,uid:'alice'}})).status,400);
+  assert.equal((await call('bob',send,'POST',{data:{...msg,type:'gift'}})).status,400);
+  assert.equal((await call('bob',send,'POST',{data:{...msg,type:'system'}})).status,403);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{slowMode:true}})).status,200);
+  assert.equal((await call('bob',send,'POST',{data:msg})).status,409);
+  const chatQuery='/v1/firestore/query';
+  assert.equal((await (await call('bob',chatQuery,'POST',{parent:chat})).json()).documents.length,1);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{kickedUserIds:['bob']}})).status,200);
+  assert.equal((await call('bob',chatQuery,'POST',{parent:chat})).status,403);
+  assert.equal((await call('bob',send,'POST',{data:msg})).status,403);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{kickedUserIds:[]}})).status,200);
+  assert.equal((await call('bob',send,'POST',{data:{...msg,type:'reaction',text:'heart'}})).status,201);
+  assert.equal((await (await call('bob',doc)).json()).data.likesCount,1);
+  assert.equal((await (await call('bob','/v1/docs/lives/room')).json()).document.likesCount,1);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{likesCount:999}})).status,403);
+  assert.equal((await call('bob',doc,'PATCH',{fields:{status:'ended'}})).status,403);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{audioB64:'cannot store media'}})).status,403);
+  assert.equal((await call('alice',doc,'PATCH',{fields:{status:'ended'}})).status,200);
+  assert.equal((await (await call('bob',doc)).json()).data.status,'ended');
+  assert.equal((await call('alice',doc,'PATCH',{fields:{status:'live'}})).status,403);
+  sql.close();
+});

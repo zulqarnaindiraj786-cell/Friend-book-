@@ -4,7 +4,6 @@ import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, con
 import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
-import { authorizePost } from './firebase-post-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -155,9 +154,9 @@ export async function appDocuments(request, env, identity) {
           if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
         }
       }
-      if (collection === 'posts' || collection === 'reels' || collection === 'stories') {
+      if (['posts','reels','stories','lives'].includes(collection)) {
         const userReads = new Map(); // scoped to this response; never cache privacy across requests
-        const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id, undefined, undefined, userReads)));
+        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads)));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
       return json({ collection, documents });
@@ -213,7 +212,7 @@ export async function appDocuments(request, env, identity) {
       return json({ error: 'Document object required' }, 400);
     }
     const now = Date.now();
-    if (['users','posts','reels'].includes(collection)) {
+    if (['users','posts','reels','events','pages','lives'].includes(collection)) {
       // Older clients use /v1/docs. Share the guarded canonical mutation with
       // newer clients so concurrent edits and relationship changes are not lost.
       const data={...incoming,updatedAt:now};

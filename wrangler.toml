@@ -44,5 +44,13 @@ binding = "VIDEO_BUCKET"
 bucket_name = "friendbook"
 
 [triggers]
-# Cleans temporary Cloudinary processing assets ONLY; never deletes R2 videos.
+# Expires transient realtime state and retries temporary Cloudinary cleanup; never deletes R2 videos.
 crons = ["*/15 * * * *"]
+
+[[durable_objects.bindings]]
+name = "LIVE_RELAY"
+class_name = "LiveRelay"
+
+[[migrations]]
+tag = "live-relay-v1"
+new_sqlite_classes = ["LiveRelay"]

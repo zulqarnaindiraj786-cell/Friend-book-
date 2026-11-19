@@ -1,6 +1,9 @@
+import { openLiveRelay, LiveRelay } from './cloudflare/live-relay.js';
+export { LiveRelay };
+import { runMaintenance } from './cloudflare/maintenance.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { contentReadAllowed } from './cloudflare/document-policy.js';
-import { uploadVideo, uploadPhoto, retryVideoCleanup } from './cloudflare/video-r2.js';
+import { uploadVideo, uploadPhoto } from './cloudflare/video-r2.js';
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
@@ -46,7 +49,14 @@ export function createWorker(verify = verifyFirebaseToken) {
         try { return await env.ASSETS.fetch(new Request(assetURL, request)); }
         catch { return json({ error: 'Frontend unavailable' }, 503); }
       }
+      if (path === '/v1/android-config') {
+        if (request.method !== 'GET') return json({error:'Method not allowed'},405);
+        // Only explicit public booleans are exposed; never serialize env or D1 rows.
+        if (!['true','false'].includes(env.ADS_ENABLED_V3)) return json({error:'App config unavailable'},503);
+        return json({ads_enabled_v3:env.ADS_ENABLED_V3 === 'true'});
+      }
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
+      const live = /^\/v1\/live\/([A-Za-z0-9_-]{1,128})\/(publish|watch)$/.exec(path);
       const video = path === '/v1/videos';
       const photo = path === '/v1/photos';
       const firestore = path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
@@ -60,7 +70,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !firestore && !fcm) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !firestore && !fcm && !live) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -100,6 +110,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         try { if (await accountDisabled(env.DB,uid)) return json({error:'Account disabled'},403); }
         catch { return json({error:'Account status unavailable'},503); }
       }
+      if (live) return openLiveRelay(request,env,uid,live[1],live[2]);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) return firestoreDocuments(request, env, { uid, token: bearer[1] });
@@ -151,4 +162,4 @@ export function createWorker(verify = verifyFirebaseToken) {
   };
 }
 const app = createWorker();
-export default {...app, scheduled(_controller, env, ctx) { ctx.waitUntil(retryVideoCleanup(env)); }};
+export default {...app, scheduled(_controller, env, ctx) { ctx.waitUntil(runMaintenance(env)); }};

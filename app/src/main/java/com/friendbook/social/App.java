@@ -63,11 +63,6 @@ public class App extends Application implements SensorEventListener {
         com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
-        // 🔐 App Check with Play Integrity — MONITOR mode first (won't block users)
-        // TODO: Switch to enforce after verifying in Firebase Console (App Check > Apps > friendbook > Enforce)
-        com.google.firebase.appcheck.FirebaseAppCheck.getInstance()
-                .installAppCheckProviderFactory(
-                        com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory.getInstance());
         com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
