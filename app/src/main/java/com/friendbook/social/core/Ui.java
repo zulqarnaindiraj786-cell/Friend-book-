@@ -6,9 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -36,7 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Programmatic UI toolkit with friendbook 525 look, dark mode, data-saver quality & QR/browser helpers. */
+/** Programmatic UI toolkit with friendbook 525 look, dark mode, data-saver quality & browser helpers. */
 public class Ui {
 
     public static final int BLUE = 0xFF1877F2;
@@ -716,81 +714,6 @@ public class Ui {
         } catch (Exception e) {
             toast(c, "Couldn't open link");
         }
-    }
-
-    public static void showQrDialog(Context c, String title, String link) {
-        showQrDialog(c, title, "Scan or share on friendbook", link);
-    }
-
-    /** Visual QR share card dialog (deterministic matrix + copy/share link). */
-    public static void showQrDialog(Context c, String title, String subtitle, String link) {
-        LinearLayout box = col(c);
-        box.setGravity(Gravity.CENTER_HORIZONTAL);
-        pad(box, 20, 16, 20, 8);
-
-        View qr = new View(c) {
-            final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-            @Override
-            protected void onDraw(Canvas canvas) {
-                super.onDraw(canvas);
-                int w = getWidth(), h = getHeight();
-                int n = 21;
-                float cell = Math.min(w, h) / (float) (n + 4);
-                float ox = (w - cell * n) / 2f, oy = (h - cell * n) / 2f;
-                p.setColor(Color.WHITE);
-                canvas.drawRoundRect(0, 0, w, h, dp(c, 14), dp(c, 14), p);
-                p.setColor(BLUE);
-                long seed = link == null ? 42 : link.hashCode() * 2654435761L;
-                for (int r = 0; r < n; r++) {
-                    for (int col = 0; col < n; col++) {
-                        boolean finder = (r < 7 && col < 7) || (r < 7 && col >= n - 7) || (r >= n - 7 && col < 7);
-                        boolean on;
-                        if (finder) {
-                            int fr = r < 7 ? r : r - (n - 7);
-                            int fc = col < 7 ? col : col - (n - 7);
-                            on = fr == 0 || fr == 6 || fc == 0 || fc == 6
-                                    || (fr >= 2 && fr <= 4 && fc >= 2 && fc <= 4);
-                        } else {
-                            long mix = seed ^ (r * 131L + col * 977L + (r * col * 31L));
-                            on = ((mix >>> ((r + col) & 15)) & 1L) == 1L;
-                        }
-                        if (on) {
-                            canvas.drawRect(ox + col * cell, oy + r * cell,
-                                    ox + (col + 1) * cell - 1, oy + (r + 1) * cell - 1, p);
-                        }
-                    }
-                }
-            }
-        };
-        int qs = dp(c, 190);
-        box.addView(qr, new LinearLayout.LayoutParams(qs, qs));
-
-        TextView t = tvBold(c, title, 17, txt(c));
-        t.setPadding(0, dp(c, 12), 0, dp(c, 2));
-        box.addView(t);
-        if (subtitle != null && !subtitle.isEmpty()) {
-            TextView s = tv(c, subtitle, 12, sub(c));
-            box.addView(s);
-        }
-        TextView urlTv = tv(c, link, 12, BLUE);
-        urlTv.setPadding(0, dp(c, 6), 0, 0);
-        box.addView(urlTv);
-
-        new AlertDialog.Builder(c)
-                .setView(box)
-                .setPositiveButton("📤 Share", (d, w) -> {
-                    Intent s = new Intent(Intent.ACTION_SEND);
-                    s.setType("text/plain");
-                    s.putExtra(Intent.EXTRA_TEXT, title + "\n" + link);
-                    c.startActivity(Intent.createChooser(s, "Share QR link"));
-                })
-                .setNeutralButton("📋 Copy link", (d, w) -> {
-                    ClipboardManager cm = (ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("link", link));
-                    toast(c, "Link copied 🔗");
-                })
-                .setNegativeButton("Close", null)
-                .show();
     }
 
     /** Copy text to clipboard & show crisp confirmation toast. */

@@ -51,7 +51,7 @@ import java.util.Set;
 /**
  * 👥 Full Pro Community Group Detail Screen:
  *  - Cover Photo + Group Icon + Role Badge (👑 Admin / 🛡 Moderator / ✓ Member)
- *  - Invite Members picker (sends direct `group_invite` notification + share link + QR)
+ *  - Invite Members picker (sends direct `group_invite` notification + Play Store sharing)
  *  - 🛡 Manage Group Hub (for Group Admins & Group Moderators):
  *      • Pending Posts Approval Queue (Approve ✓ / Decline ✕)
  *      • Member Join Requests Queue (Approve ✓ / Decline ✕)
@@ -515,9 +515,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
 
-        TextView shareLinkBtn = Ui.btnOutline(this, "🔗 Copy & Share Group Invite Link", Ui.BLUE);
+        TextView shareLinkBtn = Ui.btnOutline(this, "🔗 Share group name & app link", Ui.BLUE);
         shareLinkBtn.setOnClickListener(v -> {
-            String link = AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id;
+            String link = AdsConfig.PLAY_STORE_URL;
             Intent s = new Intent(Intent.ACTION_SEND);
             s.setType("text/plain");
             s.putExtra(Intent.EXTRA_TEXT, "👥 Join our group \"" + group.name + "\" on friendbook!\n" + link);
@@ -584,8 +584,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "➕ Invite people");
-        pm.getMenu().add(0, 2, 0, "🔗 Copy group link");
-        pm.getMenu().add(0, 3, 0, "📱 Group QR code");
+        pm.getMenu().add(0, 2, 0, "🔗 Copy app link");
         if (group.canManageGroup(me)) {
             pm.getMenu().add(0, 4, 0, "🛡 Manage group & approvals");
             pm.getMenu().add(0, 5, 0, "📌 Pin / Remove group posts");
@@ -596,8 +595,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         pm.setOnMenuItemClickListener(it -> {
             int item = it.getItemId();
             if (item == 1) showInviteMembersDialog();
-            else if (item == 2) Ui.copy(this, AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id);
-            else if (item == 3) Ui.showQrDialog(this, group.name, AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id);
+            else if (item == 2) Ui.copy(this, AdsConfig.PLAY_STORE_URL);
             else if (item == 4) showManageGroupHub();
             else if (item == 5) showModerateGroupPostsDialog();
             else if (item == 6) showGroupSettingsDialog();

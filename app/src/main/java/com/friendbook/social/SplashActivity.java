@@ -26,7 +26,7 @@ public class SplashActivity extends Activity {
     }
 
     private void route() {
-        // 🔵 Capture referral & group invite deep links (friendbook:// or official GitHub Pages)
+        // 🔵 Capture referral & group invite deep links (friendbook:// or web links)
         android.net.Uri data = getIntent() != null ? getIntent().getData() : null;
         if (data != null) {
             String ref = data.getQueryParameter("ref");

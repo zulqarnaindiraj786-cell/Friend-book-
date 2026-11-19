@@ -1601,7 +1601,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("🖐 Poke " + (user != null ? firstOnly(user.displayName) : "them"));
             pm.getMenu().add(blocked ? "🔓 Unblock user" : "🚫 Block user");
             pm.getMenu().add("💙 See friendship");
-            pm.getMenu().add("🔗 Copy profile link");
+            pm.getMenu().add("🔗 Copy app link");
             pm.getMenu().add("🚩 Report profile");
             boolean isFav = Fb.me != null && Fb.me.favoriteUids != null
                     && Fb.me.favoriteUids.contains(uid);
@@ -1636,7 +1636,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("👁 View as Public");
             pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
             pm.getMenu().add("📦 Archive & Recycle Bin");
-            pm.getMenu().add("🔗 Copy profile link");
+            pm.getMenu().add("🔗 Copy app link");
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
         }
@@ -1655,8 +1655,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->
                         Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
             } else if (t.contains("See friendship")) showFriendship();
-            else if (t.contains("Copy profile link")) {
-                Ui.copy(this, com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
+            else if (t.contains("Copy app link")) {
+                Ui.copy(this, com.friendbook.social.core.AdsConfig.PLAY_STORE_URL);
             } else if (t.contains("Tick level (admin)")) {
                 Ui.choose(this, "🛡 Set tick for " + (user != null ? user.displayName : "user"),
                         new String[]{"✓ Blue tick", "✨ Gold tick", "💎 Diamond tick", "✕ Remove tick"},

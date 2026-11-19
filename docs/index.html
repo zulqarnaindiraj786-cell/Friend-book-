@@ -10,7 +10,7 @@
   <!-- WhatsApp / friendbook / Telegram Rich Link Preview -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="friendbook — Official Android App Download" />
-  <meta property="og:description" content="Tap to download friendbook Release APK (v2.8.33). Fast, lightweight & Pro social network with Live Studio, Reels, Groups & Voice Chat!" />
+  <meta property="og:description" content="Get friendbook on Google Play. Fast, lightweight & Pro social network with Live Studio, Reels, Groups & Voice Chat!" />
   <meta property="og:image" content="/logo.png" />
 
   <link rel="icon" type="image/png" href="./logo.png" />
@@ -379,7 +379,7 @@
         </div>
         <div class="meta-item">
           <strong>8.7 MB</strong>
-          <span>Signed APK Size</span>
+          <span>Android app</span>
         </div>
         <div class="meta-item">
           <strong>⚡ 2G Turbo</strong>
@@ -387,26 +387,17 @@
         </div>
       </div>
 
-      <!-- Downloads ./friendbook.apk directly from your own website domain! -->
-      <a
-        id="mainDownloadBtn"
-        class="btn-download"
-        href="./friendbook.apk"
-        download="friendbook.apk"
-      >
-        <span>⬇️ Download friendbook APK (8.7 MB)</span>
+      <a id="mainDownloadBtn" class="btn-download"
+        href="https://play.google.com/store/apps/details?id=com.friendbook.social">
+        <span>Get friendbook on Google Play</span>
       </a>
-
-      <div id="downloadNotice" class="download-toast">
-        ✅ Downloading <strong>friendbook.apk</strong>! Once finished, tap the file in your browser notifications or Downloads folder to install.
-      </div>
 
       <div class="share-row">
         <a id="waShareBtn" class="btn-secondary btn-whatsapp" href="#" target="_blank" rel="noopener">
           📲 Share on WhatsApp
         </a>
         <button id="copyLinkBtn" class="btn-secondary" type="button">
-          📋 Copy Website Link
+          📋 Copy Google Play Link
         </button>
         <button id="nativeShareBtn" class="btn-secondary" type="button">
           📤 Share App
@@ -414,30 +405,8 @@
       </div>
     </section>
 
-    <h2 class="section-title">📲 How to Install (3 Easy Steps)</h2>
-    <div class="steps">
-      <div class="step-card">
-        <div class="step-num">1</div>
-        <div>
-          <h4>Tap "Download friendbook APK"</h4>
-          <p>Upar blue Download button par click karein — <code>friendbook.apk</code> foran download hona shuru ho jayegi.</p>
-        </div>
-      </div>
-      <div class="step-card">
-        <div class="step-num">2</div>
-        <div>
-          <h4>Open Downloaded APK</h4>
-          <p>Download mukammal hone par browser notification ya <strong>Downloads</strong> folder se <code>friendbook.apk</code> open karein.</p>
-        </div>
-      </div>
-      <div class="step-card">
-        <div class="step-num">3</div>
-        <div>
-          <h4>Tap "Install" &amp; Enjoy</h4>
-          <p>Agar Android puche to <em>"Allow from this source"</em> on kar ke <strong>Install</strong> dabayein aur apna account open karein!</p>
-        </div>
-      </div>
-    </div>
+    <h2 class="section-title">📲 How to Install</h2>
+    <p>Open the listing in Google Play and tap Install or Update.</p>
 
     <h2 class="section-title">✨ Why Everyone Loves friendbook</h2>
     <div class="features">
@@ -476,16 +445,10 @@
 
   <script>
     (function () {
-      var pageUrl = window.location.href;
-      var mainBtn = document.getElementById("mainDownloadBtn");
-      var notice = document.getElementById("downloadNotice");
+      var pageUrl = document.getElementById("mainDownloadBtn").href;
       var waBtn = document.getElementById("waShareBtn");
       var copyBtn = document.getElementById("copyLinkBtn");
       var nativeShareBtn = document.getElementById("nativeShareBtn");
-
-      mainBtn.addEventListener("click", function () {
-        notice.style.display = "block";
-      });
 
       var shareMessage = "👑 Download *friendbook* Official Android App!\nFast Reels, Stories, HD Photos & Voice Chat:\n👉 " + pageUrl;
       waBtn.href = "https://wa.me/?text=" + encodeURIComponent(shareMessage);
@@ -494,7 +457,7 @@
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(pageUrl).then(function () {
             copyBtn.textContent = "✅ Link Copied!";
-            setTimeout(function () { copyBtn.textContent = "📋 Copy Website Link"; }, 2500);
+            setTimeout(function () { copyBtn.textContent = "📋 Copy Google Play Link"; }, 2500);
           });
         } else {
           window.prompt("Copy this link:", pageUrl);
@@ -505,7 +468,7 @@
         if (navigator.share) {
           navigator.share({
             title: "friendbook — Official Android App",
-            text: "Download friendbook official Android APK!",
+            text: "Get friendbook on Google Play!",
             url: pageUrl
           }).catch(function () {});
         } else {

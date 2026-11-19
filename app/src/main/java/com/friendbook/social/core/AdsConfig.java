@@ -1,5 +1,7 @@
 package com.friendbook.social.core;
 
+import com.friendbook.social.BuildConfig;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
@@ -52,7 +54,7 @@ public class AdsConfig {
             "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view";
 
     /** Official Developer Website (for app-ads.txt verification) & Google Docs Policy URLs. */
-    public static final String OFFICIAL_WEBSITE_URL = "https://zulqarnaindiraj786-cell.github.io/Friend-book-";
+    public static final String OFFICIAL_WEBSITE_URL = BuildConfig.CLOUDFLARE_API_URL;
     public static final String APP_ADS_TXT_URL = OFFICIAL_WEBSITE_URL + "/app-ads.txt";
     public static final String PRIVACY_POLICY_URL = GOOGLE_DOCS_POLICY_URL;
     public static final String TERMS_OF_SERVICE_URL = GOOGLE_DOCS_POLICY_URL;

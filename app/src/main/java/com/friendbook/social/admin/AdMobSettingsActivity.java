@@ -98,12 +98,12 @@ public class AdMobSettingsActivity extends Activity {
         TextView appId = Ui.tvBold(this, AdsConfig.APP_ID, 14, Ui.txt(this));
         appId.setPadding(0, Ui.dp(this, 4), 0, 0);
         card1.addView(appId);
-        TextView websiteLabel = Ui.tvBold(this, "Official Website URL", 12, Ui.sub(this));
+        TextView websiteLabel = Ui.tvBold(this, "Google Play listing", 12, Ui.sub(this));
         websiteLabel.setPadding(0, Ui.dp(this, 8), 0, 0);
         card1.addView(websiteLabel);
-        TextView websiteLink = Ui.tvBold(this, AdsConfig.OFFICIAL_WEBSITE_URL, 12.5f, Ui.GREEN);
+        TextView websiteLink = Ui.tvBold(this, AdsConfig.PLAY_STORE_URL, 12.5f, Ui.GREEN);
         websiteLink.setPadding(0, Ui.dp(this, 2), 0, 0);
-        websiteLink.setOnClickListener(v -> Ui.openUrl(this, AdsConfig.OFFICIAL_WEBSITE_URL));
+        websiteLink.setOnClickListener(v -> Ui.openUrl(this, AdsConfig.PLAY_STORE_URL));
         card1.addView(websiteLink);
         LinearLayout.LayoutParams cp1 = new LinearLayout.LayoutParams(-1, -2);
         cp1.topMargin = Ui.dp(this, 10);
