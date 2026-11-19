@@ -27,7 +27,7 @@ public class App extends Application implements SensorEventListener {
     private boolean hasLast;
 
     private int startedCount = 0;
-    private int resumedCount = 0;
+    private volatile int resumedCount = 0;
     private final Handler timeHandler = new Handler(Looper.getMainLooper());
     private final Runnable deferredOffline = () -> {
         if (startedCount <= 0) {

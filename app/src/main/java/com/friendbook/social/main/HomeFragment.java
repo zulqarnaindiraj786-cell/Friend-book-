@@ -68,7 +68,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private ListenerRegistration postsReg, storiesReg, friendsReg, livesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
-    private boolean loadingPosts, loadedPosts, pendingFeedRefresh;
+    private boolean loadingPosts, loadedPosts;
+    private List<DocumentSnapshot> pendingFeedPage;
     private boolean pageError,pymkLoading,pymkLoaded;
     private boolean featuredReelsLoaded, featuredReelsLoading;
     private String pymkActor;
@@ -133,9 +134,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
                 if(dy>0 && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-4) loadMore();
-                if(pendingFeedRefresh && !loadingPosts && manager!=null && manager.findFirstVisibleItemPosition()<=1){
-                    pendingFeedRefresh=false;restartPostsListener();
-                }
+                if(!loadingPosts && manager!=null && manager.findFirstVisibleItemPosition()<=1) applyPendingFeedPage();
             }
         });
         rv.setBackgroundColor(Ui.bg(a));
@@ -507,6 +506,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onStop();
         engagementHandler.removeCallbacks(engagementRefresh);
         FastCache.removeReactionObserver(reactionObserver);
+        pendingFeedPage=null;
         feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (postsReg != null) { postsReg.remove(); postsReg=null; }
         if (storiesReg != null) storiesReg.remove();
@@ -686,13 +686,30 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     if(previous[0].equals(current))return;
                     previous[0]=current;
                     LinearLayoutManager lm=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
-                    if(!loadingPosts && (lm==null || lm.findFirstVisibleItemPosition()<=1)) restartPostsListener();
-                    else pendingFeedRefresh=true;
+                    pendingFeedPage=snapshot.getDocuments();
+                    if(!loadingPosts && (lm==null || lm.findFirstVisibleItemPosition()<=1)) applyPendingFeedPage();
                 });
+    }
+
+    private void applyPendingFeedPage() {
+        if (pendingFeedPage == null || !java.util.Objects.equals(feedAccount, Fb.uid())) return;
+        List<DocumentSnapshot> page=pendingFeedPage;
+        pendingFeedPage=null;
+        feedQuery=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING);
+        lastDoc=page.isEmpty()?null:page.get(page.size()-1);
+        moreAvailable=page.size()==PAGE;
+        pageError=false;
+        loadedPosts=true;
+        loadedPostIds.clear();
+        for(DocumentSnapshot doc:page) loadedPostIds.add(doc.getId());
+        forceReRank=true;
+        consumePostsSnapshot(page,true,true);
+        updatePagingUi();
     }
 
     private void startPostsQuery(boolean ordered) {
         final int generation=++feedGeneration;
+        pendingFeedPage=null;
         pageError=false;loadingPosts=true;updatePagingUi(); loadedPosts=false; lastDoc=null; moreAvailable=true;
         feedAccount=Fb.uid(); final String actor=feedAccount;
         // The D1 document query already merges legacy rows with canonical precedence.
@@ -728,9 +745,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if (firstLayout==null || firstLayout.findFirstVisibleItemPosition()<=1) forceReRank=true;
             consumePostsSnapshot(snapshot.getDocuments(),ordered,true);
             LinearLayoutManager current=rv==null?null:(LinearLayoutManager)rv.getLayoutManager();
-            if(pendingFeedRefresh && (current==null || current.findFirstVisibleItemPosition()<=1)){
-                pendingFeedRefresh=false;restartPostsListener();
-            }
+            if(current==null || current.findFirstVisibleItemPosition()<=1) applyPendingFeedPage();
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
             loadingPosts=false;pageError=true;updatePagingUi();

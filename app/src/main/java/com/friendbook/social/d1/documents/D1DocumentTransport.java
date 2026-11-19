@@ -115,8 +115,20 @@ final class D1DocumentTransport {
         return android.net.Uri.encode(s);
     }
 
+    private static final ReadCoalescer READS = new ReadCoalescer();
+
+    private static JSONObject read(String method, String path, JSONObject body) throws Exception {
+        String actor=REQUEST_ACTOR.get();
+        if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
+        requireActor(actor);
+        String key=actor+"\n"+method+"\n"+path+"\n"+(body==null?"":body.toString());
+        String response=READS.read(key, () -> request(method,path,body).toString());
+        requireActor(actor);
+        return new JSONObject(response); // Never share mutable JSON across consumers.
+    }
+
     static JSONObject getDocument(String path) throws Exception {
-        JSONObject data = request("GET", "/v1/firestore/document?path=" + enc(path), null);
+        JSONObject data = read("GET", "/v1/firestore/document?path=" + enc(path), null);
         boolean present = data.optJSONObject("data") != null;
         if ((!data.has("exists") && !present) || (data.optBoolean("exists", false) && !present)
                 || (data.has("exists") && !(data.opt("exists") instanceof Boolean)))
@@ -141,7 +153,7 @@ final class D1DocumentTransport {
     }
 
     static JSONArray query(JSONObject body) throws Exception {
-        JSONObject data = request("POST", "/v1/firestore/query", body);
+        JSONObject data = read("POST", "/v1/firestore/query", body);
         JSONArray arr = data.optJSONArray("documents");
         if (arr == null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid query response");
         return arr;

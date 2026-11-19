@@ -39,7 +39,12 @@ public class D1DocumentStore {
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Map<String, DocumentSnapshot> docCache = new ConcurrentHashMap<>();
+    private final Map<String, DocumentSnapshot> docCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, DocumentSnapshot>(256, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, DocumentSnapshot> entry) {
+                    return size() > 256;
+                }
+            });
     // Warm in-process cache for revisited screens. Query keys include the authenticated UID to
     // prevent one account's cached results being shown after an account switch.
     private final Map<String, String> queryCache = new ConcurrentHashMap<>();
@@ -51,6 +56,7 @@ public class D1DocumentStore {
         final String actor = authenticatedUid();
         final EventListener<DocumentSnapshot> listener;
         volatile boolean active = true;
+        volatile long lastAttemptMs = -60_000;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
 
@@ -65,6 +71,7 @@ public class D1DocumentStore {
         final String actor = authenticatedUid();
         final EventListener<QuerySnapshot> listener;
         volatile boolean active = true;
+        volatile long lastAttemptMs = -60_000;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
         final AtomicBoolean refreshPending = new AtomicBoolean(false);
@@ -77,15 +84,17 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
-        // Only active chat message queries need the shorter interval. Keep other listeners at
-        // five seconds so a faster chat does not multiply traffic for the whole app.
+        // Use a separate cadence for foreground chat messages.
         poller.scheduleWithFixedDelay(this::pollChatMessages, 2, 2, TimeUnit.SECONDS);
     }
 
     private void pollChatMessages() {
+        if (!com.friendbook.social.App.isForeground()) return;
+        long now = android.os.SystemClock.elapsedRealtime();
         for (QueryListenerEntry e : queryListeners) {
             String path = e.query.parentPath;
-            if (e.active && ListenerPollingPolicy.isChatMessages(path)) {
+            if (e.active && ListenerPollingPolicy.isChatMessages(path)
+                    && ListenerPollingPolicy.due(path, true, now - e.lastAttemptMs)) {
                 scheduleQueryRead(e);
             }
         }
@@ -277,14 +286,20 @@ public class D1DocumentStore {
 
     ListenerRegistration registerDocListener(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
         DocListenerEntry entry = new DocListenerEntry(ref, listener);
-        docListeners.computeIfAbsent(ref.getPath(), k -> new CopyOnWriteArrayList<>()).add(entry);
+        docListeners.compute(ref.getPath(), (path, entries) -> {
+            if (entries == null) entries = new CopyOnWriteArrayList<>();
+            entries.add(entry);
+            return entries;
+        });
         DocumentSnapshot cached = getCachedDoc(ref.getPath());
         if (cached != null) mainHandler.post(() -> { if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(cached.asCached(), null); });
         scheduleDocRead(entry);
         return () -> {
             entry.active = false;
-            CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(ref.getPath());
-            if (list != null) list.remove(entry);
+            docListeners.computeIfPresent(ref.getPath(), (path, entries) -> {
+                entries.remove(entry);
+                return entries.isEmpty() ? null : entries;
+            });
         };
     }
 
@@ -352,17 +367,23 @@ public class D1DocumentStore {
     private void pollActiveListeners() {
         // Never perform HTTP on the single scheduled executor. A slow request there used to block
         // every remaining listener (and the next poll cycle), making unrelated screens appear hung.
+        long now = android.os.SystemClock.elapsedRealtime();
+        boolean foreground = com.friendbook.social.App.isForeground();
         for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
-            for (DocListenerEntry e : list) scheduleDocRead(e);
+            for (DocListenerEntry e : list) {
+                if (ListenerPollingPolicy.due(e.ref.getPath(), foreground, now - e.lastAttemptMs)) scheduleDocRead(e);
+            }
         }
         for (QueryListenerEntry e : queryListeners) {
-            if (!ListenerPollingPolicy.isChatMessages(e.query.parentPath)) scheduleQueryRead(e);
+            String path = e.query.parentPath;
+            if (!ListenerPollingPolicy.isChatMessages(path) && ListenerPollingPolicy.due(path, foreground, now - e.lastAttemptMs)) scheduleQueryRead(e);
         }
     }
 
     private void scheduleDocRead(DocListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
         try { listenerExecutor.execute(() -> {
+            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
             try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverDoc(entry); return null; }); }
             catch (Exception ignored) { entry.inFlight.set(false); }
         }); }
@@ -378,6 +399,7 @@ public class D1DocumentStore {
             // A push arriving after this point must get one follow-up read, even
             // when the current HTTP request returns the pre-message snapshot.
             entry.refreshPending.set(false);
+            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
             try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry); return null; }); }
             catch (Exception ignored) { }
             finally {
