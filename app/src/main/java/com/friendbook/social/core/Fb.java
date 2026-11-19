@@ -73,6 +73,7 @@ public class Fb {
     public static void startMeListener() {
         String uid = uid();
         if (uid == null) return;
+        if (me != null && !uid.equals(me.uid)) me=null;
         if (me == null) {
             Models.User cachedMe = FastCache.getMe();
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
@@ -80,7 +81,7 @@ public class Fb {
         if (meReg != null) meReg.remove();
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
-                    if (doc == null) return;
+                    if (!uid.equals(Fb.uid()) || doc == null) return;
                     if (!doc.exists()) {
                         if (!doc.getMetadata().isFromCache()) {
                             com.google.firebase.auth.FirebaseUser fu = auth().getCurrentUser();
@@ -174,18 +175,28 @@ public class Fb {
         Models.User ram = FastCache.getUser(uid);
         if (ram != null) return Tasks.forResult(ram);
 
+        final String actor=Fb.uid();
         TaskCompletionSource<Models.User> tcs = new TaskCompletionSource<>();
         db().collection("users").document(uid).get(Source.CACHE)
                 .addOnSuccessListener(d -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
                     if (d != null && d.exists()) {
                         Models.User u = Models.User.fromDoc(d);
                         FastCache.putUser(u);
                         tcs.trySetResult(u);
                     } else {
-                        fetchUserNetwork(uid, tcs);
+                        fetchUserNetwork(uid, actor, tcs);
                     }
                 })
-                .addOnFailureListener(e -> fetchUserNetwork(uid, tcs));
+                .addOnFailureListener(e -> fetchUserNetwork(uid, actor, tcs));
+        return tcs.getTask();
+    }
+
+    /** Refresh an author from D1 instead of treating a stale name/photo cache as authoritative. */
+    public static Task<Models.User> getUserFresh(String uid) {
+        if (uid == null || uid.isEmpty()) return Tasks.forResult(null);
+        TaskCompletionSource<Models.User> tcs=new TaskCompletionSource<>();
+        fetchUserNetwork(uid,Fb.uid(),tcs);
         return tcs.getTask();
     }
 
@@ -217,9 +228,11 @@ public class Fb {
         } catch (Throwable ignored) { }
     }
 
-    private static void fetchUserNetwork(String uid, TaskCompletionSource<Models.User> tcs) {
+    private static void fetchUserNetwork(String uid, String actor, TaskCompletionSource<Models.User> tcs) {
+        if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
         db().collection("users").document(uid).get()
                 .addOnSuccessListener(d -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
                     Models.User u = (d != null && d.exists()) ? Models.User.fromDoc(d) : null;
                     if (u != null) FastCache.putUser(u);
                     tcs.trySetResult(u);

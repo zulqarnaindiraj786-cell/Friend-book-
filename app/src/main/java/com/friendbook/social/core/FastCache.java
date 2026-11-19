@@ -85,6 +85,13 @@ public final class FastCache {
         String curUid = Fb.uid();
         String safeUid = curUid == null ? "" : curUid;
         if (!safeUid.equals(ACTIVE_UID)) {
+            boolean sameCachedAccount = !safeUid.isEmpty() && CACHED_ME != null && safeUid.equals(CACHED_ME.uid);
+            USERS.clear();
+            if (sameCachedAccount) USERS.put(safeUid,CACHED_ME);
+            else {
+                CACHED_ME=null;
+                FEED=new ArrayList<>(); STORIES=new ArrayList<>(); CHATS=new ArrayList<>(); NOTIFS=new ArrayList<>();
+            }
             MY_REACTIONS.clear();
             LOCAL_REACTION_TS.clear();
             REACTION_FETCHED.clear();
@@ -182,16 +189,18 @@ public final class FastCache {
 
     // ===================== ME & USERS =====================
 
-    public static Models.User getMe() { return CACHED_ME; }
+    public static Models.User getMe() { ensureUserScope(); return CACHED_ME; }
 
     public static void saveMe(Context ctx, Models.User u) {
-        if (u == null || u.uid == null) return;
+        String actor=ensureUserScope();
+        if (u == null || u.uid == null || !u.uid.equals(actor)) return;
         CACHED_ME = u;
         USERS.put(u.uid, u);
         if (ctx == null) return;
         final Context app = ctx.getApplicationContext();
         IO.execute(() -> {
             try {
+                if (!u.uid.equals(Fb.uid())) return;
                 app.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                         .edit().putString("me_json", userToJson(u).toString()).apply();
             } catch (Throwable ignored) { }
@@ -199,6 +208,7 @@ public final class FastCache {
     }
 
     public static Models.User getUser(String uid) {
+        ensureUserScope();
         if (uid == null || uid.isEmpty()) return null;
         Models.User u = USERS.get(uid);
         if (u != null) ramHits++;
@@ -206,6 +216,7 @@ public final class FastCache {
     }
 
     public static void putUser(Models.User u) {
+        ensureUserScope();
         if (u != null && u.uid != null && !u.uid.isEmpty()) {
             USERS.put(u.uid, u);
             TickCache.put(u.uid, u.tickLevel);
@@ -215,6 +226,7 @@ public final class FastCache {
     // ===================== FEED, STORIES, CHATS, NOTIFS =====================
 
     public static List<Models.Post> getFeed() {
+        ensureUserScope();
         if (!FEED.isEmpty()) ramHits++;
         return new ArrayList<>(FEED);
     }
@@ -280,6 +292,7 @@ public final class FastCache {
     }
 
     public static List<StoriesAdapter.Group> getStories() {
+        ensureUserScope();
         return new ArrayList<>(STORIES);
     }
 
@@ -288,6 +301,7 @@ public final class FastCache {
     }
 
     public static List<Models.ChatRoom> getChats() {
+        ensureUserScope();
         return new ArrayList<>(CHATS);
     }
 
@@ -296,6 +310,7 @@ public final class FastCache {
     }
 
     public static List<Models.Notif> getNotifications() {
+        ensureUserScope();
         return new ArrayList<>(NOTIFS);
     }
 
@@ -723,6 +738,8 @@ public final class FastCache {
         o.put("suspendedLifetime", u.suspendedLifetime);
         o.put("stars", u.stars);
         o.put("friendsCount", u.friendsCount);
+        o.put("followers", new JSONArray(u.followers == null ? Collections.emptyList() : u.followers));
+        o.put("following", new JSONArray(u.following == null ? Collections.emptyList() : u.following));
         o.put("statusNote", u.statusNote == null ? "" : u.statusNote);
         o.put("statusNoteAt", u.statusNoteAt);
         o.put("hideReactionCounts", u.hideReactionCounts);
@@ -749,6 +766,10 @@ public final class FastCache {
         u.suspendedLifetime = o.optBoolean("suspendedLifetime", false);
         u.stars = o.optInt("stars", 0);
         u.friendsCount = o.optInt("friendsCount", 0);
+        JSONArray followers=o.optJSONArray("followers"), following=o.optJSONArray("following");
+        if (followers!=null) for (int i=0;i<followers.length();i++) { String id=followers.optString(i,""); if (!id.isEmpty()) u.followers.add(id); }
+        if (following!=null) for (int i=0;i<following.length();i++) { String id=following.optString(i,""); if (!id.isEmpty()) u.following.add(id); }
+        u.followerCount=u.followers.size(); u.followingCount=u.following.size();
         u.statusNote = o.optString("statusNote", "");
         u.statusNoteAt = o.optLong("statusNoteAt", 0L);
         u.hideReactionCounts = o.optBoolean("hideReactionCounts", false);

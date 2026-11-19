@@ -1529,3 +1529,24 @@ test('new account signup can finish an existing presence-only profile without pr
  assert.equal((await put({...doc,isAdmin:true})).status,403);
  sql.close();
 });
+
+test('own follow lists include locked people without exposing their private lists to other viewers',async()=>{
+ const sql=new DatabaseSync(':memory:'); for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(s);
+ const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const insert=(id,doc)=>put.run('users/'+id,'users','users',id,id,JSON.stringify(doc),1,1);
+ insert('alice',{uid:'alice',followers:['bob'],following:['bob']});
+ insert('bob',{uid:'bob',profileLocked:true,followers:['alice','eve'],following:['alice','eve']});
+ insert('eve',{uid:'eve'});
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null}}}}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const query=async(uid,target,field)=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({parent:'users',filters:[{field,op:'array-contains',value:target}]})}),env);
+ for(const field of ['followers','following']) {
+   const own=await (await query('alice','alice',field)).json();assert.deepEqual(own.documents.map(x=>x.id),['bob']);
+   assert.equal(own.documents[0].data.followers,undefined);assert.equal(own.documents[0].data.following,undefined);
+   const other=await (await query('eve','alice',field)).json();assert.deepEqual(other.documents,[]);
+   const filters=encodeURIComponent(JSON.stringify([{field,op:'array-contains',value:'alice'}]));
+   const count=await app.fetch(new Request('https://example.test/v1/firestore/count?parent=users&filters='+filters,{headers:{authorization:'Bearer alice'}}),env);
+   assert.equal((await count.json()).count,1);
+ }
+ sql.close();
+});

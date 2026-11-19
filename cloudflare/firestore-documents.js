@@ -712,6 +712,13 @@ function applyQuery(docs, spec) {
   return sliced;
 }
 
+// A caller may discover their own followers/following even when one of those
+// profiles hides its full relationship arrays. Never apply this exception to a
+// third party's list: that would reveal a locked profile's private connections.
+function ownFollowFilter(parent,uid,filter) {
+  return parent==='users' && ['followers','following'].includes(filter?.field)
+    && filter.op==='array-contains' && filter.value===uid;
+}
 // Apply unchanged-data filters before expensive authorization; projected user,
 // friend and group fields must still be filtered only after projection.
 function prefilterRaw(docs,parent,filters) {
@@ -1743,8 +1750,10 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
+    const ownFollowFilters=Array.isArray(body?.filters) ? body.filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,body?.filters).map(async doc => {
+      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      docs = (await Promise.all(prefilterRaw(source,parent,body?.filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
@@ -1758,7 +1767,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         || (f.field==='trashedAt' && f.op==='>' && f.value===0));
     try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
-    const result = applyQuery(visible, body || {});
+    const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});
+    const result = applyQuery(visible, spec);
     return json({ parent, documents: result });
   }
 
@@ -1777,8 +1787,10 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { rows = await readCollectionRows(db, parent, uid, filters); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
+    const ownFollowFilters=Array.isArray(filters) ? filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      docs = (await Promise.all(prefilterRaw(rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data))),parent,filters).map(async doc => {
+      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      docs = (await Promise.all(prefilterRaw(source,parent,filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
       }))).filter(Boolean);
@@ -1786,7 +1798,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     let visible;
     try { visible=await visibleDocuments(db,uid,parent,docs); }
     catch { return json({error:'Read unavailable'},503); }
-    const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).every(f => matchesFilter(d.data, f, d.id)));
+    const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).filter(f=>!ownFollowFilter(parent,uid,f)).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });
   }
 

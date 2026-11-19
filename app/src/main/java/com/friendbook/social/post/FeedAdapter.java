@@ -857,12 +857,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Models.User author = pagePost || p.authorId == null ? null
                 : com.friendbook.social.core.FastCache.getUser(p.authorId);
         String actor = Fb.uid();
-        if (!pagePost && author == null && p.authorId != null && !p.authorId.isEmpty()
-                && (p.authorName == null || p.authorName.trim().isEmpty() || "User".equals(p.authorName))
+        if (!pagePost && p.authorId != null && !p.authorId.isEmpty()
                 && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
-            Fb.getUser(p.authorId).addOnSuccessListener(loaded -> {
-                if (loaded != null && java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing())
-                    notifyDataSetChanged();
+            final String requestKey=String.valueOf(actor) + ":" + p.authorId;
+            Fb.getUserFresh(p.authorId).addOnSuccessListener(loaded -> {
+                if (loaded == null) { requestedAuthors.remove(requestKey); return; }
+                if (java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing()) notifyDataSetChanged();
             });
         }
         String photo = pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto
