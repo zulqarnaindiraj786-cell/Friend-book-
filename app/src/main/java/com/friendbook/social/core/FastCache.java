@@ -589,10 +589,10 @@ public final class FastCache {
 
     public static void preloadFeedForOffline(Activity a, Runnable onDone) {
         if (a == null) return;
-        Ui.toast(a, "📥 Caching latest 30 posts & mini thumbnails for offline reading…");
+        Ui.toast(a, "📥 Caching latest 10 posts & mini thumbnails for offline reading…");
         Fb.db().collection("posts")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(30)
+                .limit(10)
                 .get()
                 .addOnSuccessListener(snap -> {
                     List<Models.Post> list = new ArrayList<>();

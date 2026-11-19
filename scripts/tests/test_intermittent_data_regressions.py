@@ -16,14 +16,13 @@ class IntermittentDataTests(unittest.TestCase):
   self.assertGreaterEqual(home.count('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();'),2)
   self.assertIn('if(!current(token,me) || !checkingUsers.containsAll(ids))return;',friends)
   self.assertIn('checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();',friends)
- def test_reel_engagement_refreshes_visible_item_without_recursive_cached_render(self):
+ def test_reel_engagement_avoids_periodic_reads_and_recursive_cached_render(self):
   reactions=(ROOT/'post/D1Reactions.java').read_text()
   reels=(ROOT/'reels/ReelsFragment.java').read_text()
   self.assertIn('fetch(context.getApplicationContext(),collection,reel.id,false,render)',reactions)
   self.assertIn('if(renderCached)ready.run()',reactions)
-  self.assertIn('findViewHolderForAdapterPosition(pager.getCurrentItem())',reels)
-  self.assertIn('engagementHandler.removeCallbacks(engagementRefresh)',reels)
-  self.assertIn('if (!isResumed()) return;',reels)
+  self.assertNotIn('engagementRefresh',reels)
+  self.assertIn('D1Reactions.reel(',reels)
  def test_token_rejection_retries_once_not_all_failures(self):
   doc=(ROOT/'d1/documents/D1DocumentTransport.java').read_text()
   self.assertIn('Code.UNAUTHENTICATED',doc)

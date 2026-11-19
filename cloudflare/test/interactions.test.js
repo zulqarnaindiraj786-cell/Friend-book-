@@ -301,7 +301,7 @@ test('Home returns authorized reaction state and comment previews with the bound
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,2);
   const worker=createWorker(async token=>token);
   const get=(uid,limit)=>worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'posts',feedEngagement:true,limit,orderBy:[{field:'createdAt',direction:'DESCENDING'}]})}),{...f.env,FIREBASE_PROJECT_ID:'test'});
-  const r=await get('user1',7);assert.equal(r.status,200,await r.clone().text());
+  const r=await get('user1',10);assert.equal(r.status,200,await r.clone().text());
   const {documents}=await r.json();
   assert.deepEqual(documents.map(d=>d.id),['p2','p1']);
   assert.equal(documents[0].engagement,undefined);
@@ -316,7 +316,7 @@ test('Home returns authorized reaction state and comment previews with the bound
   assert.deepEqual(documents[1].engagement.preview.map(c=>c.id),['first']);
   const another=await (await get('author',7)).json();
   assert.equal(another.documents.find(d=>d.id==='p1').engagement.types[0].mine,0);
-  assert.ok((await (await get('user1',8)).json()).documents.every(d=>!d.engagement));
+  assert.ok((await (await get('user1',11)).json()).documents.every(d=>!d.engagement));
   f.sql.exec("UPDATE friendbook_cf_comment_details SET removed=0 WHERE resource='posts/p1' AND id='third'");
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,3);
 });

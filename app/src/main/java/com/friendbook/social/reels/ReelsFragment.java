@@ -85,14 +85,6 @@ public class ReelsFragment extends Fragment {
     private int loadAttempts;
     /** A load that neither succeeds nor fails (black-hole network) must not strand the spinner. */
     private final android.os.Handler reelsWatchdog = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final android.os.Handler engagementHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable engagementRefresh = new Runnable() {
-        @Override public void run() {
-            if (!isResumed()) return;
-            if (!isHidden() && adapter!=null && pager!=null) adapter.refreshVisibleEngagement(pager);
-            engagementHandler.postDelayed(this, 8000L);
-        }
-    };
     private int watchdogGen;
     private int videoGeneration;
     private final java.util.Set<String> loadedVideoIds=new java.util.HashSet<>();
@@ -753,7 +745,6 @@ public class ReelsFragment extends Fragment {
 
     @Override public void onResume(){
         super.onResume();
-        engagementHandler.removeCallbacks(engagementRefresh);engagementHandler.postDelayed(engagementRefresh,8000L);
         AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
         AdsConfig.setReelsPoolListener(() -> {
             if (adapter != null && pager != null) {
@@ -767,7 +758,7 @@ public class ReelsFragment extends Fragment {
             pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));
         }
     }
-    @Override public void onPause(){engagementHandler.removeCallbacks(engagementRefresh);if(adapter!=null && pager!=null)adapter.pauseAll(pager);super.onPause();}
+    @Override public void onPause(){if(adapter!=null && pager!=null)adapter.pauseAll(pager);super.onPause();}
 
     @Override
     public void onHiddenChanged(boolean hidden) {
@@ -860,14 +851,6 @@ public class ReelsFragment extends Fragment {
             data.clear();
             data.addAll(incoming);
             notifyDataSetChanged();
-        }
-
-        private void refreshVisibleEngagement(ViewPager2 pager) {
-            if (pager.getChildAt(0) instanceof RecyclerView) {
-                RecyclerView rv=(RecyclerView)pager.getChildAt(0);
-                RecyclerView.ViewHolder holder=rv.findViewHolderForAdapterPosition(pager.getCurrentItem());
-                if(holder instanceof VH) ((VH)holder).renderCounts();
-            }
         }
 
         private void refreshVisibleHoldersInPlace(ViewPager2 pager) {

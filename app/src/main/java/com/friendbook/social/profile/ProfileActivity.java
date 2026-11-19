@@ -965,7 +965,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postCountReg=null;
         if(postPager!=null) postPager.close();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
-                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),10,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
             if (postCountReg==null && error.isEmpty()) {
                 postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
@@ -1797,11 +1797,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void adminStats() {
         Ui.toast(this, "Counting posts…");
-        Fb.db().collection("posts").whereEqualTo("authorId", uid).limit(100).get()
+        Fb.db().collection("posts").whereEqualTo("authorId", uid).count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER)
                 .addOnSuccessListener(snap -> {
-                    int pcount = snap.size();
+                    long pcount = snap.getCount();
                     Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
-                            "• Posts: " + pcount + (pcount >= 100 ? "+" : "") + "\n"
+                            "• Posts: " + pcount + "\n"
                             + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
                             + "• Followers: " + (user != null && user.followers != null
                                     ? user.followers.size() : 0) + "\n"

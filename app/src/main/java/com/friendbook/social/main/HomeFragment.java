@@ -57,7 +57,7 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 7;
+    private static final int PAGE = 10;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -71,6 +71,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean loadingPosts, loadedPosts;
     private boolean pageError,pymkLoading,pymkLoaded;
     private boolean featuredReelsLoaded, featuredReelsLoading;
+    private String featuredReelsActor;
     private String pymkActor;
     private final List<Models.User> pymkCandidates=new ArrayList<>();
     private final List<Models.Reel> featuredReels=new ArrayList<>();
@@ -580,7 +581,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     /** Loads featured Reels once on Home open so the one-time Reels Showcase Card after Post #1 shows a real Reel preview. */
     private void loadFeaturedReelsForHome() {
         if (adapter == null) return;
-        if (featuredReelsLoaded && !featuredReels.isEmpty()) {
+        final String actor=Fb.uid();
+        if(actor==null)return;
+        if(!actor.equals(featuredReelsActor)){
+            featuredReelsActor=actor;
+            featuredReels.clear();featuredReelsLoading=false;featuredReelsLoaded=false;
+            adapter.setFeaturedReels(featuredReels);
+        }
+        if (featuredReelsLoaded) {
             adapter.setFeaturedReels(featuredReels);
             return;
         }
@@ -595,23 +603,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (!featuredReels.isEmpty()) {
             adapter.setFeaturedReels(featuredReels);
         }
-        // 2. Check Cloudflare D1/Worker reels
-        com.friendbook.social.core.CloudflareStore.list("reels", 12, docs -> {
-            if (!isAdded() || docs == null) return;
-            boolean changed = false;
-            for (Map<String, Object> m : docs) {
-                String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
-                if (id.isEmpty()) continue;
-                Models.Reel r = Models.Reel.fromMap(id, m);
-                if (addFeaturedReelCandidate(r)) changed = true;
-            }
-            if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
-        });
-        // 3. One-shot Firestore reels query (cache first, then network)
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
+        // The canonical D1 query merges old rows; an independent mirror read is redundant.
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(PAGE)
                 .get(Source.CACHE)
                 .addOnSuccessListener(cacheSnap -> {
-                    if (!isAdded() || cacheSnap == null) return;
+                    if (!isAdded() || !actor.equals(Fb.uid()) || cacheSnap == null) return;
                     boolean changed = false;
                     for (DocumentSnapshot d : cacheSnap.getDocuments()) {
                         if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
@@ -619,9 +615,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     }
                     if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
                 });
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(12)
+        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(PAGE)
                 .get()
                 .addOnSuccessListener(snap -> {
+                    if(!actor.equals(Fb.uid()) || !actor.equals(featuredReelsActor))return;
                     featuredReelsLoading = false;
                     featuredReelsLoaded = true;
                     if (!isAdded() || snap == null) return;
@@ -632,7 +629,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     }
                     if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
                 })
-                .addOnFailureListener(err -> featuredReelsLoading = false);
+                .addOnFailureListener(err -> {if(actor.equals(featuredReelsActor))featuredReelsLoading=false;});
     }
 
     private boolean addFeaturedReelCandidate(Models.Reel r) {

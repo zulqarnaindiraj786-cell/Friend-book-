@@ -110,6 +110,7 @@ dependencies {
     implementation 'com.google.android.gms:play-services-ads:22.5.0'
     // Placement mappings stay in AdMob; use the adapter from the GMA 22.x generation.
     implementation 'com.google.ads.mediation:facebook:6.16.0.0'
+    implementation 'com.google.ads.mediation:applovin:12.1.0.1'
     implementation 'com.google.android.ump:user-messaging-platform:2.2.0'
 
     implementation 'androidx.core:core:1.13.1'

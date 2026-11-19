@@ -222,9 +222,6 @@ public class MainActivity extends Activity {
             startBadgeListeners();
             watchReferralsForFreeTick();
             AdsConfig.startWatching();
-            notificationPermissionHandler.postDelayed(
-                    () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
-                    2000L);
             com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
         });
