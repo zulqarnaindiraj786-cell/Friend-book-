@@ -218,7 +218,7 @@ public class ConversationsActivity extends Activity {
                 Room r = new Room();
                 r.room = cr;
                 r.other = cr.otherUid(me0);
-                if (r.other.isEmpty()) continue;
+                if (!cr.isGroup && r.other.isEmpty()) continue;
                 Models.User cu = com.friendbook.social.core.FastCache.getUser(r.other);
                 if (cu != null) userCache.put(r.other, cu);
                 allRooms.add(r);
@@ -319,7 +319,7 @@ public class ConversationsActivity extends Activity {
                     }
                     List<Models.ChatRoom> toCache = new ArrayList<>();
                     for (Room r : allRooms) toCache.add(r.room);
-                    com.friendbook.social.core.FastCache.saveChats(toCache);
+                    if (!snap.getMetadata().isFromCache()) com.friendbook.social.core.FastCache.saveChats(toCache);
                     renderActiveNow();
                     applyFilter();
             inboxMoreButton.setText("Continue loading chats");

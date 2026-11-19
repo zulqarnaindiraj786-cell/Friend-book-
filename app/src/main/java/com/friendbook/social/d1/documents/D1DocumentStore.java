@@ -490,39 +490,49 @@ public class D1DocumentStore {
         }
     }
 
+    private static boolean isChatCache(String key) {
+        int split=key.indexOf('|');
+        if (split<0) return false;
+        String query=key.substring(split+1);
+        return query.contains("\"parent\":\"chats\"") || query.contains("\"parent\":\"chats/");
+    }
+
+    private static android.content.SharedPreferences queryPreferences(com.friendbook.social.App app,String key) {
+        return app.getSharedPreferences(isChatCache(key) ? "d1_chat_query_cache_v2" : "d1_query_cache_v2",0);
+    }
+
     String getCachedQuery(String key) {
         String cached = queryCache.get(key);
         if (cached != null) return cached;
         com.friendbook.social.App app = com.friendbook.social.App.instance;
         if (app == null) return null;
         String prefKey = "q_" + cacheHash(key);
-        cached = app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE).getString(prefKey, null);
+        cached = queryPreferences(app,key).getString(prefKey, null);
+        if (cached == null) cached = app.getSharedPreferences("d1_query_cache_v1", 0).getString(prefKey, null);
         if (cached != null) queryCache.put(key, cached);
         return cached;
     }
 
     synchronized void cacheQuery(String key, String json) {
-        if (json.equals(queryCache.put(key, json))) return;
+        queryCache.put(key, json);
         while (queryCache.size() > 32) {
             String evict = queryCache.keySet().iterator().next();
             queryCache.remove(evict);
-            com.friendbook.social.App app = com.friendbook.social.App.instance;
-            if (app != null) app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE)
-                    .edit().remove("q_" + cacheHash(evict)).apply();
         }
         // Avoid putting exceptionally large result pages into preferences.
         if (json.length() <= 256 * 1024) {
             com.friendbook.social.App app = com.friendbook.social.App.instance;
             if (app != null) {
-                android.content.SharedPreferences prefs = app.getSharedPreferences("d1_query_cache_v1", android.content.Context.MODE_PRIVATE);
+                android.content.SharedPreferences prefs = queryPreferences(app,key);
                 String prefKey = "q_" + cacheHash(key);
-                java.util.Set<String> keys = new java.util.HashSet<>(prefs.getStringSet("keys", java.util.Collections.emptySet()));
-                keys.add(prefKey);
+                if (json.equals(prefs.getString(prefKey,null))) return;
+                java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>(java.util.Arrays.asList(prefs.getString("ordered_keys", "").split(",")));
+                keys.remove("");keys.remove(prefKey);keys.add(prefKey);
                 android.content.SharedPreferences.Editor editor = prefs.edit().putString(prefKey, json);
                 while (keys.size() > 32) {
                     String evict = keys.iterator().next(); keys.remove(evict); editor.remove(evict);
                 }
-                editor.putStringSet("keys", keys).apply();
+                editor.putString("ordered_keys", android.text.TextUtils.join(",",keys)).apply();
             }
         }
     }

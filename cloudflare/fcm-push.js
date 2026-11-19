@@ -25,8 +25,13 @@ function b64url(bytes) {
 }
 let cachedToken = '';
 let tokenUntil = 0;
+let tokenRefresh;
 export async function googleToken(env) {
   if (cachedToken && Date.now() < tokenUntil) return cachedToken;
+  if (!tokenRefresh) tokenRefresh=refreshGoogleToken(env).finally(()=>{tokenRefresh=null;});
+  return tokenRefresh;
+}
+async function refreshGoogleToken(env) {
   const raw = env.FIREBASE_ADMIN_SERVICE_ACCOUNT;
   if (!raw) throw new Error('FCM_NOT_CONFIGURED');
   let sa;

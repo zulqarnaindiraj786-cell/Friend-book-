@@ -2042,6 +2042,32 @@ public class ReelsFragment extends Fragment {
                 }
             }
 
+            private Runnable startupWatchdog;
+
+            private void watchStartup(MediaPlayer player, Context context, String rawUrl, boolean canFallback) {
+                startupWatchdog = () -> {
+                    if (player != activeMp || !wantPlay || getBindingAdapterPosition()!=playingPos) return;
+                    if (canFallback && !triedRawFallback) {
+                        triedRawFallback=true;
+                        prepareWithRawUrlFallback(context,rawUrl);
+                    } else {
+                        reportStartupFailure(context);
+                    }
+                };
+                uiHandler.postDelayed(startupWatchdog,canFallback?4500L:12000L);
+            }
+
+            private void reportStartupFailure(Context context) {
+                releasePlayerOnly();
+                bufferingSpinner.setVisibility(View.GONE);
+                if (wantPlay && getBindingAdapterPosition()==playingPos) Ui.toast(context,"Video couldn't start. Tap to retry.");
+            }
+
+            private void cancelStartupWatchdog() {
+                if (startupWatchdog!=null) uiHandler.removeCallbacks(startupWatchdog);
+                startupWatchdog=null;
+            }
+
             private void prepareMediaPlayerAsync() {
                 if (!wantPlay || getBindingAdapterPosition()!=playingPos || reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
                 releasePlayerOnly();
@@ -2076,7 +2102,8 @@ public class ReelsFragment extends Fragment {
                     });
 
                     mp.setOnInfoListener((player, what, extra) -> {
-                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && activeMp == player) {
+                            cancelStartupWatchdog();
                             posterView.setVisibility(View.GONE);
                             bufferingSpinner.setVisibility(View.GONE);
                         } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay) {
@@ -2133,6 +2160,7 @@ public class ReelsFragment extends Fragment {
                         mp.setDataSource(ctx, Uri.parse(fastUrl));
                         // One stream only: a parallel full download competes with playback on mobile data.
                     }
+                    watchStartup(mp,ctx,targetUrl,cached==null && !targetUrl.equals(ReelVideoCache.optimizeStreamUrl(ctx,targetUrl)));
                     mp.prepareAsync();
                 } catch (Throwable t) {
                     bufferingSpinner.setVisibility(View.GONE);
@@ -2162,15 +2190,21 @@ public class ReelsFragment extends Fragment {
                         if (wantPlay && !userPaused) startPreparedPlayer();
                     });
                     mp.setOnInfoListener((p, what, extra) -> {
-                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && activeMp == p) {
+                            cancelStartupWatchdog();
                             posterView.setVisibility(View.GONE);
                             bufferingSpinner.setVisibility(View.GONE);
                         }
                         return false;
                     });
+                    mp.setOnErrorListener((player,what,extra) -> {
+                        if (player==activeMp) reportStartupFailure(ctx);
+                        return true;
+                    });
                     mp.setDataSource(ctx, Uri.parse(rawUrl));
+                    watchStartup(mp,ctx,rawUrl,false);
                     mp.prepareAsync();
-                } catch (Throwable ignored) { }
+                } catch (Throwable ignored) { reportStartupFailure(ctx); }
             }
 
             private void applyVideoTransform(int viewW, int viewH) {
@@ -2316,6 +2350,7 @@ public class ReelsFragment extends Fragment {
 
             void pause() {
                 wantPlay = false;
+                if (!mpPrepared) releasePlayerOnly();
                 uiHandler.removeCallbacks(progressTicker);
                 bufferingSpinner.setVisibility(View.GONE);
                 pausedBadge.setVisibility(View.GONE);
@@ -2332,6 +2367,7 @@ public class ReelsFragment extends Fragment {
             }
 
             private void releasePlayerOnly() {
+                cancelStartupWatchdog();
                 uiHandler.removeCallbacks(progressTicker);
                 mpPrepared = false;
                 if (externalAudioMp != null) {

@@ -21,7 +21,7 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
   const send=()=>fcmGateway(new Request('https://example.test/functions/v1/send-fcm-notification',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target_user_id:'bob',data:{notificationId:'n1'}})}),env,{uid:'alice'});
   try {
     const pair=await Promise.all([send(),send()]);assert.deepEqual(pair.map(r=>r.status),[200,200]);
-    assert.equal(sends,1);const bodies=await Promise.all(pair.map(r=>r.json()));assert.equal(bodies.reduce((n,b)=>n+b.accepted,0),1);assert.equal(bodies.reduce((n,b)=>n+b.duplicate,0),1);
+    assert.equal(oauth,1);assert.equal(sends,1);const bodies=await Promise.all(pair.map(r=>r.json()));assert.equal(bodies.reduce((n,b)=>n+b.accepted,0),1);assert.equal(bodies.reduce((n,b)=>n+b.duplicate,0),1);
     sql.prepare('DELETE FROM friendbook_cf_fcm_device_claims').run();fail=true;assert.equal((await send()).status,503);
     assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_fcm_device_claims').get().n,0);
     fail=false;assert.equal((await send()).status,200);assert.equal(sends,3);
