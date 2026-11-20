@@ -39,6 +39,7 @@ import com.friendbook.social.core.AdsConfig;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.ContentSafetyEngine;
 import com.friendbook.social.core.Fb;
+import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
