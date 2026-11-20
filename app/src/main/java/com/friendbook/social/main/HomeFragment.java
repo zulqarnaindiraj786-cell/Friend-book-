@@ -131,11 +131,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         swipe.setColorSchemeColors(Ui.BLUE);
         rv = new RecyclerView(a);
         LinearLayoutManager lm = new LinearLayoutManager(a);
-        lm.setItemPrefetchEnabled(true);
-        lm.setInitialPrefetchItemCount(6);
+        FastCache.NetTier tier = FastCache.netTier(a);
+        final boolean constrainedFeed = tier == FastCache.NetTier.NET_2G
+                || tier == FastCache.NetTier.NET_3G || Prefs.dataSaver(a) || Prefs.turbo2g(a);
+        // Avoid offscreen binds (and their image requests) competing with the first visible cards.
+        lm.setItemPrefetchEnabled(!constrainedFeed);
+        lm.setInitialPrefetchItemCount(constrainedFeed ? 1 : 6);
         rv.setLayoutManager(lm);
         rv.setItemAnimator(null); // zero jank / zero blink on realtime updates
-        rv.setItemViewCacheSize(24);
+        rv.setItemViewCacheSize(constrainedFeed ? 8 : 24);
         rv.getRecycledViewPool().setMaxRecycledViews(1, 30);
         adapter = new FeedAdapter(a, this);
         adapter.feedEngagementInPage = true;
@@ -143,7 +147,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                if(dy>0 && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-7) loadMore();
+                if(dy>0 && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !pageError && manager!=null && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-(constrainedFeed ? 4 : 7)) loadMore();
             }
         });
         rv.setBackgroundColor(Ui.bg(a));

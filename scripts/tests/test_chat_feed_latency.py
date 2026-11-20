@@ -45,3 +45,11 @@ class ChatFeedLatencyTest(unittest.TestCase):
         self.assertIn('runAsync(feedFirstPageExecutor, task)', store)
         batch = (ROOT / 'd1/documents/WriteBatch.java').read_text()
         self.assertIn('firestore.runChatSend(path, task)', batch)
+
+    def test_slow_feed_prioritizes_visible_cards_and_keeps_tail_pagination(self):
+        home = (ROOT / 'main/HomeFragment.java').read_text()
+        section = home.split('FastCache.NetTier tier = FastCache.netTier(a);', 1)[1].split('rv.setBackgroundColor', 1)[0]
+        for marker in ('NET_2G', 'NET_3G', 'Prefs.dataSaver(a)', 'Prefs.turbo2g(a)',
+                       'setItemPrefetchEnabled(!constrainedFeed)',
+                       'getItemCount()-(constrainedFeed ? 4 : 7)', 'loadMore()'):
+            self.assertIn(marker, section)
