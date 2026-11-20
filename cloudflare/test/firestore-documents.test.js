@@ -995,6 +995,8 @@ test('inbox sorts all eligible rooms by current message time before limiting the
   assert.equal(message.status,200);assert.equal((await message.json()).data.text,'new message');
   const refreshed=await fetchPage();
   assert.equal(refreshed[0].id,'room11');assert.equal(refreshed[0].data.lastMessage,'new message');assert.equal(refreshed[0].data.unreadCount.bob,1);
+  assert.ok(refreshed[0].data.inboxActivityAt>refreshed[1].data.inboxActivityAt);
+  assert.equal(new Set(refreshed.map(d=>d.id)).size,refreshed.length);
   const tail=refreshed.at(-1);
   assert.ok(!(await fetchPage([tail.data.inboxActivityAt,tail.id])).some(d=>d.id==='room11'));
   sql.close();
