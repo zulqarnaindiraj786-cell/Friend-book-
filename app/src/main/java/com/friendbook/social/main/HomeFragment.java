@@ -80,6 +80,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
     private Runnable pendingHomeSecondary;
+    private boolean homeStarted;
 
     private void cancelHomeSecondary() {
         if (pendingHomeSecondary != null) engagementHandler.removeCallbacks(pendingHomeSecondary);
@@ -524,6 +525,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onStart() {
         super.onStart();
+        homeStarted=true;
         FastCache.addReactionObserver(reactionObserver);
         refreshPostsIfNeeded();
         if (!isHidden()) {
@@ -539,6 +541,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public void onStop() {
+        homeStarted=false;
         super.onStop();
         cancelHomeSecondary();
         FastCache.removeReactionObserver(reactionObserver);
@@ -554,8 +557,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (actor == null) return;
         pendingHomeSecondary = () -> {
             pendingHomeSecondary = null;
-            if (!isAdded() || isHidden() || !getLifecycle().getCurrentState()
-                    .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) || !actor.equals(Fb.uid())) return;
+            if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
             startHomeWatchers();
             startStoriesListener();
             loadFeaturedReelsForHome();
