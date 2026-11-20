@@ -268,15 +268,21 @@ export async function fcmGateway(request, env, identity) {
       message = 'Direct FCM reached your phone. Notification permission and delivery are working.';
       data = { type: 'push_test', toUserId: actor, fromUserId: actor, eventId: event, title, body: message };
     } else {
+      const messageEvent=input.type==='message' && validId(input.chatId) && validId(input.messageId);
+      // These scoped reads are independent. Start together, but expose nothing
+      // and send no push until profile, block and chat membership checks pass.
+      const messageRead=messageEvent ? Promise.all([d1Doc(db,`chats/${input.chatId}`),
+        d1Doc(db,`chats/${input.chatId}/messages/${input.messageId}`)]).then(rows=>({rows}),error=>({error})) : null;
       let sender, recipient;
       try { [sender,recipient]=await Promise.all([pushProfile(db,actor),pushProfile(db,target)]); }
       catch { return json({error:'FCM_PROFILE_UNAVAILABLE'},503); }
       if (!sender || !recipient) return json({ error: 'INVALID_OR_UNAVAILABLE_EVENT' }, 400);
       if (sender.banned || recipient.banned || sender.deactivated || recipient.deactivated) return json({ error: 'Unavailable account' }, 403);
       if (blockedList(recipient).includes(actor)) return json({ skipped: 'blocked' });
-      if (input.type === 'message' && validId(input.chatId) && validId(input.messageId)) {
-        const [chat,m] = await Promise.all([d1Doc(db, `chats/${input.chatId}`),
-          d1Doc(db, `chats/${input.chatId}/messages/${input.messageId}`)]);
+      if (messageEvent) {
+        const read=await messageRead;
+        if(read.error)return json({error:'FCM_MESSAGE_UNAVAILABLE'},503);
+        const [chat,m]=read.rows;
         if (!m || !chat || m.senderId !== actor || !chat.participants?.includes(actor) || !chat.participants?.includes(target) || m.isDeleted) {
           return json({ error: 'Forbidden event' }, 403);
         }
