@@ -1,6 +1,6 @@
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary } from './interactions.js';
-import { readD1DocumentFields } from './app-documents.js';
+import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
@@ -847,7 +847,8 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   try {
     const resources=docs.map(d=>`posts/${d.id}`);
     const [viewer,states]=await Promise.all([
-      requestUserReads.get(`users/${uid}`) ?? readD1DocumentFields(db,`users/${uid}`),
+      requestUserReads.has(`users/${uid}`)
+        ? requestUserReads.get(`users/${uid}`) : readD1DocumentFields(db,`users/${uid}`),
       db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources WHERE resource IN (${resources.map(()=>'?').join(',')})`).bind(...resources).all(),
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
@@ -2459,6 +2460,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     if (parent==='referrals' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     let rows;
     const requestUserReads=new Map();
+    // Reuse the viewer record already checked by the Worker on this request.
+    if (identity.viewerProfile !== undefined) requestUserReads.set(`users/${uid}`,toFirestoreFields(identity.viewerProfile));
     try {
       const tag=body?.postTag;
       if (tag!==undefined && (parent!=='posts' || typeof tag!=='string' || !/^[#@][\p{L}\p{N}_]{1,80}$/u.test(tag))) return json({error:'Invalid post tag'},400);

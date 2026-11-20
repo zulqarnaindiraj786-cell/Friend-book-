@@ -110,12 +110,13 @@ export function createWorker(verify = verifyFirebaseToken) {
       // and sign out, but reject all other operations for disabled accounts.
       const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'
         && new URL(request.url).searchParams.get('path')===`users/${uid}`;
-      let suspended=false;
+      let suspended=false, viewerProfile;
       if (!ownProfileRead && !isPaymentAdmin(env,uid)) {
         try {
           const state=await accountStatus(env.DB,uid);
           if (state.disabled) return json({error:'Account disabled'},403);
           suspended=state.suspended;
+          viewerProfile=state.profile;
         } catch { return json({error:'Account status unavailable'},503); }
       }
       if (suspended && ((engagement && engagement[3]==='comments' && request.method!=='GET')
@@ -130,7 +131,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) {
-        const response=await firestoreDocuments(request, env, { uid, suspended, token: bearer[1] });
+        const response=await firestoreDocuments(request, env, { uid, suspended, viewerProfile, token: bearer[1] });
         if(path==='/v1/chat/call' && response.ok && ctx?.waitUntil){
           const call=await response.clone().json();
           if(call.status==='ringing') ctx.waitUntil(pushIncomingCall(env,call).catch(()=>{}));

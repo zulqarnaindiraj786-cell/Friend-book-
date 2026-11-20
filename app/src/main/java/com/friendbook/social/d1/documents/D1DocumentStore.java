@@ -31,6 +31,10 @@ public class D1DocumentStore {
     private final ExecutorService executor = new java.util.concurrent.ThreadPoolExecutor(
             8, 8, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(256),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    // Disk cache lookup and JSON decoding must not block scrolling or wait behind network calls.
+    private final ExecutorService cacheReadExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            2, 2, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(32),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ExecutorService listenerExecutor = new java.util.concurrent.ThreadPoolExecutor(
             4, 4, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(128),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
@@ -79,6 +83,7 @@ public class D1DocumentStore {
         final String actor = authenticatedUid();
         final EventListener<QuerySnapshot> listener;
         volatile boolean active = true;
+        volatile boolean cacheReady;
         volatile long lastAttemptMs = -60_000;
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final PollBudget budget = new PollBudget();
@@ -249,6 +254,8 @@ public class D1DocumentStore {
 
     <T> Task<T> runAsync(Callable<T> task) { return runAsync(executor, task); }
 
+    <T> Task<T> runCacheRead(Callable<T> task) { return runAsync(cacheReadExecutor, task); }
+
     <T> Task<T> runChatSend(Callable<T> task) { return runAsync(chatWriteExecutor, task); }
 
     private <T> Task<T> runAsync(ExecutorService lane, Callable<T> task) {
@@ -316,17 +323,31 @@ public class D1DocumentStore {
     ListenerRegistration registerQueryListener(Query query, EventListener<QuerySnapshot> listener) {
         QueryListenerEntry entry = new QueryListenerEntry(query, listener);
         queryListeners.add(entry);
-        String key = queryCacheKey(query, entry.actor);
-        String cachedJson = getCachedQuery(key);
-        if (cachedJson != null) {
-            try {
-                org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
-                entry.deliveryState.cached(cached.toString());
-                QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
-                mainHandler.post(() -> { if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(snapshot, null); });
-            } catch (Exception ignored) { }
+        // Decode saved inbox/requests on the cache lane, not the UI thread.
+        // Publish cache before letting any authoritative read overtake it.
+        try {
+            cacheReadExecutor.execute(() -> {
+                try {
+                    if (!entry.active || !entry.actor.equals(authenticatedUid())) return;
+                    String cachedJson = getCachedQuery(queryCacheKey(query, entry.actor));
+                    if (cachedJson != null) {
+                        org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
+                        QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
+                        entry.deliveryState.cached(cached.toString());
+                        mainHandler.post(() -> {
+                            if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(snapshot, null);
+                        });
+                    }
+                } catch (Exception ignored) { /* Bad cache never prevents a fresh read. */ }
+                finally {
+                    entry.cacheReady = true;
+                    scheduleQueryRead(entry);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            entry.cacheReady = true;
+            scheduleQueryRead(entry);
         }
-        scheduleQueryRead(entry);
         return () -> {
             entry.active = false;
             queryListeners.remove(entry);
@@ -409,7 +430,7 @@ public class D1DocumentStore {
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
-        if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.cacheReady || !entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
         String path = entry.query.parentPath;
         boolean inbox = ListenerPollingPolicy.isChatMessages(path) || "chats".equals(path)
                 || "notifications".equals(path) || "friend_requests".equals(path);

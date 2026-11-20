@@ -67,14 +67,30 @@ public class CommentsEngine {
         private int legacyLoaded=10, visible=10;
         private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
         private long revision;
+        private int pageAttempt;
+        private Runnable pageDeadline;
+        private final android.os.Handler pageHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+        private void clearPageDeadline() {
+            if(pageDeadline!=null)pageHandler.removeCallbacks(pageDeadline);
+            pageDeadline=null;
+        }
         private final Set<String> pendingD1=new HashSet<>();
         private void d1Page(boolean first){d1Page(first,false);}
         private void d1Page(boolean first,boolean background){
             if(!active()||loading)return;loading=true;if(!background){error="";emit();}
+            if(!active())return;
+            final int attempt=++pageAttempt;
+            pageDeadline=()->{
+                if(!active() || attempt!=pageAttempt)return;
+                pageDeadline=null;pageAttempt++;loading=false;
+                if(!background){error="Comments are taking too long. Tap to retry.";emit();}
+            };
+            pageHandler.postDelayed(pageDeadline,15000L);
             String query="?limit=10"+(first||nextD1==null?"":"&before="+android.net.Uri.encode(nextD1));
             final long requestedAtRevision=revision;
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
-                if(!active())return;loading=false;
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
                 // A response started before a local mutation must not overwrite its result.
                 if(requestedAtRevision!=revision){if(!background)d1Page(first);return;}
@@ -93,7 +109,11 @@ public class CommentsEngine {
                     if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
                     error="";if(first)firstPageReady=true;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
-            }).addOnFailureListener(e->{if(active()){loading=false;if(!background){error="D1 page unavailable. Tap to retry.";emit();}}});
+            }).addOnFailureListener(e->{
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
+                if(!background){error="D1 page unavailable. Tap to retry.";emit();}
+            });
         }
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
@@ -132,7 +152,7 @@ public class CommentsEngine {
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true;for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;clearPageDeadline();for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
     }
 
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {

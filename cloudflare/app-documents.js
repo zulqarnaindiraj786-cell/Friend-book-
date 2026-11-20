@@ -97,6 +97,15 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
+export function readPreferredDocumentJson(db, path) {
+  // Use one indexed lookup statement even for historical records. The legacy
+  // branch is eligible only when the canonical row does not exist.
+  return db.prepare(`SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1
+    UNION ALL SELECT document_json FROM friendbook_cf_documents WHERE path = ?1
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
+    LIMIT 1`).bind(path).first();
+}
+
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   // Authorization and privacy fields must reflect the current D1 row, not a
@@ -104,12 +113,7 @@ export async function readD1DocumentFields(db, path) {
   // Canonical records take precedence over the mirror. A failed read is not a
   // missing record: treating it as missing can turn a transient outage into a
   // successful empty feed, overwriting good cached data on every client.
-  // Use one indexed lookup statement even for historical records. The legacy
-  // branch is eligible only when the canonical row does not exist.
-  const row = await db.prepare(`SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1
-    UNION ALL SELECT document_json FROM friendbook_cf_documents WHERE path = ?1
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
-    LIMIT 1`).bind(path).first();
+  const row = await readPreferredDocumentJson(db,path);
   if (!row) return null;
   const fields=toFirestoreFields(row.document_json);
   if (!fields) throw new Error('Invalid stored document');

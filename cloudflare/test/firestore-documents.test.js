@@ -1151,10 +1151,10 @@ test('feed coalesces repeated author and viewer checks per request but refreshes
  const reads={};const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>({results:stmt.all(...args)}),first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith('users/'))reads[args[0]]=(reads[args[0]]||0)+1;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'posts',limit:10})}),env);
- // One extra current-account read enforces bans before the per-request feed ACL cache.
- let response=await query();assert.equal((await response.json()).documents.length,10);assert.equal(reads['users/bob'],2);assert.equal(reads['users/alice'],1);
+ // The request-level account check and feed ACL share one fresh viewer lookup.
+ let response=await query();assert.equal((await response.json()).documents.length,10);assert.equal(reads['users/bob'],1);assert.equal(reads['users/alice'],1);
  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({uid:'alice',blocked:['bob']}),'users/alice');
- response=await query();assert.deepEqual((await response.json()).documents,[]);assert.equal(reads['users/bob'],4);assert.equal(reads['users/alice'],2);
+ response=await query();assert.deepEqual((await response.json()).documents,[]);assert.equal(reads['users/bob'],2);assert.equal(reads['users/alice'],2);
  sql.close();
 });
 
