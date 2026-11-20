@@ -17,7 +17,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ inputs.release_tag || 'friendbook-2.9.6-cloudflare-e269492' }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'friendbook-2.9.9-cloudflare-a0b7d30' }}
     steps:
       - uses: actions/setup-java@v4
         with:
