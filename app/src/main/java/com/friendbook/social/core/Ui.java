@@ -439,8 +439,11 @@ public class Ui {
      * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
      * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
+    private static final java.util.regex.Pattern VERSIONED_CLOUDINARY_IMAGE =
+            java.util.regex.Pattern.compile("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+");
+
     private static boolean isVersionedCloudinaryImage(String url) {
-        return url != null && url.matches("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+");
+        return url != null && VERSIONED_CLOUDINARY_IMAGE.matcher(url).matches();
     }
 
     static String feedThumbnailUrl(String url) {
@@ -448,9 +451,22 @@ public class Ui {
         return url.replace("/image/upload/", "/image/upload/w_480,c_limit,f_webp,q_auto:eco/");
     }
 
+    /** Compact inline photo; callers retain the original URL for full-screen viewing. */
+    public static void imgPreview(Context c, ImageView iv, String url) {
+        boolean weak = FastCache.isSlow2G(c) || FastCache.netTier(c) == FastCache.NetTier.NET_3G;
+        String preview = weak && isVersionedCloudinaryImage(url)
+                ? url.replace("/image/upload/", "/image/upload/w_320,c_limit,f_webp,q_auto:eco/")
+                : feedThumbnailUrl(url);
+        img(c, iv, preview);
+    }
+
     public static void imgFeed(Context c, ImageView iv, String url) {
         Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
-        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
+        if (url == null || url.isEmpty()) {
+            Glide.with(c.getApplicationContext()).clear(iv);
+            iv.setImageDrawable(ph);
+            return;
+        }
         String fastUrl = feedThumbnailUrl(url);
         Prefs.recordBytes(c, 38_000L, 162_000L);
         if (Prefs.fullPhotoDisplay(c)) {

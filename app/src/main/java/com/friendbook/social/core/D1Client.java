@@ -18,6 +18,7 @@ public final class D1Client {
     private static final ThreadPoolExecutor IO=new ThreadPoolExecutor(8,8,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(256));
     // An opened comment thread should not queue behind feed reaction refreshes.
     private static final ThreadPoolExecutor COMMENT_READS=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
+    private static final ThreadPoolExecutor COMMENT_WRITES=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private static final ThreadPoolExecutor INTERACTIVE=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(24));
     private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final Map<String,List<Runnable>> OBSERVERS=new HashMap<>();
@@ -40,7 +41,8 @@ public final class D1Client {
         if(!enabled(collection)){result.setException(new IOException("D1 route is disabled"));return result.getTask();}
         FirebaseUser user=Fb.auth().getCurrentUser();final String actor=Fb.uid();
         if(!enabled(collection)||user==null||actor==null){result.setException(new IOException("D1 route is disabled or not signed in"));return result.getTask();}
-        ThreadPoolExecutor pool=interactive ? INTERACTIVE : "comments".equals(kind) && "GET".equals(method) ? COMMENT_READS : IO;
+        ThreadPoolExecutor pool=interactive ? INTERACTIVE : "comments".equals(kind)
+                ? ("GET".equals(method) ? COMMENT_READS : COMMENT_WRITES) : IO;
         try{pool.execute(()->{
             try{
                 if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");

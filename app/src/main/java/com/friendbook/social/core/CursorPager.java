@@ -32,8 +32,10 @@ public final class CursorPager {
     public void start() { start(false); }
     public void startObserved() { start(true); }
     private void start(boolean observed) {
+        if (!active()) return;
         CachedPage cached=CACHE.get(key);
         if(cached!=null){for(DocumentSnapshot doc:cached.docs)records.put(doc.getId(),doc);more=cached.more;emit("");}
+        if (!active()) return;
         if (cached==null) query.limit(size).get(Source.CACHE).addOnSuccessListener(page -> {
             if (!active() || serverReceived || !records.isEmpty()) return;
             for (DocumentSnapshot doc:page) records.put(doc.getId(),doc);
@@ -73,14 +75,19 @@ public final class CursorPager {
         if (active() && !serverReceived && !loading) emit("Couldn't load this page. Tap to retry.");
     }
     public void next() {
-        if(closed || loading || !more || !Objects.equals(actor,Fb.uid())) return;
-        loading=true;if(cursor!=null || records.isEmpty())emit("");Query page=query;if(cursor!=null)page=page.startAfter(cursor);
+        if(!active() || loading || !more) return;
+        loading=true;
         final int request=++requestGeneration;
+        if(cursor!=null || records.isEmpty())emit("");
+        // A listener can replace or close this pager during rendering.
+        if(!active() || request!=requestGeneration)return;
+        Query page=query;if(cursor!=null)page=page.startAfter(cursor);
         timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
         timeoutHandler.postDelayed(timeout,20000L);
         page.limit(size).get().addOnSuccessListener(result -> {
-            if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;serverReceived=true;
+            if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;
             boolean offline=result.getMetadata().isFromCache();
+            if(!offline)serverReceived=true;
             if(!offline)more=result.size()==size;
             // An offline cache can be incomplete or empty; it cannot prove that
             // previously confirmed rows disappeared. Only replace on a server read.
@@ -95,7 +102,7 @@ public final class CursorPager {
             emit(offline?"Showing cached results. Reconnect and tap to retry.":"");
         }).addOnFailureListener(error -> {if(active() && request==requestGeneration){timeoutHandler.removeCallbacks(timeout);loading=false;emit("Couldn't load this page. Tap to retry.");}});
     }
-    private boolean active(){return !closed && Objects.equals(actor,Fb.uid());}
+    private boolean active(){return !closed && actor!=null && Objects.equals(actor,Fb.uid());}
     private void emit(String error){
         if(!active())return;List<DocumentSnapshot> docs=new ArrayList<>(records.values());
         if(delivered && !loading && !lastLoading && more==lastMore && error.isEmpty() && lastError.isEmpty() && sameData(lastDelivered,docs))return;

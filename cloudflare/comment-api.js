@@ -155,7 +155,13 @@ function input(data) {
 }
 export async function commentsAPI(request, db, identity, resource, data, context={}) {
   const uid=identity.uid;
-  const read = id => db.prepare(commentSelect+' WHERE c.resource=? AND c.id=?').bind(uid,resource,id).first();
+  const selectComment = id => db.prepare(commentSelect+' WHERE c.resource=? AND c.id=?').bind(uid,resource,id);
+  const read = id => selectComment(id).first();
+  const mutateComment = async (id, ...writes) => {
+    const results = await db.batch([...writes, selectComment(id)]);
+    const saved = results.at(-1).results?.[0];
+    return saved && !saved.removed ? reply({comment:normalized(saved,uid)}) : reply({error:'Not found'},404);
+  };
   const pin = async () => (await db.prepare('SELECT id FROM friendbook_cf_comment_pins WHERE resource=?').bind(resource).first())?.id || '';
   if(request.method==='GET') {
     const url=new URL(request.url), single=url.searchParams.get('id');
@@ -197,11 +203,9 @@ export async function commentsAPI(request, db, identity, resource, data, context
     const existing=await read(data.id);
     if(existing){return existing.uid===uid && !existing.removed && existing.text===content.text && existing.parent_id===parent &&
       (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo}):reply({error:'Comment ID conflict'},409);}
-    // A root legacy row may share an ID even if it belongs to another resource.
-    // Never shadow that historical record through a newly supplied comment ID.
-    const oldId=await db.prepare("SELECT doc_id FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${data.id}`).first();
-    if(oldId)return reply({error:'Comment ID conflict'},409);
-    await db.batch([
+    // The insert already checks legacy ID collisions atomically. Do not run
+    // the same check as a separate round trip before every new comment.
+    const [, , acknowledgement] = await db.batch([
       db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
         SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=? AND collection='comments')
         AND (? IS NULL OR EXISTS (SELECT 1 FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
@@ -209,10 +213,12 @@ export async function commentsAPI(request, db, identity, resource, data, context
         ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now(),`comments/${data.id}`,parent,resource,parent),
       db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,media_url,mentions,name,photo)
         SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=? AND uid=? AND text=? AND parent_id IS ?)
-        ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,content.media,content.mentions,context.name||'',context.photo||'',resource,data.id,uid,content.text,parent)
+        ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,content.media,content.mentions,context.name||'',context.photo||'',resource,data.id,uid,content.text,parent),
+      // Read the acknowledgement in the same transaction as the write.
+      selectComment(data.id),
     ]);
-    const saved=await read(data.id);
-    if(saved?.uid!==uid || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
+    const saved=acknowledgement.results?.[0];
+    if(saved?.uid!==uid || saved.removed || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
     return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo});
   }
   if(!['react','pin','remove','edit'].includes(data.op))return reply({error:'Unknown operation'},400);
@@ -231,7 +237,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
   if(!row || row.removed || (context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);
   if(data.op==='react') {
     if(data.type!==null && !types.has(data.type))return reply({error:'Invalid reaction'},400);
-    await db.prepare(`INSERT INTO friendbook_cf_comment_reactions VALUES(?,?,?,?) ON CONFLICT(resource,id,uid) DO UPDATE SET type=excluded.type`).bind(resource,data.id,uid,data.type).run();
+    return mutateComment(data.id, db.prepare(`INSERT INTO friendbook_cf_comment_reactions VALUES(?,?,?,?) ON CONFLICT(resource,id,uid) DO UPDATE SET type=excluded.type`).bind(resource,data.id,uid,data.type));
   } else if(data.op==='pin') {
     if(context.owner!==uid || typeof data.pin!=='boolean')return reply({error:'Forbidden'},403);
     await db.prepare(`INSERT INTO friendbook_cf_comment_pins VALUES(?,?) ON CONFLICT(resource) DO UPDATE SET id=excluded.id`).bind(resource,data.pin?data.id:null).run();
@@ -244,10 +250,9 @@ export async function commentsAPI(request, db, identity, resource, data, context
   } else if(data.op==='edit') {
     if(row.uid!==uid)return reply({error:'Forbidden'},403);
     let content;try{content=input({...data,mediaUrl:row.media_url||''});}catch{return reply({error:'Invalid edit'},400);}
-    await db.batch([db.prepare('UPDATE friendbook_cf_comments SET text=? WHERE resource=? AND id=?').bind(content.text,resource,data.id),
-      db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,mentions,edited) VALUES(?,?,?,1) ON CONFLICT(resource,id) DO UPDATE SET mentions=excluded.mentions,edited=1`).bind(resource,data.id,content.mentions)]);
+    return mutateComment(data.id, db.prepare('UPDATE friendbook_cf_comments SET text=? WHERE resource=? AND id=?').bind(content.text,resource,data.id),
+      db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,mentions,edited) VALUES(?,?,?,1) ON CONFLICT(resource,id) DO UPDATE SET mentions=excluded.mentions,edited=1`).bind(resource,data.id,content.mentions));
   } else return reply({error:'Unknown operation'},400);
-  return reply({comment:normalized(await read(data.id),uid)});
 }
 export async function reactorsAPI(request,db,resource,context={}) {
   const url=new URL(request.url),id=url.searchParams.get('commentId'),after=url.searchParams.get('after')||'';

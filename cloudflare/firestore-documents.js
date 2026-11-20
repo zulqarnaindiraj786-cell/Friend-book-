@@ -1,3 +1,4 @@
+import { mapBounded } from './map-bounded.js';
 import { engagementSummary } from './interactions.js';
 import { readD1DocumentFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
@@ -279,18 +280,22 @@ function appDocumentToFirestoreRow(row) {
 }
 
 export async function readRow(db, path) {
-  const row = await db.prepare(
-    'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?'
-  ).bind(path).first();
-  if (row) return row;
-  // Read-through compatibility for root records written by the app-document API or CloudflareStore.
-  // Both stores are D1, but older app versions wrote only friendbook_cf_documents. Without this,
-  // ProfileActivity and PostDetailActivity report "User/Post not found" despite a valid D1 record.
-  if (!isRootDocument(path)) return null;
-  const appRow = await db.prepare(
-    'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
-  ).bind(path).first();
-  return appDocumentToFirestoreRow(appRow);
+  if (!isRootDocument(path)) {
+    return db.prepare('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
+  }
+  // Root point reads include the historical mirror in the same D1 request.
+  // A current row always wins, including when its data fails later validation.
+  const row = await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time,
+      NULL AS collection, NULL AS updated_at, 0 AS legacy_source
+    FROM friendbook_cf_firestore_documents WHERE path = ?1
+    UNION ALL SELECT path, NULL, NULL, doc_id, owner_uid, document_json, NULL, NULL, collection, updated_at, 1
+    FROM friendbook_cf_documents WHERE path = ?1
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
+    LIMIT 1`).bind(path).first();
+  if (!row) return null;
+  if (row.legacy_source === 1) return appDocumentToFirestoreRow(row);
+  const { legacy_source, collection, updated_at, ...canonical } = row;
+  return canonical;
 }
 
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
@@ -315,18 +320,20 @@ async function boundedChatRows(db,parent,spec) {
     cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
   }
   const prefix=`${parts[1]}_`, upper=`${parts[1]}\``;
-  const legacy=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<?
-    UNION ALL SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first();
-  if (legacy) return null;
+  // Both compatibility probes are independent; keep one wait before the page read.
+  const [legacy,bad]=await Promise.all([
+    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<?
+    UNION ALL SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first(),
   // Ensure SQLite's ordering matches the existing JS comparator exactly. Older or
   // malformed records must never be dropped simply to make the page smaller.
-  const bad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND (
+    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND (
     doc_id GLOB '*[^ -~]*' OR COALESCE((
       (json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
       OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
         AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)
-    ),0)=0) LIMIT 1`).bind(parent).first();
-  if (bad) return null;
+    ),0)=0) LIMIT 1`).bind(parent).first(),
+  ]);
+  if (legacy || bad) return null;
   const descending=orders[0].direction==='DESCENDING';
   const takeLast=spec.limitToLast===true;
   const direction=(descending !== takeLast)?'DESC':'ASC';
@@ -388,13 +395,15 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     // Canonical membership wins over stale legacy mirrors. The normal document
     // ACL still runs before results are returned to the caller.
     try {
-      const canonical=await db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m
+      const [canonical,legacy]=await Promise.all([
+        db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m
         JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
-        WHERE m.participant_uid=? AND m.source=1`).bind(uid).all();
-      const legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m
+        WHERE m.participant_uid=? AND m.source=1`).bind(uid).all(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m
         JOIN friendbook_cf_documents a ON a.path=m.chat_path
         WHERE m.participant_uid=? AND m.source=0
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all();
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all(),
+      ]);
       return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
     } catch (error) {
       if (!String(error).includes('no such table: friendbook_cf_chat_participants')) throw error;
@@ -403,37 +412,41 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
   if (parent === 'friends') {
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
-    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    const [canonical,legacy] = await Promise.all([
+      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?
       UNION ALL SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=?
-        AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all();
-    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+        AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all(),
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END)=?
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
       UNION ALL SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[1].stringValue') ELSE json_extract(a.document_json,'$.participants[1]') END)=?
       AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END) IS NOT ?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all();
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all(),
+    ]);
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'friend_requests') {
     const filtered=await filteredRequestRows(db,uid,filters);
     if (filtered!==null) return filtered;
     // Only participants can read requests, regardless of query filter supplied by the client.
-    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    const [canonical,legacy] = await Promise.all([
+      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=?
       UNION ALL
       SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
-      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?`).bind(uid,uid,uid).all();
-    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?`).bind(uid,uid,uid).all(),
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END)=?
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
       UNION ALL
       SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.toUid.stringValue') ELSE json_extract(a.document_json,'$.toUid') END)=?
         AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END) IS NOT ?
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all();
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all(),
+    ]);
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   // Only hard-coded root/field pairs can be interpolated into SQL. Privacy
@@ -443,11 +456,13 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     Array.isArray(filters) && filters.some(f=>f?.field===field && f.op==='==' && typeof f.value==='string'));
   if (indexedField) {
     const value=filters.find(f=>f.field===indexedField && f.op==='==' && typeof f.value==='string').value;
-    const canonical = await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
-      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all();
-    const legacy = await db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
+    const [canonical,legacy] = await Promise.all([
+      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
+      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all(),
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='${parent}' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${indexedField}.stringValue') ELSE json_extract(a.document_json,'$.${indexedField}') END)=?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(value).all();
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(value).all(),
+    ]);
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'notifications') {
@@ -456,29 +471,30 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     const legacyUnread = unread ? " AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_type(a.document_json,'$.fields.isRead.booleanValue') ELSE json_type(a.document_json,'$.isRead') END)='false'" : '';
     // Authorization itself narrows the inbox before loading rows. Keep canonical
     // path precedence even when its recipient differs from a stale legacy mirror.
-    const canonical = await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
-      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?${canonicalUnread}`).bind(uid).all();
-    const legacy = await db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
+    const [canonical,legacy] = await Promise.all([
+      db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
+      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?${canonicalUnread}`).bind(uid).all(),
+      db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
       FROM friendbook_cf_documents a WHERE a.collection='notifications'
         AND (CASE WHEN json_type(a.document_json,'$.fields')='object'
           THEN json_extract(a.document_json,'$.fields.toUserId.stringValue')
           ELSE json_extract(a.document_json,'$.toUserId') END)=?${legacyUnread}
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all();
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all(),
+    ]);
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
-  const firestoreRows = await db.prepare(
+  const parts = splitPath(parent);
+  const canonicalRead = db.prepare(
     'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
   ).bind(parent).all();
+  // Root collections merge both stores. Nested collections never run a root scan.
+  const legacyRead = parts?.length === 1 ? db.prepare(
+    'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ?'
+  ).bind(parent).all() : null;
+  const [firestoreRows, appRows] = await Promise.all([canonicalRead, legacyRead]);
   const byPath = new Map((firestoreRows?.results || []).map(row => [row.path, row]));
-  // The older app-document API owns most historical top-level posts/chats/friends. Firestore
-  // compatibility queries previously ignored those rows, so feed and list screens appeared empty
-  // even though production D1 had hundreds of valid documents. Merge only root collections, and
-  // let the Firestore-compatible row win where both stores contain the same path.
-  const parts = splitPath(parent);
+  // Prefer canonical rows over stale mirrors without changing privacy or ordering.
   if (parts?.length === 1) {
-    const appRows = await db.prepare(
-      'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ?'
-    ).bind(parent).all();
     for (const appRow of appRows?.results || []) {
       if (byPath.has(appRow.path)) continue;
       const row = appDocumentToFirestoreRow(appRow);
@@ -836,8 +852,7 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
     const blocked=[...(viewer?.blocked?.arrayValue?.values||[]),...(viewer?.blockedUsers?.arrayValue?.values||[])].map(v=>v.stringValue).filter(v=>typeof v==='string');
-    const output=[];
-    for (let i=0;i<docs.length;i+=3) output.push(...await Promise.all(docs.slice(i,i+3).map(async doc=>{
+    return await mapBounded(docs,3,async doc=>{
       const resource=`posts/${doc.id}`;
       const state=stateByResource.get(resource);
       if (state && state!=='verified') return doc;
@@ -855,8 +870,7 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
         return {...doc,data:compact,engagement};
       }
       catch { return doc; } // A summary failure must not hide an authorized post.
-    })));
-    return output;
+    });
   } catch { return docs; }
 }
 
@@ -2573,12 +2587,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     }
     // Pre-read existing docs so FieldValue transforms resolve against current state.
     const cache = new Map();
-    for (const op of ops) {
-      if (op?.path && !cache.has(op.path)) {
-        try { cache.set(op.path, await readRow(db, op.path)); }
-        catch { return json({ error: 'Read unavailable' }, 503); }
+    // Chat sends carry exactly two independent pre-reads (message and room).
+    // Keep large generic batches sequential to avoid flooding D1.
+    const paths=[...new Set(ops.map(op=>op?.path).filter(Boolean))];
+    const room=paths.find(p=>typeof p==='string' && /^chats\/[^/]+$/.test(p));
+    try {
+      if (ops.length===2 && paths.length===2 && room && paths.some(p=>typeof p==='string'
+          && p.startsWith(`${room}/messages/`) && splitPath(p)?.length===4)) {
+        const rows=await Promise.all(paths.map(p=>readRow(db,p)));
+        paths.forEach((p,i)=>cache.set(p,rows[i]));
+      } else {
+        for (const p of paths) cache.set(p,await readRow(db,p));
       }
-    }
+    } catch { return json({ error: 'Read unavailable' }, 503); }
     // Compute final docs in memory, then write atomically via D1 batch.
     const finalDocs = new Map(); // path -> {doc|null(deleted), existingRow}
     const order = [];

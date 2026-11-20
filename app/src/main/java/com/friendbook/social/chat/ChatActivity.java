@@ -52,6 +52,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
     private boolean historyLoading, historyMore=true,historyFailed;
     private int historyGeneration;
+    private int historyPageAttempt;
     private TextView historyButton;
     private android.widget.ProgressBar historySpinner;
     private boolean chatVisible;
@@ -663,13 +664,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void loadOlderMessages() {
         if(historyLoading || !historyMore || historyCursor==null) return;
         historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
+        final int attempt=++historyPageAttempt;
+        final DocumentSnapshot requestedCursor=historyCursor;
+        final Runnable deadline=()->failHistoryPage(generation,attempt,actor);
         historyButton.setVisibility(View.GONE);historySpinner.setVisibility(View.VISIBLE);
+        historySpinner.postDelayed(deadline,15_000L);
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
         older.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
-                    if(generation!=historyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing()) return;
+                    historySpinner.removeCallbacks(deadline);
+                    if(!isCurrentHistoryPage(generation,attempt,actor)) return;
+                    if(historyCursor!=requestedCursor){failHistoryPage(generation,attempt,actor);return;}
                     historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
                     if(historyEnd!=null && page.size()<10){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
@@ -687,9 +694,21 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     historyButton.setVisibility(View.GONE);
                     // History does not trigger sounds or bulk seen/delivered writes.
                 }).addOnFailureListener(error -> {
-                    if(generation!=historyGeneration) return;
-                    historyLoading=false;historyFailed=true;historySpinner.setVisibility(View.GONE);historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
+                    historySpinner.removeCallbacks(deadline);
+                    failHistoryPage(generation,attempt,actor);
                 });
+    }
+
+    private boolean isCurrentHistoryPage(int generation,int attempt,String actor) {
+        return historyLoading && generation==historyGeneration && attempt==historyPageAttempt
+                && java.util.Objects.equals(actor,Fb.uid()) && !isFinishing();
+    }
+
+    private void failHistoryPage(int generation,int attempt,String actor) {
+        if(!isCurrentHistoryPage(generation,attempt,actor)) return;
+        historyLoading=false;historyFailed=true;
+        historySpinner.setVisibility(View.GONE);
+        historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
     }
 
     /** Dispatch receipts before rendering; only the foreground open conversation, no history scan. */

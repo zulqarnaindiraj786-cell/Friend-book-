@@ -2054,7 +2054,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         @Override public void onBindViewHolder(@NonNull VH h, int i) {
             String url = media.get(i);
-            Ui.img(ProfileActivity.this, h.iv, url);
+            Ui.imgPreview(ProfileActivity.this, h.iv, url);
             h.iv.setOnClickListener(v -> openFullscreenImage(url));
         }
 

@@ -1131,10 +1131,14 @@ test('comments and reactions authorize parent once while enforcing post privacy'
  let postReads=0;const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>{if(q.includes('SELECT document_json') && args[0]==='posts/p')postReads++;return s.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'posts/p/comments',limit:10})}),env);
- let r=await query();assert.equal((await r.json()).documents.length,10);assert.equal(postReads,2); // canonical then legacy
+ let r=await query();assert.equal((await r.json()).documents.length,10);assert.equal(postReads,1); // one lookup including the legacy fallback
  a.run('posts/other','posts','other','alice',JSON.stringify({authorId:'alice'}),1);
  sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Only me'}),'posts/p');
  r=await query();assert.deepEqual((await r.json()).documents,[]);
+ // A stale public mirror must not override a private canonical post.
+ sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Public'}),'posts/p');
+ f.run('posts/p','posts','posts','p','alice',JSON.stringify({authorId:'alice',privacy:'Only me'}),1,1);
+ r=await query();assert.deepEqual((await r.json()).documents,[]);assert.equal(postReads,3);
  sql.close();
 });
 
@@ -1676,7 +1680,7 @@ test('transient authorization reads never turn feed or chat data into empty succ
  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{
   run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>{
    if(fail && q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path') && a[0]===fail)throw Error('temporary D1 failure');
-   if(fail && q.includes('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path') && a[0]===fail)throw Error('temporary D1 failure');
+   if(fail && q.includes('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time') && q.includes('FROM friendbook_cf_firestore_documents WHERE path') && a[0]===fail)throw Error('temporary D1 failure');
    return stmt.get(...a)||null;
   }};}};}};
  const app=createWorker(async()=> 'alice'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'},headers={authorization:'Bearer token','content-type':'application/json'};

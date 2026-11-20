@@ -69,16 +69,29 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private boolean loadingPosts, loadedPosts;
-    private boolean pageError,pymkLoading,pymkLoaded;
+    private boolean pageError;
     private boolean featuredReelsLoaded, featuredReelsLoading;
     private String featuredReelsActor;
-    private String pymkActor;
     private final List<Models.User> pymkCandidates=new ArrayList<>();
     private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
     private long lastFeedFetch, lastFeedWriteVersion;
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
+    private Runnable pendingHomeSecondary;
+
+    private void cancelHomeSecondary() {
+        if (pendingHomeSecondary != null) engagementHandler.removeCallbacks(pendingHomeSecondary);
+        pendingHomeSecondary = null;
+    }
+
+    private void releaseHomeSecondary() {
+        Runnable pending = pendingHomeSecondary;
+        if (pending == null) return;
+        engagementHandler.removeCallbacks(pending);
+        pending.run();
+    }
     private String feedAccount;
     private Query feedQuery, storyQuery;
     private DocumentSnapshot storyCursor;
@@ -195,11 +208,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (adapter != null) adapter.refreshSponsoredAds();
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
         loadingPosts=false;restartPostsListener();
-        pymkLoaded=false;loadPymk();startStoriesListener(true);
+        // Refresh posts without invalidating unrelated sections or their reuse windows.
         if (adapter != null) adapter.advanceFeaturedReelRotation();
-        featuredReelsLoaded=false;loadFeaturedReelsForHome();
-        notesReadAt = -120_000L;
-        loadNotesUsers();
+        startVisibleHomeContent();
         if (scrollTop && rv != null) rv.scrollToPosition(0);
     }
 
@@ -246,6 +257,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
         if (hidden) {
+            cancelHomeSecondary();
             stopHomeWatchers();
         } else if (adapter != null && isResumed()) {
             refreshPostsIfNeeded();
@@ -421,19 +433,25 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             notesActor = actor;
             notesReadAt = -120_000L;
             noteUsers.clear();
+            pymkCandidates.clear();
             renderNotesRow();
+            renderPymk();
         }
         long attempt = android.os.SystemClock.elapsedRealtime();
         if (attempt - notesReadAt < 120_000L) return;
         notesReadAt = attempt;
+        // Notes need up to 30 users; reuse the first ten for Home suggestions.
         Fb.db().collection("users").limit(30).get().addOnSuccessListener(snap -> {
             if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
+            if (snap == null || (snap.getMetadata().isFromCache() && snap.isEmpty())) return;
             noteUsers.clear();
+            pymkCandidates.clear();
             long now = System.currentTimeMillis();
             if (snap != null) {
                 for (DocumentSnapshot d : snap.getDocuments()) {
                     Models.User u = Models.User.fromDoc(d);
                     FastCache.putUser(u);
+                    if (pymkCandidates.size() < 10) pymkCandidates.add(u);
                     if (u.statusNote != null && !u.statusNote.isEmpty()
                             && (now - u.statusNoteAt) < NOTE_TTL_MS) {
                         noteUsers.add(u);
@@ -441,6 +459,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 }
             }
             renderNotesRow();
+            renderPymk();
         });
     }
 
@@ -521,6 +540,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onStop() {
         super.onStop();
+        cancelHomeSecondary();
         FastCache.removeReactionObserver(reactionObserver);
         feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (storiesReg != null) storiesReg.remove();
@@ -529,11 +549,21 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void startVisibleHomeContent() {
-        startHomeWatchers();
-        loadPymk();
-        loadFeaturedReelsForHome();
-        startStoriesListener();
-        loadNotesUsers();
+        cancelHomeSecondary();
+        final String actor = Fb.uid();
+        if (actor == null) return;
+        pendingHomeSecondary = () -> {
+            pendingHomeSecondary = null;
+            if (!isAdded() || isHidden() || !getLifecycle().getCurrentState()
+                    .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) || !actor.equals(Fb.uid())) return;
+            startHomeWatchers();
+            startStoriesListener();
+            loadFeaturedReelsForHome();
+            loadNotesUsers();
+        };
+        // Let the main feed take the first network turn. A one-shot deadline
+        // still lets secondary sections load when the feed is slow or offline.
+        engagementHandler.postDelayed(pendingHomeSecondary, loadingPosts ? HOME_SECONDARY_MAX_WAIT_MS : 0L);
     }
 
     private void startHomeWatchers() {
@@ -589,7 +619,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                             for (String p : parts) if (!p.equals(me)) friendIds.add(p);
                         }
                     }
-                    loadPymk();renderLoadedStories();
+                    renderPymk();renderLoadedStories();
                     // The first feed page may arrive before the friendship graph.
                     // Reapply visibility once membership is known instead of hiding
                     // friends-only posts until a later manual refresh.
@@ -600,19 +630,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 });
     }
 
-    private void loadPymk() {
-        String me=Fb.uid();if(me==null || adapter==null)return;
-        if(!java.util.Objects.equals(pymkActor,me)){pymkActor=me;pymkLoaded=false;pymkLoading=false;pymkCandidates.clear();}
-        if(pymkLoaded){renderPymk();return;}if(pymkLoading)return;pymkLoading=true;
-        Fb.db().collection("users").limit(10).get().addOnSuccessListener(snap->{
-            if(!java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
-            pymkLoading=false;pymkLoaded=true;pymkCandidates.clear();
-            for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);FastCache.putUser(u);pymkCandidates.add(u);}
-            renderPymk();
-        }).addOnFailureListener(error->{if(java.util.Objects.equals(me,Fb.uid()))pymkLoading=false;});
-    }
     private void renderPymk(){
-        List<Models.User> rows=new ArrayList<>();for(Models.User u:pymkCandidates)
+        List<Models.User> rows=new ArrayList<>();
+        if(java.util.Objects.equals(notesActor,Fb.uid())) for(Models.User u:pymkCandidates)
             if(u.uid!=null && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
                     && (Fb.me==null || !Fb.me.blocked.contains(u.uid)))rows.add(u);
         if(adapter!=null && getActivity()!=null)adapter.setPymk(FeedAlgorithm.rankPymk(getActivity(),rows,10));
@@ -714,8 +734,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // A queued or stalled request must not leave pull-to-refresh spinning forever.
         engagementHandler.postDelayed(()->{
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
-            // Stop the refresh animation without discarding a late response on a weak link.
-            if (swipe != null) swipe.setRefreshing(false);
+            // Unlock Retry while allowing a late result until a newer request starts.
+            loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
         },20000L);
         if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
             if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty()) {
@@ -725,27 +745,33 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         });
         first.get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            if(snapshot.getMetadata().isFromCache() && sameAccount && !loadedPostIds.isEmpty()) {
+            if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {
                 lastDoc=previousCursor;moreAvailable=previousMore;
-                loadingPosts=false;loadedPosts=true;updatePagingUi();return;
+                loadingPosts=false;loadedPosts=true;pageError=true;updatePagingUi();releaseHomeSecondary();return;
             }
-            loadingPosts=false;updatePagingUi(); loadedPosts=true;
-            lastFeedFetch=android.os.SystemClock.elapsedRealtime();
-            lastFeedWriteVersion=writeVersion;
+            boolean offline=snapshot.getMetadata().isFromCache();
+            loadingPosts=false;pageError=offline;updatePagingUi();loadedPosts=!offline;
+            if(!offline){
+                lastFeedFetch=android.os.SystemClock.elapsedRealtime();
+                lastFeedWriteVersion=writeVersion;
+            }
             loadedPostIds.clear();
             for(DocumentSnapshot doc:snapshot.getDocuments()) {
                 loadedPostIds.add(doc.getId());
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
             }
-            moreAvailable=snapshot.size()==PAGE;
-            if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            moreAvailable=offline || snapshot.size()==PAGE;
+            if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             // The cached first paint should not lock the first authoritative D1 page
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
             if (sessionOrderIds.isEmpty()) forceReRank=true;
-            consumePostsSnapshot(snapshot.getDocuments(),true);
+            consumePostsSnapshot(snapshot.getDocuments(),!offline);
+            releaseHomeSecondary();
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
+            if(sameAccount){lastDoc=previousCursor;moreAvailable=previousMore || previousCursor==null;}
             loadingPosts=false;pageError=true;updatePagingUi();
+            releaseHomeSecondary();
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
         });
     }
@@ -898,10 +924,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     // ---------- stories ----------
-    private void startStoriesListener(){startStoriesListener(false);}
-    private void startStoriesListener(boolean force) {
+    private void startStoriesListener() {
         String actor=Fb.uid();
-        if(!force && java.util.Objects.equals(storiesActor,actor) && storyQuery!=null && android.os.SystemClock.elapsedRealtime()-lastStoryFetch<120_000L){renderLoadedStories();return;}
+        if(actor==null)return;
+        if(actor.equals(storiesActor) && storyQuery!=null){
+            if(loadingStories)return;
+            if(android.os.SystemClock.elapsedRealtime()-lastStoryFetch<120_000L){renderLoadedStories();return;}
+        }
         storiesActor=actor;
         if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
         storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
@@ -1004,6 +1033,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             loadingPosts=false;
+            // Partial cache results cannot prove we reached the end or move the server cursor.
+            if(snapshot.getMetadata().isFromCache()){
+                pageError=true;updatePagingUi();return;
+            }
             moreAvailable=snapshot.size()==PAGE;
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             List<Models.Post> page=new ArrayList<>();

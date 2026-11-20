@@ -675,39 +675,32 @@ public class ReelsFragment extends Fragment {
         final int wdGen=++watchdogGen;
         reelsWatchdog.postDelayed(() -> {
             if (wdGen != watchdogGen || generation != videoGeneration || !isAdded()) return;
-            if (!pagingVideos || (adapter != null && !adapter.rawReels().isEmpty())) return;
+            if (!pagingVideos) return;
+            // Retire this attempt before exposing retry. Its late callbacks must
+            // not move the cursor or clear the watchdog of the next attempt.
+            watchdogGen++;
             pagingVideos=false;
             reelsLoadFailed=true;
-            rebuildMergedFeed(true);
-            if (getActivity() != null) Ui.toast(getActivity(), "Network slow — tap Retry to load Reels");
+            boolean empty = adapter == null || adapter.rawReels().isEmpty();
+            rebuildMergedFeed(empty);
+            if (getActivity() != null) Ui.toast(getActivity(), empty
+                    ? "Network slow — tap Retry to load Reels" : "Network slow — tap More videos to retry");
         }, 15_000L);
-        if (reelsCursor == null && postsCursor == null) {
-            com.friendbook.social.core.CloudflareStore.list("reels", 10, docs -> {
-                if (generation != videoGeneration || !java.util.Objects.equals(actor, Fb.uid()) || !isAdded() || docs == null) return;
-                boolean added = false;
-                for (Map<String, Object> m : docs) {
-                    String id = m.get("id") != null ? String.valueOf(m.get("id")) : "";
-                    if (id.isEmpty()) continue;
-                    Models.Reel reel = Models.Reel.fromMap(id, m);
-                    if (reel.videoUrl == null || reel.videoUrl.isEmpty()) continue;
-                    if (Fb.me != null && Fb.me.blocked.contains(reel.authorId)) continue;
-                    if (Prefs.isPostHidden(getActivity(), reel.id)) continue;
-                    if (loadedVideoIds.add("reels/" + id)) { fromReels.add(reel); added = true; }
-                }
-                if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
-            });
-        }
+        // The document query already merges canonical and legacy root Reels with
+        // access checks. Avoid a duplicate legacy request racing the first page.
         // Two sources contribute five metadata documents each: at most ten per batch.
         final int[] pending={(moreReels?1:0)+(moreVideoPosts?1:0)};
+        final boolean[] pageFailed={false};
         Runnable done=() -> {
-            if(generation!=videoGeneration) return;
+            if(generation!=videoGeneration || wdGen!=watchdogGen) return;
             if(--pending[0]==0) {
                 pagingVideos=false;
                 watchdogGen++;
                 reelsWatchdog.removeCallbacksAndMessages(null);
                 if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
-                    // An outage must NOT become a retry storm: three attempts, then a visible Retry.
-                    if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
+                    // Skip a bounded number of successfully read but filtered pages.
+                    // A network error stops here until the user retries.
+                    if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
                     else { reelsLoadFailed=true; rebuildMergedFeed(true); }
                 } else {
                     reelsLoadFailed=false;
@@ -723,7 +716,7 @@ public class ReelsFragment extends Fragment {
             if(cursor!=null) query=query.startAfter(cursor);
             query.limit(5).get().addOnSuccessListener(page -> {
                 // A superseded generation returns without settling: the newer load owns pagingVideos.
-                if(generation!=videoGeneration) return;
+                if(generation!=videoGeneration || wdGen!=watchdogGen) return;
                 // But an auth flip or a hide/show MUST NOT swallow the settle - that is exactly how
                 // pagingVideos stayed true forever and the opening spinner never went away. The page
                 // is simply not applied when it no longer belongs to this session.
@@ -746,7 +739,12 @@ public class ReelsFragment extends Fragment {
                     if (addedNow) rebuildMergedFeed(false);
                 }
                 done.run();
-            }).addOnFailureListener(error -> { if(generation==videoGeneration) { done.run(); if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load Reels — tap Retry"); } });
+            }).addOnFailureListener(error -> {
+                if(generation!=videoGeneration || wdGen!=watchdogGen) return;
+                pageFailed[0]=true;
+                done.run();
+                if(getActivity()!=null) Ui.toast(getActivity(),"Couldn't load Reels — tap Retry");
+            });
         }
     }
 
@@ -2128,7 +2126,11 @@ public class ReelsFragment extends Fragment {
                         reportStartupFailure(context);
                     }
                 };
-                uiHandler.postDelayed(startupWatchdog,canFallback?4500L:12000L);
+                // Give the small stream time on slow links instead of restarting early
+                // with a potentially much larger original. Explicit media errors still fall back.
+                boolean slow = FastCache.isSlow2G(context)
+                        || FastCache.netTier(context) == FastCache.NetTier.NET_3G;
+                uiHandler.postDelayed(startupWatchdog, canFallback ? (slow ? 12000L : 4500L) : 12000L);
             }
 
             private void reportStartupFailure(Context context) {
