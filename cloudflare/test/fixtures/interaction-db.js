@@ -15,7 +15,7 @@ export function fixture() {
   const DB = { async batch(list){sql.exec('BEGIN');try{const result=[];for(const q of list)result.push(await q.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}, withSession: () => DB, prepare(query) {
     const stmt = sql.prepare(query);
     const bound = args => ({ first: async () => stmt.get(...args) || null,
-      all: async () => ({ results: stmt.all(...args) }), run: async () => stmt.run(...args) });
+      all: async () => ({ results: stmt.all(...args) }), run: async () => /^SELECT\b/i.test(query.trim()) ? { results: stmt.all(...args) } : stmt.run(...args) });
     return { ...bound([]), bind: (...args) => bound(args) };
   } };
   const env = { DB, D1_INTERACTIONS_ENABLED: 'true' };

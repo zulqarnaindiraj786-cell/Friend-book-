@@ -72,6 +72,19 @@ test('reaction retries set state without duplicate increments or trusting client
   await call(f.env, 'reactions', 'PUT', { type: 'like' }, { identity: { ...identity, uid: 'other' } });
   assert.deepEqual((await (await call(f.env, 'reactions')).json()).types, [{ type: 'like', count: 2, mine: 1 }]);
 });
+test('compact reaction writes acknowledge within the batch without reading comments', async t => {
+  const f=fixture(); t.after(f.close);
+  const db=f.env.DB, prepare=db.prepare;
+  db.prepare=function(sql){assert.doesNotMatch(sql,/comment/i);return prepare.call(this,sql);};
+  const options={query:'?response=reaction'};
+  for(const type of ['like','like',null]) {
+    const response=await call(f.env,'reactions','PUT',{type},options);
+    assert.equal(response.status,200);
+    assert.deepEqual(await response.json(),{reactionOnly:true,types:type?[{type,count:1,mine:1}]:[]});
+  }
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,post:'p2'})).status,503);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,authorize:async()=>false})).status,403);
+});
 test('comments are idempotent, reject conflicts, spoofed authors and cross-post parents', async t => {
   const f = fixture(); t.after(f.close);
   const comment = { id: 'c1', text: 'Keep this comment' };

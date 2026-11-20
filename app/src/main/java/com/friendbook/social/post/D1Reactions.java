@@ -106,7 +106,14 @@ public final class D1Reactions {
    optimistic.put("types",adjusted);remember(context.getApplicationContext(),collection,id,optimistic);render.run();
   }catch(JSONException ignored){}
   D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",next)).addOnSuccessListener(data->{
-   if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,data);render.run();
+   if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);
+   JSONObject summary=data;
+   if(data.optBoolean("reactionOnly")){
+    // Retain the cached comment count and preview; the write only changes reactions.
+    try{summary=new JSONObject(previous.toString());summary.put("types",data.getJSONArray("types"));}
+    catch(JSONException malformed){summary=data;}
+   }
+   remember(context.getApplicationContext(),collection,id,summary);render.run();
    String owner=data.optString("owner");if(old==null&&next!=null&&!owner.isEmpty()&&!owner.equals(uid))Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
    D1Client.changed(key);
   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;WRITING.remove(key);remember(context.getApplicationContext(),collection,id,previous);render.run();Ui.toast(context,"Like not saved. Check connection and tap again.");});

@@ -27,6 +27,10 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
+const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
+      FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
+      LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]')`;
+
 // Shared by explicit post details and the bounded Home response; no writes here.
 export async function engagementSummary(db, resource, uid, owner, blocked = []) {
   const countFor = condition => `(SELECT COUNT(*) FROM friendbook_cf_comments c
@@ -34,9 +38,7 @@ export async function engagementSummary(db, resource, uid, owner, blocked = []) 
       WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
         AND c.uid ${condition} (SELECT value FROM json_each(?3)))`;
   const query = count => db.prepare(`SELECT
-    COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
-      FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
-      LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
+    ${reactionTypesSql} AS types_json,
     ${count} AS total_comments,
     COALESCE((SELECT json_group_array(json_object(
       'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
@@ -112,14 +114,23 @@ export async function interactions(request, env, identity, match, authorize = au
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
-        await db.batch([
+        const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
             VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at`)
             .bind(resource, identity.uid, data.type, Date.now()),
           db.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known)
             VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1`)
             .bind(resource, identity.uid)
-        ]);
+        ];
+        if (new URL(request.url).searchParams.get('response') === 'reaction') {
+          // One D1 batch: the acknowledgement cannot fail in a separate comment read
+          // after committing the reaction. Older clients still receive the full summary.
+          const results = await db.batch([...writes, db.prepare(`SELECT ${reactionTypesSql} AS types_json`)
+            .bind(identity.uid, resource)]);
+          return json({ reactionOnly: true, owner: context.owner,
+            types: JSON.parse(results[2].results[0].types_json) });
+        }
+        await db.batch(writes);
       }
       return json(await engagementSummary(db, resource, identity.uid, context.owner, context.blocked || []));
     }

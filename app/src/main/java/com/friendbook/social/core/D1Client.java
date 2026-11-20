@@ -32,7 +32,8 @@ public final class D1Client {
         return request(collection,id,kind,method,body,query,false);
     }
     public static Task<JSONObject> requestInteractive(String collection,String id,String kind,String method,JSONObject body){
-        return request(collection,id,kind,method,body,null,true);
+        return request(collection,id,kind,method,body,
+                "reactions".equals(kind) && "PUT".equals(method) ? "?response=reaction" : null,true);
     }
     private static Task<JSONObject> request(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
         TaskCompletionSource<JSONObject> result=new TaskCompletionSource<>();
