@@ -12,10 +12,14 @@ public class FriendMessagingService extends FirebaseMessagingService {
         // A push wakes only an already-open chat listener; it never supplies message
         // content or bypasses the Worker's authenticated membership check.
         java.util.Map<String,String> data=message.getData();
-        // Post the notification before attempting any optional network refresh.
-        PushManager.show(this, data);
+        // Schedule authenticated message reads before building the notification.
+        // This does not block on network or use push text as a stored message.
         String actor=com.friendbook.social.core.Fb.uid();
-        if (com.friendbook.social.App.isForeground() && actor != null && actor.equals(data.get("toUserId"))) {
+        boolean currentActor=actor!=null && actor.equals(data.get("toUserId"));
+        if (currentActor && com.friendbook.social.App.isForeground() && "message".equals(data.get("type")))
+            com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshChatFromPush(data.get("chatId"));
+        PushManager.show(this, data);
+        if (com.friendbook.social.App.isForeground() && currentActor && actor.equals(com.friendbook.social.core.Fb.uid())) {
             com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();
             String type = data.get("type");
             if ("incoming_call".equals(type)) {
@@ -28,7 +32,6 @@ public class FriendMessagingService extends FirebaseMessagingService {
                         });
                 return;
             }
-            if ("message".equals(type)) store.refreshChatFromPush(data.get("chatId"));
             if (data.get("notificationId") != null || !"message".equals(type)) store.refreshInboxFromPush(type);
         }
     }
