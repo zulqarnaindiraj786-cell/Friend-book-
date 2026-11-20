@@ -1,6 +1,6 @@
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
-import { engagementSummary } from './interactions.js';
+import { engagementSummary, batchEngagementReads } from './interactions.js';
 import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
@@ -854,12 +854,13 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
     const blocked=[...(viewer?.blocked?.arrayValue?.values||[]),...(viewer?.blockedUsers?.arrayValue?.values||[])].map(v=>v.stringValue).filter(v=>typeof v==='string');
+    const preloaded=await batchEngagementReads(db,resources.filter(resource=>!stateByResource.get(resource) || stateByResource.get(resource)==='verified'),uid,blocked);
     return await mapBounded(docs,3,async doc=>{
       const resource=`posts/${doc.id}`;
       const state=stateByResource.get(resource);
       if (state && state!=='verified') return doc;
       try {
-        const engagement=await engagementSummary(db,resource,uid,doc.data.authorId,blocked);
+        const engagement=await engagementSummary(db,resource,uid,doc.data.authorId,blocked,preloaded.get(resource));
         // Missing import metadata is not proof that a historical post had zero likes.
         if (!state && !engagement.types.length && (Number(doc.data.likes)>0 || Object.keys(doc.data.reactionsMap||{}).length)) {
           engagement.reactionStateUnknown=true;

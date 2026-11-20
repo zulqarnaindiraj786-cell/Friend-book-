@@ -107,6 +107,12 @@ public class WriteBatch {
             }
             return null;
         };
-        return chatSend ? firestore.runChatSend(task) : firestore.runAsync(task);
+        if (!chatSend) return firestore.runAsync(task);
+        for (int i = 0; i < ops.length(); i++) {
+            JSONObject op = ops.optJSONObject(i);
+            String path = op == null ? "" : op.optString("path", "");
+            if (path.matches("chats/[^/]+")) return firestore.runChatSend(path, task);
+        }
+        return firestore.runChatSend("", task);
     }
 }

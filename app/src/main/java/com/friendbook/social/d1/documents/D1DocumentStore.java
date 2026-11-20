@@ -41,10 +41,17 @@ public class D1DocumentStore {
     private final ExecutorService inboxExecutor = new java.util.concurrent.ThreadPoolExecutor(
             3, 3, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(32),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
-    // A chat send must not sit behind slow feed, profile or discovery requests.
-    private final ExecutorService chatWriteExecutor = new java.util.concurrent.ThreadPoolExecutor(
-            1, 1, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(24),
+    private final ExecutorService feedFirstPageExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            2, 2, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(8),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    // One FIFO per stripe: a slow room does not block rooms assigned to other stripes.
+    private final ExecutorService[] chatWriteExecutors = {
+            newChatWriteLane(), newChatWriteLane(), newChatWriteLane(), newChatWriteLane()
+    };
+    private static ExecutorService newChatWriteLane() {
+        return new java.util.concurrent.ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(6), new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    }
     private final ExecutorService chatReadExecutor = new java.util.concurrent.ThreadPoolExecutor(
             2, 2, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(16),
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
@@ -257,7 +264,11 @@ public class D1DocumentStore {
 
     <T> Task<T> runCacheRead(Callable<T> task) { return runAsync(cacheReadExecutor, task); }
 
-    <T> Task<T> runChatSend(Callable<T> task) { return runAsync(chatWriteExecutor, task); }
+    <T> Task<T> runFeedFirstPage(Callable<T> task) { return runAsync(feedFirstPageExecutor, task); }
+
+    <T> Task<T> runChatSend(String roomPath, Callable<T> task) {
+        return runAsync(chatWriteExecutors[Math.floorMod(roomPath.hashCode(), chatWriteExecutors.length)], task);
+    }
 
     private <T> Task<T> runAsync(ExecutorService lane, Callable<T> task) {
         TaskCompletionSource<T> tcs = new TaskCompletionSource<>();

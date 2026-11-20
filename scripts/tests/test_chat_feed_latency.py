@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2] / 'app/src/main/java/com/friendbook/s
 class ChatFeedLatencyTest(unittest.TestCase):
     def test_message_lanes_and_direct_push(self):
         store = (ROOT / 'd1/documents/D1DocumentStore.java').read_text()
-        self.assertIn('runAsync(chatWriteExecutor, task)', store)
+        self.assertIn('runAsync(chatWriteExecutors[Math.floorMod(roomPath.hashCode(), chatWriteExecutors.length)], task)', store)
         self.assertIn('ListenerPollingPolicy.isChatMessages(path) ? chatReadExecutor', store)
         push = (ROOT / 'push/FCMPush.java').read_text()
         self.assertIn('invoke(directPeer,', push)
@@ -35,3 +35,13 @@ class ChatFeedLatencyTest(unittest.TestCase):
         self.assertIn('entry.active && (chat || inbox)', fallback)
         self.assertIn('chatFallbackDue(now - entry.lastAttemptMs, chat)', fallback)
         self.assertIn('scheduleQueryRead(entry)', fallback)
+
+    def test_feed_first_page_does_not_queue_behind_other_reads(self):
+        query = (ROOT / 'd1/documents/Query.java').read_text()
+        self.assertIn('"posts".equals(parentPath) && feedEngagement', query)
+        self.assertIn('startAfterValues == null', query)
+        self.assertIn('firstFeedPage ? firestore.runFeedFirstPage(fetch)', query)
+        store = (ROOT / 'd1/documents/D1DocumentStore.java').read_text()
+        self.assertIn('runAsync(feedFirstPageExecutor, task)', store)
+        batch = (ROOT / 'd1/documents/WriteBatch.java').read_text()
+        self.assertIn('firestore.runChatSend(path, task)', batch)

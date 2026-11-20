@@ -1,4 +1,4 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyPage } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountStatement, legacyPage } from './comment-api.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -32,12 +32,14 @@ const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', 
       LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]')`;
 
 // Shared by explicit post details and the bounded Home response; no writes here.
-export async function engagementSummary(db, resource, uid, owner, blocked = []) {
+function engagementStatement(db, resource, uid, blocked, useTotals = true) {
   const countFor = condition => `(SELECT COUNT(*) FROM friendbook_cf_comments c
       LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
       WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
         AND c.uid ${condition} (SELECT value FROM json_each(?3)))`;
-  const query = count => db.prepare(`SELECT
+  const count = useTotals ? `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
+        ${blocked.length ? `- ${countFor('IN')}` : ''}` : countFor('NOT IN');
+  return db.prepare(`SELECT
     ${reactionTypesSql} AS types_json,
     ${count} AS total_comments,
     COALESCE((SELECT json_group_array(json_object(
@@ -49,21 +51,23 @@ export async function engagementSummary(db, resource, uid, owner, blocked = []) 
     )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
       AND c.uid NOT IN (SELECT value FROM json_each(?3))
       ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
-    .bind(uid, resource, JSON.stringify(blocked || [])).first();
+    .bind(uid, resource, JSON.stringify(blocked || []));
+}
+
+export async function engagementSummary(db, resource, uid, owner, blocked = [], preloaded = null) {
   const canonicalSummary = async () => {
     try {
-      return await query(`COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
-        ${blocked.length ? `- ${countFor('IN')}` : ''}`);
+      return await engagementStatement(db,resource,uid,blocked).first();
     } catch (error) {
       if (!String(error).includes('no such table: friendbook_cf_visible_comment_totals')) throw error;
-      return query(countFor('NOT IN'));
+      return engagementStatement(db,resource,uid,blocked,false).first();
     }
   };
   const legacySummary = async () => {
-    const count = await legacyCommentCount(db,resource,blocked);
+    const count = preloaded ? preloaded.count : await legacyCommentCount(db,resource,blocked);
     return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : []};
   };
-  const [combined,legacy] = await Promise.all([canonicalSummary(),legacySummary()]);
+  const [combined,legacy] = await Promise.all([preloaded ? preloaded.canonical : canonicalSummary(),legacySummary()]);
   const typesList = JSON.parse(combined?.types_json || '[]');
   const previewRows = JSON.parse(combined?.preview_json || '[]');
   const preview = [...previewRows.map(row => normalized(row, uid)), ...legacy.preview]
@@ -74,6 +78,19 @@ export async function engagementSummary(db, resource, uid, owner, blocked = []) 
     comments: Number(combined?.total_comments || 0) + legacy.count,
     preview,
   };
+}
+
+// A small authorized Home page can fetch summary rows in one D1 round trip.
+// Preserve the existing individual read path for incomplete schemas and failures.
+export async function batchEngagementReads(db, resources, uid, blocked) {
+  if (resources.length < 2 || resources.length > 10 || typeof db.batch !== 'function') return new Map();
+  try {
+    const rows=await db.batch(resources.flatMap(resource=>[
+      engagementStatement(db,resource,uid,blocked),legacyCommentCountStatement(db,resource,blocked),
+    ]));
+    if(rows.length!==resources.length*2 || rows.some(row=>row.success===false || !row.results?.[0]))return new Map();
+    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i*2].results[0],count:Number(rows[i*2+1].results[0].n)||0}]));
+  } catch { return new Map(); }
 }
 
 export async function interactions(request, env, identity, match, authorize = authorizePost) {

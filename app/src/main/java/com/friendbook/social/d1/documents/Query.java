@@ -269,13 +269,16 @@ public class Query {
                 return snapshot;
             });
         }
-        return firestore.runAsync(() -> {
+        java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
             JSONArray arr = D1DocumentTransport.query(toQueryBody());
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
             firestore.cacheQuery(key, arr.toString());
             return parseQuerySnapshot(arr);
-        });
+        };
+        boolean firstFeedPage = "posts".equals(parentPath) && feedEngagement && limitValue != null
+                && startAfterValues == null && startAtValues == null && endBeforeValues == null && endAtValues == null;
+        return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
     }
 
     public ListenerRegistration addSnapshotListener(EventListener<QuerySnapshot> listener) {

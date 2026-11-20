@@ -44,9 +44,12 @@ function legacyBindings(resource,blocked) {
   const id=resource.slice(resource.indexOf('/')+1);
   return [id,id,resource,JSON.stringify(blocked||[]),resource];
 }
+export function legacyCommentCountStatement(db,resource,blocked=[]) {
+  return db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyWhere}`)
+    .bind(...legacyBindings(resource,blocked));
+}
 export async function legacyCommentCount(db,resource,blocked=[]) {
-  const row=await db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyWhere}`)
-    .bind(...legacyBindings(resource,blocked)).first();
+  const row=await legacyCommentCountStatement(db,resource,blocked).first();
   return Number(row?.n)||0;
 }
 function legacyComment(row, uid, resource) {
