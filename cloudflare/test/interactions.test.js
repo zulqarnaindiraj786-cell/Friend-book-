@@ -85,6 +85,16 @@ test('compact reaction writes acknowledge within the batch without reading comme
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,post:'p2'})).status,503);
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,authorize:async()=>false})).status,403);
 });
+test('five ordered quick-tap targets leave one Like and the correct persisted count', async t => {
+  const f=fixture(); t.after(f.close);
+  const options={query:'?response=reaction'};
+  for(const type of ['like',null,'like',null,'like']) {
+    const result=await call(f.env,'reactions','PUT',{type},options);
+    assert.equal(result.status,200);
+    assert.deepEqual((await result.json()).types,type?[{type,count:1,mine:1}]:[]);
+  }
+  assert.deepEqual((await (await call(f.env,'reactions','GET')).json()).types,[{type:'like',count:1,mine:1}]);
+});
 test('comments are idempotent, reject conflicts, spoofed authors and cross-post parents', async t => {
   const f = fixture(); t.after(f.close);
   const comment = { id: 'c1', text: 'Keep this comment' };
