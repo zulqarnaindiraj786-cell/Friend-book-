@@ -17,8 +17,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release download friendbook-2.10.4-cloudflare-b313544 -p app-release.apk -D previous
-          gh release download friendbook-2.10.5-cloudflare-e407c39 --clobber -p app-release.apk -D candidate
+          gh release download friendbook-2.10.7-cloudflare-dcb8b27 -p app-release.apk -D previous
+          gh release download friendbook-2.10.8-cloudflare-f44ff43 --clobber -p app-release.apk -D candidate
           tools="$ANDROID_HOME/build-tools/36.0.0"
           if [ ! -x "$tools/apksigner" ]; then sdkmanager 'build-tools;36.0.0'; fi
           for dir in previous candidate; do
@@ -28,8 +28,8 @@ jobs:
             grep -E "^(package:|sdkVersion:|native-code:)" "$dir/badging.txt"
           done
           diff -u previous/cert.txt candidate/cert.txt
-          grep -q "^package: name='com.friendbook.social' versionCode='147'" candidate/badging.txt
-          test "$(wc -c < candidate/app-release.apk)" -eq 8303078
+          grep -q "^package: name='com.friendbook.social' versionCode='150'" candidate/badging.txt
+          test "$(wc -c < candidate/app-release.apk)" -eq 8304090
           sha256sum candidate/app-release.apk
       - name: Enable KVM for emulator
         run: |
@@ -42,4 +42,4 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: adb install candidate/app-release.apk && adb uninstall com.friendbook.social && adb install previous/app-release.apk && adb install -r candidate/app-release.apk && adb shell dumpsys package com.friendbook.social | grep 'versionCode=147'
+          script: adb install candidate/app-release.apk && adb uninstall com.friendbook.social && adb install previous/app-release.apk && adb install -r candidate/app-release.apk && adb shell dumpsys package com.friendbook.social | grep 'versionCode=150'
