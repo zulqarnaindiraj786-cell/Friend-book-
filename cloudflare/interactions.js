@@ -94,10 +94,12 @@ export async function interactions(request, env, identity, match, authorize = au
     if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     if (!allowed) return json({ error: 'Forbidden' }, 403);
     if (!ready) {
-      await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
-        .bind(resource).run();
-      // Another request can establish a staging row between the read and insert.
-      const current = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+      // Keep the insert-or-observe check atomic and in one D1 round trip.
+      const [, observed] = await db.batch([
+        db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING").bind(resource),
+        db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource),
+      ]);
+      const current = observed.results?.[0];
       if (!current || current.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     }
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }

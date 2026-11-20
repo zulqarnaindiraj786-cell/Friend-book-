@@ -367,7 +367,11 @@ public class Ui {
             iv.setImageResource(defRes);
             return;
         }
-        String fastUrl = optimizeImageUrl(c, url.trim(), true);
+        String avatarUrl = url.trim();
+        // Small circular avatars render at 240px; keep full-size profile media unchanged.
+        String fastUrl = isVersionedCloudinaryImage(avatarUrl)
+                ? avatarUrl.replace("/image/upload/", "/image/upload/w_240,c_limit,f_webp,q_auto:eco/")
+                : optimizeImageUrl(c, avatarUrl, true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(240, 240)
@@ -435,8 +439,12 @@ public class Ui {
      * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
      * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
+    private static boolean isVersionedCloudinaryImage(String url) {
+        return url != null && url.matches("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+");
+    }
+
     static String feedThumbnailUrl(String url) {
-        if (url == null || !url.matches("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+")) return url;
+        if (!isVersionedCloudinaryImage(url)) return url;
         return url.replace("/image/upload/", "/image/upload/w_480,c_limit,f_webp,q_auto:eco/");
     }
 

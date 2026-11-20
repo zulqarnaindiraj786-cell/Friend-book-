@@ -825,13 +825,13 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
 }
 
 // Enrich only a bounded page that already passed the authoritative post ACL.
-async function feedEngagement(db, env, uid, body, docs) {
+async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
       || body.limit<1 || body.limit>10 || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
     const resources=docs.map(d=>`posts/${d.id}`);
     const [viewer,states]=await Promise.all([
-      readD1DocumentFields(db,`users/${uid}`),
+      requestUserReads.get(`users/${uid}`) ?? readD1DocumentFields(db,`users/${uid}`),
       db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources WHERE resource IN (${resources.map(()=>'?').join(',')})`).bind(...resources).all(),
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
@@ -863,7 +863,7 @@ async function feedEngagement(db, env, uid, body, docs) {
 // Feed fast path: fetch small indexed batches from each store, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
-async function boundedFeedPage(db,uid,spec) {
+async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const filters=Array.isArray(spec?.filters)?spec.filters:[];
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
   const authorArgs=author===null?[]:[author];
@@ -904,7 +904,7 @@ async function boundedFeedPage(db,uid,spec) {
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const chunk=Math.min(100,Math.max(20,spec.limit*2));
-  const visible=[], requestUserReads=new Map();
+  const visible=[];
   for (;;) {
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
     const args=[...authorArgs,...(cursor||[]),chunk];
@@ -2444,20 +2444,23 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     }
     if (parent==='referrals' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     let rows;
+    const requestUserReads=new Map();
     try {
       const tag=body?.postTag;
       if (tag!==undefined && (parent!=='posts' || typeof tag!=='string' || !/^[#@][\p{L}\p{N}_]{1,80}$/u.test(tag))) return json({error:'Invalid post tag'},400);
       if (tag!==undefined) {
         const match=`"${tag}"`;
-        const canonical=await db.prepare(`SELECT f.* FROM friendbook_cf_post_search s JOIN friendbook_cf_firestore_documents f ON f.path=s.path
-          WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all();
-        const legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_post_search s JOIN friendbook_cf_documents a ON a.path=s.path
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT f.* FROM friendbook_cf_post_search s JOIN friendbook_cf_firestore_documents f ON f.path=s.path
+          WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_post_search s JOIN friendbook_cf_documents a ON a.path=s.path
           WHERE friendbook_cf_post_search MATCH ? AND s.source=0
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(match).all();
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(match).all(),
+        ]);
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
-        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body);
-        if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page),body.knownRevisions);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
+        if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body);
       }
     }
@@ -2487,18 +2490,18 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     const valueCursors=['startAfter','startAt','endBefore','endAt'].every(k=>!body[k] || Array.isArray(body[k]));
     if(parent==='posts' && Number.isInteger(body.limit) && body.limit>0 && body.limit<=100 && !body.limitToLast && valueCursors){
       const ordered=applyQuery(docs,{...body,limit:null});
-      const allowed=[],userReads=new Map();
+      const allowed=[];
       try {
         for(let i=0;i<ordered.length && allowed.length<body.limit;i+=20)
-          allowed.push(...await visibleDocuments(db,uid,parent,ordered.slice(i,i+20),userReads,archiveQuery));
+          allowed.push(...await visibleDocuments(db,uid,parent,ordered.slice(i,i+20),requestUserReads,archiveQuery));
       } catch { return json({error:'Read unavailable'},503); }
-      return queryResponse(parent,await feedEngagement(db,env,uid,body,allowed.slice(0,body.limit)),body.knownRevisions);
+      return queryResponse(parent,await feedEngagement(db,env,uid,body,allowed.slice(0,body.limit),requestUserReads),body.knownRevisions);
     }
-    try { visible=await visibleDocuments(db,uid,parent,docs,new Map(),archiveQuery); }
+    try { visible=await visibleDocuments(db,uid,parent,docs,requestUserReads,archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});
     const result = applyQuery(visible, spec);
-    return queryResponse(parent,await feedEngagement(db,env,uid,body,result),body.knownRevisions);
+    return queryResponse(parent,await feedEngagement(db,env,uid,body,result,requestUserReads),body.knownRevisions);
   }
 
   // GET /v1/firestore/count?parent=...&filters=...
