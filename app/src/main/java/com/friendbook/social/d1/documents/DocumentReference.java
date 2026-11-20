@@ -14,6 +14,7 @@ public class DocumentReference {
     private final D1DocumentStore firestore;
     private final String path;
     private final String id;
+    private boolean profileAudience;
 
     DocumentReference(D1DocumentStore firestore, String path) {
         this.firestore = firestore;
@@ -31,6 +32,14 @@ public class DocumentReference {
     }
 
     public String getId() { return id; }
+
+    public DocumentReference withProfileAudience() {
+        DocumentReference ref=new DocumentReference(firestore,path);
+        ref.profileAudience=true;
+        return ref;
+    }
+
+    boolean includesProfileAudience(){return profileAudience;}
 
     public String getPath() { return path; }
 

@@ -801,10 +801,12 @@ public class Models {
             }
             c.participants = Format.listOf(m, "participants");
             c.lastMessage = Format.str(m, "lastMessage");
-            long ts = Format.ts(m == null ? null : m.get("lastMessageTime"));
+            long ts = Format.ts(m == null ? null : m.get("inboxActivityAt"));
+            if(ts<=0)ts=Format.ts(m == null ? null : m.get("lastMessageTime"));
             if (ts <= 0 && m != null && m.get("lastMessageTimeMs") instanceof Number) {
                 ts = ((Number) m.get("lastMessageTimeMs")).longValue();
             }
+            if(ts<=0)ts=Format.ts(m == null ? null : m.get("lastMessageAt"));
             c.lastMessageTime = ts;
             Object t = m == null ? null : m.get("typing");
             if (t instanceof Map) {

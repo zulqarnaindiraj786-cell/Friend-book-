@@ -580,6 +580,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if(chatVisible && !snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty())
+                        handOffInboxHead(chatActor, snap.getDocuments().get(snap.size()-1));
                     boolean bridged=false;
                     if(!snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()){
                         Set<String> known=firstServer[0]?knownAtAttach:new HashSet<>(historyMessages.keySet());
@@ -659,6 +661,23 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     }
 
                 });
+    }
+
+    private void handOffInboxHead(String actor, DocumentSnapshot doc) {
+        Models.Message message=Models.Message.fromDoc(doc);
+        if(message.isDeleted || hiddenMsgs().contains(message.id))return;
+        long time=Format.ts(doc.get("createdAt"));
+        if(time<=0)time=Format.ts(doc.get("createdAtMs"));
+        if(time<=0)return;
+        String preview;
+        switch(message.type==null?"":message.type){
+            case "image": preview="📷 Photo";break;
+            case "video": preview="🎬 Video";break;
+            case "voice": preview="🎤 Voice note";break;
+            default: preview=message.text;break;
+        }
+        if(preview==null || preview.isEmpty())return;
+        InboxMessageHandoff.seen(actor,new InboxMessageHandoff.Head(chatId,preview,time,peerId,isGroupChat));
     }
 
     private void loadOlderMessages() {

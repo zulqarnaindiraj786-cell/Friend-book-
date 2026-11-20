@@ -454,7 +454,7 @@ public class D1DocumentStore {
     private void deliverDoc(DocListenerEntry entry) {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
-            org.json.JSONObject response = D1DocumentTransport.getDocument(entry.ref.getPath());
+            org.json.JSONObject response = D1DocumentTransport.getDocument(entry.ref.getPath(),entry.ref.includesProfileAudience());
             DocumentSnapshot snap = entry.ref.parseSnapshot(response);
             if (!entry.actor.equals(authenticatedUid())) return;
             cacheDoc(entry.ref.getPath(), snap, entry.actor);

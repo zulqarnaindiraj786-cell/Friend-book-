@@ -17,10 +17,11 @@ public final class D1Reactions {
  private static final long REFRESH_MS=8000;
  private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
+ private static final Set<String> UNCONFIRMED=new HashSet<>();
  private static final Map<String,PendingReaction> MUTATIONS=new HashMap<>();
  private static final Map<String,Integer> GENERATION=new HashMap<>();
  private static final Map<String,List<Runnable>> WAITERS=new HashMap<>();
- private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();}}
+ private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();UNCONFIRMED.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
@@ -45,13 +46,14 @@ public final class D1Reactions {
    if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);
    if(WRITING.contains(key)){WAITERS.remove(key);return;}
    if(generation!=GENERATION.getOrDefault(key,0)){List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)fetch(context,collection,id,false,callback);return;}
+   UNCONFIRMED.remove(key);
    remember(context,collection,id,data);List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
   }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);WAITERS.remove(key);FAILED.add(key);
    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(Objects.equals(uid,Fb.uid()))FAILED.remove(key);},10000);});
  }
  public static void seedFeed(Context context,com.friendbook.social.d1.documents.DocumentSnapshot doc,long requestedAt){
   scope();String key=D1Client.key("posts",doc.getId());Long last=FETCHED_AT.get(key);
-  if(WRITING.contains(key) || ((doc.getMetadata().isFromCache() && CACHE.get(key)!=null) || (last!=null && last>=requestedAt)))return;
+  if(WRITING.contains(key) || UNCONFIRMED.contains(key) || ((doc.getMetadata().isFromCache() && CACHE.get(key)!=null) || (last!=null && last>=requestedAt)))return;
   String raw=doc.getString("__feedEngagement");if(raw==null)return;
   try{JSONObject summary=new JSONObject(raw);if(summary.optJSONArray("types")==null)return;
    GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);
@@ -99,7 +101,7 @@ public final class D1Reactions {
   MUTATIONS.put(key,mutation);WRITING.add(key);
   mutation.add(requested,onlyAdd,toggleAny,render);
   JSONObject initial=CACHE.get(key);
-  if(initial!=null && !initial.optBoolean("reactionStateUnknown"))mutation.start(initial);
+  if(initial!=null && !UNCONFIRMED.contains(key) && !initial.optBoolean("reactionStateUnknown"))mutation.start(initial);
   else D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
    if(!mutation.current())return;
    if(data.optJSONArray("types")==null)mutation.finish("Couldn't load reaction. Tap to try again.");
@@ -124,6 +126,7 @@ public final class D1Reactions {
    if(confirmed!=null)publishOptimistic();
   }
   void start(JSONObject initial){
+   UNCONFIRMED.remove(key);
    confirmed=initial;initialType=mine(initial);owner=initial.optString("owner");
    queue.initialize(initialType);publishOptimistic();sendNext();
   }
@@ -168,6 +171,9 @@ public final class D1Reactions {
   void failed(ReactionWriteQueue.Target target){
    queue.complete(target);
    if(queue.hasPending()){sendNext();return;}
+   // A timeout may mean that the write committed but its response was lost.
+   // Read the current server state before interpreting the next tap.
+   UNCONFIRMED.add(key);
    finish("Like not confirmed. Check connection and tap again.");
   }
   void finish(String error){

@@ -121,8 +121,11 @@ final class D1DocumentTransport {
         return new JSONObject(response); // Never share mutable JSON across consumers.
     }
 
-    static JSONObject getDocument(String path) throws Exception {
-        JSONObject data = read("GET", "/v1/firestore/document?path=" + enc(path), null);
+    static JSONObject getDocument(String path) throws Exception {return getDocument(path,false);}
+
+    static JSONObject getDocument(String path, boolean profileAudience) throws Exception {
+        JSONObject data = read("GET", "/v1/firestore/document?path=" + enc(path)
+                + (profileAudience ? "&profileAudience=1" : ""), null);
         boolean present = data.optJSONObject("data") != null;
         if ((!data.has("exists") && !present) || (data.optBoolean("exists", false) && !present)
                 || (data.has("exists") && !(data.opt("exists") instanceof Boolean)))

@@ -88,7 +88,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private String attemptedProfileRepairUid = "";
     private String friendState = "none"; // none|friends|outgoing|incoming
     private String incomingRequestId = null;
-    private boolean hasOut, hasIn;
+    private boolean hasOut, hasIn, requestBusy, outgoingKnown;
+    private String outgoingRequestId;
+    private String requestPendingLabel;
+    private int profileAudienceCount=-1;
+    private boolean audienceIncludesViewer, viewerFriendKnown;
     private int userPostCount = -1; // unknown until an authenticated D1 count returns
     private ListenerRegistration postCountReg;
     private String profileSearchQuery = "";
@@ -884,7 +888,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void startProfileListeners() {
-        userReg = Fb.db().collection("users").document(uid)
+        userReg = Fb.db().collection("users").document(uid).withProfileAudience()
                 .addSnapshotListener((d, err) -> {
                     if (d == null) {
                         // Permission loss must not leave previously visible private data onscreen.
@@ -905,6 +909,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     if (fields.equals(boundProfileFields)) return;
                     boundProfileFields = fields;
                     user = Models.User.fromDoc(d);
+                    Long audienceCount=d.getLong("profileAudienceCount");
+                    profileAudienceCount=audienceCount==null?-1:audienceCount.intValue();
+                    audienceIncludesViewer=Boolean.TRUE.equals(d.getBoolean("profileAudienceIncludesViewer"));
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
@@ -920,6 +927,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
                 if (snap==null) return; // keep the last confirmed relationship on a transient error
                 if (snap.getMetadata().isFromCache()) return; // a partial cache is not authoritative relationship state
+                viewerFriendKnown=true;
                 friendIds.clear();if(!snap.isEmpty())friendIds.add(uid);
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
@@ -927,7 +935,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         if (snap == null || snap.getMetadata().isFromCache()) return;
+                        if (requestBusy || !me.equals(Fb.uid())) return;
+                        outgoingKnown=true;
                         hasOut = !snap.isEmpty();
+                        outgoingRequestId=hasOut?snap.getDocuments().get(0).getId():null;
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
@@ -1099,10 +1110,21 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (presenceH != null) presenceH.close();
     }
 
+    private int displayedFollowerCount() {
+        boolean viewerCounts=user.followedByMe || hasOut || friendIds.contains(uid);
+        if(profileAudienceCount>=0){
+            if(!mine && viewerCounts && !audienceIncludesViewer)return profileAudienceCount+1;
+            if(!mine && !viewerCounts && outgoingKnown && viewerFriendKnown && audienceIncludesViewer)
+                return Math.max(0,profileAudienceCount-1);
+            return profileAudienceCount;
+        }
+        int base=Math.max(user.followerCount, user.friendsCount);
+        return base+(!mine && hasOut && !user.followedByMe && !friendIds.contains(uid)?1:0);
+    }
+
     private void updateStatsLine() {
         if (user == null) return;
-        // 2.8.89 showed at least the friend count in the profile headline.
-        int followers = Math.max(user.followerCount, user.friendsCount);
+        int followers = displayedFollowerCount();
         int following = user.followingCount;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();
@@ -1451,16 +1473,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void computeFriendState() {
         if (mine) return;
+        boolean wasFriend="friends".equals(friendState);
         if (hasIn) friendState = "incoming";
         else if (hasOut) friendState = "outgoing";
         else if (friendIds.contains(uid)) friendState = "friends";
         else friendState = "none";
         refreshButtons();
-        if (user != null) bindUser();
+        if (user != null) {
+            if(wasFriend!="friends".equals(friendState))bindUser();
+            else updateStatsLine();
+        }
     }
 
     private void refreshButtons() {
         if (mine || user == null) return;
+        primaryBtn.setEnabled(!requestBusy);
+        if(requestBusy){primaryBtn.setText(requestPendingLabel);return;}
         switch (friendState) {
             case "friends": primaryBtn.setText("✓ Friends"); break;
             case "outgoing": primaryBtn.setText("✓ Requested"); break;
@@ -1472,7 +1500,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void primary() {
-        if (user == null) return;
+        if (user == null || requestBusy) return;
         if (mine) {
             startActivity(new Intent(this, EditProfileActivity.class));
             return;
@@ -1486,22 +1514,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             case "outgoing":
-                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () -> {
-                    String actor = Fb.uid();
-                    if (actor == null) return;
-                    Fb.db().collection("friend_requests").whereEqualTo("fromUid",actor)
-                            .whereEqualTo("toUid",uid).whereEqualTo("status","pending").limit(20).get()
-                            .addOnSuccessListener(page -> {
-                                if (!actor.equals(Fb.uid())) return;
-                                if (page.getMetadata().isFromCache() || page.size() == 20) {
-                                    Ui.toast(this,"Couldn't verify requests. Please retry online."); return;
-                                }
-                                java.util.List<com.google.android.gms.tasks.Task<Void>> deletes = new java.util.ArrayList<>();
-                                for (DocumentSnapshot doc : page) deletes.add(doc.getReference().delete());
-                                com.google.android.gms.tasks.Tasks.whenAll(deletes)
-                                        .addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
-                            }).addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
-                });
+                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", this::cancelOutgoingRequest);
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1527,21 +1540,40 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             default:
                 String requestActor = Fb.uid();
                 if (requestActor == null) return;
+                requestBusy=true;requestPendingLabel="Sending…";refreshButtons();
                 Map<String, Object> m = Fb.map(
                         "fromUid", requestActor, "toUid", uid,
                         "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
                         "status", "pending", "createdAt", FieldValue.serverTimestamp());
                 Fb.db().collection("friend_requests").add(m).addOnSuccessListener(x -> {
                     if (!requestActor.equals(Fb.uid()) || isFinishing()) return;
+                    requestBusy=false;outgoingKnown=true;hasOut=true;outgoingRequestId=x.getId();
+                    computeFriendState();
                     Notify.send(uid, "friend_request", "sent you a friend request");
                     Ui.toast(this, "Friend request sent ✓");
                 }).addOnFailureListener(e -> {
                     if (requestActor.equals(Fb.uid()) && !isFinishing()) {
+                        requestBusy=false;computeFriendState();
                         Ui.toast(this, "Couldn't send friend request. Please retry.");
                     }
                 });
                 break;
         }
+    }
+
+    private void cancelOutgoingRequest() {
+        String actor=Fb.uid(), requestId=outgoingRequestId;
+        if(actor==null || requestBusy || requestId==null || !hasOut)return;
+        requestBusy=true;requestPendingLabel="Cancelling…";refreshButtons();
+        // The listener or send acknowledgement already provided the exact ID.
+        Fb.db().collection("friend_requests").document(requestId).delete().addOnCompleteListener(result->{
+            if(!actor.equals(Fb.uid()) || isFinishing())return;
+            requestBusy=false;
+            if(result.isSuccessful()){
+                outgoingKnown=true;hasOut=false;outgoingRequestId=null;
+            }else Ui.toast(this,"Couldn't cancel. Please retry.");
+            computeFriendState();
+        });
     }
 
     private void reconfirmFriendship() {
@@ -1883,7 +1915,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "💞", user.relationship);
         if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
         addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
-        addAboutRow(card, "🚶", Format.count(user.followerCount) + " followers · " + Format.count(user.followingCount) + " following");
+        addAboutRow(card, "🚶", Format.count(displayedFollowerCount()) + " followers · " + Format.count(user.followingCount) + " following");
 
         boolean canSeeContact = (mine && !viewAsPublic)
                 || "Public".equalsIgnoreCase(user.contactInfoPrivacy)

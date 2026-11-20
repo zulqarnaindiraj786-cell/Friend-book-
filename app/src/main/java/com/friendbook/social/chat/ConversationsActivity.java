@@ -93,6 +93,7 @@ public class ConversationsActivity extends Activity {
         Models.ChatRoom room;
         int unread;
         String other;
+        long serverRevision;
     }
 
     @Override
@@ -271,19 +272,54 @@ public class ConversationsActivity extends Activity {
         });
         if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
         inboxGeneration++; inboxLoading=false;
+        applyInboxHandoff(me);
+        applyFilter();
         loadInboxPage(true);
+    }
+
+    private Room existingRoom(String id) {
+        for(Room room:allRooms)if(id.equals(room.room.id))return room;
+        return null;
+    }
+
+    private void applyInboxHandoff(String actor) {
+        if(!java.util.Objects.equals(actor,Fb.uid()))return;
+        Set<String> hidden=getSharedPreferences("fb_prefs",MODE_PRIVATE).getStringSet("hiddenChats",new HashSet<>());
+        for(InboxMessageHandoff.Head head:InboxMessageHandoff.snapshot(actor).values()){
+            if(hidden.contains(head.chatId) || (!head.group && Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(head.peerId)))continue;
+            Room row=existingRoom(head.chatId);
+            if(row==null){
+                row=new Room();row.room=new Models.ChatRoom();row.room.id=head.chatId;
+                row.room.isGroup=head.group;row.other=head.group?head.chatId:head.peerId;
+                if(row.other==null || row.other.isEmpty())continue;
+                allRooms.add(row);
+            }
+            if(head.time>=row.room.lastMessageTime){
+                row.room.lastMessage=head.preview;
+                row.room.lastMessageTime=head.time;
+                row.unread=0; // This head was observed in the open conversation.
+            }
+        }
+    }
+
+    @Override protected void onResume(){
+        super.onResume();
+        applyInboxHandoff(Fb.uid());
+        applyFilter();
     }
 
     private void loadInboxPage(boolean reset) {
         if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) return;
         inboxLoading=true;inboxSpinner.setVisibility(View.VISIBLE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
-        com.friendbook.social.d1.documents.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
+        com.friendbook.social.d1.documents.Query query=Fb.db().collection("chats").whereArrayContains("participants",me)
+                .orderBy("inboxActivityAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
         if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply=snap -> {
             if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
+            if(snap.getMetadata().isFromCache() && !allRooms.isEmpty())return;
             inboxLoading=false;inboxSpinner.setVisibility(View.GONE);
             if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
-                if(reset)allRooms.clear();inboxMore=snap.size()==10;
+                inboxMore=snap.size()==10;
                 if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(snap.size()-1);
             }
                     if (snap != null) {
@@ -302,8 +338,14 @@ public class ConversationsActivity extends Activity {
                                 Object n = ((Map<?, ?>) u).get(me);
                                 if (n instanceof Number) r.unread = ((Number) n).intValue();
                             }
-                            allRooms.removeIf(old -> old.room.id.equals(r.room.id));
-                            allRooms.add(r);
+                            r.serverRevision=Format.ts(d.getUpdateTime());
+                            Room previous=existingRoom(r.room.id);
+                            if(previous!=null && (previous.room.lastMessageTime>r.room.lastMessageTime
+                                    || (r.serverRevision>0 && previous.serverRevision>r.serverRevision)))continue;
+                            if(!snap.getMetadata().isFromCache() && r.unread==0)
+                                InboxMessageHandoff.confirmed(me,r.room.id,r.room.lastMessageTime);
+                            if(previous!=null)allRooms.set(allRooms.indexOf(previous),r);
+                            else allRooms.add(r);
                             if (!r.room.isGroup && !Ui.TEAM_USER_ID.equals(r.other) && !userCache.containsKey(r.other)) {
                                 Fb.getUser(r.other).addOnSuccessListener(us -> {
                                     if (us != null) {
@@ -317,6 +359,7 @@ public class ConversationsActivity extends Activity {
                             }
                         }
                     }
+                    applyInboxHandoff(me);
                     List<Models.ChatRoom> toCache = new ArrayList<>();
                     for (Room r : allRooms) toCache.add(r.room);
                     if (!snap.getMetadata().isFromCache()) com.friendbook.social.core.FastCache.saveChats(toCache);
@@ -380,7 +423,9 @@ public class ConversationsActivity extends Activity {
 
     private void applyFilter() {
         rooms.clear();
+        Set<String> hidden=getSharedPreferences("fb_prefs",MODE_PRIVATE).getStringSet("hiddenChats",new HashSet<>());
         for (Room r : allRooms) {
+            if(hidden.contains(r.room.id) || (!r.room.isGroup && Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(r.other)))continue;
             boolean arch = Prefs.isChatArchived(this, r.room.id);
             if (arch != showArchived) continue;
             if (tabMode == 1 && r.unread <= 0) continue;
@@ -400,7 +445,8 @@ public class ConversationsActivity extends Activity {
         rooms.sort((a, b2) -> {
             boolean pa = pinned.contains(a.room.id), pb = pinned.contains(b2.room.id);
             if (pa != pb) return pa ? -1 : 1;
-            return Long.compare(b2.room.lastMessageTime, a.room.lastMessageTime);
+            int time=Long.compare(b2.room.lastMessageTime, a.room.lastMessageTime);
+            return time!=0?time:b2.room.id.compareTo(a.room.id);
         });
         adapter.notifyDataSetChanged();
         empty.setText(showArchived

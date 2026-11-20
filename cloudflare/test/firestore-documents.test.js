@@ -969,6 +969,37 @@ test('chat message query checks room membership once, not once per message', asy
   sql.close();
 });
 
+test('inbox sorts all eligible rooms by current message time before limiting the page', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  for(let i=0;i<12;i++){
+    const id=`room${i.toString().padStart(2,'0')}`;
+    insert.run(`chats/${id}`,'chats','chats',id,'alice',JSON.stringify({participants:['alice','bob'],lastMessageTime:{__type:'timestamp',millis:200-i},lastMessage:'old',unreadCount:{bob:0}}),1,1);
+  }
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null};}};},async batch(statements){
+    sql.exec('BEGIN');try{for(const statement of statements)await statement.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+  }};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const fetchPage=async startAfter=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'chats',filters:[{field:'participants',op:'array-contains',value:'bob'}],orderBy:[{field:'inboxActivityAt',direction:'DESCENDING'}],limit:10,startAfter})}),env);
+    assert.equal(response.status,200);return (await response.json()).documents;
+  };
+  const first=await fetchPage();assert.equal(first.length,10);assert.equal(first[0].id,'room00');assert.ok(!first.some(d=>d.id==='room11'));
+  const room='chats/room11';
+  const send=await app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({operations:[
+    {op:'set',path:`${room}/messages/new`,data:{senderId:'alice',receiverId:'bob',text:'new message',createdAt:{__fieldValue:'serverTimestamp'}}},
+    {op:'set',path:room,merge:true,data:{participants:['alice','bob'],lastMessage:'new message',lastMessageTime:{__fieldValue:'serverTimestamp'},unreadCount:{bob:{__fieldValue:'increment',value:1}}}},
+  ]})}),env);
+  assert.equal(send.status,200,await send.text());
+  const message=await app.fetch(new Request(`https://example.test/v1/firestore/document?path=${room}/messages/new`,{headers:{authorization:'Bearer bob'}}),env);
+  assert.equal(message.status,200);assert.equal((await message.json()).data.text,'new message');
+  const refreshed=await fetchPage();
+  assert.equal(refreshed[0].id,'room11');assert.equal(refreshed[0].data.lastMessage,'new message');assert.equal(refreshed[0].data.unreadCount.bob,1);
+  const tail=refreshed.at(-1);
+  assert.ok(!(await fetchPage([tail.data.inboxActivityAt,tail.id])).some(d=>d.id==='room11'));
+  sql.close();
+});
+
 test('query cursor bounds work for prefixes, ties and deleted page anchors', async () => {
   const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');

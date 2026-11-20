@@ -2153,7 +2153,9 @@ public class ReelsFragment extends Fragment {
                 final String targetUrl = reel.videoUrl;
                 mpPrepared = false;
 
-                File cached = ReelVideoCache.getCachedFile(ctx, targetUrl);
+                File cached = triedRawFallback ? null : ReelVideoCache.getCachedFile(ctx, targetUrl);
+                final String startupUrl = triedRawFallback ? targetUrl : ReelVideoCache.startup480Url(targetUrl);
+                final boolean canFallback = !triedRawFallback && (cached != null || !targetUrl.equals(startupUrl));
                 bufferingSpinner.setVisibility((cached == null && wantPlay) ? View.VISIBLE : View.GONE);
 
                 MediaPlayer mp = new MediaPlayer();
@@ -2216,11 +2218,12 @@ public class ReelsFragment extends Fragment {
                         if(player!=activeMp || !java.util.Objects.equals(targetUrl,reel==null?null:reel.videoUrl)) return true;
                         bufferingSpinner.setVisibility(View.GONE);
                         // Automatic fallback to raw untransformed URL if CDN transform failed
-                        if (!triedRawFallback && reel != null && reel.videoUrl != null) {
+                        if (canFallback) {
                             triedRawFallback = true;
                             prepareWithRawUrlFallback(ctx, reel.videoUrl);
                             return true;
                         }
+                        reportStartupFailure(ctx);
                         return true;
                     });
 
@@ -2231,20 +2234,17 @@ public class ReelsFragment extends Fragment {
                     } else if (targetUrl.startsWith("file:") || targetUrl.startsWith("content:")) {
                         mp.setDataSource(ctx, Uri.parse(targetUrl));
                     } else {
-                        String fastUrl = triedRawFallback
-                                ? targetUrl
-                                : ReelVideoCache.startup480Url(targetUrl);
-                        mp.setDataSource(ctx, Uri.parse(fastUrl));
+                        mp.setDataSource(ctx, Uri.parse(startupUrl));
                         // One stream only: a parallel full download competes with playback on mobile data.
                     }
-                    watchStartup(mp,ctx,targetUrl,cached==null && !targetUrl.equals(ReelVideoCache.startup480Url(targetUrl)));
+                    watchStartup(mp,ctx,targetUrl,cached==null && canFallback);
                     mp.prepareAsync();
                 } catch (Throwable t) {
                     bufferingSpinner.setVisibility(View.GONE);
-                    if (!triedRawFallback && reel != null && reel.videoUrl != null) {
+                    if (canFallback) {
                         triedRawFallback = true;
-                        prepareWithRawUrlFallback(ctx, reel.videoUrl);
-                    }
+                        prepareWithRawUrlFallback(ctx, targetUrl);
+                    } else reportStartupFailure(ctx);
                 }
             }
 
@@ -2390,7 +2390,11 @@ public class ReelsFragment extends Fragment {
             }
 
             private void togglePlayPause() {
-                if (activeMp == null || !mpPrepared) { play(); return; }
+                if (activeMp == null || !mpPrepared) {
+                    if (activeMp == null) triedRawFallback=false; // A deliberate tap gets a fresh 480p attempt.
+                    play();
+                    return;
+                }
                 try {
                     if (activeMp.isPlaying()) {
                         userPaused = true;

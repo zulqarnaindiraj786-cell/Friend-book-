@@ -1,3 +1,4 @@
+import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary } from './interactions.js';
 import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
@@ -2190,6 +2191,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }
     catch { return json({error:'Read unavailable'},503); }
     if (view === null) return json({ error: 'Forbidden' }, 403);
+    if (parts[0]==='users' && parts.length===2 && url.searchParams.get('profileAudience')==='1') {
+      // Counting is opt-in and a failed aggregate must not fail the profile.
+      try { view={...view,...await profileAudience(db,parts[1],uid,document.data.followers)}; }
+      catch { /* The client can show the ordinary follower count. */ }
+    }
     document.data = parts[0]==='config' ? adsView(view) : view;
     return json(document);
   }
@@ -2517,6 +2523,14 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     try { visible=await visibleDocuments(db,uid,parent,docs,requestUserReads,archiveQuery); }
     catch { return json({error:'Read unavailable'},503); }
     const spec=ownFollowFilters.length ? {...body,filters:body.filters.filter(f=>!ownFollowFilter(parent,uid,f))} : (body || {});
+    // Inbox pagination must order all authorized rooms before taking ten, not
+    // alphabetically page first and sort only the rows the client happened to receive.
+    if(parent==='chats' && spec.orderBy?.some?.(order=>order?.field==='inboxActivityAt')) {
+      const millis=value=>typeof value==='number' && Number.isFinite(value) ? value
+        : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
+      visible=visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:
+        millis(doc.data.lastMessageTime)||millis(doc.data.lastMessageTimeMs)||millis(doc.data.lastMessageAt)}}));
+    }
     const result = applyQuery(visible, spec);
     return queryResponse(parent,await feedEngagement(db,env,uid,body,result,requestUserReads),body.knownRevisions);
   }
