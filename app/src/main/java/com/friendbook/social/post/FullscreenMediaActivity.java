@@ -68,7 +68,7 @@ public class FullscreenMediaActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         String type = getIntent().getStringExtra("type");
-        final String url = getIntent().getStringExtra("url");
+        final String url = com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(getIntent().getStringExtra("url"));
         final String title = getIntent().getStringExtra("title");
         this.postId = getIntent().getStringExtra("post_id");
         final boolean guarded = getIntent().getBooleanExtra("guarded", false);

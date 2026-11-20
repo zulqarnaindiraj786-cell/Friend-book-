@@ -16,7 +16,7 @@ import java.security.MessageDigest;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 
-/** New video uploads: server-side 480p processing -> R2 only; never Cloudinary playback fallback. */
+/** New uploads encode on-device and put the two MP4 renditions in R2. */
 public final class R2VideoClient {
     private R2VideoClient() {}
     static final String ORIGIN = "https://pub-88ab0a56178742af95cbbf62df152a67.r2.dev";
@@ -71,19 +71,41 @@ public final class R2VideoClient {
         String id=hex(digest.digest()),owner=hex(MessageDigest.getInstance("SHA-256").digest(expectedUid.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         String token=Tasks.await(user.getIdToken(false),30,TimeUnit.SECONDS).getToken();
         if(token==null || !expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed");
-        URL endpoint=new URL(ENDPOINT);
-        JSONObject response=send(endpoint,"GET",token,id,null,0,null);
+        URL previewEndpoint=new URL(ENDPOINT+"/preview");
+        String expected=ORIGIN+"/videos/"+owner+"/"+id+"/video_preview.mp4";
+        JSONObject response=send(previewEndpoint,"GET",token,id,null,0,null);
         if(response==null) {
-            try(InputStream in=ctx.getContentResolver().openInputStream(uri)) {
-                if(in==null)throw new IOException("Video unavailable");
-                response=send(endpoint,"POST",token,id,in,length,progress);
-            }
+            java.io.File dir=new java.io.File(ctx.getCacheDir(),"video-pair-"+java.util.UUID.randomUUID());
+            if(!dir.mkdir())throw new IOException("Video cache unavailable");
+            java.io.File preview=new java.io.File(dir,"video_preview.mp4"), full=new java.io.File(dir,"video_full.mp4");
+            try {
+                PhoneVideoEncoder.encode(ctx.getApplicationContext(),uri,preview,true);
+                PhoneVideoEncoder.encode(ctx.getApplicationContext(),uri,full,false);
+                if(!expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed");
+                String freshToken=Tasks.await(user.getIdToken(false),30,TimeUnit.SECONDS).getToken();
+                if(freshToken==null || !expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed");
+                try(InputStream in=new java.io.FileInputStream(full)) {
+                    send(new URL(ENDPOINT+"/full"),"POST",freshToken,id,in,full.length(),null);
+                }
+                if(!expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed");
+                try(InputStream in=new java.io.FileInputStream(preview)) {
+                    response=send(previewEndpoint,"POST",freshToken,id,in,preview.length(),progress);
+                }
+            } finally {preview.delete();full.delete();dir.delete();}
         }
         if(!expectedUid.equals(FirebaseAuth.getInstance().getUid()))throw new IOException("Account changed; video not attached");
-        String result=verifiedUrl(response,owner,id);
+        if(!expected.equals(response.optString("url")) || !fullPlaybackUrl(expected).equals(response.optString("fullUrl"))
+                || response.optLong("bytes")<=0 || response.optLong("fullBytes")<=0)throw new IOException("Unverified R2 video pair");
         if(progress!=null)MAIN.post(()->progress.onProgress(100,length,length));
-        return result;
+        return expected;
     }
+
+    public static String fullPlaybackUrl(String url) {
+        if(url!=null && url.startsWith(ORIGIN+"/") && url.substring(ORIGIN.length()).matches("/videos/[a-f0-9]{64}/[a-f0-9]{64}/video_preview\\.mp4"))
+            return url.substring(0,url.length()-"video_preview.mp4".length())+"video_full.mp4";
+        return url;
+    }
+
     private static JSONObject stageAndCommit(Context ctx,Uri uri,URL endpoint,String token,String id,long length,Cloudinary.ProgressListener progress)throws Exception {
         String boundary="fbstage"+System.currentTimeMillis();
         HttpURLConnection stage=(HttpURLConnection)new URL("https://api.cloudinary.com/v1_1/x5ed4d0b/video/upload").openConnection();

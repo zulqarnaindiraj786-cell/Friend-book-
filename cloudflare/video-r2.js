@@ -268,3 +268,38 @@ export async function uploadPhoto(request, env, uid) {
   return json({ error: 'Photo upload to R2 failed' }, 502);
  }
 }
+
+/** Phone-encoded uploads bypass the legacy staging/transcoding path. */
+export async function uploadPhoneVideo(request, env, uid, variant) {
+ if(env.VIDEO_R2_ENABLED!=='true'||env.VIDEO_R2_RETENTION_VERIFIED!=='true'||!env.VIDEO_BUCKET)
+  return json({error:'Video storage unavailable'},503);
+ const id=request.headers.get('X-Video-Id')||'';
+ if(!/^[a-f0-9]{64}$/.test(id)||!['preview','full'].includes(variant))return json({error:'Invalid video identity'},400);
+ if(!['GET','POST'].includes(request.method))return json({error:'Method not allowed'},405);
+ const owner=await hash(uid),base=`videos/${owner}/${id}`;
+ const fullKey=`${base}/video_full.mp4`,previewKey=`${base}/video_preview.mp4`;
+ const key=variant==='preview'?previewKey:fullKey;
+ try {
+  const bucket=env.VIDEO_BUCKET;
+  const valid=(object,kind)=>object?.size>0 && object.customMetadata?.owner===owner
+     && object.customMetadata?.video_id===id && object.customMetadata?.variant===kind;
+  const reply=async()=>{
+   const full=await bucket.head(fullKey);
+   if(!valid(full,'full'))return json({error:'Video not found'},404);
+   if(variant==='full')return json({url:`${VIDEO_ORIGIN}/${fullKey}`,bytes:full.size});
+   const preview=await bucket.head(previewKey);
+   return valid(preview,'preview')?json({url:`${VIDEO_ORIGIN}/${previewKey}`,fullUrl:`${VIDEO_ORIGIN}/${fullKey}`,bytes:preview.size,fullBytes:full.size}):json({error:'Video not found'},404);
+  };
+  if(request.method==='GET')return reply();
+  const length=Number(request.headers.get('Content-Length'));
+  const limit=variant==='preview'?15_000_000:MAX_VIDEO_BYTES;
+  if(!Number.isSafeInteger(length)||length<12||length>limit)return json({error:'Invalid encoded video size'},413);
+  if(variant==='preview'&&!valid(await bucket.head(fullKey),'full'))return json({error:'Upload full video first'},409);
+  if(valid(await bucket.head(key),variant)){await request.body?.cancel();return reply();}
+  const data=await boundedBytes(request,limit);
+  if(data.length!==length || new TextDecoder().decode(data.subarray(4,8))!=='ftyp')return json({error:'Encoded MP4 required'},400);
+  await bucket.put(key,data,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'video/mp4',cacheControl:'public,max-age=31536000,immutable'},
+   customMetadata:{owner,video_id:id,variant,retention:'forever'}});
+  return reply();
+ }catch{return json({error:'Video upload unavailable'},502);}
+}

@@ -96,6 +96,16 @@ public final class ReelVideoCache {
         return tier == FastCache.NetTier.NET_4G ? mobileBandwidthUrl(u) : u;
     }
 
+    static boolean preferLiteStartup(Context context) {
+        FastCache.NetTier tier = FastCache.netTier(context);
+        return tier == FastCache.NetTier.NET_2G || tier == FastCache.NetTier.NET_3G
+                || Prefs.dataSaver(context) || Prefs.turbo2g(context);
+    }
+
+    static String startupUrl(Context context, String url) {
+        return preferLiteStartup(context) ? lowBandwidthUrl(url) : startup480Url(url);
+    }
+
     static String startup480Url(String url) {
         return boundedCloudinaryUrl(url, "h_480,c_limit,br_650k,f_mp4,vc_h264,ac_aac,q_auto:eco");
     }
@@ -252,7 +262,7 @@ public final class ReelVideoCache {
             HttpURLConnection conn = null;
             try {
                 if (!key.equals(wantedWarmKey) || !canPrefetch(appCtx) || (dest.exists() && dest.length() > 1024L)) return;
-                String streamUrl = startup480Url(rawVideoUrl);
+                String streamUrl = startupUrl(appCtx, rawVideoUrl);
                 conn = (HttpURLConnection) new URL(streamUrl).openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(15000);

@@ -26,3 +26,12 @@ class ChatFeedLatencyTest(unittest.TestCase):
         feed = (ROOT / 'post/FeedAdapter.java').read_text()
         self.assertIn('isCurrentFeedSlotAd(slotOrdinal, currentNativeAd)', feed)
         self.assertIn('return id & Long.MAX_VALUE', feed)
+
+    def test_delayed_push_fallback_is_foreground_and_chat_scoped(self):
+        store = (ROOT / 'd1/documents/D1DocumentStore.java').read_text()
+        fallback = store.split('private void pollVisibleChatFallback()', 1)[1].split('private void pollActiveListeners()', 1)[0]
+        self.assertIn('App.isForeground()', fallback)
+        self.assertIn('periodicAllowed(now)', fallback)
+        self.assertIn('entry.active && (chat || inbox)', fallback)
+        self.assertIn('chatFallbackDue(now - entry.lastAttemptMs, chat)', fallback)
+        self.assertIn('scheduleQueryRead(entry)', fallback)

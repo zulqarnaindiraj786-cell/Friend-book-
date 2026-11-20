@@ -101,6 +101,7 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
+        poller.scheduleWithFixedDelay(this::pollVisibleChatFallback, 2, 2, TimeUnit.SECONDS);
     }
 
     /** A single authenticated refresh when the process actually returns to foreground. */
@@ -396,6 +397,20 @@ public class D1DocumentStore {
                 e.refreshPending.set(true);
                 scheduleQueryRead(e);
             }
+        }
+    }
+
+    // Push is the fast path. Catch a delayed/missing push only while a chat or inbox is open.
+    private void pollVisibleChatFallback() {
+        if (!com.friendbook.social.App.isForeground()) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (!D1DocumentTransport.periodicAllowed(now)) return;
+        for (QueryListenerEntry entry : queryListeners) {
+            String path = entry.query.parentPath;
+            boolean chat = ListenerPollingPolicy.isChatMessages(path);
+            boolean inbox = "chats".equals(path) && Integer.valueOf(10).equals(entry.query.limitValue);
+            if (entry.active && (chat || inbox) && entry.budget.chatFallbackDue(now - entry.lastAttemptMs, chat))
+                scheduleQueryRead(entry);
         }
     }
 

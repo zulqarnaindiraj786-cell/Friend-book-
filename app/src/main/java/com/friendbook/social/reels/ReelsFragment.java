@@ -1463,6 +1463,7 @@ public class ReelsFragment extends Fragment {
             final TextureView textureView;
             final ImageView posterView;
             final ProgressBar bufferingSpinner;
+            final TextView playbackRetry;
             final ProgressBar scrubBar;
             final TextView pausedBadge;
             final FrameLayout likeBtnBox, commentBtnBox, shareBtnBox, saveBtnBox, soundBtnBox, moreBtnBox;
@@ -1572,6 +1573,11 @@ public class ReelsFragment extends Fragment {
                 bufferingSpinner.setVisibility(View.GONE);
                 int spSz = Ui.dp(a, 38);
                 root.addView(bufferingSpinner, new FrameLayout.LayoutParams(spSz, spSz, Gravity.CENTER));
+                playbackRetry = Ui.roundChip(a, "Retry video", Ui.BLUE, Color.WHITE, 15f);
+                Ui.pad(playbackRetry, 16, 10, 16, 10);
+                playbackRetry.setVisibility(View.GONE);
+                playbackRetry.setOnClickListener(v -> togglePlayPause());
+                root.addView(playbackRetry, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
                 pausedBadge = com.friendbook.social.core.StudioVectorIcons.circleIconButton(a, "play", 62, 0x55000000, 0xDDFFFFFF, null);
                 pausedBadge.setGravity(Gravity.CENTER);
@@ -1772,7 +1778,10 @@ public class ReelsFragment extends Fragment {
                     }
 
                     @Override
-                    public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) { }
+                    public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+                        if (activeMp != null && mpPrepared && wantPlay && posterView.getVisibility() == View.VISIBLE)
+                            handlePlaybackInfo(activeMp, MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START, itemView.getContext());
+                    }
                 });
 
                 // Gestures: double-tap to ❤️ Like, single tap pause/play
@@ -1786,6 +1795,14 @@ public class ReelsFragment extends Fragment {
                         return true;
                     }
                     @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                        if (reel != null && playbackRetry.getVisibility() != View.VISIBLE
+                                && !java.util.Objects.equals(reel.videoUrl, com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(reel.videoUrl))) {
+                            Intent full = new Intent(a, FullscreenMediaActivity.class);
+                            full.putExtra("type", "video");
+                            full.putExtra("url", reel.videoUrl);
+                            a.startActivity(full);
+                            return true;
+                        }
                         togglePlayPause();
                         return true;
                     }
@@ -2116,11 +2133,12 @@ public class ReelsFragment extends Fragment {
             }
 
             private Runnable startupWatchdog;
+            private boolean renderedFirstFrame;
 
             private void watchStartup(MediaPlayer player, Context context, String rawUrl, boolean canFallback) {
                 startupWatchdog = () -> {
                     if (player != activeMp || !wantPlay || getBindingAdapterPosition()!=playingPos) return;
-                    if (canFallback && !triedRawFallback) {
+                    if (canFallback && !triedRawFallback && !ReelVideoCache.preferLiteStartup(context)) {
                         triedRawFallback=true;
                         prepareWithRawUrlFallback(context,rawUrl);
                     } else {
@@ -2137,7 +2155,28 @@ public class ReelsFragment extends Fragment {
             private void reportStartupFailure(Context context) {
                 releasePlayerOnly();
                 bufferingSpinner.setVisibility(View.GONE);
-                if (wantPlay && getBindingAdapterPosition()==playingPos) Ui.toast(context,"Video couldn't start. Tap to retry.");
+                if (wantPlay && getBindingAdapterPosition()==playingPos) playbackRetry.setVisibility(View.VISIBLE);
+            }
+
+            private boolean handlePlaybackInfo(MediaPlayer player, int what, Context context) {
+                if (player != activeMp) return false;
+                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    cancelStartupWatchdog();
+                    posterView.setVisibility(View.GONE);
+                    bufferingSpinner.setVisibility(View.GONE);
+                    if (!renderedFirstFrame && wantPlay && !userPaused && getBindingAdapterPosition() == playingPos) {
+                        renderedFirstFrame = true;
+                        ReelVideoCache.warmUpcomingAfterPlay(context, data, reelIndexForPos(getBindingAdapterPosition()));
+                    }
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay && !userPaused) {
+                    ReelVideoCache.cancelUpcomingWarm();
+                    bufferingSpinner.setVisibility(View.VISIBLE);
+                    if (startupWatchdog == null) watchStartup(player, context, null, false);
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                    bufferingSpinner.setVisibility(View.GONE);
+                    if (posterView.getVisibility() == View.GONE) cancelStartupWatchdog();
+                }
+                return false;
             }
 
             private void cancelStartupWatchdog() {
@@ -2149,12 +2188,13 @@ public class ReelsFragment extends Fragment {
                 if (!wantPlay || getBindingAdapterPosition()!=playingPos || reel == null || reel.videoUrl == null || reel.videoUrl.isEmpty()) return;
                 releasePlayerOnly();
 
+                playbackRetry.setVisibility(View.GONE);
                 final Context ctx = itemView.getContext();
                 final String targetUrl = reel.videoUrl;
                 mpPrepared = false;
 
                 File cached = triedRawFallback ? null : ReelVideoCache.getCachedFile(ctx, targetUrl);
-                final String startupUrl = triedRawFallback ? targetUrl : ReelVideoCache.startup480Url(targetUrl);
+                final String startupUrl = triedRawFallback ? targetUrl : ReelVideoCache.startupUrl(ctx, targetUrl);
                 final boolean canFallback = !triedRawFallback && (cached != null || !targetUrl.equals(startupUrl));
                 bufferingSpinner.setVisibility((cached == null && wantPlay) ? View.VISIBLE : View.GONE);
 
@@ -2180,18 +2220,7 @@ public class ReelsFragment extends Fragment {
                         applyVideoTransform(textureView.getWidth(), textureView.getHeight());
                     });
 
-                    mp.setOnInfoListener((player, what, extra) -> {
-                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && activeMp == player) {
-                            cancelStartupWatchdog();
-                            posterView.setVisibility(View.GONE);
-                            bufferingSpinner.setVisibility(View.GONE);
-                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay) {
-                            bufferingSpinner.setVisibility(View.VISIBLE);
-                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                            bufferingSpinner.setVisibility(View.GONE);
-                        }
-                        return false;
-                    });
+                    mp.setOnInfoListener((player, what, extra) -> handlePlaybackInfo(player, what, ctx));
 
                     mp.setOnPreparedListener(player -> {
                         if (player != activeMp) return;
@@ -2266,14 +2295,7 @@ public class ReelsFragment extends Fragment {
                         player.setVolume(v, v);
                         if (wantPlay && !userPaused) startPreparedPlayer();
                     });
-                    mp.setOnInfoListener((p, what, extra) -> {
-                        if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && activeMp == p) {
-                            cancelStartupWatchdog();
-                            posterView.setVisibility(View.GONE);
-                            bufferingSpinner.setVisibility(View.GONE);
-                        }
-                        return false;
-                    });
+                    mp.setOnInfoListener((player, what, extra) -> handlePlaybackInfo(player, what, ctx));
                     mp.setOnErrorListener((player,what,extra) -> {
                         if (player==activeMp) reportStartupFailure(ctx);
                         return true;
@@ -2325,15 +2347,6 @@ public class ReelsFragment extends Fragment {
                         ensureExternalSoundPlaying(itemView.getContext(), reel.audioUrl.trim());
                     }
                     pausedBadge.setVisibility(View.GONE);
-                    // Safety hide poster 90ms after start on devices that omit MEDIA_INFO_VIDEO_RENDERING_START
-                    uiHandler.postDelayed(() -> {
-                        if (wantPlay && activeMp != null && mpPrepared) {
-                            posterView.setVisibility(View.GONE);
-                            bufferingSpinner.setVisibility(View.GONE);
-                            int rIdx = reelIndexForPos(getBindingAdapterPosition());
-                            ReelVideoCache.warmUpcomingAfterPlay(itemView.getContext(), data, rIdx);
-                        }
-                    }, 90L);
                     uiHandler.removeCallbacks(progressTicker);
                     uiHandler.post(progressTicker);
                 } catch (Throwable ignored) { }
@@ -2450,6 +2463,8 @@ public class ReelsFragment extends Fragment {
             }
 
             private void releasePlayerOnly() {
+                renderedFirstFrame = false;
+                playbackRetry.setVisibility(View.GONE);
                 cancelQualityUpgrade();
                 cancelStartupWatchdog();
                 uiHandler.removeCallbacks(progressTicker);
@@ -2892,6 +2907,8 @@ public class ReelsFragment extends Fragment {
                     m.getMenu().add(0, 5, 0, "View creator's full DP");
                 }
                 m.getMenu().add(0, 6, 0, "Report Reel");
+                if (!java.util.Objects.equals(reel.videoUrl, com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(reel.videoUrl)))
+                    m.getMenu().add(0, 17, 0, "Watch full quality");
                 if (reel.authorId != null && !reel.authorId.equals(Fb.uid())) {
                     m.getMenu().add(0, 7, 0, "Block " + (reel.authorName == null ? "creator" : reel.authorName));
                     if (com.friendbook.social.core.Admin.canModerate()) {
@@ -2950,6 +2967,11 @@ public class ReelsFragment extends Fragment {
                         dp.putExtra("url", reel.authorPhoto);
                         dp.putExtra("title", reel.authorName + "'s Profile Picture");
                         a.startActivity(dp);
+                    } else if (id == 17) {
+                        Intent full = new Intent(a, FullscreenMediaActivity.class);
+                        full.putExtra("type", "video");
+                        full.putExtra("url", reel.videoUrl);
+                        a.startActivity(full);
                     } else if (id == 6) {
                         final String[] reasons = {
                                 "Nudity or explicit sexual video",

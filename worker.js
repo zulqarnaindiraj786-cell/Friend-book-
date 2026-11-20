@@ -5,7 +5,7 @@ export { LiveRelay };
 import { runMaintenance } from './cloudflare/maintenance.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { contentReadAllowed } from './cloudflare/document-policy.js';
-import { uploadVideo, uploadPhoto } from './cloudflare/video-r2.js';
+import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r2.js';
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
@@ -61,7 +61,8 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const live = /^\/v1\/live\/([A-Za-z0-9_-]{1,128})\/(publish|watch|cohost|pkguest)$/.exec(path);
       const callMedia = /^\/v1\/chat\/call\/([A-Za-z0-9_-]{1,200})\/([A-Za-z0-9_-]{1,80})$/.exec(path);
-      const video = path === '/v1/videos';
+      const phoneVideo = /^\/v1\/videos\/(preview|full)$/.exec(path);
+      const video = path === '/v1/videos' || Boolean(phoneVideo);
       const photo = path === '/v1/photos';
       const firestore = path === '/v1/chat/call' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
@@ -128,6 +129,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         return relay.fetch(new Request(`https://call.internal/?${new URLSearchParams({chat,call,uid})}`, {headers:request.headers}));
       }
       if (live) return openLiveRelay(request,env,uid,live[1],live[2]);
+      if (phoneVideo) return uploadPhoneVideo(request, env, uid, phoneVideo[1]);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) {

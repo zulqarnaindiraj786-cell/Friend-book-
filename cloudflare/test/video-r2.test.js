@@ -107,3 +107,23 @@ test('unsigned preset mode fetches 480p compressed MP4 into R2 and deletes tempo
   assert.equal(r2Health.status,200);assert.deepEqual(await r2Health.json(),{ok:true,r2Bound:true,videoR2Enabled:true});
  }finally{f.sql.close();}
 });
+
+ test('phone video pair publishes preview only after full and keeps legacy keys unchanged',async()=>{
+  const {uploadPhoneVideo}=await import('../video-r2.js');
+  const objects=new Map();
+  const env={VIDEO_R2_ENABLED:'true',VIDEO_R2_RETENTION_VERIFIED:'true',VIDEO_BUCKET:{
+   head:async key=>objects.get(key),
+   put:async(key,body,options)=>{if(!objects.has(key))objects.set(key,{size:body.length,customMetadata:options.customMetadata});},
+  }};
+  const send=(kind,method='POST',actor='alice')=>uploadPhoneVideo(new Request(`https://example.test/v1/videos/${kind}`,{
+   method,headers:{'X-Video-Id':id,...(method==='POST'?{'Content-Length':'16'}:{})},
+   ...(method==='POST'?{body:new Uint8Array([0,0,0,16,102,116,121,112,0,0,0,0,0,0,0,0])}:{}),
+  }),env,actor,kind);
+  assert.equal((await send('preview')).status,409);
+  assert.equal((await send('full')).status,200);
+  assert.equal((await send('preview','GET')).status,404);
+  const pair=await send('preview');assert.equal(pair.status,200);
+  const body=await pair.json();assert.match(body.url,/\/video_preview\.mp4$/);assert.match(body.fullUrl,/\/video_full\.mp4$/);
+  assert.equal((await send('preview','GET','bob')).status,404);
+  assert.equal((await send('full')).status,200);assert.equal(objects.size,2);
+ });

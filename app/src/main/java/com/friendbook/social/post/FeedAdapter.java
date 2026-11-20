@@ -1200,6 +1200,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setTextSize(15);
             vh.playBadge.setText("Tap to watch Reel");
             View.OnClickListener watchReel = v -> {
+                if (!java.util.Objects.equals(p.mediaUrl, com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(p.mediaUrl))) {
+                    Intent full = new Intent(c, FullscreenMediaActivity.class);
+                    full.putExtra("type", "video");
+                    full.putExtra("url", p.mediaUrl);
+                    full.putExtra("post_id", p.id);
+                    c.startActivity(full);
+                    return;
+                }
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
                 i.putExtra("is_post", true);

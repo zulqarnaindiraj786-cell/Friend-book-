@@ -19,8 +19,8 @@ android {
         buildConfigField 'String', 'CLOUDFLARE_API_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
-        versionCode 145
-        versionName '2.10.3'
+        versionCode 146
+        versionName '2.10.4'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -89,6 +89,8 @@ gradle.taskGraph.whenReady { graph ->
 }
 
 dependencies {
+    implementation "androidx.media3:media3-transformer:1.5.1"
+    implementation "androidx.media3:media3-effect:1.5.1"
     implementation 'com.google.android.play:app-update:2.1.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
