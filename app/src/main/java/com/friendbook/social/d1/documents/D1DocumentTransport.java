@@ -7,18 +7,14 @@ import com.google.firebase.auth.FirebaseUser;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import com.friendbook.social.core.CloudflareHttp;
+import okhttp3.Response;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /** Authenticated HTTP transport to the Cloudflare Worker D1 document API. */
 final class D1DocumentTransport {
-    static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
+    static final String BASE = com.friendbook.social.BuildConfig.CLOUDFLARE_API_URL;
     private D1DocumentTransport() {}
     private static final java.util.concurrent.atomic.AtomicLong PERIODIC_PAUSED_UNTIL = new java.util.concurrent.atomic.AtomicLong();
 
@@ -76,34 +72,14 @@ final class D1DocumentTransport {
     private static JSONObject requestOnce(String method,String pathAndQuery,JSONObject body,String actor,boolean refresh) throws Exception {
         String token = idToken(actor,refresh);
         requireActor(actor);
-        HttpURLConnection conn = (HttpURLConnection) new URL(BASE + pathAndQuery).openConnection();
-        try {
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(30000);
-            conn.setInstanceFollowRedirects(false);
-            conn.setRequestMethod(method);
-            conn.setRequestProperty("Authorization", "Bearer " + token);
-            conn.setRequestProperty("Accept", "application/json");
-            if (body != null) {
-                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-                conn.setDoOutput(true);
-                conn.setFixedLengthStreamingMode(bytes.length);
-                conn.setRequestProperty("Content-Type", "application/json");
-                try (OutputStream out = conn.getOutputStream()) { out.write(bytes); }
-            }
-            int code = conn.getResponseCode();
-            if (code == 429) pausePeriodicReads(conn.getHeaderField("Retry-After"));
-            InputStream rs = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-            StringBuilder sb = new StringBuilder();
-            if (rs != null) {
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(rs, StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) sb.append(line);
-                }
-            }
+        byte[] bytes = body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8);
+        try (Response response = CloudflareHttp.openDocument(pathAndQuery, method, token, bytes)) {
+            int code = response.code();
+            if (code == 429) pausePeriodicReads(response.header("Retry-After"));
+            String json = CloudflareHttp.readUtf8(response.body(), 16 * 1024 * 1024);
             requireActor(actor);
             JSONObject data;
-            try { data = sb.length() > 0 ? new JSONObject(sb.toString()) : new JSONObject(); }
+            try { data = !json.isEmpty() ? new JSONObject(json) : new JSONObject(); }
             catch (Exception e) {
                 if (code >= 200 && code < 300)
                     throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid server response", e);
@@ -125,8 +101,6 @@ final class D1DocumentTransport {
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, err + " HTTP " + code);
             }
             return data;
-        } finally {
-            conn.disconnect();
         }
     }
 

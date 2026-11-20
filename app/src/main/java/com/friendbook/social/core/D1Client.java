@@ -46,7 +46,7 @@ public final class D1Client {
                 if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
-                URL url=new URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
+                URL url=new URL(BuildConfig.CLOUDFLARE_API_URL+"/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
                 JSONObject response;
                 try { response=D1HttpTransport.send(url,method,token,body); }
                 catch(D1HttpTransport.HttpStatusException failure) {
