@@ -765,12 +765,6 @@ public class AdsConfig {
         }));
     }
 
-    /**
-     * Foreground pool top-up: while the app is open, an under-filled pool is asked again every 30s.
-     * Bounded by design — it respects the no-fill cooldown and the in-flight guard, stops as soon as
-     * the app goes to the background, and never runs a tight retry loop. This is what makes an ad
-     * appear a few seconds after a cold-start no-fill instead of never.
-     */
     /** Compatibility entry point: remember context, never start a periodic request timer. */
     public static synchronized void startPoolTopUpTicker(Context context) {
         if (context != null) cachedAppCtx = context.getApplicationContext();
@@ -799,6 +793,7 @@ public class AdsConfig {
             FEED_SLOT_WAITERS.remove(slotOrdinal);
         } else {
             FEED_SLOT_WAITERS.put(slotOrdinal, cb);
+            if (lastFeedFailAtMs != 0L && cachedAppCtx != null) recoverWaitingSlot(cachedAppCtx, true);
         }
     }
 
@@ -807,6 +802,7 @@ public class AdsConfig {
             REELS_SLOT_WAITERS.remove(slotOrdinal);
         } else {
             REELS_SLOT_WAITERS.put(slotOrdinal, cb);
+            if (lastReelsFailAtMs != 0L && cachedAppCtx != null) recoverWaitingSlot(cachedAppCtx, false);
         }
     }
 
@@ -1132,6 +1128,26 @@ public class AdsConfig {
         }
     }
 
+    // One recovery attempt per placement after cold no-fill, only with a waiting slot.
+    private static boolean feedRecoveryUsed, reelsRecoveryUsed;
+    private static synchronized void recoverWaitingSlot(Context app, boolean feed) {
+        if (feed ? feedRecoveryUsed : reelsRecoveryUsed) return;
+        if ((feed ? FEED_SLOT_WAITERS : REELS_SLOT_WAITERS).isEmpty()) return;
+        if (feed) feedRecoveryUsed = true; else reelsRecoveryUsed = true;
+        final long failedAt = feed ? lastFeedFailAtMs : lastReelsFailAtMs;
+        MAIN_UI_HANDLER.postDelayed(() -> {
+            synchronized (AdsConfig.class) {
+                if ((feed ? lastFeedFailAtMs : lastReelsFailAtMs) != failedAt) return;
+                if (!com.friendbook.social.App.isForeground() || !nativeAdsEnabled() || !ConsentManager.canRequestAds(app)
+                        || (feed ? FEED_SLOT_WAITERS : REELS_SLOT_WAITERS).isEmpty()) {
+                    if (feed) feedRecoveryUsed = false; else reelsRecoveryUsed = false;
+                    return;
+                }
+            }
+            if (feed) ensureFeedPoolReplenished(app); else ensureReelsPoolReplenished(app);
+        }, Math.max(250L, FAIL_COOLDOWN_MS + 250L - (System.currentTimeMillis() - failedAt)));
+    }
+
     private static void preloadMediatedAd(
             final Context appCtx,
             final String unitId,
@@ -1175,8 +1191,8 @@ public class AdsConfig {
                     new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
                             .forNativeAd(nativeAd -> {
                                 synchronized (AdsConfig.class) {
-                                    if (isFeedPool) lastFeedFailAtMs = 0L;
-                                    else lastReelsFailAtMs = 0L;
+                                    if (isFeedPool) { lastFeedFailAtMs = 0L; feedRecoveryUsed = false; }
+                                    else { lastReelsFailAtMs = 0L; reelsRecoveryUsed = false; }
                                     if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
                                     else reelsInFlight = Math.max(0, reelsInFlight - 1);
                                     onNativeAdLoaded(appCtx);
@@ -1225,13 +1241,14 @@ public class AdsConfig {
                                                     + (adapter.getAdError()==null ? "OK" : adapter.getAdError().getMessage());
                                         }
                                     }
-                                    onNativeAdFailed(appCtx, code, detail);
+                                    onNativeAdFailed(appCtx, code, (isFeedPool ? "Feed: " : "Reels: ") + detail);
                                     // If ad fails, do NOT retry in a loop — record cooldown and let feed/reels show content without ad.
                                     synchronized (AdsConfig.class) {
                                         if (isFeedPool) { feedInFlight=0; lastFeedFailAtMs=System.currentTimeMillis(); }
                                         else { reelsInFlight=0; lastReelsFailAtMs=System.currentTimeMillis(); }
                                     }
                                     notifyWaitersNoAdYet(isFeedPool);
+                                    recoverWaitingSlot(appCtx, isFeedPool);
                                 }
                             })
                             .withNativeAdOptions(adOptions)

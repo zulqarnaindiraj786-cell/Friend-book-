@@ -1351,7 +1351,8 @@ public class ReelsFragment extends Fragment {
                 AdsConfig.registerReelsSlotWaiter(slotOrdinal, readyAd -> {
                     if (mySeq != requestSeq) return;
                     adRequestInFlight = false;
-                    if (readyAd == null || currentNativeAd != null) {
+                    if (readyAd == null || currentNativeAd != null || !AdsConfig.nativeAdsEnabled()
+                            || !ConsentManager.canRequestAds(ctx)) {
                         loadingBox.setVisibility(View.GONE);
                         return;
                     }
