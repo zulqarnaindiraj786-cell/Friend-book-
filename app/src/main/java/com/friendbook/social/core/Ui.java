@@ -422,13 +422,15 @@ public class Ui {
                 hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_960,c_limit,f_webp,q_auto:best/" + after;
             }
         }
-        Glide.with(c.getApplicationContext()).load(hdUrl)
+        if (FastCache.isSlow2G(c) || FastCache.netTier(c) == FastCache.NetTier.NET_3G || Prefs.dataSaver(c)) {
+            hdUrl = feedThumbnailUrl(cleanUrl);
+        }
+        photoWithOriginalFallback(Glide.with(c.getApplicationContext()).load(hdUrl)
                 .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(640, 640)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .into(iv);
+                .diskCacheStrategy(DiskCacheStrategy.ALL), hdUrl, cleanUrl).into(iv);
     }
 
     private static final ColorDrawable PH_LIGHT = new ColorDrawable(0xFFF0F2F5);
@@ -461,28 +463,44 @@ public class Ui {
     }
 
     public static void imgFeed(Context c, ImageView iv, String url) {
+        imgFeed(c, iv, url, null);
+    }
+
+    public static void imgFeed(Context c, ImageView iv, String url, Runnable onFailed) {
         Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
         if (url == null || url.isEmpty()) {
             Glide.with(c.getApplicationContext()).clear(iv);
             iv.setImageDrawable(ph);
             return;
         }
-        String fastUrl = feedThumbnailUrl(url);
+        String original = url.trim();
+        String fastUrl = feedThumbnailUrl(original);
+        if (isVersionedCloudinaryImage(original) && (FastCache.isSlow2G(c)
+                || FastCache.netTier(c) == FastCache.NetTier.NET_3G || Prefs.dataSaver(c))) {
+            fastUrl = original.replace("/image/upload/", "/image/upload/w_320,c_limit,f_webp,q_auto:eco/");
+        }
         Prefs.recordBytes(c, 38_000L, 162_000L);
-        if (Prefs.fullPhotoDisplay(c)) {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(480, 640)
-                    .fitCenter()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+        com.bumptech.glide.RequestBuilder<Drawable> request = Glide.with(c.getApplicationContext()).load(fastUrl)
+                .override(480, 640).dontAnimate().diskCacheStrategy(DiskCacheStrategy.ALL).placeholder(ph).error(ph);
+        if (Prefs.fullPhotoDisplay(c)) request.fitCenter(); else request.centerCrop();
+        if (onFailed == null) {
+            photoWithOriginalFallback(request, fastUrl, original).into(iv);
         } else {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(480, 640)
-                    .centerCrop()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+            com.bumptech.glide.request.RequestListener<Drawable> failure = new com.bumptech.glide.request.RequestListener<Drawable>() {
+                @Override public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e, Object model,
+                        com.bumptech.glide.request.target.Target<Drawable> target, boolean first) {
+                    iv.post(onFailed);
+                    return false;
+                }
+                @Override public boolean onResourceReady(Drawable image, Object model,
+                        com.bumptech.glide.request.target.Target<Drawable> target, com.bumptech.glide.load.DataSource source, boolean first) {
+                    return false;
+                }
+            };
+            request.timeout(10_000);
+            if (!fastUrl.equals(original)) request.error(request.clone().load(original).listener(failure));
+            else request.listener(failure);
+            request.into(iv);
         }
     }
 
@@ -497,16 +515,22 @@ public class Ui {
         imgFeed(c, iv, url);
     }
 
+    private static com.bumptech.glide.RequestBuilder<Drawable> photoWithOriginalFallback(
+            com.bumptech.glide.RequestBuilder<Drawable> request, String optimized, String original) {
+        // One retry of the exact stored URL if the CDN derivative fails; never race the two downloads.
+        request.timeout(10_000);
+        if (!optimized.equals(original)) request.error(request.clone().load(original));
+        return request;
+    }
+
     public static void img(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
         String fastUrl = optimizeImageUrl(c, url, false);
         Prefs.recordBytes(c, 36_000L, 164_000L);
-        Glide.with(c.getApplicationContext()).load(fastUrl)
-                .centerCrop()
-                .dontAnimate()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(ph).error(ph).into(iv);
+        photoWithOriginalFallback(Glide.with(c.getApplicationContext()).load(fastUrl)
+                .centerCrop().dontAnimate().diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(ph).error(ph), fastUrl, url.trim()).into(iv);
     }
 
     public static void imgFit(Context c, ImageView iv, String url) {

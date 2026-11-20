@@ -18,3 +18,17 @@ class InlinePhotoBandwidthTest(unittest.TestCase):
         self.assertIn('w_320,c_limit,f_webp,q_auto:eco/', ui)
         self.assertIn(': feedThumbnailUrl(url);', ui)
         self.assertIn('img(c, iv, preview);', ui)
+
+    def test_profile_avatar_cover_and_feed_can_recover_from_derivative_failure(self):
+        ui = (JAVA / 'core/Ui.java').read_text()
+        self.assertIn('if (!optimized.equals(original)) request.error(request.clone().load(original));', ui)
+        for method in ('avatarLarge', 'img'):
+            body = ui.split('public static void ' + method + '(', 1)[1].split('\n    }', 1)[0]
+            self.assertIn('photoWithOriginalFallback(', body)
+
+    def test_feed_photo_shows_retry_after_final_failure(self):
+        ui = (JAVA / 'core/Ui.java').read_text()
+        self.assertIn('request.clone().load(original).listener(failure)', ui)
+        feed = (JAVA / 'post/FeedAdapter.java').read_text()
+        self.assertIn('Photo couldn’t load · Tap to retry', feed)
+        self.assertIn('holder.boundPhotoPost != post', feed)

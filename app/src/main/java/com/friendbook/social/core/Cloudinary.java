@@ -240,8 +240,8 @@ public class Cloudinary {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
 
             boolean slow2g = FastCache.isSlow2G(ctx) || Prefs.dataSaver(ctx);
-            int maxDim = slow2g ? 720 : (Prefs.turbo2g(ctx) ? 1080 : 1440);
-            int quality = slow2g ? 60 : (Prefs.turbo2g(ctx) ? 75 : 85);
+            int maxDim = slow2g ? 720 : 1080;
+            int quality = slow2g ? 60 : 78;
 
             int sample = 1;
             int w = bounds.outWidth, h = bounds.outHeight;

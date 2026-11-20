@@ -1177,7 +1177,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     ? ImageView.ScaleType.FIT_CENTER
                     : ImageView.ScaleType.CENTER_CROP);
             vh.playBadge.setBackgroundColor(0x99000000);
-            Ui.imgFeedModerated(c, vh.image, fImg, "posts", p.id, p.authorId, p.content, null);
+            loadRetryableFeedPhoto(c, vh, p, fImg);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
@@ -1252,6 +1252,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * 💬 Authentic friendbook Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
      * Uses pre-built ViewHolder rows (ZERO removeAllViews() / ZERO new View() during scroll!).
      */
+    private void loadRetryableFeedPhoto(Context context, PostVH holder, Models.Post post, String url) {
+        Ui.imgFeed(context, holder.image, url, () -> {
+            if (holder.boundPhotoPost != post || !java.util.Objects.equals(holder.boundPhotoUrl, url)) return;
+            holder.playBadge.setTextSize(14);
+            holder.playBadge.setBackgroundColor(0xCC182438);
+            holder.playBadge.setText("Photo couldn’t load · Tap to retry");
+            holder.playBadge.setVisibility(View.VISIBLE);
+            holder.playBadge.setOnClickListener(v -> {
+                if (holder.boundPhotoPost != post || !java.util.Objects.equals(holder.boundPhotoUrl, url)) return;
+                holder.playBadge.setVisibility(View.GONE);
+                loadRetryableFeedPhoto(context, holder, post, url);
+            });
+        });
+    }
+
     private void bindInlineComments(Context c, PostVH vh, Models.Post p) {
         if (vh.inlineCommentsBox == null) return;
         if (!showInlineComments || !Prefs.inlineFeedComments(c)) {
