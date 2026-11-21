@@ -929,18 +929,21 @@ async function boundedPeoplePage(db,env,uid,spec) {
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
   const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
   const page=[], size=Math.max(16,spec.limit);
-  for (let offset=0;offset<size*4;offset+=size) {
+  let after=null;
+  for (let batch=0;batch<4;batch++) {
+    const seek=after?' AND (doc_id,path)>(?,?)':'';
+    const bindings=after?[...after,...after,size+1]:[size+1];
     let results;
     try { ({results=[]}=await db.prepare(`WITH candidates AS (
       SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time,0 AS source
-      FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page WHERE parent_path='users'
+      FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page WHERE parent_path='users'${seek}
       UNION ALL
       SELECT path,NULL,collection,doc_id,owner_uid,document_json,NULL,updated_at,1 AS source
-      FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_default_page WHERE collection='users'
-      ORDER BY doc_id,path LIMIT ? OFFSET ?
+      FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_default_page WHERE collection='users'${seek}
+      ORDER BY doc_id,path LIMIT ?
     ) SELECT c.*, CASE WHEN c.source=1 THEN EXISTS (
       SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=c.path AND f.parent_path='users'
-    ) ELSE 0 END AS shadowed FROM candidates c ORDER BY doc_id,path`).bind(size+1,offset).all()); }
+    ) ELSE 0 END AS shadowed FROM candidates c ORDER BY doc_id,path`).bind(...bindings).all()); }
     catch (error) {
       if (/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) return null;
       throw error;
@@ -948,7 +951,10 @@ async function boundedPeoplePage(db,env,uid,spec) {
     // SQL and JS agree on ASCII order. Use the original path for unusual IDs or
     // inconsistent historical rows (including equal IDs crossing a batch boundary).
     if (results.some(row=>!/^[-_a-zA-Z0-9]+$/.test(row.doc_id) || row.path!==`users/${row.doc_id}`)) return null;
-    for (const row of results.slice(0,size)) {
+    // A canonical/legacy pair can straddle the boundary. Consume both copies
+    // together before seeking strictly past their shared key.
+    const take=results[size]?.path===results[size-1]?.path && results.length>size ? size+1 : size;
+    for (const row of results.slice(0,take)) {
       if (row.shadowed) continue;
       const doc=rowToDocument(row.source===0 ? row : appDocumentToFirestoreRow({...row,collection:row.collection_id,updated_at:row.update_time}));
       if (!doc) continue;
@@ -958,6 +964,8 @@ async function boundedPeoplePage(db,env,uid,spec) {
       if (page.length===spec.limit) return page;
     }
     if (results.length<=size) return page;
+    const last=results[take-1];
+    after=[last.doc_id,last.path];
   }
   return null;
 }

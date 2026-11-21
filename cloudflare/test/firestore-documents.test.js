@@ -2145,6 +2145,7 @@ test('default people picker uses both ordered indexes and fills its page after p
     ? main.run(`users/${id}`,'users','users',id,id,JSON.stringify(data),1,1)
     : mirror.run(`users/${id}`,'users',id,id,JSON.stringify(data),1);
   add('viewer',{uid:'viewer'});
+  add('aaa-hidden',{uid:'aaa-hidden',deactivated:true});
   for(let i=0;i<12;i++) {
     const id='blocked'+i;
     add(id,{uid:id,banned:true});add(id,{uid:id,displayName:'Stale public mirror'},false);
@@ -2172,8 +2173,8 @@ test('default people picker uses both ordered indexes and fills its page after p
   assert.deepEqual(selected.map(row=>row.id),['person002','person003']);
   assert.doesNotMatch(JSON.stringify(selected),/private@example|Stale public mirror/);
   assert.ok(candidates<60);
-  assert.match(plan,/USING INDEX idx_cf_people_default_page/);
-  assert.match(plan,/USING INDEX idx_cf_legacy_people_default_page/);
+  assert.match(plan,/SEARCH friendbook_cf_firestore_documents USING INDEX idx_cf_people_default_page/);
+  assert.match(plan,/SEARCH friendbook_cf_documents USING INDEX idx_cf_legacy_people_default_page/);
   assert.doesNotMatch(plan,/USE TEMP B-TREE/);
   sql.close();
 });
