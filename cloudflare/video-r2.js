@@ -79,7 +79,7 @@ export async function cleanTemporary(env, publicId, fetcher=fetch) {
   if(!response.ok)return false;
   const data=await smallJson(response);
   if(!['ok','not found'].includes(data.result))return false;
-  await env.DB.prepare("UPDATE friendbook_video_processing SET state='cleaned',finished_at=? WHERE public_id=?").bind(Date.now(),publicId).run();
+  await env.DB.prepare("UPDATE friendbook_video_processing SET state='cleaned',finished_at=? WHERE public_id=? AND state='pending'").bind(Date.now(),publicId).run();
   return true;
  } catch {return false;}
 }
@@ -209,8 +209,12 @@ export async function uploadVideo(request, env, uid, fetcher=fetch) {
     method:'POST',redirect:'error',body:new URLSearchParams({token:deleteToken}),signal:AbortSignal.timeout(20000)});}catch{}
   }
   if(sourceId) {
-   try {await env.DB.prepare("UPDATE friendbook_video_processing SET cleanup_after=? WHERE public_id=? AND state='pending'").bind(Date.now(),sourceId).run();}catch{}
-   await cleanTemporary(env,sourceId,fetcher);
+   // Only accelerate the janitor on failure. Successful inline cleanup needs
+   // just the terminal state write; the initial pending deadline covers crashes.
+   if (!await cleanTemporary(env,sourceId,fetcher).catch(()=>false)) {
+    try {await env.DB.prepare("UPDATE friendbook_video_processing SET cleanup_after=? WHERE public_id=? AND state='pending' AND cleanup_after>?")
+     .bind(Date.now(),sourceId,Date.now()).run();}catch{}
+   }
   }
  }
 }

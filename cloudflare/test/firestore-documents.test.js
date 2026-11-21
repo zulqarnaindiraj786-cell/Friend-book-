@@ -1295,8 +1295,12 @@ test('indexed profile and request reads preserve privacy and canonical precedenc
  assert.deepEqual(await query('alice','posts',[{field:'authorId',op:'==',value:'alice'}]),['old','p1','private']);
  assert.deepEqual(await query('alice','friend_requests'),['old','r1']);
  assert.deepEqual(await query('eve','friend_requests'),['old','r2']);
+ for (const file of ['0049_friend_request_status_indexes.sql','0069_remove_redundant_request_indexes.sql'])
+   sql.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
+ assert.deepEqual(await query('alice','friend_requests'),['old','r1']);
+ assert.deepEqual(await query('eve','friend_requests'),['old','r2']);
  const q="SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=? UNION ALL SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?";
- const plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all('alice','alice','alice').map(x=>x.detail).join('\n');assert.match(plan,/SEARCH.*idx_cf_request_fromUid/);assert.match(plan,/SEARCH.*idx_cf_request_toUid/);
+ const plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all('alice','alice','alice').map(x=>x.detail).join('\n');assert.match(plan,/SEARCH.*idx_cf_request_canonical_out_status/);assert.match(plan,/SEARCH.*idx_cf_request_canonical_in_status/);
  sql.close();
 });
 

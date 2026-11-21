@@ -49,6 +49,7 @@ test('480p verified bytes persist in R2 forever and only R2 URL is returned',asy
   assert.equal(response.status,200);assert.equal(body.provider,'r2');assert.equal(body.retention,'forever');
   assert.ok(body.url.startsWith(VIDEO_ORIGIN+'/videos/'));assert.equal(body.url.includes('cloudinary'),false);
   assert.equal(f.objects.size,1);assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_video_processing WHERE state='cleaned'").get().n,1);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,2,'initial pending row plus terminal cleanup; no intermediate deadline write');
   const count=f.calls.length;
   assert.equal((await uploadVideo(f.request('GET'),f.env,'actor',f.fetcher)).status,200);
   assert.equal((await uploadVideo(f.request(),f.env,'actor',f.fetcher)).status,200);assert.equal(f.calls.length,count);
