@@ -1034,9 +1034,11 @@ async function boundedPeoplePage(db,env,uid,spec) {
       || spec.limitToLast || spec.startAfter || spec.startAt || spec.endBefore || spec.endAt
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
   const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
-  const page=[], size=Math.max(16,spec.limit);
+  const page=[];
   let after=null;
   for (let batch=0;batch<4;batch++) {
+    // Only overfetch once hidden or shadowed rows prove a refill is needed.
+    const size=batch===0 ? spec.limit : Math.max(16,spec.limit);
     const seek=after?' AND (doc_id,path)>(?,?)':'';
     const bindings=after?[...after,...after,size+1]:[size+1];
     let results;

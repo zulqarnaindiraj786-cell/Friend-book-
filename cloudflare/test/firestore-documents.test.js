@@ -2264,9 +2264,10 @@ test('default people picker uses both ordered indexes and fills its page after p
     add(id,{uid:id,displayName:id,email:'private@example.test'},i%2===0);
   }
   let plan, candidates=0;
+  const fetchSizes=[];
   const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
     all:async()=>{const results=stmt.all(...args);if(q.includes('WITH candidates')){
-      candidates+=results.length;plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail).join('\n');
+      fetchSizes.push(results.length);candidates+=results.length;plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail).join('\n');
     }return {results};},first:async()=>stmt.get(...args)||null
   };}};}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
@@ -2277,6 +2278,7 @@ test('default people picker uses both ordered indexes and fills its page after p
   const reference=(await query({})).slice(0,10);
   assert.equal(reference[0].id,'person000');
   assert.deepEqual(await query({limit:10}),reference);
+  assert.equal(fetchSizes[0],11,'first fetch is limited to the requested page plus the mirror boundary row');
   assert.doesNotMatch(JSON.stringify(reference),/private@example|Stale public mirror/);
   const selected=await query({filters:[{field:'__name__',op:'in',value:['person003','person002','blocked0','person003']}]});
   assert.deepEqual(selected.map(row=>row.id),['person002','person003']);
