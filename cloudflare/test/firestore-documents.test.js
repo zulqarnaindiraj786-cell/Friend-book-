@@ -1278,30 +1278,31 @@ test('bounded chat pages match full merge across ties, cursors and legacy fallba
  sql.close();
 });
 
-test('bounded feed pages fill after privacy checks and preserve legacy precedence and cursors', async () => {
+for (const root of ['posts','reels']) test(`bounded ${root} pages fill after privacy checks and preserve legacy precedence and cursors`, async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
  sql.exec(readFileSync(new URL('../migrations/0029_feed_page_indexes.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0051_feed_exception_indexes.sql',import.meta.url),'utf8'));
+ if(root==='reels')sql.exec(readFileSync(new URL('../migrations/0063_reel_page_indexes.sql',import.meta.url),'utf8'));
  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)'),a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
  const user=(id,data)=>f.run('users/'+id,'users','users',id,id,JSON.stringify(data),1,1);user('alice',{uid:'alice'});user('bob',{uid:'bob'});
  for(let i=0;i<100;i++){
   const id='p'+String(i).padStart(3,'0'),createdAt={__type:'timestamp',millis:Math.floor(i/3)};
   const data={authorId:'alice',privacy:i>60?'Only me':'Public',createdAt,content:'canonical'};
-  if(i%2===0) f.run('posts/'+id,'posts','posts',id,'alice',JSON.stringify(data),1,1);
-  else a.run('posts/'+id,'posts',id,'alice',JSON.stringify(data),1);
+  if(i%2===0) f.run(root+'/'+id,root,root,id,'alice',JSON.stringify(data),1,1);
+  else a.run(root+'/'+id,root,id,'alice',JSON.stringify(data),1);
  }
  // A stale public mirror cannot override the newer private canonical row.
- a.run('posts/p098','posts','p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
+ a.run(root+'/p098',root,'p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
  let batchReads=0,maxRows=0,postReads=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith('posts/'))postReads++;return stmt.get(...args)||null;}};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
- const query=async(spec,full=false)=>{let body={parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
+ const query=async(spec,full=false)=>{let body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
  const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  let prior=batchReads;
  // A fractional timestamp still uses the JS comparator, without forcing a full scan.
- f.run('posts/odd','posts','posts','odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
- a.run('posts/old-wrapper','posts','old-wrapper','alice',JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'},createdAt:{timestampValue:'1970-01-01T00:00:00.019Z'}}}),1);
+ f.run(root+'/odd',root,root,'odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
+ a.run(root+'/old-wrapper',root,'old-wrapper','alice',JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'},createdAt:{timestampValue:'1970-01-01T00:00:00.019Z'}}}),1);
  postReads=0;
  const fallback=await query({});const fallbackReads=postReads;
  assert.deepEqual(fallback.map(d=>d.id),(await query({},true)).map(d=>d.id));assert.ok(batchReads>prior);

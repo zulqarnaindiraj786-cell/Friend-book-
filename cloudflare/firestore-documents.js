@@ -1062,6 +1062,8 @@ async function boundedPeoplePage(db,env,uid,spec) {
 }
 
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
+  const root=spec?.parent;
+  if (root!=='posts' && root!=='reels') return null;
   const filters=Array.isArray(spec?.filters)?spec.filters:[];
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
   const authorArgs=author===null?[]:[author];
@@ -1069,7 +1071,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const legacyAuthor="CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') ELSE json_extract(document_json,'$.authorId') END";
   const byAuthor=author===null?'':` AND ${authorField}=?`;
   const byLegacyAuthor=author===null?'':` AND (${legacyAuthor})=?`;
-  if (spec?.parent!=='posts' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
+  if ((root==='reels' && filters.length) || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
       || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
       || (filters.length && author===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
       || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
@@ -1092,14 +1094,15 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
-  const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard})`;
-  const legacyException=`(doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`;
-  const legacyUnshadowed="NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='posts')";
+  const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
+  const legacyException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`;
+  const legacyUnshadowed=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='${root}')`;
+  const exceptionIndex=root==='posts'?'feed_exceptions':'reels_feed_exceptions';
   let exceptions=[];
   if (author!==null) {
     const [canonicalBad,legacyBad]=await Promise.all([
-      probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='posts'${byAuthor} AND ${canonicalException}`,authorArgs),
-      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='posts'${byLegacyAuthor} AND ${legacyException}`,authorArgs),
+      probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='${root}'${byAuthor} AND ${canonicalException}`,authorArgs),
+      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='${root}'${byLegacyAuthor} AND ${legacyException}`,authorArgs),
     ]);
     if (canonicalBad || legacyBad) return null;
   } else {
@@ -1109,17 +1112,17 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     let unusual;
     try {
       unusual=await Promise.all([
-        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_feed_exceptions
-          WHERE parent_path='posts' AND ${canonicalException} LIMIT 129`).bind().all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_feed_exceptions
-          WHERE a.collection='posts' AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind().all(),
+        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
+          WHERE parent_path='${root}' AND ${canonicalException} LIMIT 129`).bind().all(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_${exceptionIndex}
+          WHERE a.collection='${root}' AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind().all(),
       ]);
     } catch(error) {
-      if (/no such index: idx_cf_(?:legacy_)?feed_exceptions/.test(String(error))) return null;
+      if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
       throw error;
     }
     const [odd,old]=unusual.map(x=>x.results||[]);
-    if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`posts/${row.doc_id}`)) return null;
+    if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
     exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
   }
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
@@ -1132,14 +1135,14 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     let batches;
     try { batches=await Promise.all([
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-        FROM friendbook_cf_firestore_documents a ${author===null?'INDEXED BY idx_cf_posts_feed_page':''} WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
+        FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
       db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a ${author===null?'INDEXED BY idx_cf_legacy_posts_feed_page':''} WHERE a.collection='posts'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
+        FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''} WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
         AND ${legacyUnshadowed}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
     ]); } catch(error) {
-      if (/no such index: idx_cf_(?:legacy_)?posts_feed_page/.test(String(error))) return null;
+      if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
       throw error;
     }
     const [canonical,legacy]=batches;
@@ -1153,7 +1156,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     for(let i=0;i<merged.length && visible.length<spec.limit;i+=chunk) {
-      visible.push(...await visibleDocuments(db,uid,'posts',merged.slice(i,i+chunk),requestUserReads));
+      visible.push(...await visibleDocuments(db,uid,root,merged.slice(i,i+chunk),requestUserReads));
     }
     if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
     cursor=nextCursor;
