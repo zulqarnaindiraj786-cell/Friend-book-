@@ -2228,8 +2228,24 @@ async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map(),roo
   return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms,snapshot || null),room,roomPath};
 }
 async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false) {
-  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   if (!auth.room) return json({error:'Forbidden'},403);
+  const id=docIdOf(path), parent=parentPath(path), coll=collectionIdOf(path);
+  if (!existing && !deleted && auth.room[canonicalRootSnapshot] && !isRootDocument(path)) {
+    const serialized=JSON.stringify(doc);
+    if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+    // The INSERT itself checks room membership's snapshot and both possible
+    // message stores. No guard rows are needed for a single new nested message.
+    const inserted=await db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+      (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+      SELECT ?1,?2,?3,?4,?5,?6,?7,?7
+      WHERE EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?8 AND document_json=?9)
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1)
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?1)
+      RETURNING path`).bind(path,parent,coll,id,ownerOf(doc,uid),serialized,now,auth.roomPath,auth.room.document_json).first();
+    if (!inserted) throw new Error('Document changed');
+    return json({exists:true,id,path,parent,collection:coll,data:doc,createTime:now,updateTime:now});
+  }
+  if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   // The nested message and canonical room were both read for authorization.
   // Compare both snapshots at commit time using one guard row, not two writes
   // and two preflight rereads. Legacy roots still need their source checks.
@@ -2237,7 +2253,6 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
     ? [chatSnapshotGroupGuard(db,[JSON.stringify([auth.roomPath,auth.room.document_json]),
       JSON.stringify([path,existing?.document_json ?? null])])]
     : [await chatDocumentGuard(db,auth.roomPath,auth.room),await chatDocumentGuard(db,path,existing)];
-  const id=docIdOf(path), parent=parentPath(path), coll=collectionIdOf(path);
   if (deleted) {
     statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
     if (isRootDocument(path)) statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(path));

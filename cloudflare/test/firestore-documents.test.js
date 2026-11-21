@@ -908,7 +908,12 @@ test('chat atomic guards reject concurrent room and message changes and orphan a
   assert.notEqual((await put('alice','chats/room/messages/m1',{senderId:'alice',text:'must not commit'})).status,200);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
   sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({participants:['alice','bob']}),'chats/room');
+  const beforeSend=sql.prepare('SELECT total_changes() n').get().n;
   assert.equal((await put('alice','chats/room/messages/m2',{senderId:'alice',text:'original'})).status,200);
+  assert.equal(sql.prepare('SELECT total_changes() n').get().n-beforeSend,1,'standalone nested send writes one message and no guard rows');
+  race=()=>insert('chats/room/messages/same','chats/room/messages','messages','same',{senderId:'bob',text:'winner'});
+  assert.notEqual((await put('alice','chats/room/messages/same',{senderId:'alice',text:'loser'})).status,200);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/same').document_json).text,'winner');
   race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({senderId:'bob',text:'new owner'}),'chats/room/messages/m2');
   assert.notEqual((await call('alice','/v1/firestore/document?path=chats/room/messages/m2','PATCH',{fields:{text:'overwrite'}})).status,200);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m2').document_json).text,'new owner');
