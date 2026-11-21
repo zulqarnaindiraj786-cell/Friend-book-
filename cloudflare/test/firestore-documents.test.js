@@ -2113,3 +2113,22 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  assert.ok(!delta.order.includes(removed));assert.equal(delta.documents.length,1);
  sql.close();
 });
+
+test('message preview and unread updates do not rewrite unchanged membership indexes',()=>{
+  const sql=new DatabaseSync(':memory:');sql.exec(appSchema);sql.exec(schema);
+  for(const migration of ['0040_chat_participant_lookup.sql','0058_skip_unchanged_chat_members.sql'])
+    sql.exec(readFileSync(new URL(`../migrations/${migration}`,import.meta.url),'utf8'));
+  for(const [table,column,insert] of [
+    ['friendbook_cf_firestore_documents','parent_path',['chats/r','chats','chats','r','alice','{"participants":["alice","bob"]}',1,1]],
+    ['friendbook_cf_documents','collection',['chats/r','chats','r','alice','{"participants":["alice","bob"]}',1]],
+  ]){
+    sql.prepare(`INSERT INTO ${table} VALUES (${insert.map(()=>'?').join(',')})`).run(...insert);
+    const before=sql.prepare('SELECT total_changes() AS n').get().n;
+    sql.exec(`UPDATE ${table} SET document_json=json_set(document_json,'$.lastMessage','hi','$.unreadCount.bob',1) WHERE ${column}='chats'`);
+    assert.equal(sql.prepare('SELECT total_changes() AS n').get().n-before,1);
+    sql.exec(`UPDATE ${table} SET document_json=json_set(document_json,'$.participants',json('["alice","cara"]')) WHERE ${column}='chats'`);
+    const source=table.includes('firestore')?1:0;
+    assert.deepEqual(sql.prepare('SELECT participant_uid FROM friendbook_cf_chat_participants WHERE source=? ORDER BY 1').all(source).map(r=>r.participant_uid),['alice','cara']);
+  }
+  sql.close();
+});
