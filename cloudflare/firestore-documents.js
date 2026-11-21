@@ -1204,9 +1204,11 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
-  const chunk=Math.min(100,Math.max(20,spec.limit*2));
   const visible=[];
-  for (;;) {
+  // Normal pages need no speculative double-size fetch. Refill in larger
+  // batches only when privacy filtering leaves gaps.
+  for (let pass=0;;pass++) {
+    const chunk=pass===0 ? spec.limit : Math.min(100,Math.max(20,spec.limit*2));
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
     const args=[...authorArgs,...(cursor||[]),chunk];
     let batches;
@@ -1286,7 +1288,8 @@ async function boundedNotificationPage(db,uid,spec) {
     probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
       AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs),
     probe('friendbook_cf_documents','idx_cf_legacy_notif_exceptions',`collection='notifications'${byLegacyRecipient}
-      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`,recipientArgs),
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`,recipientArgs),
   ]);
   if (canonicalBad || legacyBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;

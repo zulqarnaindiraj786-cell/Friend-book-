@@ -1332,10 +1332,11 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  // A stale public mirror cannot override the newer private canonical row.
  a.run(root+'/p098',root,'p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
  let batchReads=0,maxRows=0,postReads=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
+ const pageLimits=[];
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;pageLimits.push(args.at(-1));maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=async(spec,full=false)=>{let body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
- const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);
+ const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);assert.deepEqual(pageLimits.slice(0,2),[12,12]);
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  if(root==='posts') {
   sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p098'").run(JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}}));
@@ -2208,7 +2209,7 @@ test('notification pages use bounded per-store reads and do not expose stale mir
   else a.run(path,'notifications',id,'sender',data('alice',i),1);
  }
  f.run('notifications/shadow','notifications','notifications','shadow','sender',data('bob',999),1,1);
- a.run('notifications/shadow','notifications','shadow','sender',data('alice',999),1);
+ a.run('notifications/shadow','notifications','shadow','sender',JSON.stringify({fields:{toUserId:{stringValue:'alice'},isRead:{booleanValue:false}}}),1);
  let rows=0;
  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
