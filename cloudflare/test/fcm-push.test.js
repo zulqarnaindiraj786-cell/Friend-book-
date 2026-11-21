@@ -42,3 +42,21 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
     assert.equal((await send()).status,200);assert.equal(sends,8);
   } finally {globalThis.fetch=original;sql.close();}
 });
+
+test('unchanged device registrations do not rewrite the token; changes and daily refresh still persist', async () => {
+  const sql=new DatabaseSync(':memory:');
+  sql.exec(readFileSync(new URL('../migrations/0015_additive_fcm_devices.sql',import.meta.url),'utf8'));
+  const writes=[];
+  const env={DB:{prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>writes.push(Number(stmt.run(...args).changes))};}};}}};
+  const register=(uid,token)=>fcmGateway(new Request('https://example.test/functions/v1/send-fcm-notification',{
+    method:'POST',body:JSON.stringify({action:'register',device_id:'dev1',token}),
+  }),env,{uid});
+  const a='a'.repeat(30), b='b'.repeat(30);
+  try {
+    for(const [uid,token] of [['alice',a],['alice',a],['alice',b],['bob',b]]) assert.equal((await register(uid,token)).status,200);
+    sql.exec('UPDATE friendbook_cf_fcm_devices SET updated_at=1');
+    assert.equal((await register('bob',b)).status,200);
+    assert.deepEqual(writes,[1,0,1,1,1]);
+    assert.equal(sql.prepare('SELECT user_id FROM friendbook_cf_fcm_devices').get().user_id,'bob');
+  } finally {sql.close();}
+});

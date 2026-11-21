@@ -243,7 +243,10 @@ export async function fcmGateway(request, env, identity) {
       }
       await db.prepare(
         `INSERT INTO friendbook_cf_fcm_devices(device_id, user_id, token, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id, token = excluded.token, updated_at = excluded.updated_at`
+         ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id, token = excluded.token, updated_at = excluded.updated_at
+         WHERE friendbook_cf_fcm_devices.user_id IS NOT excluded.user_id
+            OR friendbook_cf_fcm_devices.token IS NOT excluded.token
+            OR friendbook_cf_fcm_devices.updated_at <= excluded.updated_at - 86400000`
       ).bind(body.device_id, actor, body.token, Date.now()).run();
       return json({ registered: true, provider: 'fcm' });
     }

@@ -1681,10 +1681,16 @@ async function adminBroadcast(request,env,uid,now) {
     if (job.status==='complete') return json({complete:true,processed:job.processed});
     const cursor=typeof job.cursor==='string'?job.cursor:'';
     const size=6;
-    const {results: recipients=[]}=await db.prepare(`SELECT doc_id FROM (
-      SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
-      UNION SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_documents WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
+    const recipientPage=async (indexed)=>db.prepare(`SELECT doc_id FROM (
+      SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_firestore_documents ${indexed?'INDEXED BY idx_cf_people_default_page':''} WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
+      UNION SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_documents ${indexed?'INDEXED BY idx_cf_legacy_people_default_page':''} WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
     ) ORDER BY doc_id LIMIT ?`).bind(cursor,size+1,cursor,size+1,size+1).all();
+    let recipients;
+    try { ({results: recipients=[]}=await recipientPage(true)); }
+    catch (error) {
+      if (!/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) throw error;
+      ({results: recipients=[]}=await recipientPage(false));
+    }
     const statements=[await chatDocumentGuard(db,path,jobRow)];
     const next={...job,status:recipients.length>size?'sending':'complete',processed:Number.isSafeInteger(job.processed)?job.processed:0};
     for (const {doc_id:to} of recipients.slice(0,size)) {
