@@ -365,7 +365,7 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
 test('profiles and chats: private fields, membership and write bypasses across APIs', async () => {
   const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
   let roomReads=0,roomGuards=0;
-  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>{if(query.includes('INSERT INTO friendbook_cf_social_guards') && args[1]==='chats/c1')roomGuards++;return stmt.run(...args);},all:async()=>({results:stmt.all(...args)}),first:async()=>{if(args[0]==='chats/c1')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){for(const s of stmts)await s.run();}};
+  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>{if(query.includes('INSERT INTO friendbook_cf_social_guards') && (args[1]==='chats/c1' || (query.includes('FROM json_each(?) j') && JSON.parse(args[0]).some(([path])=>path==='chats/c1'))))roomGuards++;return stmt.run(...args);},all:async()=>({results:stmt.all(...args)}),first:async()=>{if(args[0]==='chats/c1')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){for(const s of stmts)await s.run();}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const put=(uid,path,data)=>call(uid,'/v1/firestore/document?path='+path,'PUT',{data});
@@ -400,7 +400,7 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const receipts=batch(messages.map(path=>({op:'update',path,updates:{isSeen:true}})));
   roomReads=0;roomGuards=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',receipts)).status,200);
-  assert.equal(roomReads,2); // authorization snapshot plus one guard preflight
+  assert.equal(roomReads,1); // atomic guard compares the authorized snapshot directly
   assert.equal(roomGuards,1);
   roomGuards=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',receipts)).status,200);

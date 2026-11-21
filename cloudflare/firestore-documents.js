@@ -280,6 +280,8 @@ function appDocumentToFirestoreRow(row) {
   };
 }
 
+// Internal source marker; not serialized in any document response.
+const canonicalRootSnapshot=Symbol('canonicalRootSnapshot');
 export async function readRow(db, path) {
   if (!isRootDocument(path)) {
     return db.prepare('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
@@ -296,7 +298,7 @@ export async function readRow(db, path) {
   if (!row) return null;
   if (row.legacy_source === 1) return appDocumentToFirestoreRow(row);
   const { legacy_source, collection, updated_at, ...canonical } = row;
-  return canonical;
+  return {...canonical,[canonicalRootSnapshot]:true};
 }
 
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
@@ -1672,6 +1674,19 @@ async function chatDocumentGuard(db,path,row) {
   if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:collectionIdOf(path),doc_id:docIdOf(path),document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Document changed');
   return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||'');
 }
+// Validate a group of independent path snapshots in one atomic guard row.
+// For an absent nested document also refuse the old mirror path, as before.
+function chatSnapshotGroupGuard(db, snapshots) {
+  return db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
+    SELECT CASE WHEN NOT EXISTS (
+      SELECT 1 FROM json_each(?) j WHERE
+        (SELECT f.document_json FROM friendbook_cf_firestore_documents f WHERE f.path=json_extract(j.value,'$[0]'))
+          IS NOT json_extract(j.value,'$[1]')
+        OR (json_extract(j.value,'$[1]') IS NULL AND EXISTS (
+          SELECT 1 FROM friendbook_cf_documents a WHERE a.path=json_extract(j.value,'$[0]')
+        ))
+    ) THEN 1 ELSE 0 END`).bind(`[${snapshots.join(',')}]`);
+}
 // Moderation authority comes exclusively from the configured verified UID list.
 // Preserve the original document in a private audit record before changing it.
 async function verifiedModerator(db,uid) {
@@ -2929,6 +2944,20 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     }
     try {
       const statements = [];
+      let snapshotGroup=[], snapshotSize=0;
+      const flushSnapshots=()=>{
+        if(snapshotGroup.length) statements.push(chatSnapshotGroupGuard(db,snapshotGroup));
+        snapshotGroup=[];snapshotSize=0;
+      };
+      const addSnapshot=(p,row)=>{
+        const item=JSON.stringify([p,row?.document_json??null]);
+        // Bound each JSON binding; very large historical messages stay on the
+        // old guard path rather than growing an unbounded combined binding.
+        if (item.length>20_000) return false;
+        if(snapshotSize+item.length+1>20_000) flushSnapshots();
+        snapshotGroup.push(item);snapshotSize+=item.length+1;
+        return true;
+      };
       const roomPaths=order.filter(p=>splitPath(p).length===2 && splitPath(p)[0]==='chats');
       const messagePaths=order.filter(p=>chatAuths.get(p).roomPath);
       const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels','stories','events','pages','lives'].includes(splitPath(p)[0]));
@@ -2936,7 +2965,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       for (const p of guardedPaths) statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
       for (const roomPath of roomPaths) {
         const entry=finalDocs.get(roomPath), before=entry.existingRow?decodeValue(JSON.parse(entry.existingRow.document_json)):null;
-        statements.push(...await chatRootGuards(db,roomPath,entry.existingRow));
+        if (!entry.existingRow?.[canonicalRootSnapshot] || !addSnapshot(roomPath,entry.existingRow)) {
+          statements.push(...await chatRootGuards(db,roomPath,entry.existingRow));
+        }
         const ledger=await groupChatLedgerChanges(db,roomPath,before,entry.deleted?null:entry.doc);
         statements.push(...ledger.guards,...ledger.writes);
       }
@@ -2947,11 +2978,15 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         const auth=chatAuths.get(p);
         if (!auth.room && !pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
         if (auth.room && !checkedRooms.has(auth.roomPath)) {
-          statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
+          if (!auth.room[canonicalRootSnapshot] || !addSnapshot(auth.roomPath,auth.room)) {
+            statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
+          }
           checkedRooms.add(auth.roomPath);
         }
-        statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
+        const snapshot=finalDocs.get(p).existingRow;
+        if (isRootDocument(p) || !addSnapshot(p,snapshot)) statements.push(await chatDocumentGuard(db,p,snapshot));
       }
+      flushSnapshots();
       for (const p of order) {
         const entry = finalDocs.get(p);
       if (entry.deleted) {
