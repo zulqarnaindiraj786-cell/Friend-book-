@@ -190,5 +190,5 @@ export default {...app, scheduled(controller, env, ctx) {
   if (controller.cron === '* * * * *') {
     ctx.waitUntil(resumeOfficialBroadcasts(env));
     ctx.waitUntil(drainBroadcastPush(env));
-  } else ctx.waitUntil(runMaintenance(env));
+  } else ctx.waitUntil(runMaintenance(env, {broadcastPush:null}));
 }};

@@ -12,8 +12,10 @@ export async function pruneExpiredRealtime(db, now) {
   const results = await Promise.allSettled([
     db.prepare(`DELETE FROM friendbook_cf_presence_sessions WHERE rowid IN (
       SELECT s.rowid FROM friendbook_cf_presence_sessions s WHERE s.last_seen < ?
-        AND EXISTS (SELECT 1 FROM friendbook_cf_presence_sessions newer WHERE newer.uid=s.uid
-          AND (newer.last_seen>s.last_seen OR (newer.last_seen=s.last_seen AND newer.session_id>s.session_id)))
+        AND (EXISTS (SELECT 1 FROM friendbook_cf_presence_sessions newer
+          WHERE newer.uid=s.uid AND newer.last_seen>s.last_seen)
+          OR EXISTS (SELECT 1 FROM friendbook_cf_presence_sessions tied
+            WHERE tied.uid=s.uid AND tied.last_seen=s.last_seen AND tied.session_id>s.session_id))
       ORDER BY s.last_seen LIMIT ?
     )`).bind(cutoff,BATCH_SIZE).run(),
     db.prepare(`DELETE FROM friendbook_cf_typing_sessions WHERE rowid IN (
@@ -24,7 +26,8 @@ export async function pruneExpiredRealtime(db, now) {
 }
 
 export async function runMaintenance(env, {now = Date.now(), videoCleanup = retryVideoCleanup, broadcastPush = drainBroadcastPush, report = console.error} = {}) {
-  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now)], ['temporary-video', () => videoCleanup(env)], ['broadcast-push', () => broadcastPush(env,now)]];
+  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now)], ['temporary-video', () => videoCleanup(env)]];
+  if (broadcastPush) jobs.push(['broadcast-push', () => broadcastPush(env,now)]);;
   await Promise.all(jobs.map(async ([job, run]) => {
     try { await run(); }
     catch { report(JSON.stringify({event:'friendbook.maintenance_failed',job})); }

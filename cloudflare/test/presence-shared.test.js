@@ -93,6 +93,7 @@ test('scheduled maintenance prunes bounded expired rows and retains the presence
   const presence=sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)');
   presence.run('alice','old',1,1,1);
   presence.run('alice','fresh',1,1,now);
+  presence.run('bob','first',1,1,1);
   presence.run('bob','last',0,0,1);
   const typing=sql.prepare('INSERT INTO friendbook_cf_typing_sessions VALUES (?,?,?,?,?)');
   for (let i=0;i<101;i++) typing.run('room','alice',String(i),1,1);
@@ -163,4 +164,18 @@ test('opening presence socket reserves the write window before D1 resolves and p
   fail(new Error('D1 unavailable'));
   await pending;
   assert.equal(shouldPersistActive(false,state.lastWrite,now+1),true);
+});
+
+
+test('only the minute cron polls the broadcast outbox', async () => {
+  const {default:worker}=await import('../../worker.js');
+  const queries=[];
+  const env={DB:{prepare(q){queries.push(q);return {bind:()=>({all:async()=>({results:[]}),run:async()=>({})})};}}};
+  const pending=[];
+  const ctx={waitUntil(p){pending.push(p);}};
+  worker.scheduled({cron:'* * * * *'},env,ctx);
+  worker.scheduled({cron:'*/15 * * * *'},env,ctx);
+  await Promise.all(pending);
+  assert.equal(queries.filter(q=>q.includes('FROM friendbook_cf_broadcast_push')).length,1);
+  assert.equal(queries.filter(q=>q.includes('DELETE FROM friendbook_cf_typing_sessions')).length,1);
 });
