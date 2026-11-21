@@ -2195,7 +2195,13 @@ async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map(),roo
 async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   if (!auth.room) return json({error:'Forbidden'},403);
-  const statements=[await chatDocumentGuard(db,auth.roomPath,auth.room),await chatDocumentGuard(db,path,existing)];
+  // The nested message and canonical room were both read for authorization.
+  // Compare both snapshots at commit time using one guard row, not two writes
+  // and two preflight rereads. Legacy roots still need their source checks.
+  const statements=auth.room[canonicalRootSnapshot] && !isRootDocument(path)
+    ? [chatSnapshotGroupGuard(db,[JSON.stringify([auth.roomPath,auth.room.document_json]),
+      JSON.stringify([path,existing?.document_json ?? null])])]
+    : [await chatDocumentGuard(db,auth.roomPath,auth.room),await chatDocumentGuard(db,path,existing)];
   const id=docIdOf(path), parent=parentPath(path), coll=collectionIdOf(path);
   if (deleted) {
     statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
@@ -2241,6 +2247,7 @@ async function chatRootGuards(db,path,row) {
       THEN 1 ELSE 0 END`).bind(path,path,`${path}/messages`,id.length+1,id+'_',id,id,id.length+1,id+'_',id,id));
     return statements;
   }
+  if (row[canonicalRootSnapshot]) return [chatSnapshotGroupGuard(db,[JSON.stringify([path,row.document_json])])];
   const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
   const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
   if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'chats',doc_id:id,document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Room changed');

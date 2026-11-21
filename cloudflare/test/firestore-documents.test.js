@@ -432,6 +432,11 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.equal((await call('alice','/v1/firestore/document?path=chats/solo','PUT',{data:{participants:['alice']}})).status,403);
   assert.equal((await call('eve','/v1/firestore/batch','POST',batch([{op:'set',path:'chats/c1/messages/m2',data:{senderId:'eve',text:'spoof'}}]))).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{text:'tamper'}}]))).status,403);
+  roomReads=0;
+  const beforeDelivered=profileChanges();
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isDelivered:true}})).status,200);
+  assert.equal(roomReads,1,'single receipt does not re-read membership before its atomic guard');
+  assert.equal(profileChanges()-beforeDelivered,3,'one message change and one guard insert/delete');
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{isSeen:true}}]))).status,200);
   const beforeRepeatReceipt=profileChanges();
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isSeen:true}})).status,200);
