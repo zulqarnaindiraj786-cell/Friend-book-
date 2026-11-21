@@ -2949,6 +2949,14 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
           .bind(`chats/${[...receiptRooms][0]}`).first()) return json({ok:true,operations:ops.length});
       } catch { /* Keep the existing guarded write path on an unavailable probe. */ }
     }
+    const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
+    const previewKeys=new Set(['lastMessage','lastMessageTime','lastMessageTimeMs','unreadCount','typing','participantNames','participantPhotos']);
+    const canonicalOnlyRoom=(p,entry)=>{
+      if (!messageRoomPaths.has(p) || !entry.existingRow?.[canonicalRootSnapshot]) return false;
+      const before=decodeValue(JSON.parse(entry.existingRow.document_json));
+      return [...new Set([...Object.keys(before),...Object.keys(entry.doc)])].every(key=>
+        previewKeys.has(key) || JSON.stringify(before[key])===JSON.stringify(entry.doc[key]));
+    };
     try {
       const statements = [];
       let snapshotGroup=[], snapshotSize=0;
@@ -3012,7 +3020,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
           ).bind(p, parent, coll, id, owner, serialized, createTime, now));
-          if (isRootDocument(p) && id && coll) {
+          if (isRootDocument(p) && id && coll && !canonicalOnlyRoom(p,entry)) {
             const appDoc = JSON.stringify({ ...entry.doc, id });
             const appOwner = owner || (coll === 'users' ? id : '');
             statements.push(db.prepare(

@@ -150,7 +150,15 @@ export async function appDocuments(request, env, identity) {
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
     // Membership and privacy may change through another isolate or API: reauthorize every read.
     try {
-      const rows = await env.DB.prepare(
+      // Chat previews and unread counters can advance without rewriting the
+      // historical room mirror. Sort current rooms by their canonical timestamp.
+      const rows = collection==='chats' ? await env.DB.prepare(`
+        SELECT doc_id,document_json,update_time AS updated_at FROM friendbook_cf_firestore_documents
+          WHERE collection_id='chats' AND parent_path='chats'
+        UNION ALL SELECT a.doc_id,a.document_json,a.updated_at FROM friendbook_cf_documents a
+          WHERE a.collection='chats' AND NOT EXISTS (
+            SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='chats'
+          ) ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
       ).bind(collection, limit).all();
       let documents = [];

@@ -405,10 +405,19 @@ test('profiles and chats: private fields, membership and write bypasses across A
   roomGuards=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',receipts)).status,200);
   assert.equal(roomGuards,0,'repeated receipts perform no atomic guard writes');
+  const exactMirror=()=>sql.prepare("SELECT document_json,updated_at FROM friendbook_cf_documents WHERE path='chats/c1'").get();
+  const oldMirror=exactMirror();
   const reset={op:'update',path:'chats/c1',updates:{'unreadCount.bob':0}};
   const resetBatch=batch([...receipts.operations,reset]);
   assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
   assert.equal(roomGuards,1,'first unread reset still commits');
+  assert.deepEqual(exactMirror(),oldMirror,'receipt does not rewrite historical room mirror');
+  sql.prepare("UPDATE friendbook_cf_documents SET updated_at=1 WHERE path='chats/c1'").run();
+  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/older','chats','older','alice',JSON.stringify({participants:['alice','bob']}),2);
+  const chatList=await (await call('bob','/v1/docs?collection=chats&limit=1')).json();
+  assert.equal(chatList.documents[0].id,'c1','older list endpoint uses the current room order');
+  assert.equal(chatList.documents[0].unreadCount.bob,0);
+
   roomGuards=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
   assert.equal(roomGuards,0,'unchanged receipts and already-zero unread require no guard writes');
