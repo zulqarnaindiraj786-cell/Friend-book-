@@ -81,6 +81,26 @@ for(const root of ['posts','reels']){
     assert.deepEqual(page.documents.map(doc=>doc.id),['item39','item38','item37','item36','item35']);
   }));
 }
+const timestamp=millis=>({__type:'timestamp',millis});
+add('stories','active','user0',{authorId:'user0',privacy:'Public',expiresAt:timestamp(now+100000)});
+add('stories','expired','user0',{authorId:'user0',privacy:'Public',expiresAt:timestamp(now-1)});
+add('lives','open','user0',{hostId:'user0',privacy:'public',status:'live'});
+add('lives','ended','user0',{hostId:'user0',privacy:'public',status:'ended'});
+for(let i=0;i<users;i++) add('notifications',`notice${i}`,'user0',{fromUserId:'user0',toUserId:`user${i}`,isRead:false,createdAt:timestamp(now)});
+for(const [root,options,expected] of [
+  ['stories',{filters:[{field:'expiresAt',op:'>',value:timestamp(now)}]},()=>['active']],
+  ['lives',{filters:[{field:'status',op:'==',value:'live'}]},()=>['open']],
+  ['notifications',i=>({filters:[{field:'toUserId',op:'==',value:`user${i}`}],orderBy:[{field:'createdAt',direction:'DESCENDING'}]}),i=>[`notice${i}`]],
+]) await measure(`page-${root}`,users,()=>wave(users,async i=>{
+  const page=await call(`user${i}`,'/v1/firestore/query','POST',{parent:root,limit:5,...(typeof options==='function'?options(i):options)});
+  assert.deepEqual(page.documents.map(d=>d.id),expected(i));
+}));
+await measure('profileDetail',users,()=>wave(users,async i=>{
+  const profile=await call(`user${i}`,`/v1/docs/users/user${(i+1)%users}`);
+  assert.equal(profile.document.displayName,`user${(i+1)%users}`);
+  assert.equal(profile.document.email,undefined);
+}));
+for(const root of ['posts','reels','stories','lives','notifications']) assert.equal(report.workloads[`page-${root}`].changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
 console.log(JSON.stringify(report,null,2));

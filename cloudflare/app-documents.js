@@ -97,6 +97,13 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
+// Request-local only: never keep authorization state between HTTP requests.
+export function requestAccountReads(identity) {
+  const reads=new Map();
+  if(identity?.viewerProfile!==undefined) reads.set(`users/${identity.uid}`,toFirestoreFields(identity.viewerProfile));
+  return reads;
+}
+
 export function readPreferredDocumentJson(db, path) {
   // Use one indexed lookup statement even for historical records. The legacy
   // branch is eligible only when the canonical row does not exist.
@@ -178,7 +185,7 @@ export async function appDocuments(request, env, identity) {
         }
       }
       if (['posts','reels','stories','lives'].includes(collection)) {
-        const userReads = new Map(); // scoped to this response; never cache privacy across requests
+        const userReads = requestAccountReads(identity);
         const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads)));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
@@ -205,13 +212,10 @@ export async function appDocuments(request, env, identity) {
 
   if (request.method === 'GET') {
     try {
-      const row = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
-      ).bind(docPath).first();
-      const current = await canonicalRoot(env.DB, docPath, row);
+      const current = await readPreferredDocumentJson(env.DB,docPath);
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
-      if (!(await contentReadAllowed(env.DB, uid, docPath))) return json({error:'Forbidden'},403);
+      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity)))) return json({error:'Forbidden'},403);
       if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);

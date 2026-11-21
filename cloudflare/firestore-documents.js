@@ -1,7 +1,7 @@
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads } from './interactions.js';
-import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
+import { requestAccountReads, readD1DocumentFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
@@ -971,7 +971,7 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   // All comments/reactions in a nested collection share the same parent post.
   // Authorize that parent once per request, not once per child row.
   if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
-    return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`) ? docs : [];
+    return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`,requestUserReads) ? docs : [];
   }
   if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return await authorizeLiveRoom(db,parts[1],uid) ? docs : [];
   const allowed=new Array(docs.length).fill(false);
@@ -2502,7 +2502,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
-    try { if (!(await contentReadAllowed(db,uid,docPath,undefined,true))) return json({error:'Forbidden'},403); }
+    try { if (!(await contentReadAllowed(db,uid,docPath,requestAccountReads(identity),true))) return json({error:'Forbidden'},403); }
     catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0]==='officialBroadcasts' && document.data?.adminId!==uid) return json({error:'Forbidden'},403);
@@ -2791,9 +2791,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     }
     if (parent==='referrals' && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
     let rows;
-    const requestUserReads=new Map();
-    // Reuse the viewer record already checked by the Worker on this request.
-    if (identity.viewerProfile !== undefined) requestUserReads.set(`users/${uid}`,toFirestoreFields(identity.viewerProfile));
+    const requestUserReads=requestAccountReads(identity);
     try {
       const tag=body?.postTag;
       if (tag!==undefined && (parent!=='posts' || typeof tag!=='string' || !/^[#@][\p{L}\p{N}_]{1,80}$/u.test(tag))) return json({error:'Invalid post tag'},400);
@@ -2897,7 +2895,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       }))).filter(Boolean);
     } catch { return json({error:'Read unavailable'},503); }
     let visible;
-    try { visible=await visibleDocuments(db,uid,parent,docs); }
+    try { visible=await visibleDocuments(db,uid,parent,docs,requestAccountReads(identity)); }
     catch { return json({error:'Read unavailable'},503); }
     const filtered = visible.filter(d => (Array.isArray(filters) ? filters : []).filter(f=>!ownFollowFilter(parent,uid,f)).every(f => matchesFilter(d.data, f, d.id)));
     return json({ parent, count: filtered.length });

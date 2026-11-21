@@ -9,7 +9,7 @@ import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
-import { appDocuments, toFirestoreFields, saveProfileProjection } from './cloudflare/app-documents.js';
+import { appDocuments, requestAccountReads, saveProfileProjection } from './cloudflare/app-documents.js';
 import { drainBroadcastPush } from './cloudflare/fcm-push.js';
 import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
@@ -141,7 +141,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         return response;
       }
       if (fcm) return fcmGateway(request, env, { uid, token: bearer[1], viewerProfile });
-      if (docs) return appDocuments(request, env, { uid, suspended, token: bearer[1] });
+      if (docs) return appDocuments(request, env, { uid, suspended, token: bearer[1], viewerProfile });
       if (views) {
         const validId=id=>typeof id==='string' && id.length>0 && id.length<=128 && !/[\\/,\x00-\x1f]/.test(id) && id!=='.' && id!=='..';
         const url=new URL(request.url);
@@ -149,7 +149,7 @@ export function createWorker(verify = verifyFirebaseToken) {
           if (viewsMatch) {
             let id; try { id=decodeURIComponent(viewsMatch[2]); } catch { return json({error:'Invalid resource'},400); }
             if (!validId(id)) return json({error:'Invalid resource'},400);
-            if (!(await contentReadAllowed(env.DB,uid,`${viewsMatch[1]}/${id}`))) return json({error:'Forbidden'},403);
+            if (!(await contentReadAllowed(env.DB,uid,`${viewsMatch[1]}/${id}`,requestAccountReads({uid,viewerProfile})))) return json({error:'Forbidden'},403);
             return viewCounters(request,env,{uid},viewsMatch,url,Date.now,ctx);
           }
           if (request.method!=='GET') return json({error:'Method not allowed'},405);
@@ -158,8 +158,7 @@ export function createWorker(verify = verifyFirebaseToken) {
           if (!['posts','reels'].includes(collection) || raw===null) return json({error:'Invalid request'},400);
           const ids=[...new Set(raw.split(',').map(x=>x.trim()))];
           if (ids.length>50 || ids.some(x=>!validId(x))) return json({error:'Invalid request'},400);
-          const accountReads=new Map();
-          if (viewerProfile!==undefined) accountReads.set(`users/${uid}`,toFirestoreFields(viewerProfile));
+          const accountReads=requestAccountReads({uid,viewerProfile});
           const allowed=await Promise.all(ids.map(id=>contentReadAllowed(env.DB,uid,`${collection}/${id}`,accountReads)));
           const safe=ids.filter((_,i)=>allowed[i]);
           if (!safe.length) return json({collection,views:{}});

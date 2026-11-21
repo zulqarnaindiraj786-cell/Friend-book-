@@ -1,5 +1,5 @@
 import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountStatement, legacyPage } from './comment-api.js';
-import { toFirestoreFields } from './app-documents.js';
+import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -102,8 +102,7 @@ export async function interactions(request, env, identity, match, authorize = au
   let id; try { id = identifier(encodedId); } catch { return json({ error: 'Invalid resource' }, 400); }
   const resource = `${collection}/${id}`;
   let db;const context={};
-  const accountReads=new Map();
-  if(identity.viewerProfile!==undefined) accountReads.set(`users/${identity.uid}`,toFirestoreFields(identity.viewerProfile));
+  const accountReads=requestAccountReads(identity);
   try {
     db = env.DB.withSession('first-primary');
     // Keep a primary-first session, but overlap the independent readiness and access reads.
