@@ -2016,6 +2016,12 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   assert.deepEqual((await (await call('bob','/v1/docs?collection=lives')).json()).documents,[]);
   assert.equal((await call('alice',doc,'PATCH',{fields:{privacy:'public'}})).status,200);
   assert.equal((await call('bob',doc)).status,200);
+  const heartbeat={fields:{lastHeartbeatMs:Date.now(),viewerIds:['bob'],peakViewers:1}};
+  assert.equal((await call('bob',doc,'PATCH',heartbeat)).status,403);
+  const beforeHeartbeat=sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call('alice',doc,'PATCH',heartbeat)).status,200);
+  assert.equal(sql.prepare('SELECT total_changes() n').get().n-beforeHeartbeat,1,'live telemetry needs only the canonical write');
+  assert.equal((await (await call('bob',doc)).json()).data.peakViewers,1);
   for(let i=0;i<200;i++) insert.run(`lives/old${i}`,'lives',`old${i}`,'alice',JSON.stringify({hostId:'alice',privacy:'public',status:'ended'}),1);
   insert.run('lives/legacyLive','lives','legacyLive','alice',JSON.stringify({fields:{hostId:{stringValue:'alice'},privacy:{stringValue:'public'},status:{stringValue:'live'}}}),1);
   insert.run('lives/shadow','lives','shadow','alice',JSON.stringify({hostId:'alice',privacy:'public',status:'live'}),1);

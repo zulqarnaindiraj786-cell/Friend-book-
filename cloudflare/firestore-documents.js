@@ -702,6 +702,13 @@ function unchangedChatReceipt(path,uid,row,next,fields) {
     && keys[0]===`unreadCount.${uid}` && fields[keys[0]]===0;
 }
 
+function isLiveHeartbeatPatch(path,row,before,fields) {
+  return /^lives\/[^/]+$/.test(path) && row[canonicalRootSnapshot] && before?.status==='live'
+    && Object.keys(fields).length===3 && Number.isSafeInteger(fields.lastHeartbeatMs)
+    && Array.isArray(fields.viewerIds) && fields.viewerIds.every(id=>typeof id==='string')
+    && Number.isSafeInteger(fields.peakViewers) && fields.peakViewers>=0;
+}
+
 async function writeRow(db, path, doc, now, existing, guarded = false) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
@@ -2816,6 +2823,17 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
         }
         return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
+      }
+      // Active hosts send this exact telemetry patch every eight seconds.
+      // Persist current stats once; status/privacy edits still mirror and guard.
+      if (isLiveHeartbeatPatch(docPath,existing,existingDoc,receiptFields)) {
+        const serialized=JSON.stringify(next);
+        if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+        const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents
+          SET document_json=?,update_time=? WHERE path=? AND document_json=? AND update_time=? RETURNING path`)
+          .bind(serialized,now,docPath,existing.document_json,existing.update_time).first();
+        if (!updated) return json({error:'Update unavailable'},503);
+        return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
       }
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
