@@ -2325,11 +2325,12 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   for(let i=0;i<250;i++) add(`person${String(i).padStart(3,'0')}`,{createdAt:ts(i),email:'private@example.test'},i%2===0);
   add('banned',{createdAt:ts(500),banned:true});
   add('banned',{createdAt:ts(600)},false);
+  for(let i=0;i<45;i++) add(`hidden${i}`,{createdAt:ts(1000+i),...(i%2?{banned:true}:{deactivated:true})},i%3!==0);
   add('wrapped',{fields:{createdAt:{timestampValue:'1970-01-01T00:00:00.248Z'}}},false);
   add('fraction',{createdAt:ts(247.5)});
-  let reads=0;
+  let reads=0, scans=0;
   const plans=[];
-  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+  const db={prepare(q){if(q.includes('quota_root_users_recent')) scans++;const stmt=sql.prepare(q);return{bind(...args){return{
     first:async()=>stmt.get(...args)||null,
     all:async()=>{const results=stmt.all(...args);if(q.includes('INDEXED BY')&&q.includes('recent_people')){
       reads+=results.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
@@ -2342,6 +2343,7 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
     assert.equal(r.status,200);return (await r.json()).documents;
   };
   const page=await query({});
+  assert.equal(scans,0,'hidden profiles must not trigger a users collection scan');
   assert.deepEqual(page,await query({endBefore:[]}));
   assert.equal(page[1].id,'wrapped');
   assert.doesNotMatch(JSON.stringify(page),/private@example|banned/);

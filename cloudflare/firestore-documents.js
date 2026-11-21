@@ -1117,9 +1117,16 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   try {
     const [odd,normal]=await Promise.all([false,true].map(standard=>Promise.all(stores.map(async ([table,index,where,rank,shadow],i)=>{
       const bound=standard && cursor ? `AND (${rank},${time},doc_id)<(?,?,?)` : '';
-      const args=standard && cursor ? [...cursor,size] : [standard?size:65];
+      // Ordinary viewers cannot see suspended listings marked banned/deactivated.
+      // Apply the same strict Boolean check before LIMIT so a run of hidden rows
+      // cannot force a whole-collection fallback. Wrapped legacy rows stay on
+      // the exceptional path and are projected after decoding.
+      const visibility=standard && !admin ? `AND (a.path=? OR (
+        json_type(document_json,'$.banned') IS NOT 'true'
+        AND json_type(document_json,'$.deactivated') IS NOT 'true'))` : '';
+      const args=[...(visibility?[`users/${uid}`]:[]),...(standard && cursor ? cursor : []),standard?size:65];
       const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
-        WHERE ${where} AND (${rank})${standard?'>=0':'=-1'} ${shadow} ${bound}
+        WHERE ${where} AND (${rank})${standard?'>=0':'=-1'} ${shadow} ${visibility} ${bound}
         ${standard?`ORDER BY (${rank}) DESC,(${time}) DESC,doc_id DESC`:''} LIMIT ?`).bind(...args).all();
       return unpack(results,i);
     }))));
