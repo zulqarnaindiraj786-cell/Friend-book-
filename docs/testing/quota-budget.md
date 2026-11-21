@@ -39,3 +39,7 @@ Bounded listeners (up to 40 rows) accept document deltas after their first succe
 | Stories, Reels, live, comments and reactions | Existing bounded and indexed paths where supported; collect read/write patterns separately | Verify individual paths under representative traffic; do not equate smaller responses with fewer D1 reads |
 
 For each area report query count, rows read, rows written and errors in matched windows, then confirm privacy and unchanged result order. APK install checks do not exercise those production paths. The published 151 APK passed fresh install and upgrade from 150 on the emulator.
+
+### Capacity gate for large rollout
+
+The shown D1 Free budget is 5,000,000 rows read and 100,000 rows written/day. At 100,000 **daily active** users that is at most 50 reads and 1 write per user per day, before fixed jobs, indexes and headroom. Registered users and daily active users are not interchangeable. Measure actual rows by workload (idle, browsing, messaging and posting) in staging, include fan-out and retry costs, and compare forecast peak and daily load against platform limits before claiming this scale. No production load generation on the current quota.

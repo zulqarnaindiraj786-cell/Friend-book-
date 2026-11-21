@@ -113,3 +113,12 @@ test('presence uses constant-size index probes for large session histories', asy
   assert.doesNotMatch(plans.join('\n'),/SCAN friendbook_cf_presence_sessions|TEMP B-TREE/);
   sql.close();
 });
+
+test('quiet socket persistence is coalesced without delaying active transitions', async () => {
+  const {shouldPersistActive,WRITE_COALESCE_MS}=await import('../presence-realtime.js');
+  const last=1_000_000;
+  assert.equal(shouldPersistActive(false,last,last+119_999),false);
+  assert.equal(shouldPersistActive(false,last,last+120_000),true);
+  assert.equal(shouldPersistActive(true,last,last+1),true);
+  assert.ok(WRITE_COALESCE_MS*2<PRESENCE_TTL_MS,'one missed renewal must not exhaust the freshness window');
+});

@@ -2,7 +2,7 @@
 import { loadChat } from './chat-access.js';
 import { readD1DocumentFields, hasD1Friendship, toFirestoreFields } from './app-documents.js';
 export const PRESENCE_TTL_MS = 300_000; // 5 minutes (300 seconds)
-export const WRITE_COALESCE_MS = 60_000; // Persist quiet heartbeats at most once a minute; transitions remain immediate.
+export const WRITE_COALESCE_MS = 120_000; // Quiet socket renewals only; transitions remain immediate.
 export const TYPING_TTL_MS = 8_000;
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -14,6 +14,9 @@ export function validId(value) {
 export function isFreshOnline(online, visible, lastSeen, now) {
   return Boolean(online) && visible !== false && visible !== 0
     && Number.isFinite(lastSeen) && lastSeen > 0 && lastSeen <= now && (now - lastSeen) < PRESENCE_TTL_MS;
+}
+export function shouldPersistActive(becameActive, lastWrite, now) {
+  return becameActive || now - lastWrite >= WRITE_COALESCE_MS;
 }
 // Per-isolate maps do not represent other Worker isolates. Persist each socket
 // separately so one phone disconnecting cannot mark another phone offline.
@@ -165,7 +168,7 @@ export async function presenceRealtime(request, env, identity) {
       if (data.type === 'active') {
         const becameActive = !state.active;
         state.active = true; state.lastSeen = now;
-        if (becameActive || now - state.lastWrite >= WRITE_COALESCE_MS) {
+        if (shouldPersistActive(becameActive,state.lastWrite,now)) {
           state.lastWrite = now;
           try { await writePresence(env.DB, uid, state.session, true, state.visible, now); } catch {}
         }
