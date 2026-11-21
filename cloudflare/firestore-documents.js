@@ -678,6 +678,17 @@ function unchangedNotificationRead(path,row,fields) {
   return decodeValue(JSON.parse(row.document_json)).isRead===true;
 }
 
+// Only literal acknowledgement patches: transforms and real changes still commit.
+function unchangedChatReceipt(path,uid,row,next,fields) {
+  if (!row || !fields || row.document_json!==JSON.stringify(next)) return false;
+  const parts=splitPath(path),keys=Object.keys(fields);
+  if(parts?.[0]!=='chats' || !keys.length)return false;
+  if(parts.length===4 && parts[2]==='messages')return keys.every(key=>
+    ['isSeen','isDelivered'].includes(key) && fields[key]===true);
+  return parts.length===2 && row[canonicalRootSnapshot] && keys.length===1
+    && keys[0]===`unreadCount.${uid}` && fields[keys[0]]===0;
+}
+
 async function writeRow(db, path, doc, now, existing, guarded = false) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
@@ -2701,7 +2712,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
-      if (unchangedNotificationRead(docPath,existing,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
+      if (unchangedNotificationRead(docPath,existing,body.fields||body.data||body.updates)
+          || unchangedChatReceipt(docPath,uid,existing,next,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
@@ -3110,29 +3122,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     // An older client can replay the same receipt and zero unread counter.
     // Only an entirely unchanged, single-room receipt batch can return early:
     // no writes or optimistic guard rows are needed after the full ACL above.
-    const receiptRooms=new Set();
-    const noOpReceipts=path!=='/v1/firestore/transaction' && ops.every(op=>{
-      const parts=splitPath(op.path), kind=op.type||op.op;
-      if (kind!=='update' || parts?.[0]!=='chats') return false;
-      const patch=op.fields||op.updates||op.data||{};
-      const keys=Object.keys(patch);
-      if (!keys.length) return false;
-      if (parts.length===4 && parts[2]==='messages') {
-        if (!keys.every(key=>['isSeen','isDelivered'].includes(key) && patch[key]===true)) return false;
-      } else if (parts.length!==2 || keys.length!==1 || keys[0]!==`unreadCount.${uid}` || patch[keys[0]]!==0) return false;
-      receiptRooms.add(parts[1]);
+    if (path==='/v1/firestore/batch' && ops.every(op=>{
       const entry=finalDocs.get(op.path);
-      return entry?.existingRow && !entry.deleted && entry.existingRow.document_json===JSON.stringify(entry.doc);
-    });
-    if (noOpReceipts && receiptRooms.size===1) {
-      try {
-        // Do not bypass migration of a legacy-only room when the batch includes
-        // its unread field. Nested messages are canonical by construction.
-        const hasRoot=order.some(p=>splitPath(p).length===2);
-        if (!hasRoot || await db.prepare('SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? LIMIT 1')
-          .bind(`chats/${[...receiptRooms][0]}`).first()) return json({ok:true,operations:ops.length});
-      } catch { /* Keep the existing guarded write path on an unavailable probe. */ }
-    }
+      return (op.type||op.op)==='update' && !entry?.deleted && unchangedChatReceipt(
+        op.path,uid,entry?.existingRow,entry?.doc,op.fields||op.updates||op.data);
+    })) return json({ok:true,operations:ops.length});
     // Keep the original authorization and optimistic snapshots, but don't
     // rewrite identical receipt rows alongside a genuinely changed receipt.
     const unchangedBatchRows=new Set();

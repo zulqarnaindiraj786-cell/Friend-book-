@@ -433,6 +433,10 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.equal((await call('eve','/v1/firestore/batch','POST',batch([{op:'set',path:'chats/c1/messages/m2',data:{senderId:'eve',text:'spoof'}}]))).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{text:'tamper'}}]))).status,403);
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{isSeen:true}}]))).status,200);
+  const beforeRepeatReceipt=profileChanges();
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isSeen:true}})).status,200);
+  assert.equal(profileChanges(),beforeRepeatReceipt,'a repeated single receipt writes no message or guard rows');
+  assert.equal((await call('eve','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isSeen:true}})).status,403);
   const messages=Array.from({length:12},(_,i)=>`chats/c1/messages/batch${i}`);
   assert.equal((await call('alice','/v1/firestore/batch','POST',batch(messages.map(path=>({op:'set',path,data:{senderId:'alice',receiverId:'bob',text:'batch'}}))))).status,200);
   const receipts=batch(messages.map(path=>({op:'update',path,updates:{isSeen:true}})));
