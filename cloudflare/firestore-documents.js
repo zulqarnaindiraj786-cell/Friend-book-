@@ -327,7 +327,7 @@ async function boundedChatRows(db,parent,spec) {
     UNION ALL SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first(),
   // Ensure SQLite's ordering matches the existing JS comparator exactly. Older or
   // malformed records must never be dropped simply to make the page smaller.
-    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND (
+    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND parent_path GLOB 'chats/*/messages' AND (
     doc_id GLOB '*[^ -~]*' OR COALESCE((
       (json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
       OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
