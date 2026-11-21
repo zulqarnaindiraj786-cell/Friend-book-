@@ -1823,9 +1823,11 @@ test('Cloudflare restores event RSVP and page follows without granting ownership
 test('live room creation, discovery and end transitions enforce host and viewer permissions', async () => {
   const sql=new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  sql.exec(readFileSync(new URL('../migrations/0060_live_status_indexes.sql',import.meta.url),'utf8'));
+  const plans=[];
   const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const doc='/v1/firestore/document?path=lives/room';
@@ -1836,6 +1838,18 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   assert.deepEqual((await (await call('bob','/v1/docs?collection=lives')).json()).documents,[]);
   assert.equal((await call('alice',doc,'PATCH',{fields:{privacy:'public'}})).status,200);
   assert.equal((await call('bob',doc)).status,200);
+  for(let i=0;i<200;i++) insert.run(`lives/old${i}`,'lives',`old${i}`,'alice',JSON.stringify({hostId:'alice',privacy:'public',status:'ended'}),1);
+  insert.run('lives/legacyLive','lives','legacyLive','alice',JSON.stringify({fields:{hostId:{stringValue:'alice'},privacy:{stringValue:'public'},status:{stringValue:'live'}}}),1);
+  insert.run('lives/shadow','lives','shadow','alice',JSON.stringify({hostId:'alice',privacy:'public',status:'live'}),1);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('lives/shadow','lives','lives','shadow','alice',JSON.stringify({hostId:'alice',privacy:'public',status:'ended'}),1,1);
+  const discover=async filter=>{
+    const r=await call('bob','/v1/firestore/query','POST',{parent:'lives',limit:25,filters:[{field:'status',...filter}]});
+    assert.equal(r.status,200);return (await r.json()).documents.map(row=>row.id);
+  };
+  assert.deepEqual(await discover({op:'==',value:'live'}),await discover({op:'in',value:['live']}));
+  assert.deepEqual(await discover({op:'==',value:'live'}),['legacyLive','room']);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_lives_status/);
   const chat='lives/room/chat', send=`/v1/firestore/document?parent=${chat}`;
   const msg={type:'chat',uid:'bob',text:'Hello',name:'Fake Host',isHost:true};
   const created=await call('bob',send,'POST',{data:msg});

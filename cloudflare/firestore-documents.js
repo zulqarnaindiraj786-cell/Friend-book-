@@ -415,6 +415,28 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
       return [...(a.results||[]),...(b.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
     }
   }
+  if (parent==='lives' && filters?.some(f=>f.field==='status' && f.op==='==' && f.value==='live')) {
+    const legacyStatus=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
+    WHEN json_type(document_json,'$.fields.status')='text' THEN json_extract(document_json,'$.fields.status')
+    WHEN json_type(document_json,'$.fields.status.stringValue')='text' THEN json_extract(document_json,'$.fields.status.stringValue')
+    WHEN json_type(document_json,'$.fields.status.stringValue') IS NOT NULL THEN 1 END
+    ELSE json_extract(document_json,'$.status') END`;
+    try {
+      const [canonical,legacy]=await Promise.all([
+        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_lives_status
+          WHERE parent_path='lives' AND json_extract(document_json,'$.status')='live'`).bind().all(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_lives_status
+          WHERE a.collection='lives' AND (${legacyStatus}) IN ('live',1) AND NOT EXISTS (
+            SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='lives'
+          )`).bind().all(),
+      ]);
+      const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+      // Apply the raw predicate before authorizing the uncommon encoding bucket.
+      return rows.filter(row=>rowToDocument(row).data.status==='live');
+    } catch(error) {
+      if (!/no such index: idx_cf_(?:legacy_)?lives_status/.test(String(error))) throw error;
+    }
+  }
   if (parent === 'chats') {
     // Canonical membership wins over stale legacy mirrors. The normal document
     // ACL still runs before results are returned to the caller.
