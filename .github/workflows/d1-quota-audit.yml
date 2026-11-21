@@ -36,6 +36,6 @@ jobs:
                       sql=row['dimensions']['query'] or ''
                       op=re.match(r'\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b',sql,re.I)
                       tables=sorted(set(re.findall(r'\b(?:FROM|JOIN|INTO|UPDATE)\s+(friendbook_[a-z0-9_]+)',sql,re.I)))
-                      print(op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'])
+                      print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'])
           for metric in ('rowsRead','rowsWritten'): query(metric)
           PY
