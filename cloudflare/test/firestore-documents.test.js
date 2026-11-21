@@ -2311,3 +2311,46 @@ test('Home story expiry uses indexed candidate seeks and preserves legacy and pr
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_story_timestamp_expiry_lookup/);
   sql.close();
 });
+
+test('recent friend suggestions seek indexed profiles and preserve privacy, historical timestamps and cursors', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  sql.exec(readFileSync(new URL('../migrations/0067_recent_people_pages.sql',import.meta.url),'utf8'));
+  const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=(id,data,modern=true)=>modern
+    ? canonical.run(`users/${id}`,'users','users',id,id,JSON.stringify(data),1,1)
+    : legacy.run(`users/${id}`,'users',id,id,JSON.stringify(data),1);
+  const ts=millis=>({__type:'timestamp',millis});
+  add('viewer',{uid:'viewer'});
+  for(let i=0;i<250;i++) add(`person${String(i).padStart(3,'0')}`,{createdAt:ts(i),email:'private@example.test'},i%2===0);
+  add('banned',{createdAt:ts(500),banned:true});
+  add('banned',{createdAt:ts(600)},false);
+  add('wrapped',{fields:{createdAt:{timestampValue:'1970-01-01T00:00:00.248Z'}}},false);
+  add('fraction',{createdAt:ts(247.5)});
+  let reads=0;
+  const plans=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const results=stmt.all(...args);if(q.includes('INDEXED BY')&&q.includes('recent_people')){
+      reads+=results.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return {results};},
+  };}};}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async spec=>{
+    const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},
+      body:JSON.stringify({parent:'users',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:5,...spec})}),env);
+    assert.equal(r.status,200);return (await r.json()).documents;
+  };
+  const page=await query({});
+  assert.deepEqual(page,await query({endBefore:[]}));
+  assert.equal(page[1].id,'wrapped');
+  assert.doesNotMatch(JSON.stringify(page),/private@example|banned/);
+  const anchor=page.at(-1);
+  const startAfter=[anchor.data.createdAt,anchor.id];
+  assert.deepEqual(await query({startAfter}),await query({startAfter,endBefore:[]}));
+  assert.ok(reads>0 && reads<100);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_recent_people/);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_recent_people/);
+  assert.doesNotMatch(plans.join('\n'),/USE TEMP B-TREE/);
+  sql.close();
+});

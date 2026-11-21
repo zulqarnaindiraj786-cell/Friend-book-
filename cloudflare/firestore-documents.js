@@ -1074,6 +1074,73 @@ async function boundedPeoplePage(db,env,uid,spec) {
   return null;
 }
 
+// Friends suggestions sort profiles by account creation date, not document ID.
+async function boundedRecentPeoplePage(db,env,uid,spec) {
+  if(spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length!==1
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
+      || spec.startAt || spec.endAt || spec.endBefore || spec.limitToLast
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>30) return null;
+  const admin=isPaymentAdmin(env,uid);
+  // Moderator projections can remove createdAt, so their ordering stays on the
+  // generic path which applies projection before ordering.
+  if(!admin && await verifiedModerator(db,uid)) return null;
+  let cursor;
+  if(spec.startAfter){
+    const c=spec.startAfter;
+    if(!Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[ -~]+$/.test(c[1])) return null;
+    const rank=c[0]===null?0:typeof c[0]==='number'?2:c[0]?.__type==='timestamp'?4:-1;
+    const time=rank===0?0:rank===2?c[0]:c[0]?.millis;
+    if(rank<0 || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
+    cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
+  }
+  const modern=`CASE WHEN doc_id GLOB '*[^ -~]*' OR path<>'users/'||doc_id THEN -1
+    WHEN json_type(document_json,'$.createdAt') IS NULL OR json_type(document_json,'$.createdAt')='null' THEN 0
+    WHEN json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991 THEN 2
+    WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991 THEN 4
+    ELSE -1 END`;
+  const historical=`CASE WHEN json_type(document_json,'$.fields')='object' THEN -1 ELSE (CASE WHEN doc_id GLOB '*[^ -~]*' OR path<>'users/'||doc_id THEN -1
+    WHEN json_type(document_json,'$.createdAt') IS NULL OR json_type(document_json,'$.createdAt')='null' THEN 0
+    WHEN json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991 THEN 2
+    WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991 THEN 4
+    ELSE -1 END) END`;
+  const time=`COALESCE(CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt')
+    ELSE json_extract(document_json,'$.createdAt.millis') END,0)`;
+  const size=Math.max(20,spec.limit*2);
+  const stores=[
+    ['friendbook_cf_firestore_documents','idx_cf_recent_people',"parent_path='users'",modern,''],
+    ['friendbook_cf_documents','idx_cf_legacy_recent_people',"collection='users'",historical,
+      "AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')"],
+  ];
+  const unpack=(rows,i)=>i===0 ? rows : rows.map(appDocumentToFirestoreRow).filter(Boolean);
+  try {
+    const [odd,normal]=await Promise.all([false,true].map(standard=>Promise.all(stores.map(async ([table,index,where,rank,shadow],i)=>{
+      const bound=standard && cursor ? `AND (${rank},${time},doc_id)<(?,?,?)` : '';
+      const args=standard && cursor ? [...cursor,size] : [standard?size:65];
+      const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
+        WHERE ${where} AND (${rank})${standard?'>=0':'=-1'} ${shadow} ${bound}
+        ${standard?`ORDER BY (${rank}) DESC,(${time}) DESC,doc_id DESC`:''} LIMIT ?`).bind(...args).all();
+      return unpack(results,i);
+    }))));
+    const unusual=odd.flat();
+    if(unusual.length>64 || unusual.some(row=>row.path!==`users/${row.doc_id}`)) return null;
+    const standard=sortDocuments(normal.flat().map(rowToDocument),spec.orderBy).slice(0,size);
+    const anchor=standard.at(-1);
+    const anchorCursor=anchor && [anchor.data.createdAt??null,anchor.id];
+    const extra=unusual.map(rowToDocument).filter(doc=>!anchorCursor || standard.length<size
+      || compareDocumentToCursor(doc,anchorCursor,spec.orderBy)<=0);
+    const candidates=[...standard,...extra];
+    if(new Set(candidates.map(row=>row.id)).size!==candidates.length) return null;
+    const projected=candidates.map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data,admin,false)})).filter(doc=>doc.data!==null);
+    const page=applyQuery(projected,spec);
+    return page.length===spec.limit || standard.length<size ? page : null;
+  } catch(error) {
+    if(/no such index: idx_cf_(?:legacy_)?recent_people/.test(String(error))) return null;
+    throw error;
+  }
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
@@ -2741,7 +2808,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         ]);
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
-        const people=await boundedPeoplePage(db,env,uid,body);
+        const people=await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
