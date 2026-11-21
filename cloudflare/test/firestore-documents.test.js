@@ -814,6 +814,10 @@ test('trusted groups enforce role and membership changes on both document APIs',
   assert.equal((await call('mallory',uri,'PATCH',{fields:{adminIds:['alice','mallory'],members:['alice','mallory']}})).status,403);
   assert.equal((await call('mallory',uri,'PATCH',{fields:{members:{__fieldValue:'arrayUnion',values:['mallory']}}})).status,403);
   assert.equal((await call('bob',uri,'PATCH',{fields:{pendingMemberIds:{__fieldValue:'arrayUnion',values:['bob']}}})).status,200);
+  const changes=()=>sql.prepare('SELECT total_changes() n').get().n;
+  const beforeReplay=changes();
+  assert.equal((await call('bob',uri,'PATCH',{fields:{pendingMemberIds:{__fieldValue:'arrayUnion',values:['bob']}}})).status,200);
+  assert.equal(changes(),beforeReplay,'repeated join request does not rewrite group or guard rows');
   const outsider=await (await call('mallory',uri)).json();assert.deepEqual(outsider.data.pendingMemberIds,[]);
   const manager=await (await call('alice',uri)).json();assert.deepEqual(manager.data.pendingMemberIds,['bob']);
   assert.equal((await call('mallory',`/v1/docs/groups/${id}`,'PUT',{adminIds:['alice','mallory']})).status,403);

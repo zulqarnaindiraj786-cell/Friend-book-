@@ -1754,9 +1754,11 @@ async function writeGroup(db,uid,path,beforeRow,after,now) {
     if (!after ? !canManageGroup(uid,owner,before) || uid!==owner : !canUpdateGroup(uid,owner,before,after)) return json({error:'Forbidden'},403);
   }
   if (after && JSON.stringify(after).length>95000) return json({error:'Document too large'},413);
+  if (after && beforeRow?.[canonicalRootSnapshot] && JSON.stringify(after)===beforeRow.document_json)
+    return json({...rowToDocument(beforeRow),data:groupReadView(uid,after,owner)});
   const stmts=[];
   if (beforeRow) {
-    const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
+    const canonical=beforeRow[canonicalRootSnapshot] ? beforeRow : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
     const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
     if ((canonical && canonical.document_json!==beforeRow.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'groups',doc_id:id,document_json:legacy.document_json})?.document_json!==beforeRow.document_json))) return json({error:'Group changed'},409);
     stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?)) AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM friendbook_cf_trusted_groups WHERE group_path=?)) OR (? IS NOT NULL AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ?)) THEN 1 ELSE 0 END').bind(canonical?1:0,path,beforeRow.document_json,canonical?1:0,path,path,legacy?.document_json||'',owner,path,owner,path,owner));
@@ -2851,13 +2853,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         // A conditional assertion and deletion are committed together. Never delete a request
         // which changed after authorization, even across concurrent Worker isolates.
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
-        const canonical = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(docPath).first();
-        const legacy = canonical ? null : await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(docPath).first();
-        // Verify the exact authorized snapshot, including the absence of a canonical row
-        // when authorization used a historical mirror.
-        if ((canonical && canonical.document_json !== row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:docPath,collection:'friend_requests',doc_id:docIdOf(docPath),document_json:legacy.document_json})?.document_json !== row.document_json))) return json({error:'Request changed'},409);
         await db.batch([
-          db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical ? 1:0,docPath,row.document_json,canonical ? 1:0,docPath,docPath,legacy?.document_json || ''),
+          await chatDocumentGuard(db,docPath,row),
           db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(docPath),
           db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind(docPath),
           db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
