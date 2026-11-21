@@ -2008,10 +2008,12 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   const sql=new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')]) sql.exec(ddl);
   sql.exec(readFileSync(new URL('../migrations/0060_live_status_indexes.sql',import.meta.url),'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0070_live_chat_page.sql',import.meta.url),'utf8'));
+  let pageRows=0;
   const plans=[];let roomReads=0;
   const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},first:async()=>{if(args[0]==='lives/room')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));const results=stmt.all(...args);if(args[0]==='lives/room/chat')pageRows+=results.length;return {results};},first:async()=>{if(args[0]==='lives/room')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const doc='/v1/firestore/document?path=lives/room';
@@ -2061,6 +2063,25 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   roomReads=0;
   assert.equal((await (await call('bob',`/v1/firestore/count?parent=${chat}`)).json()).count,1);
   assert.equal(roomReads,1);
+  const addLive=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  for(let j=0;j<1200;j++) {
+    const id=`sample${String(j).padStart(4,'0')}`;
+    addLive.run(`${chat}/${id}`,chat,'chat',id,'alice',JSON.stringify({createdAtMs:Math.floor(j/2)}),j,j);
+  }
+  const page={parent:chat,orderBy:[{field:'createdAtMs',direction:'ASCENDING'}],limit:100,limitToLast:true};
+  const ids=async()=>{
+    const result=await call('bob',chatQuery,'POST',page);
+    assert.equal(result.status,200);
+    return (await result.json()).documents.map(row=>row.id);
+  };
+  pageRows=0;
+  const boundedIds=await ids();
+  assert.equal(pageRows,100);
+  sql.exec('DROP INDEX idx_cf_live_chat_page');
+  pageRows=0;
+  assert.deepEqual(await ids(),boundedIds);
+  assert.equal(pageRows,1201);
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE parent_path=? AND doc_id LIKE 'sample%'").run(chat);
   assert.equal((await call('alice',doc,'PATCH',{fields:{kickedUserIds:['bob']}})).status,200);
   assert.equal((await call('bob',chatQuery,'POST',{parent:chat})).status,403);
   assert.equal((await call('bob',send,'POST',{data:msg})).status,403);

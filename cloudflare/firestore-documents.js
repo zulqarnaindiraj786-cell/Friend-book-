@@ -398,8 +398,38 @@ async function filteredRequestRows(db,uid,filters) {
   return [...(canonical.results||[]), ...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
 }
 
+// Live chat polling normally asks for the last 100 messages. The compatibility
+// probe keeps old timestamp encodings and non-ASCII tie ordering on the old path.
+async function boundedLiveChatRows(db,parent,spec) {
+  const order=spec.orderBy?.[0];
+  if (!/^lives\/[^/]+\/chat$/.test(parent) || spec.orderBy?.length!==1 || order?.field!=='createdAtMs'
+      || !['ASCENDING','DESCENDING'].includes(order.direction) || spec.filters?.length
+      || ['startAt','startAfter','endAt','endBefore'].some(key=>spec[key])
+      || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>1000
+      || (spec.limitToLast!==undefined && typeof spec.limitToLast!=='boolean')) return null;
+  try {
+    const bad=await db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_live_chat_page_exceptions
+      WHERE parent_path=? AND parent_path GLOB 'lives/*/chat' AND (
+        doc_id GLOB '*[^ -~]*' OR COALESCE((
+          json_type(document_json,'$.createdAtMs') IN ('integer','real')
+          AND json_extract(document_json,'$.createdAtMs') BETWEEN -9007199254740991 AND 9007199254740991
+        ),0)=0
+      ) LIMIT 1`).bind(parent).first();
+    if (bad) return null;
+    const direction=((order.direction==='DESCENDING') !== (spec.limitToLast===true))?'DESC':'ASC';
+    const rows=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_live_chat_page
+      WHERE parent_path=? AND parent_path GLOB 'lives/*/chat'
+      ORDER BY json_extract(document_json,'$.createdAtMs') ${direction}, doc_id ${direction} LIMIT ?`)
+      .bind(parent,spec.limit).all();
+    return rows.results || [];
+  } catch (error) {
+    if (!/no such index: idx_cf_live_chat_page(?:_exceptions)?/.test(String(error))) throw error;
+    return null;
+  }
+}
+
 async function readCollectionRows(db, parent, uid, filters, spec) {
-  const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
+  const bounded=spec ? await boundedChatRows(db,parent,spec) ?? await boundedLiveChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
   if (parent === 'users') {
     const idFilter=filters?.find(f=>f.field==='__name__' && (f.op==='==' || f.op==='in'));
