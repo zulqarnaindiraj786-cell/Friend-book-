@@ -512,7 +512,13 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
   // projections, it identifies the query shape in normalized D1 analytics.
   const scanRoots=['users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages'];
   const scanRoot=parts?.length===1 && scanRoots.includes(parent) ? parent : parts?.length===1 ? 'other' : 'nested';
-  const scanAlias=`quota_root_${scanRoot}`;
+  const usersShape=scanRoot!=='users'?'':!spec?'_count'
+    : spec.orderBy?.[0]?.field==='createdAt'?'_recent'
+    : spec.orderBy?.[0]?.field==='displayName'?'_name'
+    : spec.orderBy?.[0]?.field==='stars'?'_stars'
+    : filters?.some(f=>f.op==='array-contains')?'_membership'
+    : filters?.length?'_filtered':Number.isInteger(spec.limit)?'_page':'_list';
+  const scanAlias=`quota_root_${scanRoot}${usersShape}`;
   const canonicalRead = db.prepare(
     `SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents AS ${scanAlias} WHERE parent_path = ?`
   ).bind(parent).all();
@@ -1876,13 +1882,15 @@ async function storyEngagement(request,env,uid,now) {
   }
 }
 
-async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map()) {
+async function authorizeChat(db,path,uid,before,after,pendingRooms=new Map(),roomReads=null) {
   const id=chatMessageRoom(path,before,after);
   if (id===null) return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms), room:null};
   if (!id) return {allowed:false,room:null};
-  const room=await readRow(db,`chats/${id}`);
+  const roomPath=`chats/${id}`;
+  if (roomReads && !roomReads.has(roomPath)) roomReads.set(roomPath,await readRow(db,roomPath));
+  const room=roomReads ? roomReads.get(roomPath) : await readRow(db,roomPath);
   const snapshot=room ? decodeValue(JSON.parse(room.document_json)) : pendingRooms.get(id);
-  return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms,snapshot || null),room,roomPath:`chats/${id}`};
+  return {allowed:await chatWriteAllowed(db,path,uid,before,after,pendingRooms,snapshot || null),room,roomPath};
 }
 async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
@@ -2801,7 +2809,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
     for (const p of order) {
       const entry = finalDocs.get(p);
       const before = entry.existingRow ? decodeValue(JSON.parse(entry.existingRow.document_json)) : null;
-      const chatAuth=await authorizeChat(db,p,uid,before,entry.deleted ? null : entry.doc,pendingRooms);
+      const chatAuth=await authorizeChat(db,p,uid,before,entry.deleted ? null : entry.doc,pendingRooms,cache);
       chatAuths.set(p,chatAuth);
       if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !chatAuth.allowed || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
     }
@@ -2818,10 +2826,16 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         const ledger=await groupChatLedgerChanges(db,roomPath,before,entry.deleted?null:entry.doc);
         statements.push(...ledger.guards,...ledger.writes);
       }
+      // A chat batch authorizes every message, but all messages in a room can
+      // share the same snapshot and atomic check. Root writes already add one.
+      const checkedRooms=new Set(roomPaths);
       for (const p of messagePaths) {
         const auth=chatAuths.get(p);
-        if (auth.room) statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
-        else if (!pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
+        if (!auth.room && !pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
+        if (auth.room && !checkedRooms.has(auth.roomPath)) {
+          statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
+          checkedRooms.add(auth.roomPath);
+        }
         statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
       }
       for (const p of order) {

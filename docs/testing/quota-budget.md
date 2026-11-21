@@ -27,3 +27,15 @@ The static list inventory still flags Home friendship membership and Main chat-r
 General document listeners check on attachment, after a foreground return, on relevant writes and on FCM hints. Their steady-state scheduled read rate is now zero for chat lists, messages, notifications, requests, profiles and stories, in foreground and background. Active foreground call/live/typing signaling keeps its targeted checks; completed work retries and token-change registration are not polling. An authorized call start sends a short-TTL FCM hint only after commit; a foreground receiver or a user tapping the notification reads the actual room state before opening the call.
 
 Bounded listeners (up to 40 rows) accept document deltas after their first successful server response. The response contains ordered IDs and revisions plus only changed documents. This reduces bytes sent, not the cost of evaluating the authorized D1 query when a refresh is triggered. With no foreground socket for general social events, remote changes without an FCM hint (or a delayed/dropped hint) appear after a foreground return or explicit refresh, not continuously.
+
+### Whole-app quota verification status
+
+| Area | Live optimization | What still needs evidence |
+|---|---|---|
+| Home Feed | Indexed post pages merge historical timestamp exceptions without dropping old posts | Compare rows per page on actual production Feed traffic; the earlier legacy scan cost 668 rows per execution, not necessarily per user-visible page |
+| Profiles and people | Exact-ID seeks, indexed first pages and keyset continuation | Attribute remaining user fallbacks by query shape before narrowing them |
+| Chat and inbox | Indexed membership/history probes, skip unchanged membership-index updates, one room check per atomic message batch | Replay healthy, delayed-push and offline sessions; compile-tested client polling/receipt changes are not in APK 151 |
+| Notifications and push | Recipient page indexes, durable send claims and unchanged-token write suppression | Test badge/history/call freshness while replaying real traffic; one audit showed 36 no-op registrations and zero row writes |
+| Stories, Reels, live, comments and reactions | Existing bounded and indexed paths where supported; collect read/write patterns separately | Verify individual paths under representative traffic; do not equate smaller responses with fewer D1 reads |
+
+For each area report query count, rows read, rows written and errors in matched windows, then confirm privacy and unchanged result order. APK install checks do not exercise those production paths. The published 151 APK passed fresh install and upgrade from 150 on the emulator.
