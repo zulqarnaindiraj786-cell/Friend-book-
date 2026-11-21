@@ -46,15 +46,19 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('public static synchronized int feedPoolSize()', self.ads)
         self.assertIn('public static synchronized int reelsPoolSize()', self.ads)
 
-    def test_admin_screen_can_run_a_real_fill_check(self):
+    def test_admin_screen_reports_real_banner_failures(self):
         screen = (JAVA / 'admin/AdMobSettingsActivity.java').read_text()
-        self.assertIn('Run Real Ad Fill Check', screen)
-        self.assertIn('AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);', screen)
-        self.assertIn('AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);', screen)
-        self.assertIn('AdsConfig.statsSummary(this)', screen)
-        self.assertIn('Code 3 can mean AdMob has no ad to serve', screen)
-        # Zero test ads and zero dummy creatives anywhere in the ad path.
-        for path in [JAVA / 'core/AdsConfig.java', JAVA / 'admin/AdMobSettingsActivity.java']:
+        pool = (JAVA / 'core/AnchoredBannerPool.java').read_text()
+        self.assertIn('Show Banner Fill Diagnostics', screen)
+        self.assertIn('AnchoredBannerPool.diagnostics(this)', screen)
+        self.assertNotIn('preloadFeedBatchNow', screen)
+        self.assertNotIn('preloadReelsBatchNow', screen)
+        self.assertIn('Code 3 means AdMob returned no fill', screen)
+        self.assertIn('error.getCode()', pool)
+        self.assertIn('error.getDomain()', pool)
+        self.assertIn('main.postDelayed(timeout, LOAD_TIMEOUT_MS)', pool)
+        self.assertIn('ConsentManager.runWhenSdkInitialized', pool)
+        for path in [JAVA / 'core/AdsConfig.java', JAVA / 'admin/AdMobSettingsActivity.java', JAVA / 'core/AnchoredBannerPool.java']:
             absent(self, 'isTestDevice', path.read_text(), path.name)
             absent(self, 'TEST_DEVICE', path.read_text(), path.name)
 

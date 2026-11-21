@@ -13,6 +13,7 @@ import android.widget.TextView;
 
 import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.AdsConfig;
+import com.friendbook.social.core.AnchoredBannerPool;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
@@ -55,46 +56,24 @@ public class AdMobSettingsActivity extends Activity {
         statsCard.setBackground(Ui.roundStroke(this, Ui.card(this), 14, Ui.BLUE, 1));
         Ui.pad(statsCard, 14, 12, 14, 12);
         statsCard.addView(Ui.tvBold(this, "💰 Production AdMob Telemetry (Logcat tag: FriendBookAds)", 13, Ui.BLUE));
-        statsT = Ui.tvBold(this, AdsConfig.statsSummary(this), 12.5f, Ui.txt(this));
+        statsT = Ui.tvBold(this, AnchoredBannerPool.diagnostics(this), 12.5f, Ui.txt(this));
         statsT.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 4));
         statsCard.addView(statsT);
         statsCard.addView(Ui.tv(this,
-                "Pure production mode: zero test IDs, fresh AdLoader.Builder request on every Feed & Reels slot, Logcat error-code logging enabled.",
+                "Visit Feed and Reels first, then return here to see the actual banner response for each placement.",
                 11, Ui.sub(this)));
-        // Real fill check: fires one genuine Feed + one genuine Reels request (zero test ads) and
-        // then reports exactly what AdMob answered, so "no ads showing" can be diagnosed on device.
-        final TextView fillCheck = Ui.btn(this, "Run Real Ad Fill Check");
+        final TextView fillCheck = Ui.btn(this, "Show Banner Fill Diagnostics");
         fillCheck.setOnClickListener(v -> {
-            fillCheck.setEnabled(false);
-            fillCheck.setText("Checking Google consent…");
-            com.friendbook.social.core.ConsentManager.gatherConsentAndInitAds(this, () -> {
-                if (isFinishing() || isDestroyed()) return;
-                if (com.friendbook.social.core.ConsentManager.canRequestAds(this)) {
-                    AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);
-                    AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);
-                }
-                fillCheck.setText(com.friendbook.social.core.ConsentManager.canRequestAds(this)
-                        ? "Requesting real ads…" : "Consent does not allow requests");
-                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    fillCheck.setEnabled(true);
-                    fillCheck.setText("Run Real Ad Fill Check");
-                    if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
-                    new android.app.AlertDialog.Builder(this)
-                            .setTitle("Real Ad Fill Check")
-                            .setMessage(AdsConfig.statsSummary(this) + "\n"
-                                    + com.friendbook.social.core.ConsentManager.consentDiagnostic() + "\n\n"
-                                    + "How to read this:\n"
-                                    + "• Loaded > 0 and Pool > 0 = real ads are arriving; the Feed slot shows one after every 3 posts.\n"
-                                    + "• Code 3 can mean AdMob has no ad to serve for this app/unit right now (new unit, app still in review, or no advertiser demand). No automatic retry loop.\n"
-                                    + "• Code 0 with a message = the request itself was rejected; the message tells us why.\n"
-                                    + "• Requests 0 = the SDK never asked, which points at consent/initialization, not at AdMob fill.")
-                            .setPositiveButton("OK", null)
-                            .show();
-                }, com.friendbook.social.core.ConsentManager.canRequestAds(this) ? 8000L : 0L);
-            });
+            String diagnostic = AnchoredBannerPool.diagnostics(this);
+            if (statsT != null) statsT.setText(diagnostic);
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Banner Fill Diagnostics")
+                    .setMessage(diagnostic + "\n" + ConsentManager.consentDiagnostic()
+                            + "\n\nCode 3 means AdMob returned no fill. If requests are zero, check the switches, consent, and SDK status above.")
+                    .setPositiveButton("OK", null)
+                    .show();
         });
-        body.addView(fillCheck, Ui.lpw(-2));
+        statsCard.addView(fillCheck, Ui.lpw(-2));
         body.addView(statsCard, Ui.lpw(-2));
 
         // 2. App ID & Official Website URL Card
@@ -161,7 +140,7 @@ public class AdMobSettingsActivity extends Activity {
         LinearLayout switchRow = Ui.row(this);
         switchRow.setGravity(Gravity.CENTER_VERTICAL);
         switchRow.setPadding(0, Ui.dp(this, 12), 0, 0);
-        TextView onT = Ui.tvBold(this, "Enable Real Production Feed & Reels Native Ads", 13, Ui.txt(this));
+        TextView onT = Ui.tvBold(this, "Enable Feed & Reels Banner Ads", 13, Ui.txt(this));
         switchRow.addView(onT, new LinearLayout.LayoutParams(0, -2, 1));
         enabledSwitch = new Switch(this);
         enabledSwitch.setChecked(AdsConfig.isMasterSwitchEnabled());
@@ -218,7 +197,7 @@ public class AdMobSettingsActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        if (statsT != null) statsT.setText(AdsConfig.statsSummary(this));
+        if (statsT != null) statsT.setText(AnchoredBannerPool.diagnostics(this));
         reg = Fb.db().collection("config").document("ads")
                 .addSnapshotListener((d, err) -> {
                     if (d != null && d.exists()) {
