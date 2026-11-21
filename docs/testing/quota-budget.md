@@ -43,3 +43,7 @@ For each area report query count, rows read, rows written and errors in matched 
 ### Capacity gate for large rollout
 
 The shown D1 Free budget is 5,000,000 rows read and 100,000 rows written/day. At 100,000 **daily active** users that is at most 50 reads and 1 write per user per day, before fixed jobs, indexes and headroom. Registered users and daily active users are not interchangeable. Measure actual rows by workload (idle, browsing, messaging and posting) in staging, include fan-out and retry costs, and compare forecast peak and daily load against platform limits before claiming this scale. No production load generation on the current quota.
+
+#### Offline replay (no D1 usage)
+
+Run `node scripts/loadtest/d1_quota_replay.mjs 30` (or `200`) with Node.js 22+. It invokes the Worker handlers against SQLite with every migration applied. It uses fabricated identities, doesn't run a server or contact Firebase/Cloudflare, and excludes bootstrap writes from workload counts. At 30 synthetic users, 15 message sends changed 135 SQLite rows, and the first 15 receipt/reset requests changed 105; replaying those receipts changed zero. Thirty unchanged in-window profile heartbeats also changed zero. These counts include guard table and trigger side effects, but **exclude SQLite index maintenance and aren't billable D1 writes**. They aren't concurrent traffic or a capacity certification. Separate message/receipt guard write overhead from content writes before forecasting scale.
