@@ -2349,11 +2349,12 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   for(let i=0;i<45;i++) add(`hidden${i}`,{createdAt:ts(1000+i),...(i%2?{banned:true}:{deactivated:true})},i%3!==0);
   add('wrapped',{fields:{createdAt:{timestampValue:'1970-01-01T00:00:00.248Z'}}},false);
   add('fraction',{createdAt:ts(247.5)});
-  let reads=0, scans=0;
+  let reads=0, scans=0, largestStandardRead=0;
   const plans=[];
   const db={prepare(q){if(q.includes('quota_root_users_recent')) scans++;const stmt=sql.prepare(q);return{bind(...args){return{
     first:async()=>stmt.get(...args)||null,
     all:async()=>{const results=stmt.all(...args);if(q.includes('INDEXED BY')&&q.includes('recent_people')){
+      if(q.includes('ORDER BY')) largestStandardRead=Math.max(largestStandardRead,results.length);
       reads+=results.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
     }return {results};},
   };}};}};
@@ -2371,7 +2372,8 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   const anchor=page.at(-1);
   const startAfter=[anchor.data.createdAt,anchor.id];
   assert.deepEqual(await query({startAfter}),await query({startAfter,endBefore:[]}));
-  assert.ok(reads>0 && reads<100);
+  assert.ok(reads>0 && reads<=24);
+  assert.equal(largestStandardRead,5);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_recent_people/);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_recent_people/);
   assert.doesNotMatch(plans.join('\n'),/USE TEMP B-TREE/);

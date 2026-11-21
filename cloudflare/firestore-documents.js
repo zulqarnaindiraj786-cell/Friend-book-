@@ -1109,7 +1109,10 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
     ELSE -1 END) END`;
   const time=`COALESCE(CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt')
     ELSE json_extract(document_json,'$.createdAt.millis') END,0)`;
-  const size=Math.max(20,spec.limit*2);
+  // Each standard stream is visibility-filtered before LIMIT. Its first N
+  // candidates are sufficient for an N-item merged page; exceptions can only
+  // displace those candidates, not require more lookahead.
+  const size=spec.limit;
   const stores=[
     ['friendbook_cf_firestore_documents','idx_cf_recent_people',"parent_path='users'",modern,''],
     ['friendbook_cf_documents','idx_cf_legacy_recent_people',"collection='users'",historical,
