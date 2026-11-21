@@ -9,7 +9,7 @@ import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
-import { appDocuments } from './cloudflare/app-documents.js';
+import { appDocuments, toFirestoreFields } from './cloudflare/app-documents.js';
 import { drainBroadcastPush } from './cloudflare/fcm-push.js';
 import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
@@ -158,14 +158,16 @@ export function createWorker(verify = verifyFirebaseToken) {
           if (!['posts','reels'].includes(collection) || raw===null) return json({error:'Invalid request'},400);
           const ids=[...new Set(raw.split(',').map(x=>x.trim()))];
           if (ids.length>50 || ids.some(x=>!validId(x))) return json({error:'Invalid request'},400);
-          const allowed=await Promise.all(ids.map(id=>contentReadAllowed(env.DB,uid,`${collection}/${id}`)));
+          const accountReads=new Map();
+          if (viewerProfile!==undefined) accountReads.set(`users/${uid}`,toFirestoreFields(viewerProfile));
+          const allowed=await Promise.all(ids.map(id=>contentReadAllowed(env.DB,uid,`${collection}/${id}`,accountReads)));
           const safe=ids.filter((_,i)=>allowed[i]);
           if (!safe.length) return json({collection,views:{}});
           url.searchParams.set('ids',safe.join(','));
           return viewCounters(request,env,{uid},null,url,Date.now,ctx);
         } catch { return json({error:'View access unavailable'},503); }
       }
-      if (presence) return presenceRealtime(request, env, { uid, token: bearer[1] });
+      if (presence) return presenceRealtime(request, env, { uid, token: bearer[1], viewerProfile });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
       try {
         if (request.method === 'PUT') {

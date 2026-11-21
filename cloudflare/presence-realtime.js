@@ -1,6 +1,6 @@
 // Authenticated Cloudflare Realtime Presence & Typing over WebSockets + D1.
 import { loadChat } from './chat-access.js';
-import { readD1DocumentFields, hasD1Friendship } from './app-documents.js';
+import { readD1DocumentFields, hasD1Friendship, toFirestoreFields } from './app-documents.js';
 export const PRESENCE_TTL_MS = 300_000; // 5 minutes (300 seconds)
 export const WRITE_COALESCE_MS = 60_000; // Persist quiet heartbeats at most once a minute; transitions remain immediate.
 export const TYPING_TTL_MS = 8_000;
@@ -83,7 +83,8 @@ export async function presenceRealtime(request, env, identity) {
     if (!validId(target)) return json({ error: 'Invalid target' }, 400);
     try {
       if (target !== uid) {
-        const me = await readD1DocumentFields(env.DB, `users/${uid}`);
+        const me = identity.viewerProfile===undefined
+          ? await readD1DocumentFields(env.DB, `users/${uid}`) : toFirestoreFields(identity.viewerProfile);
         const peer = await readD1DocumentFields(env.DB, `users/${target}`);
         const blocked = (fields, id) => ['blocked','blockedUsers'].some(key =>
           (fields?.[key]?.arrayValue?.values || []).some(value => value.stringValue === id));

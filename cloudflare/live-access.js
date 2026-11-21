@@ -26,10 +26,10 @@ export async function coHostGrant(db,roomId,uid) {
   return field(room,'status')==='live' && field(room,'coHostUid')===uid && field(room,'hostId')!==uid
     && room.coHostAllowed?.booleanValue!==false && id(field(room,'coHostGrant')) ? field(room,'coHostGrant') : null;
 }
-export async function authorizeLiveRoom(db,roomId,uid) {
-  return authorize(db,roomId,uid,'watch',true);
+export async function authorizeLiveRoom(db,roomId,uid,accountReads) {
+  return authorize(db,roomId,uid,'watch',true,accountReads);
 }
-async function authorize(db, roomId, uid, role, metadata) {
+async function authorize(db, roomId, uid, role, metadata, accountReads) {
   if (!id(roomId) || !id(uid) || !['publish','watch'].includes(role)) return false;
   const room = await readD1DocumentFields(db, `lives/${roomId}`);
   const host = field(room, 'hostId');
@@ -37,10 +37,16 @@ async function authorize(db, roomId, uid, role, metadata) {
   if (!id(host) || !(field(room,'status')==='live' || (metadata && field(room,'status')==='ended')) || !['public','friends'].includes(privacy)) return false;
   if (role === 'publish' && host !== uid) return false;
   if (uid !== host && contains(room, 'kickedUserIds', uid)) return false;
-  const broadcaster = await readD1DocumentFields(db, `users/${host}`);
+  const account = user => {
+    const key=`users/${user}`;
+    if (!accountReads) return readD1DocumentFields(db,key);
+    if (!accountReads.has(key)) accountReads.set(key,readD1DocumentFields(db,key));
+    return accountReads.get(key);
+  };
+  const broadcaster = await account(host);
   if (!active(broadcaster) || (role==='publish' && suspended(broadcaster))) return false;
   if (uid === host) return true;
-  const viewer = await readD1DocumentFields(db, `users/${uid}`);
+  const viewer = await account(uid);
   if (!active(viewer) || blocks(viewer, host) || blocks(broadcaster, uid)) return false;
   return privacy === 'public' || await hasD1Friendship(db, uid, host) === true;
 }

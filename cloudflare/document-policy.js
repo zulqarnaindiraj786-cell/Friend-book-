@@ -26,7 +26,7 @@ export function supportedCollectionPath(path) {
 }
 export async function contentReadAllowed(db, uid, path, requestUserReads, includeArchivedOwner = false) {
   const p=path.split('/');
-  if (p[0]==='lives') return authorizeLiveRoom(db,p[1],uid);
+  if (p[0]==='lives') return authorizeLiveRoom(db,p[1],uid,requestUserReads);
   if (!['posts','reels','stories'].includes(p[0])) return true;
   return authorizePost({uid,db},p[0],p[1],undefined,undefined,requestUserReads,includeArchivedOwner);
 }

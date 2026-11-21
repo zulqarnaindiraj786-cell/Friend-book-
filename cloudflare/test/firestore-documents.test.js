@@ -917,7 +917,8 @@ test('view counts enforce post privacy, filter batches and forbid unscoped top l
   for(const uid of ['alice','bob']) add.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
   add.run('posts/public','posts','posts','public','alice',JSON.stringify({authorId:'alice',privacy:'Public'}),1,1);
   add.run('posts/secret','posts','posts','secret','alice',JSON.stringify({authorId:'alice',privacy:'Only me'}),1,1);
-  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  const accountReads={};
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>{if(String(args[0]).startsWith('users/')) accountReads[args[0]]=(accountReads[args[0]]||0)+1;return stmt.get(...args)||null;}};}};}};
   const events=[],env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',ANALYTICS_ENGINE:{writeDataPoint:e=>events.push(e)}};
   const app=createWorker(async t=>t);
   const call=(uid,path,method='GET')=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid}}),env,{waitUntil:()=>{}});
@@ -926,8 +927,10 @@ test('view counts enforce post privacy, filter batches and forbid unscoped top l
   assert.equal(events.length,0);
   assert.equal((await call('bob','/v1/views/posts/public','POST')).status,200);
   assert.equal(events.length,1);
+  accountReads['users/alice']=0;accountReads['users/bob']=0;
   const batch=await (await call('bob','/v1/views?collection=posts&ids=public,secret,missing')).json();
   assert.deepEqual(Object.keys(batch.views),['public']);
+  assert.deepEqual(accountReads,{'users/alice':1,'users/bob':1});
   assert.equal((await call('bob','/v1/views?collection=posts&top=10')).status,400);
   assert.equal((await call('alice','/v1/views/posts/secret')).status,200);
   resetViewState();sql.close();
