@@ -57,7 +57,7 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 10;
+    private static final int PAGE = 20;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -212,7 +212,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
-        loadingPosts=false;restartPostsListener();
+        loadingPosts=false;startPostsQuery(true);
         // Refresh posts without invalidating unrelated sections or their reuse windows.
         if (adapter != null) adapter.advanceFeaturedReelRotation();
         startVisibleHomeContent();
@@ -719,10 +719,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private void restartPostsListener() {
         if(loadingPosts) return;
-        startPostsQuery();
+        startPostsQuery(false);
     }
 
-    private void startPostsQuery() {
+    private void startPostsQuery(boolean forceReload) {
         final int generation=++feedGeneration;
         final DocumentSnapshot previousCursor=lastDoc;
         final boolean previousMore=moreAvailable;
@@ -743,13 +743,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // Unlock Retry while allowing a late result until a newer request starts.
             loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
         },20000L);
-        if(FastCache.cachedFeedCount()==0) first.get(Source.CACHE).addOnSuccessListener(cache -> {
-            if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && !loadedPosts && !cache.isEmpty()) {
-                for(DocumentSnapshot doc:cache.getDocuments()) com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
-                consumePostsSnapshot(cache.getDocuments(),false);
-            }
-        });
-        first.get().addOnSuccessListener(snapshot -> {
+        final boolean[] usedDelta={false};
+        java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply = snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {
                 lastDoc=previousCursor;moreAvailable=previousMore;
@@ -761,24 +756,51 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 lastFeedFetch=android.os.SystemClock.elapsedRealtime();
                 lastFeedWriteVersion=writeVersion;
             }
+            final boolean delta=usedDelta[0];
+            final boolean preserveTail=delta && sameAccount && previousCursor!=null;
+            List<DocumentSnapshot> results=new ArrayList<>(snapshot.getDocuments());
+            if(delta){
+                java.util.LinkedHashMap<String,DocumentSnapshot> merged=new java.util.LinkedHashMap<>();
+                for(DocumentSnapshot doc:results)merged.put(doc.getId(),doc);
+                if(preserveTail)for(DocumentSnapshot doc:lastPostDocs)merged.putIfAbsent(doc.getId(),doc);
+                results=new ArrayList<>(merged.values());
+                // New IDs are prepended without re-ranking the visible older pages.
+                List<String> order=new ArrayList<>();
+                for(DocumentSnapshot doc:results)if(!loadedPostIds.contains(doc.getId()) && !sessionOrderIds.contains(doc.getId()))order.add(doc.getId());
+                order.addAll(sessionOrderIds);
+                sessionOrderIds.clear();sessionOrderIds.addAll(order);
+            }
             loadedPostIds.clear();
-            for(DocumentSnapshot doc:snapshot.getDocuments()) {
+            for(DocumentSnapshot doc:results) {
                 loadedPostIds.add(doc.getId());
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
             }
-            moreAvailable=offline || snapshot.size()==PAGE;
-            if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            moreAvailable=preserveTail ? previousMore : offline || snapshot.size()==PAGE;
+            if(preserveTail)lastDoc=previousCursor;
+            else if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             // The cached first paint should not lock the first authoritative D1 page
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
             if (sessionOrderIds.isEmpty()) forceReRank=true;
-            consumePostsSnapshot(snapshot.getDocuments(),!offline);
+            consumePostsSnapshot(results,!offline);
             releaseHomeSecondary();
-        }).addOnFailureListener(error -> {
+        };
+        java.util.function.Consumer<Exception> failed = error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())) return;
             if(sameAccount){lastDoc=previousCursor;moreAvailable=previousMore || previousCursor==null;}
             loadingPosts=false;pageError=true;updatePagingUi();
             releaseHomeSecondary();
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
+        };
+        if(forceReload)first.get(Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        else first.get(Source.CACHE).addOnCompleteListener(cache -> {
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
+            com.friendbook.social.d1.documents.QuerySnapshot saved=cache.isSuccessful()?cache.getResult():null;
+            usedDelta[0]=saved!=null && !saved.isEmpty();
+            if(usedDelta[0] && adapter!=null && adapter.getPosts().isEmpty()) {
+                for(DocumentSnapshot doc:saved.getDocuments())com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
+                consumePostsSnapshot(saved.getDocuments(),false);
+            }
+            first.refreshCachedHead(saved).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
         });
     }
 
@@ -802,7 +824,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void consumePostsSnapshot(List<DocumentSnapshot> docs, boolean persistCache) {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
-        if (docs != null) lastPostDocs = docs;
+        if (docs != null) lastPostDocs = new ArrayList<>(docs);
         List<Models.Post> allVisible = new ArrayList<>();
         List<Models.Post> filtered = new ArrayList<>();
         java.util.Set<String> seenIds = new java.util.HashSet<>();
@@ -1049,6 +1071,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             String filter=Prefs.feedFilter(getActivity());
             for(DocumentSnapshot doc:snapshot.getDocuments()) {
                 if(!loadedPostIds.add(doc.getId())) continue;
+                lastPostDocs.add(doc);
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 Models.Post post=Models.Post.fromDoc(doc);
                 com.friendbook.social.post.D1Reactions.hydrate(post);

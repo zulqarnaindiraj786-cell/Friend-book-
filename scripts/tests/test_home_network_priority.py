@@ -17,7 +17,7 @@ class HomeNetworkPriorityTest(unittest.TestCase):
     def test_manual_refresh_also_prioritizes_feed(self):
         source = HOME.read_text()
         refresh = source.split('void refreshWithFriendbookAlgorithm(boolean scrollTop)', 1)[1].split('startVisibleHomeContent();', 1)[0]
-        self.assertIn('restartPostsListener()', refresh)
+        self.assertIn('startPostsQuery(true)', refresh)
         for request in ('loadPymk()', 'startStoriesListener(true)', 'loadFeaturedReelsForHome()', 'loadNotesUsers()'):
             self.assertNotIn(request, refresh)
         self.assertIn('startStoriesListener();', source)
@@ -34,4 +34,4 @@ class HomeNetworkPriorityTest(unittest.TestCase):
         source = HOME.read_text()
         for method in ('void onHiddenChanged(boolean hidden)', 'void onStop()'):
             self.assertIn('cancelHomeSecondary()', source.split(method, 1)[1][:280])
-        self.assertIn('consumePostsSnapshot(snapshot.getDocuments(),!offline);\n            releaseHomeSecondary();', source)
+        self.assertIn('consumePostsSnapshot(results,!offline);\n            releaseHomeSecondary();', source)

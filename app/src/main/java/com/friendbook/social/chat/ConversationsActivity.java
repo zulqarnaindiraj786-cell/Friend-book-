@@ -44,6 +44,29 @@ import java.util.Set;
  */
 public class ConversationsActivity extends Activity {
 
+    private static java.lang.ref.WeakReference<ConversationsActivity> visibleInbox = new java.lang.ref.WeakReference<>(null);
+    private final android.os.Handler inboxHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean pushPending;
+    private final Runnable pushRefresh=()->{
+        if(!this.inboxLoading && pushPending){pushPending=false;loadInboxPage(true);}
+    };
+
+    public static void refreshVisibleInboxFromPush(String actor) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(()->{
+            ConversationsActivity inbox=visibleInbox.get();
+            if(inbox==null || inbox.isFinishing() || !java.util.Objects.equals(actor,Fb.uid())
+                    || !java.util.Objects.equals(actor,inbox.inboxActor))return;
+            inbox.pushPending=true;
+            inbox.schedulePendingPush();
+        });
+    }
+
+    private void schedulePendingPush() {
+        if(!pushPending || inboxLoading || visibleInbox.get()!=this)return;
+        inboxHandler.removeCallbacks(pushRefresh);
+        inboxHandler.postDelayed(pushRefresh,350L);
+    }
+
     private RecyclerView rv;
     private ConvAdapter adapter;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout inboxSwipe;
@@ -158,7 +181,7 @@ public class ConversationsActivity extends Activity {
         inboxMoreButton.setVisibility(View.GONE);
         inboxSwipe=new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
         inboxSwipe.addView(rv);
-        inboxSwipe.setOnRefreshListener(()->loadInboxPage(true));
+        inboxSwipe.setOnRefreshListener(()->loadInboxPage(true,true));
         root.addView(inboxSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(inboxMoreButton);
         inboxSpinner=new android.widget.ProgressBar(this);inboxSpinner.setVisibility(View.GONE);inboxSpinner.setContentDescription("Loading more conversations");
@@ -210,6 +233,7 @@ public class ConversationsActivity extends Activity {
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
         if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();userCache.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
         inboxGeneration++; inboxLoading=false;
+        visibleInbox=new java.lang.ref.WeakReference<>(this);
         applyInboxHandoff(me);
         applyFilter();
         loadInboxPage(true);
@@ -246,12 +270,13 @@ public class ConversationsActivity extends Activity {
         applyFilter();
     }
 
-    private void loadInboxPage(boolean reset) {
+    private void loadInboxPage(boolean reset) { loadInboxPage(reset,false); }
+    private void loadInboxPage(boolean reset,boolean full) {
         if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) {
             inboxSwipe.setRefreshing(false);
             return;
         }
-        inboxLoading=true;inboxSpinner.setVisibility(View.VISIBLE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
+        inboxLoading=true;inboxSpinner.setVisibility(!reset || full || allRooms.isEmpty()?View.VISIBLE:View.GONE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("chats").whereArrayContains("participants",me)
                 .orderBy("inboxActivityAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
         if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
@@ -262,13 +287,13 @@ public class ConversationsActivity extends Activity {
                 return;
             }
             inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxSwipe.setRefreshing(false);
-            if(reset && !snap.getMetadata().isFromCache()) {
+            if(reset && full && !snap.getMetadata().isFromCache()) {
                 Set<String> pageIds=new HashSet<>();
                 for(DocumentSnapshot doc:snap)pageIds.add(doc.getId());
                 allRooms.removeIf(room->!pageIds.contains(room.room.id));
                 inboxCursor=null;
             }
-            if(!snap.getMetadata().isFromCache()){
+            if(!snap.getMetadata().isFromCache() && (!reset || full || inboxCursor==null)){
                 inboxMore=snap.size()==10;
                 if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(snap.size()-1);
             }
@@ -304,13 +329,15 @@ public class ConversationsActivity extends Activity {
             inboxMoreButton.setText("Load more chats");
             inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));
             inboxMoreButton.setVisibility(inboxMore?View.VISIBLE:View.GONE);
+            if(!snap.getMetadata().isFromCache())schedulePendingPush();
         };
         java.util.function.Consumer<Exception> failed=error->{
             if(generation!=inboxGeneration)return;
-            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxSwipe.setRefreshing(false);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setOnClickListener(v -> loadInboxPage(reset));inboxMoreButton.setVisibility(View.VISIBLE);
+            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxSwipe.setRefreshing(false);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setOnClickListener(v -> loadInboxPage(reset,full));inboxMoreButton.setVisibility(View.VISIBLE);
+            schedulePendingPush();
         };
         com.friendbook.social.d1.documents.Query page=query.limit(10);
-        if(!reset)page.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        if(!reset || full)page.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
         else page.get(com.friendbook.social.d1.documents.Source.CACHE).addOnCompleteListener(cache -> {
             if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing())return;
             com.friendbook.social.d1.documents.QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
@@ -359,6 +386,8 @@ public class ConversationsActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        if(visibleInbox.get()==this)visibleInbox.clear();
+        pushPending=false;inboxHandler.removeCallbacks(pushRefresh);
         inboxGeneration++; inboxLoading=false;
         inboxSwipe.setRefreshing(false);
         inboxSpinner.setVisibility(View.GONE);

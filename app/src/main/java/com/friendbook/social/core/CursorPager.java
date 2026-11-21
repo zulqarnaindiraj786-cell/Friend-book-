@@ -30,7 +30,10 @@ public final class CursorPager {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
     public void start() { start(false); }
-    public void startDelta() {
+    public void startDelta() { startLocal(0,false); }
+    public void startFullRefresh() { startLocal(0,true); }
+    public void startCachedDay() { startLocal(24*60*60*1000L,true); }
+    private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;
         loading=true;
         final int request=++requestGeneration;
@@ -38,13 +41,21 @@ public final class CursorPager {
         head.get(Source.CACHE).addOnCompleteListener(cache -> {
             if(!active() || request!=requestGeneration)return;
             QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
+            if(cached!=null && maxAgeMs>0 && head.hasFreshLocalPage(maxAgeMs)) {
+                loading=false;
+                for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
+                if(!cached.isEmpty())cursor=cached.getDocuments().get(cached.size()-1);
+                more=cached.size()==size;
+                emit("");
+                return;
+            }
             if(cached!=null && !cached.isEmpty()) {
                 for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
                 cursor=cached.getDocuments().get(cached.size()-1);
                 more=cached.size()==size;
                 loading=false;emit("");loading=true;
             } else emit("");
-            head.refreshCachedHead(cached).addOnSuccessListener(page -> {
+            (full ? head.get(Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
                 loading=false;
                 acceptObservedFirstPage(page);

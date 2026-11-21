@@ -9,15 +9,17 @@ public class FriendMessagingService extends FirebaseMessagingService {
         PushTrace.stage("fcm_received", "event=" + PushTrace.id(message.getData().get("eventId"))
                 + " receiver=" + PushTrace.id(message.getData().get("toUserId"))
                 + " type=" + PushTrace.label(message.getData().get("type")));
-        // A push wakes only an already-open chat listener; it never supplies message
+        // A push wakes a visible chat or inbox; it never supplies message
         // content or bypasses the Worker's authenticated membership check.
         java.util.Map<String,String> data=message.getData();
         // Schedule authenticated message reads before building the notification.
         // This does not block on network or use push text as a stored message.
         String actor=com.friendbook.social.core.Fb.uid();
         boolean currentActor=actor!=null && actor.equals(data.get("toUserId"));
-        if (currentActor && com.friendbook.social.App.isForeground() && "message".equals(data.get("type")))
+        if (currentActor && com.friendbook.social.App.isForeground() && "message".equals(data.get("type"))) {
             com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshChatFromPush(data.get("chatId"));
+            com.friendbook.social.chat.ConversationsActivity.refreshVisibleInboxFromPush(actor);
+        }
         PushManager.show(this, data);
         if (com.friendbook.social.App.isForeground() && currentActor && actor.equals(com.friendbook.social.core.Fb.uid())) {
             com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();

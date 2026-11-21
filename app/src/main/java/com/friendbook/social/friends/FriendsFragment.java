@@ -55,7 +55,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private String pageError="",suggestionError="";
     private int generation, inlineToken;
     private int requestBoundary=-1,suggestionHeader=-1;
-    private boolean started;
+    private boolean started, forceSectionRefresh;
     private String pageActor;
     private final Set<Integer> loadedSections=new HashSet<>();
     private final Set<String> checkingUsers=new HashSet<>(),loadingProfiles=new HashSet<>(),checkedCandidates=new HashSet<>(),candidateFriends=new HashSet<>(),candidateIncoming=new HashSet<>(),candidateOutgoing=new HashSet<>(),failedCandidates=new HashSet<>();
@@ -129,7 +129,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             }
         });
         swipe=new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(a);swipe.setColorSchemeColors(Ui.BLUE);
-        swipe.addView(rv);swipe.setOnRefreshListener(this::startSection);
+        swipe.addView(rv);swipe.setOnRefreshListener(()->{forceSectionRefresh=true;startSection();});
         root.addView(swipe, new LinearLayout.LayoutParams(-1,0,1));
         refreshTabs();
         return root;
@@ -193,7 +193,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             else if(selected==SEC_SUGGESTIONS)consumeSuggestions(docs,me,token);
             render();
         });render();
-        if(selected==SEC_REQUESTS || selected==SEC_SENT)activePager.startDelta();
+        boolean full=forceSectionRefresh;forceSectionRefresh=false;
+        if(full)activePager.startFullRefresh();
+        else if(selected==SEC_REQUESTS || selected==SEC_SENT)activePager.startDelta();
+        else if(selected==SEC_FRIENDS)activePager.startCachedDay();
         else activePager.start();
     }
 

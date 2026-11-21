@@ -888,8 +888,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void startProfileListeners() {
-        userReg = Fb.db().collection("users").document(uid).withProfileAudience()
-                .addSnapshotListener((d, err) -> {
+        com.friendbook.social.d1.documents.DocumentReference profileRef=Fb.db().collection("users").document(uid).withProfileAudience();
+        com.friendbook.social.d1.documents.EventListener<DocumentSnapshot> profileResult=(d,err)->{
                     if (d == null) {
                         // Permission loss must not leave previously visible private data onscreen.
                         if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) { finish(); return; }
@@ -917,7 +917,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     bindUser();
                     applyPostsFilter();
                     if(activeTab==3 && friendPager==null)startFriendPages();
-                });
+        };
+        if(mine && profileRef.hasFreshOwnProfileCache()) {
+            profileRef.get(com.friendbook.social.d1.documents.Source.CACHE)
+                    .addOnSuccessListener(d->profileResult.onEvent(d,null));
+        } else userReg=profileRef.addSnapshotListener(profileResult);
         startPostsWatcher();
         watchSubscription();
         String me = Fb.uid();
@@ -975,7 +979,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
-        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
+        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.startCachedDay();
     }
 
     private void startPostsWatcher() {

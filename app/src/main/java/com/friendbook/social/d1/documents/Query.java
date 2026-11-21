@@ -281,6 +281,10 @@ public class Query {
         return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
     }
 
+    public boolean hasFreshLocalPage(long maxAgeMs) {
+        return firestore.isQueryCacheFresh(D1DocumentStore.queryCacheKey(this,D1DocumentStore.authenticatedUid()),parentPath,maxAgeMs);
+    }
+
     /** Refresh a descending head without skipping a burst larger than one page. */
     public Task<QuerySnapshot> refreshCachedHead(QuerySnapshot cached) {
         if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.SERVER);
@@ -300,7 +304,12 @@ public class Query {
                 if(rows.size()>=limitValue)break;
                 if(rows.containsKey(doc.getId()))continue;
                 JSONObject row=new JSONObject();
-                row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(doc.getData()));
+                java.util.Map<String,Object> data=new java.util.HashMap<>(doc.getData());
+                if(feedEngagement){
+                    Object summary=data.remove("__feedEngagement");
+                    if(summary instanceof String)try{row.put("engagement",new JSONObject((String)summary));}catch(org.json.JSONException ignored){}
+                }
+                row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(data));
                 if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
                 if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
                 rows.put(doc.getId(),row);

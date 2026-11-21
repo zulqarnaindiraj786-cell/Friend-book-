@@ -298,11 +298,24 @@ public class D1DocumentStore {
 
     private static String scopedCacheKey(String uid, String path) { return uid + "|" + path; }
 
+    private final java.util.Map<String,Long> docCachedAt=new java.util.concurrent.ConcurrentHashMap<>();
+
+    boolean ownProfileCacheFresh(String path) {
+        String actor=authenticatedUid();
+        if(!path.equals("users/"+actor))return false;
+        Long saved=docCachedAt.get(actor);
+        long now=android.os.SystemClock.elapsedRealtime();
+        return saved!=null && now>=saved && now-saved<24*60*60*1000L;
+    }
+
     void cacheDoc(String path, DocumentSnapshot snap) {
         cacheDoc(path, snap, authenticatedUid());
     }
     void cacheDoc(String path, DocumentSnapshot snap, String actor) {
-        if (path != null && snap != null) docCache.put(scopedCacheKey(actor, path), snap);
+        if (path != null && snap != null) {
+            docCache.put(scopedCacheKey(actor, path), snap);
+            if(path.equals("users/"+actor) && snap.exists() && !snap.getMetadata().isFromCache())docCachedAt.put(actor,android.os.SystemClock.elapsedRealtime());
+        }
     }
 
     DocumentSnapshot getCachedDoc(String path) {
@@ -310,7 +323,11 @@ public class D1DocumentStore {
     }
 
     void invalidateDoc(String path) {
-        if (path != null) docCache.remove(scopedCacheKey(authenticatedUid(), path));
+        if (path != null) {
+            String actor=authenticatedUid();
+            docCache.remove(scopedCacheKey(actor,path));
+            if(path.equals("users/"+actor))docCachedAt.remove(actor);
+        }
     }
 
     ListenerRegistration registerDocListener(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
@@ -403,6 +420,11 @@ public class D1DocumentStore {
 
     void notifyCollectionListeners(String parentPath) {
         if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
+        if ("groups".equals(parentPath) || "friends".equals(parentPath)) {
+            com.friendbook.social.App app=com.friendbook.social.App.instance;
+            if(app!=null)app.getSharedPreferences("d1_query_cache_v2",0).edit()
+                    .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
+        }
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
                 e.refreshPending.set(true);
@@ -582,6 +604,15 @@ public class D1DocumentStore {
         return cached;
     }
 
+    boolean isQueryCacheFresh(String key,String parent,long maxAgeMs) {
+        com.friendbook.social.App app=com.friendbook.social.App.instance;
+        if(app==null)return false;
+        long saved=queryPreferences(app,key).getLong("t_"+cacheHash(key),0L);
+        long now=System.currentTimeMillis();
+        long invalidated=queryPreferences(app,key).getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
+        return saved>0 && saved>invalidated && saved<=now && now-saved<maxAgeMs;
+    }
+
     synchronized void cacheQuery(String key, String json) {
         queryCache.put(key, json);
         while (queryCache.size() > 32) {
@@ -594,12 +625,12 @@ public class D1DocumentStore {
             if (app != null) {
                 android.content.SharedPreferences prefs = queryPreferences(app,key);
                 String prefKey = "q_" + cacheHash(key);
-                if (json.equals(prefs.getString(prefKey,null))) return;
+                if (json.equals(prefs.getString(prefKey,null))) { prefs.edit().putLong("t_"+cacheHash(key),System.currentTimeMillis()).apply(); return; }
                 java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>(java.util.Arrays.asList(prefs.getString("ordered_keys", "").split(",")));
                 keys.remove("");keys.remove(prefKey);keys.add(prefKey);
-                android.content.SharedPreferences.Editor editor = prefs.edit().putString(prefKey, json);
+                android.content.SharedPreferences.Editor editor = prefs.edit().putString(prefKey, json).putLong("t_"+cacheHash(key),System.currentTimeMillis());
                 while (keys.size() > 32) {
-                    String evict = keys.iterator().next(); keys.remove(evict); editor.remove(evict);
+                    String evict = keys.iterator().next(); keys.remove(evict); editor.remove(evict).remove("t_"+evict.substring(2));
                 }
                 editor.putString("ordered_keys", android.text.TextUtils.join(",",keys)).apply();
             }

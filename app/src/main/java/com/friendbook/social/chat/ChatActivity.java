@@ -581,7 +581,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (snap == null || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if (snap == null || snap.getMetadata().isFromCache() || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
                     if(chatVisible && !snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty())
                         handOffInboxHead(chatActor, snap.getDocuments().get(snap.size()-1));
                     boolean bridged=false;

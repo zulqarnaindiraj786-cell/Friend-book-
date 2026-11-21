@@ -54,6 +54,10 @@ public class DocumentReference {
         return idx > 0 ? new CollectionReference(firestore, path.substring(0, idx)) : null;
     }
 
+    public boolean hasFreshOwnProfileCache() {
+        return firestore.ownProfileCacheFresh(path) && firestore.getCachedDoc(path)!=null;
+    }
+
     public Task<DocumentSnapshot> get() {
         return get(Source.DEFAULT);
     }

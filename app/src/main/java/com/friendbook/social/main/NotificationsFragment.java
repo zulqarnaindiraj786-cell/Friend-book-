@@ -101,7 +101,7 @@ public class NotificationsFragment extends Fragment {
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
             initialLoaded = false;
-            startPages();
+            startPages(true);
         });
         root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(moreButton);
@@ -172,7 +172,8 @@ public class NotificationsFragment extends Fragment {
             startPages();
         }
     }
-    private void startPages() {
+    private void startPages() { startPages(false); }
+    private void startPages(boolean full) {
         stopPages();
         String me=Fb.uid();if(me==null)return;
         if (loadedActor != null && !me.equals(loadedActor)) { data.clear(); adapter.notifyDataSetChanged(); }
@@ -195,7 +196,7 @@ public class NotificationsFragment extends Fragment {
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        pager.startDelta();
+        if(full)pager.startFullRefresh(); else pager.startDelta();
     }
 
     private void setUnreadOnly(boolean on) {
