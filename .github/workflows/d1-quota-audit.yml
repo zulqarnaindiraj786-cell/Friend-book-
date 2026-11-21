@@ -7,9 +7,16 @@ on:
 permissions: {}
 jobs:
   analytics:
+    strategy:
+      fail-fast: false
+      matrix:
+        window: [pre-feed-deploy, post-feed-deploy, latest-30m]
+        metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
+      AUDIT_WINDOW: ${{ matrix.window }}
+      AUDIT_METRIC: ${{ matrix.metric }}
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Read recent top query patterns without exposing SQL values
@@ -20,7 +27,7 @@ jobs:
           fmt=lambda t:t.strftime('%Y-%m-%dT%H:%M:%SZ')
           def query(metric,start,end,label):
               q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
-                  d1QueriesAdaptiveGroups(limit:16, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
+                  d1QueriesAdaptiveGroups(limit:10, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
                       dimensions { query } sum { rowsRead rowsWritten } count
                   } } } }'''%(metric,fmt(start),fmt(end))
               req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
@@ -54,4 +61,4 @@ jobs:
           cutoff=dt.datetime.fromisoformat('2026-11-21T04:24:50+00:00')
           window=dt.timedelta(minutes=6)
           for start,end,label in ((cutoff-window,cutoff,'pre-feed-deploy'),(cutoff,cutoff+window,'post-feed-deploy'),(now-dt.timedelta(minutes=30),now,'latest-30m')):
-              for metric in ('rowsRead','rowsWritten'): query(metric,start,end,label)
+              if label==os.environ['AUDIT_WINDOW']: query(os.environ['AUDIT_METRIC'],start,end,label)
