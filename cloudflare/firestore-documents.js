@@ -898,6 +898,47 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
 // Feed fast path: fetch small indexed batches from each store, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
+// The Home and conversation pickers request a small, unfiltered user page.
+// Stop as soon as enough *visible* profiles have been found, not at a raw SQL limit.
+async function boundedPeoplePage(db,env,uid,spec) {
+  if (spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length
+      || spec.limitToLast || spec.startAfter || spec.startAt || spec.endBefore || spec.endAt
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
+  const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
+  const page=[], size=Math.max(16,spec.limit);
+  for (let offset=0;offset<size*4;offset+=size) {
+    let results;
+    try { ({results=[]}=await db.prepare(`WITH candidates AS (
+      SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time,0 AS source
+      FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page WHERE parent_path='users'
+      UNION ALL
+      SELECT path,NULL,collection,doc_id,owner_uid,document_json,NULL,updated_at,1 AS source
+      FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_default_page WHERE collection='users'
+      ORDER BY doc_id,path LIMIT ? OFFSET ?
+    ) SELECT c.*, CASE WHEN c.source=1 THEN EXISTS (
+      SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=c.path AND f.parent_path='users'
+    ) ELSE 0 END AS shadowed FROM candidates c ORDER BY doc_id,path`).bind(size+1,offset).all()); }
+    catch (error) {
+      if (/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) return null;
+      throw error;
+    }
+    // SQL and JS agree on ASCII order. Use the original path for unusual IDs or
+    // inconsistent historical rows (including equal IDs crossing a batch boundary).
+    if (results.some(row=>!/^[-_a-zA-Z0-9]+$/.test(row.doc_id) || row.path!==`users/${row.doc_id}`)) return null;
+    for (const row of results.slice(0,size)) {
+      if (row.shadowed) continue;
+      const doc=rowToDocument(row.source===0 ? row : appDocumentToFirestoreRow({...row,collection:row.collection_id,updated_at:row.update_time}));
+      if (!doc) continue;
+      const data=profileReadView(doc.path,uid,doc.data,admin,moderator);
+      if (data===null) continue;
+      page.push({...doc,data});
+      if (page.length===spec.limit) return page;
+    }
+    if (results.length<=size) return page;
+  }
+  return null;
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const filters=Array.isArray(spec?.filters)?spec.filters:[];
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
@@ -2501,6 +2542,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
         ]);
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
+        const people=await boundedPeoplePage(db,env,uid,body);
+        if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body);

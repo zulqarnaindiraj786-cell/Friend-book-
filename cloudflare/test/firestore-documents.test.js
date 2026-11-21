@@ -2132,3 +2132,42 @@ test('message preview and unread updates do not rewrite unchanged membership ind
   }
   sql.close();
 });
+
+test('default people picker uses both ordered indexes and fills its page after privacy and mirror checks', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  sql.exec(readFileSync(new URL('../migrations/0059_people_default_page_indexes.sql',import.meta.url),'utf8'));
+  const main=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const mirror=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=(id,data,canonical=true)=>canonical
+    ? main.run(`users/${id}`,'users','users',id,id,JSON.stringify(data),1,1)
+    : mirror.run(`users/${id}`,'users',id,id,JSON.stringify(data),1);
+  add('viewer',{uid:'viewer'});
+  for(let i=0;i<12;i++) {
+    const id='blocked'+i;
+    add(id,{uid:id,banned:true});add(id,{uid:id,displayName:'Stale public mirror'},false);
+  }
+  for(let i=0;i<500;i++) {
+    const id='person'+String(i).padStart(3,'0');
+    add(id,{uid:id,displayName:id,email:'private@example.test'},i%2===0);
+  }
+  let plan, candidates=0;
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    all:async()=>{const results=stmt.all(...args);if(q.includes('WITH candidates')){
+      candidates+=results.length;plan=sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail).join('\n');
+    }return {results};},first:async()=>stmt.get(...args)||null
+  };}};}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const query=async spec=>{
+    const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({parent:'users',...spec})}),env);
+    assert.equal(r.status,200);return (await r.json()).documents;
+  };
+  const reference=(await query({})).slice(0,10);
+  assert.equal(reference[0].id,'person000');
+  assert.deepEqual(await query({limit:10}),reference);
+  assert.doesNotMatch(JSON.stringify(reference),/private@example|Stale public mirror/);
+  assert.ok(candidates<60);
+  assert.match(plan,/USING INDEX idx_cf_people_default_page/);
+  assert.match(plan,/USING INDEX idx_cf_legacy_people_default_page/);
+  assert.doesNotMatch(plan,/USE TEMP B-TREE/);
+  sql.close();
+});
