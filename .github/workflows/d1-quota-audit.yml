@@ -44,20 +44,8 @@ jobs:
                           if re.search(r"\b(?:parent_path|collection_id|collection)\s*=\s*'"+root+"'",sql,re.I): flags.append('root='+root)
                       if re.search(r'\bquota_scan_class\b',sql,re.I): flags.append('tagged-fallback')
                       scan=re.search(r'\b([0-8])\s+AS\s+quota_scan_class\b',sql,re.I)
+                      alias=re.search(r'\bquota_root_([a-z_]+)\b',sql,re.I)
+                      if alias: flags.append('scan='+alias.group(1))
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
           for metric in ('rowsRead','rowsWritten'): query(metric)
-          # No document IDs or payloads leave D1. Inspect whether bypassing
-          # shadowed legacy rows would save reads before adding write overhead.
-          sql="""SELECT a.collection AS root, COUNT(*) AS total, COUNT(f.path) AS shadowed
-                 FROM friendbook_cf_documents a LEFT JOIN friendbook_cf_firestore_documents f
-                   ON f.path=a.path AND f.parent_path=a.collection
-                 WHERE a.collection IN ('users','posts','reels','stories','pages','groups','chats','friend_requests')
-                 GROUP BY a.collection ORDER BY total DESC"""
-          url='https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query'
-          req=urllib.request.Request(url,data=json.dumps({'sql':sql}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
-          with urllib.request.urlopen(req,timeout=25) as r: coverage=json.load(r)
-          if not coverage.get('success'): raise SystemExit('D1 coverage query failed')
-          for row in coverage['result'][0]['results']: print('::notice:: Legacy overlap',row)
-
-          PY
