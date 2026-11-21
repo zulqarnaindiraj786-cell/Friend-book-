@@ -37,6 +37,8 @@ jobs:
                       op=re.match(r'\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b',sql,re.I)
                       tables=sorted(set(re.findall(r'\b(?:FROM|JOIN|INTO|UPDATE)\s+(friendbook_[a-z0-9_]+)',sql,re.I)))
                       flags=[k for k in ('parent_path','collection','doc_id','json_extract','createdAt','chatId','LIMIT','ORDER BY','UNION ALL','owner_uid','participants','update_time','last_seen','session_id') if k.lower() in sql.lower()]
+                      scan=re.search(r'\b([0-8])\s+AS\s+quota_scan_class\b',sql,re.I)
+                      if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
           for metric in ('rowsRead','rowsWritten'): query(metric)
           PY

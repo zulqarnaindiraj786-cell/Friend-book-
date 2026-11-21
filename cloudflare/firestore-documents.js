@@ -485,12 +485,15 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   const parts = splitPath(parent);
+  // Attribute expensive compatibility scans by public collection name, not user IDs.
+  const scanClasses={users:1,posts:2,reels:3,stories:4,pages:5,groups:6,chats:7,friend_requests:8};
+  const scanClass=parts?.length===1 && Object.hasOwn(scanClasses,parent) ? scanClasses[parent] : 0;
   const canonicalRead = db.prepare(
-    'SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE parent_path = ?'
+    `SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time, ${scanClass} AS quota_scan_class FROM friendbook_cf_firestore_documents WHERE parent_path = ?`
   ).bind(parent).all();
   // Root collections merge both stores. Nested collections never run a root scan.
   const legacyRead = parts?.length === 1 ? db.prepare(
-    'SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ?'
+    `SELECT path, collection, doc_id, owner_uid, document_json, updated_at, ${scanClass} AS quota_scan_class FROM friendbook_cf_documents WHERE collection = ?`
   ).bind(parent).all() : null;
   const [firestoreRows, appRows] = await Promise.all([canonicalRead, legacyRead]);
   const byPath = new Map((firestoreRows?.results || []).map(row => [row.path, row]));
