@@ -2086,9 +2086,15 @@ async function adminBroadcast(request,env,uid,now) {
 
 // Bounded scheduled recovery keeps queued jobs moving even when the admin phone is offline.
 export async function resumeOfficialBroadcasts(env,now=Date.now()) {
-  const {results=[]}=await env.DB.prepare(`SELECT doc_id,owner_uid FROM friendbook_cf_firestore_documents
+  const active=index=>env.DB.prepare(`SELECT doc_id,owner_uid FROM friendbook_cf_firestore_documents ${index}
     WHERE parent_path='officialBroadcasts' AND json_extract(document_json,'$.status') IN ('queued','sending')
     ORDER BY update_time,doc_id LIMIT 4`).bind().all();
+  let results;
+  try { ({results=[]}=await active('INDEXED BY idx_cf_broadcast_active_jobs')); }
+  catch(error) {
+    if(!String(error).includes('no such index: idx_cf_broadcast_active_jobs'))throw error;
+    ({results=[]}=await active(''));
+  }
   await Promise.all(results.map(async job=>{
     if (!isPaymentAdmin(env,job.owner_uid)) return;
     for (let round=0;round<4;round++) {

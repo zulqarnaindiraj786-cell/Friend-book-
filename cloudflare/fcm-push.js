@@ -207,12 +207,16 @@ export async function drainBroadcastPush(env, now = Date.now(), send = sendToDev
     while (cursor<results.length) {
       const row=results[cursor++];
       const id=row.notification_id;
+      if (row.created_at<now-86400000 || row.attempts>=8) {
+        await db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?')
+          .bind(id,row.next_attempt_at).run();
+        continue;
+      }
       const next=now+Math.min(3600000,300000*2**Math.min(row.attempts,4));
       const claim=await db.prepare(`UPDATE friendbook_cf_broadcast_push SET attempts=attempts+1,next_attempt_at=?
         WHERE notification_id=? AND next_attempt_at=? RETURNING notification_id`).bind(next,id,row.next_attempt_at).first();
       if (!claim) continue;
       const discard=()=>db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?').bind(id,next).run();
-      if (row.created_at<now-86400000 || row.attempts>=8) { await discard(); continue; }
       const note=await d1Doc(db,`notifications/${id}`);
       if (!note || note.fromUserId!=='friendbook_team' || note.type!=='announcement' || note.toUserId!==row.recipient_uid) {
         // Do not send without a matching persisted inbox event; stale jobs expire.
@@ -325,6 +329,11 @@ export async function fcmGateway(request, env, identity) {
       Object.assign(data, { toUserId: target, fromUserId: actor, eventId: event, title, body: message });
     }
     const result = await sendToDevices(env, db, actor, target, data, event, action === 'self_test' ? body.device_id : null);
+    // A persisted inbox event still exists, but there is no eligible device to
+    // notify. A terminal acknowledgement stops old clients re-reading the
+    // sender, event, recipient and empty device list on every retry.
+    if (action==='send' && result.status===409 && ['RECIPIENT_NOT_REGISTERED','NO_VALID_RECIPIENT_DEVICE'].includes(result.body.error))
+      return json({provider:'fcm',accepted:0,skipped:result.body.error});
     return json(result.body, result.status);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'INVALID_REQUEST';

@@ -2007,6 +2007,7 @@ test('live room creation, discovery and end transitions enforce host and viewer 
 test('official broadcast advances an indexed D1 cursor and writes private Team messages exactly once', async () => {
   const sql=new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema,readFileSync(new URL('../migrations/0039_broadcast_recipient_indexes.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0042_broadcast_push_outbox.sql',import.meta.url),'utf8')]) sql.exec(ddl);
+  sql.exec(readFileSync(new URL('../migrations/0052_broadcast_active_jobs.sql',import.meta.url),'utf8'));
   const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const [uid, data] of [['alice',{}],['bob',{banned:true}],['cara',{}],...Array.from({length:5},(_,i)=>['z'+i,{}])]) legacy.run(`users/${uid}`,'users',uid,uid,JSON.stringify(data),1);
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice','{}',1,1);
@@ -2045,6 +2046,9 @@ test('official broadcast advances an indexed D1 cursor and writes private Team m
     return {status:target==='alice' && pushes.filter(p=>p.target==='alice').length===1?503:200};
   };
   const now=Date.now()+1;
+  sql.prepare('INSERT INTO friendbook_cf_broadcast_push VALUES (?,?,?,?,?)').run('expired','alice',now-86400001,now,0);
+  sql.exec(`CREATE TRIGGER forbid_expired_lease BEFORE UPDATE ON friendbook_cf_broadcast_push
+    WHEN OLD.notification_id='expired' BEGIN SELECT RAISE(ABORT,'expired rows must never be re-leased'); END`);
   await drainBroadcastPush(env,now,send);
   assert.equal(pushes.length,7);
   assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_broadcast_push').get().n,1);

@@ -35,7 +35,11 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
     assert.equal((await send()).status,200);
     assert.equal(oauth,oldOauth+1);assert.equal(sends,6);
     sql.prepare('DELETE FROM friendbook_cf_fcm_device_claims').run();unregistered=true;
-    assert.equal((await send()).status,409);
+    const invalid=await send();assert.equal(invalid.status,200);
+    assert.equal((await invalid.json()).skipped,'NO_VALID_RECIPIENT_DEVICE');
+    const unregisteredResponse=await send();assert.equal(unregisteredResponse.status,200);
+    assert.equal((await unregisteredResponse.json()).skipped,'RECIPIENT_NOT_REGISTERED');
+    assert.equal((await selfTest('dev1')).status,409);
     assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_fcm_device_claims').get().n,0);
     sql.prepare('INSERT INTO friendbook_cf_fcm_devices VALUES (?,?,?,?)').run('dev1','bob','y'.repeat(30),2);
     unregistered=false;
