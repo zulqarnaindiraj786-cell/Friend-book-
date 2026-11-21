@@ -24,6 +24,20 @@ export async function writePresence(db, uid, session, online, visible, now) {
        OR (excluded.last_seen=friendbook_cf_presence_sessions.last_seen AND friendbook_cf_presence_sessions.online=1 AND excluded.online=0)`)
     .bind(uid,session,online?1:0,visible?1:0,now).run();
 }
+// Explicit offline, socket error and close may describe the same transition.
+export function offlineOnce(state, persist) {
+  let pending;
+  return now => {
+    if (!state.active && pending) return pending;
+    state.active = false;
+    state.lastSeen = now;
+    state.lastWrite = now;
+    const write = Promise.resolve().then(() => persist(now));
+    pending = write;
+    write.catch(() => { if (pending === write) pending = null; });
+    return write;
+  };
+}
 export async function readPresence(db, uid, now) {
   const row=await db.prepare(`SELECT COUNT(*) AS session_count, MAX(CASE WHEN visible=1 THEN last_seen END) AS last_seen,
     MAX(CASE WHEN online=1 AND visible=1 AND last_seen>? AND last_seen<=? THEN 1 ELSE 0 END) AS online
@@ -118,6 +132,7 @@ export async function presenceRealtime(request, env, identity) {
     // canonical row, even if this socket's first write fails.
     writePresence(env.DB, uid, state.session, true, true, state.lastSeen).then(() => { state.lastWrite = state.lastSeen; }).catch(() => {});
 
+    const markOffline = offlineOnce(state, now => writePresence(env.DB, uid, state.session, false, state.visible, now));
     server.addEventListener('message', async event => {
       const now = Date.now();
       if ( typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > 4096) {
@@ -142,20 +157,15 @@ export async function presenceRealtime(request, env, identity) {
           try { await writePresence(env.DB, uid, state.session, true, state.visible, now); } catch {}
         }
       } else if (data.type === 'offline') {
-        state.active = false; state.lastSeen = now; state.lastWrite = now;
-        try { await writePresence(env.DB, uid, state.session, false, state.visible, now); } catch {}
+        try { await markOffline(now); } catch {}
       }
       const online = isFreshOnline(state.active, state.visible, state.lastSeen, now);
       server.send(JSON.stringify({ uid, online, lastSeen: state.visible ? state.lastSeen : 0 }));
     });
 
-    const markOffline = () => {
-      const now = Date.now();
-      state.active = false; state.lastSeen = now;
-      writePresence(env.DB, uid, state.session, false, state.visible, now).catch(() => {});
-    };
-    server.addEventListener('close', markOffline);
-    server.addEventListener('error', markOffline);
+    const socketEnded = () => { markOffline(Date.now()).catch(() => {}); };
+    server.addEventListener('close', socketEnded);
+    server.addEventListener('error', socketEnded);
     return new Response(null, { status: 101, webSocket: client });
   }
 

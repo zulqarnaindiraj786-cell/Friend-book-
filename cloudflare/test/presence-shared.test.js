@@ -79,3 +79,14 @@ test('scheduled maintenance prunes bounded expired rows and retains the presence
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions WHERE updated_at=?').get(now).n,1);
   sql.close();
 });
+
+test('offline, error and close share one write until the socket is active again', async () => {
+  const {offlineOnce}=await import('../presence-realtime.js');
+  const state={active:true}, writes=[];
+  const offline=offlineOnce(state, now=>writes.push(now));
+  await Promise.all([offline(100),offline(101),offline(102)]);
+  assert.deepEqual(writes,[100]);
+  state.active=true;
+  await offline(200);
+  assert.deepEqual(writes,[100,200]);
+});
