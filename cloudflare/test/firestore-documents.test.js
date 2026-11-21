@@ -1272,6 +1272,7 @@ test('bounded chat pages match full merge across ties, cursors and legacy fallba
 test('bounded feed pages fill after privacy checks and preserve legacy precedence and cursors', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
  sql.exec(readFileSync(new URL('../migrations/0029_feed_page_indexes.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0051_feed_exception_indexes.sql',import.meta.url),'utf8'));
  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)'),a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
  const user=(id,data)=>f.run('users/'+id,'users','users',id,id,JSON.stringify(data),1,1);user('alice',{uid:'alice'});user('bob',{uid:'bob'});
  for(let i=0;i<100;i++){
@@ -1289,11 +1290,13 @@ test('bounded feed pages fill after privacy checks and preserve legacy precedenc
  const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  let prior=batchReads;
- // Fractional timestamp must use the old JS comparator, which truncates millis.
+ // A fractional timestamp still uses the JS comparator, without forcing a full scan.
  f.run('posts/odd','posts','posts','odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
+ a.run('posts/old-wrapper','posts','old-wrapper','alice',JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'},createdAt:{timestampValue:'1970-01-01T00:00:00.019Z'}}}),1);
  postReads=0;
  const fallback=await query({});const fallbackReads=postReads;
- assert.deepEqual(fallback.map(d=>d.id),(await query({},true)).map(d=>d.id));assert.equal(batchReads,prior);
+ assert.deepEqual(fallback.map(d=>d.id),(await query({},true)).map(d=>d.id));assert.ok(batchReads>prior);
+ assert.ok(fallback.some(d=>d.id==='old-wrapper'));
  assert.ok(fallbackReads<100,`fallback should authorize only enough rows to fill the page, not every post: ${fallbackReads}`);
  const next=await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]});
  assert.deepEqual(next.map(d=>d.id),(await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]},true)).map(d=>d.id));

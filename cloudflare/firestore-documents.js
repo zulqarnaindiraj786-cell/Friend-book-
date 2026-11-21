@@ -970,13 +970,36 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
-  const [canonicalBad,legacyBad]=await Promise.all([
-    probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='posts'${byAuthor}
-      AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard})`,authorArgs),
-    probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='posts'${byLegacyAuthor}
-      AND (doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`,authorArgs),
-  ]);
-  if (canonicalBad || legacyBad) return null;
+  const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR ${standard})`;
+  const legacyException=`(doc_id GLOB '*[^ -~]*' OR path<>'posts/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`;
+  const legacyUnshadowed="NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='posts')";
+  let exceptions=[];
+  if (author!==null) {
+    const [canonicalBad,legacyBad]=await Promise.all([
+      probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='posts'${byAuthor} AND ${canonicalException}`,authorArgs),
+      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='posts'${byLegacyAuthor} AND ${legacyException}`,authorArgs),
+    ]);
+    if (canonicalBad || legacyBad) return null;
+  } else {
+    // A handful of unusual historical timestamps must not force every feed
+    // refresh to scan both collections. Read only the exception indexes and
+    // merge those documents into the standard keyset stream in JS order.
+    let unusual;
+    try {
+      unusual=await Promise.all([
+        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_feed_exceptions
+          WHERE parent_path='posts' AND ${canonicalException} LIMIT 129`).bind().all(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_feed_exceptions
+          WHERE a.collection='posts' AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind().all(),
+      ]);
+    } catch(error) {
+      if (/no such index: idx_cf_(?:legacy_)?feed_exceptions/.test(String(error))) return null;
+      throw error;
+    }
+    const [odd,old]=unusual.map(x=>x.results||[]);
+    if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`posts/${row.doc_id}`)) return null;
+    exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
+  }
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const chunk=Math.min(100,Math.max(20,spec.limit*2));
@@ -984,25 +1007,34 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   for (;;) {
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
     const args=[...authorArgs,...(cursor||[]),chunk];
-    const [canonical,legacy]=await Promise.all([
+    let batches;
+    try { batches=await Promise.all([
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound}
+        FROM friendbook_cf_firestore_documents a ${author===null?'INDEXED BY idx_cf_posts_feed_page':''} WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
       db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a WHERE a.collection='posts'${byLegacyAuthor}${bound}
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+        FROM friendbook_cf_documents a ${author===null?'INDEXED BY idx_cf_legacy_posts_feed_page':''} WHERE a.collection='posts'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
+        AND ${legacyUnshadowed}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-    ]);
+    ]); } catch(error) {
+      if (/no such index: idx_cf_(?:legacy_)?posts_feed_page/.test(String(error))) return null;
+      throw error;
+    }
+    const [canonical,legacy]=batches;
     const rows=[...(canonical?.results || []),...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
     const docs=sortDocuments(rows.map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
-    if (!docs.length) break;
+    const last=docs.at(-1), value=last?.data.createdAt;
+    const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
+    const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
+      compareDocumentToCursor(doc,[value,last.id],spec.orderBy)>0);
+    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
-    const allowed=await visibleDocuments(db,uid,'posts',docs,requestUserReads);
-    visible.push(...allowed);
+    for(let i=0;i<merged.length && visible.length<spec.limit;i+=chunk) {
+      visible.push(...await visibleDocuments(db,uid,'posts',merged.slice(i,i+chunk),requestUserReads));
+    }
     if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
-    const last=docs[docs.length-1], value=last.data.createdAt;
-    cursor=[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id];
+    cursor=nextCursor;
     if (docs.length<chunk) break;
   }
   return visible;
