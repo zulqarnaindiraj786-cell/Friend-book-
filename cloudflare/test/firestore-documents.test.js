@@ -324,8 +324,9 @@ test('Android batch operations persist chat messages and apply update and delete
 test('notification inbox is scoped across document APIs and batch cannot reassign a recipient', async () => {
   const sql = new DatabaseSync(':memory:');
   sql.exec(resourcesSchema); sql.exec(appSchema); sql.exec(schema);
+  let perNotificationReads=0;
   const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
-    return { run: async () => stmt.run(...args), all: async () => ({results:stmt.all(...args)}), first: async () => stmt.get(...args) || null };
+    return { run: async () => stmt.run(...args), all: async () => ({results:stmt.all(...args)}), first: async () => {if(args[0]==='notifications/n1')perNotificationReads++;return stmt.get(...args)||null;} };
   } }; }, async batch(statements) { for (const s of statements) await s.run(); } };
   const app=createWorker(async token => token);
   const env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
@@ -341,6 +342,11 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
   assert.deepEqual((await list.json()).documents,[]);
   list=await call('u1','/v1/docs?collection=notifications');
   assert.deepEqual((await list.json()).documents,[]);
+  sql.prepare("UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.toUserId','u1') WHERE path='notifications/n1'").run();
+  perNotificationReads=0;
+  assert.deepEqual((await (await call('u1','/v1/docs?collection=notifications')).json()).documents,[]);
+  assert.equal((await (await call('u2','/v1/docs?collection=notifications')).json()).documents.length,1);
+  assert.equal(perNotificationReads,0,'compatibility list resolves canonical rows in the list statement');
   sql.exec(readFileSync(new URL('../migrations/0036_inbox_unread_indexes.sql',import.meta.url),'utf8'));
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('notifications/old','notifications','old','u2',JSON.stringify({fields:{toUserId:{stringValue:'u2'},isRead:{booleanValue:false}}}),1);
   const unread=[{field:'isRead',op:'==',value:false}];
@@ -2030,7 +2036,10 @@ test('live room creation, discovery and end transitions enforce host and viewer 
     const r=await call('bob','/v1/firestore/query','POST',{parent:'lives',limit:25,filters:[{field:'status',...filter}]});
     assert.equal(r.status,200);return (await r.json()).documents.map(row=>row.id);
   };
-  assert.deepEqual(await discover({op:'==',value:'live'}),await discover({op:'in',value:['live']}));
+  const liveEqual=await discover({op:'==',value:'live'});
+  plans.length=0;
+  assert.deepEqual(await discover({op:'in',value:['live']}),liveEqual);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);
   assert.deepEqual(await discover({op:'==',value:'live'}),['legacyLive','room']);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_lives_status/);

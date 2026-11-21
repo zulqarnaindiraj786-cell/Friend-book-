@@ -166,20 +166,26 @@ export async function appDocuments(request, env, identity) {
     try {
       // Chat previews and unread counters can advance without rewriting the
       // historical room mirror. Sort current rooms by their canonical timestamp.
+      const joinedRoot=['users','groups','friends','friend_requests','notifications'].includes(collection);
       const rows = collection==='chats' ? await env.DB.prepare(`
         SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE collection_id='chats' AND parent_path='chats'
         UNION ALL SELECT a.path,a.doc_id,a.document_json,a.updated_at,0 AS canonical FROM friendbook_cf_documents a
           WHERE a.collection='chats' AND NOT EXISTS (
             SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='chats'
-          ) ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(
+          ) ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : joinedRoot ? await env.DB.prepare(`
+        SELECT a.doc_id,COALESCE(f.document_json,a.document_json) AS document_json,a.updated_at
+        FROM (SELECT doc_id,document_json,updated_at FROM friendbook_cf_documents
+          WHERE collection=?1 ORDER BY updated_at DESC LIMIT ?2) a
+        LEFT JOIN friendbook_cf_firestore_documents f ON f.path=?1 || '/' || a.doc_id
+        ORDER BY a.updated_at DESC`).bind(collection,limit).all() : await env.DB.prepare(
         'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
       ).bind(collection, limit).all();
       let documents = [];
       for (const row of rows?.results || []) {
         const docPath = `${collection}/${row.doc_id}`;
         const currentChat = collection==='chats' && row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
-        const current = currentChat ? row : await canonicalRoot(env.DB, docPath, row);
+        const current = currentChat || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));

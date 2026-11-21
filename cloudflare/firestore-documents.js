@@ -472,7 +472,8 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
       return [...(a.results||[]),...(b.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
     }
   }
-  if (parent==='lives' && filters?.some(f=>f.field==='status' && f.op==='==' && f.value==='live')) {
+  if (parent==='lives' && filters?.some(f=>f.field==='status' && ((f.op==='==' && f.value==='live')
+      || (f.op==='in' && Array.isArray(f.value) && f.value.length===1 && f.value[0]==='live')))) {
     const legacyStatus=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
     WHEN json_type(document_json,'$.fields.status')='text' THEN json_extract(document_json,'$.fields.status')
     WHEN json_type(document_json,'$.fields.status.stringValue')='text' THEN json_extract(document_json,'$.fields.status.stringValue')
