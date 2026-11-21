@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        window: [latest-15m]
+        window: [latest-25m]
         metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -67,5 +67,5 @@ jobs:
                       elif any(f.startswith(('bounded-','scan=')) for f in flags):
                           focus.append(' '.join(map(str,parts)))
                   if focus: print('::notice:: Focus patterns %0A'+'%0A'.join(focus))
-          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=15),now,os.environ['AUDIT_WINDOW'])
+          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=25),now,os.environ['AUDIT_WINDOW'])
           PY
