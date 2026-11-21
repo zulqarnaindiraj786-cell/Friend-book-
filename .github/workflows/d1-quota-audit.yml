@@ -46,6 +46,7 @@ jobs:
                       scan=re.search(r'\b([0-8])\s+AS\s+quota_scan_class\b',sql,re.I)
                       alias=re.search(r'\bquota_root_([a-z_]+)\b',sql,re.I)
                       if alias: flags.append('scan='+alias.group(1))
+                      if re.search(r'\bidx_cf_(?:legacy_)?people_default_page\b',sql,re.I): flags.append('bounded-users')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
           for metric in ('rowsRead','rowsWritten'): query(metric)
