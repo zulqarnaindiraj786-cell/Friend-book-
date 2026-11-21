@@ -22,7 +22,7 @@ jobs:
               q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
                   d1QueriesAdaptiveGroups(limit:16, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
                       dimensions { query } sum { rowsRead rowsWritten } count
-                  } } } }'''%(metric,fmt(now-dt.timedelta(minutes=15)),fmt(now))
+                  } } } }'''%(metric,fmt(now-dt.timedelta(minutes=5)),fmt(now))
               req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
               try:
                   with urllib.request.urlopen(req,timeout=25) as r: result=json.load(r)
@@ -48,6 +48,7 @@ jobs:
                       if alias: flags.append('scan='+alias.group(1))
                       if re.search(r'\bidx_cf_(?:legacy_)?people_default_page\b',sql,re.I): flags.append('bounded-users')
                       if re.search(r'\bCOUNT\s*\(\s*f\.path\s*\)',sql,re.I): flags.append('one-off-overlap-audit')
+                      if re.search(r'\bidx_cf_(?:legacy_)?posts_feed_page\b',sql,re.I): flags.append('bounded-feed')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
           for metric in ('rowsRead','rowsWritten'): query(metric)
