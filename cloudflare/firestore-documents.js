@@ -795,6 +795,19 @@ async function mutateProfile(db, uid, path, body, method, now) {
       if(method==='PATCH' && existing?.[canonicalRootSnapshot] && Object.keys(fields).length>0
           && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value))
           && existing.document_json===JSON.stringify(next)) return json(rowToDocument(existing));
+      // A quiet fallback heartbeat only renews timestamps. Keep visibility
+      // transitions and legacy profile promotion on the dual-write path.
+      if (method==='PATCH' && existing?.[canonicalRootSnapshot] && unchangedHeartbeatFlags(before,next,fields)
+          && next.isOnline===true && next.isActive===true && next.showActiveStatus===true
+          && Number.isSafeInteger(fields.lastSeenMs) && fields.lastSeen?.__fieldValue==='serverTimestamp') {
+        const serialized=JSON.stringify(next);
+        if (serialized.length>1_800_000) throw new Error('Document too large');
+        const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents SET document_json=?,update_time=?
+          WHERE path=? AND document_json=? AND update_time=? RETURNING path`)
+          .bind(serialized,now,path,existing.document_json,existing.update_time).first();
+        if (!updated) throw new Error('Document changed');
+        return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
+      }
       return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
     } catch (error) {
       const message=String(error?.message || '');
