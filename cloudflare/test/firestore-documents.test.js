@@ -402,6 +402,16 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.equal((await call('bob','/v1/firestore/batch','POST',receipts)).status,200);
   assert.equal(roomReads,2); // authorization snapshot plus one guard preflight
   assert.equal(roomGuards,1);
+  roomGuards=0;
+  assert.equal((await call('bob','/v1/firestore/batch','POST',receipts)).status,200);
+  assert.equal(roomGuards,0,'repeated receipts perform no atomic guard writes');
+  const reset={op:'update',path:'chats/c1',updates:{'unreadCount.bob':0}};
+  const resetBatch=batch([...receipts.operations,reset]);
+  assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
+  assert.equal(roomGuards,1,'first unread reset still commits');
+  roomGuards=0;
+  assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
+  assert.equal(roomGuards,0,'unchanged receipts and already-zero unread require no guard writes');
   assert.equal((await call('eve','/v1/firestore/batch','POST',receipts)).status,403);
   assert.equal((await call('bob','/v1/docs/chats/c1','PUT',{participants:['eve']})).status,403);
   // A stale legacy mirror cannot grant membership or overwrite the canonical room.
