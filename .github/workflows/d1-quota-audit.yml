@@ -1,5 +1,6 @@
 name: Read-only D1 quota audit
 on:
+  workflow_dispatch:
   push:
     branches: [arena/7c7ddb7b-friend-book]
     paths: [.github/workflows/d1-quota-audit.yml]
@@ -21,7 +22,7 @@ jobs:
               q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
                   d1QueriesAdaptiveGroups(limit:5, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
                       dimensions { query } sum { rowsRead rowsWritten } count
-                  } } } }'''%(metric,fmt(now-dt.timedelta(minutes=10)),fmt(now))
+                  } } } }'''%(metric,fmt(now-dt.timedelta(minutes=30)),fmt(now))
               req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
               try:
                   with urllib.request.urlopen(req,timeout=25) as r: result=json.load(r)
@@ -37,6 +38,11 @@ jobs:
                       op=re.match(r'\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b',sql,re.I)
                       tables=sorted(set(re.findall(r'\b(?:FROM|JOIN|INTO|UPDATE)\s+(friendbook_[a-z0-9_]+)',sql,re.I)))
                       flags=[k for k in ('parent_path','collection','doc_id','json_extract','createdAt','chatId','LIMIT','ORDER BY','UNION ALL','owner_uid','participants','update_time','last_seen','session_id') if k.lower() in sql.lower()]
+                      for field in ('parent_path','collection_id','collection','path','owner_uid','doc_id'):
+                          if re.search(r'\b'+field+r'\s*=\s*\?',sql,re.I): flags.append(field+'=bound')
+                      for root in ('notifications','friends','officialBroadcasts','posts','reels','stories','users','chats','friend_requests'):
+                          if re.search(r"\b(?:parent_path|collection_id|collection)\s*=\s*'"+root+"'",sql,re.I): flags.append('root='+root)
+                      if re.search(r'\bquota_scan_class\b',sql,re.I): flags.append('tagged-fallback')
                       scan=re.search(r'\b([0-8])\s+AS\s+quota_scan_class\b',sql,re.I)
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       print('::notice::',metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
