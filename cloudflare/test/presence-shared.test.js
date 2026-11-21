@@ -132,3 +132,15 @@ test('quiet socket persistence is coalesced without delaying active transitions'
   assert.equal(shouldPersistActive(true,last,last+1),true);
   assert.ok(WRITE_COALESCE_MS*2<PRESENCE_TTL_MS,'one missed renewal must not exhaust the freshness window');
 });
+
+test('opening presence socket reserves the write window before D1 resolves and permits retry after failure', async () => {
+  const {persistActive,shouldPersistActive}=await import('../presence-realtime.js');
+  const now=1_000_000;
+  const state={active:true,lastWrite:0};
+  let fail;
+  const pending=persistActive(state,now,()=>new Promise((_,reject)=>{fail=reject;}));
+  assert.equal(shouldPersistActive(false,state.lastWrite,now+1),false);
+  fail(new Error('D1 unavailable'));
+  await pending;
+  assert.equal(shouldPersistActive(false,state.lastWrite,now+1),true);
+});

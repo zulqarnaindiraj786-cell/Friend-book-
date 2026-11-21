@@ -27,6 +27,15 @@ export async function writePresence(db, uid, session, online, visible, now) {
        OR (excluded.last_seen=friendbook_cf_presence_sessions.last_seen AND friendbook_cf_presence_sessions.online=1 AND excluded.online=0)`)
     .bind(uid,session,online?1:0,visible?1:0,now).run();
 }
+// Reserve synchronously so the first active frame cannot duplicate the
+// connection write while D1 is still responding. A failed attempt opens retry.
+export async function persistActive(state, now, persist) {
+  state.lastWrite = now;
+  try { await persist(now); }
+  catch {
+    if (state.active && state.lastWrite === now) state.lastWrite = 0;
+  }
+}
 // Explicit offline, socket error and close may describe the same transition.
 export function offlineOnce(state, persist) {
   let pending;
@@ -154,7 +163,8 @@ export async function presenceRealtime(request, env, identity) {
     const state = { uid, session: crypto.randomUUID(), active: true, visible: true, lastSeen: Date.now(), lastWrite: 0, lastMessage: 0 };
     // Scheduled maintenance compacts old sessions without deleting the last
     // canonical row, even if this socket's first write fails.
-    writePresence(env.DB, uid, state.session, true, true, state.lastSeen).then(() => { state.lastWrite = state.lastSeen; }).catch(() => {});
+    const saveActive = now => persistActive(state, now, time => writePresence(env.DB, uid, state.session, true, state.visible, time));
+    void saveActive(state.lastSeen);
 
     const markOffline = offlineOnce(state, now => writePresence(env.DB, uid, state.session, false, state.visible, now));
     server.addEventListener('message', async event => {
@@ -177,8 +187,7 @@ export async function presenceRealtime(request, env, identity) {
         const becameActive = !state.active;
         state.active = true; state.lastSeen = now;
         if (shouldPersistActive(becameActive,state.lastWrite,now)) {
-          state.lastWrite = now;
-          try { await writePresence(env.DB, uid, state.session, true, state.visible, now); } catch {}
+          await saveActive(now);
         }
       } else if (data.type === 'offline') {
         try { await markOffline(now); } catch {}
