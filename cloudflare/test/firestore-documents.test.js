@@ -2168,6 +2168,9 @@ test('default people picker uses both ordered indexes and fills its page after p
   assert.equal(reference[0].id,'person000');
   assert.deepEqual(await query({limit:10}),reference);
   assert.doesNotMatch(JSON.stringify(reference),/private@example|Stale public mirror/);
+  const selected=await query({filters:[{field:'__name__',op:'in',value:['person003','person002','blocked0','person003']}]});
+  assert.deepEqual(selected.map(row=>row.id),['person002','person003']);
+  assert.doesNotMatch(JSON.stringify(selected),/private@example|Stale public mirror/);
   assert.ok(candidates<60);
   assert.match(plan,/USING INDEX idx_cf_people_default_page/);
   assert.match(plan,/USING INDEX idx_cf_legacy_people_default_page/);

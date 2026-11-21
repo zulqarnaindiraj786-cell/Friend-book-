@@ -376,6 +376,29 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
   if (parent === 'users') {
+    const idFilter=filters?.find(f=>f.field==='__name__' && (f.op==='==' || f.op==='in'));
+    const requested=idFilter?.op==='==' ? [idFilter.value] : idFilter?.value;
+    if (Array.isArray(requested) && requested.length<=30 && requested.every(id=>typeof id==='string')) {
+      const ids=[...new Set(requested)];
+      if (!ids.length) return [];
+      const slots=ids.map(()=>'?').join(',');
+      try {
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page
+            WHERE parent_path='users' AND doc_id IN (${slots})`).bind(...ids).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_default_page
+            WHERE a.collection='users' AND a.doc_id IN (${slots}) AND NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users'
+            )`).bind(...ids).all(),
+        ]);
+        const candidates=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        // Same path precedence and normal profile projection. For inconsistent
+        // historical IDs, retain the old tie ordering via the generic path.
+        if (new Set(candidates.map(row=>row.doc_id)).size===candidates.length) return candidates;
+      } catch(error) {
+        if (!/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) throw error;
+      }
+    }
     const lo=filters?.find(f=>f.field==='displayName' && f.op==='>=')?.value;
     const hi=filters?.find(f=>f.field==='displayName' && f.op==='<=')?.value;
     if (typeof lo==='string' && /^[\x20-\x7e]{2,60}$/.test(lo) && hi===lo+'\uf8ff') {
