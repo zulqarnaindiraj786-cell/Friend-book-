@@ -58,6 +58,7 @@ jobs:
                       if re.search(r'\bidx_cf_(?:legacy_)?people_default_page\b',sql,re.I): flags.append('bounded-users')
                       if re.search(r'\bCOUNT\s*\(\s*f\.path\s*\)',sql,re.I): flags.append('one-off-overlap-audit')
                       if re.search(r'\bidx_cf_(?:legacy_)?posts_feed_page\b',sql,re.I): flags.append('bounded-feed')
+                      if re.search(r'\bidx_cf_(?:legacy_)?lives_status\b',sql,re.I): flags.append('bounded-live-discovery')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       parts=(label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
                       if printed<8:
