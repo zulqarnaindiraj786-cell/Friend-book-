@@ -371,11 +371,11 @@ async function bulkMention(body, actor, db, env) {
   }
   if (!eligible.length) return json({ inbox: 0, accepted: 0, note: 'No eligible recipients' });
   const event = `${body.post_id}:${body.comment_id || 'post'}`;
-  // Daily limit: one bulk event per actor per 24h (D1 claim).
   const dayKey = `bulk:${actor}:${event}`;
-  const prior = await db.prepare('SELECT event_key FROM friendbook_cf_push_claims WHERE event_key = ?').bind(dayKey).first().catch(() => null);
-  if (prior) return json({ error: 'BULK_DAILY_LIMIT', cooldown_hours: 24 }, 429);
-  await db.prepare('INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at) VALUES (?, ?, ?)').bind(dayKey, actor, Date.now()).run().catch(() => {});
+  try {
+    if (!await claimBulkEvent(db,dayKey,actor,Date.now()))
+      return json({ error: 'BULK_DAILY_LIMIT', cooldown_hours: 24 }, 429);
+  } catch { return json({ error: 'Bulk claim unavailable' }, 503); }
   let inbox = 0, accepted = 0, failed = 0;
   for (const uid of eligible.slice(0, 20)) {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${actor}:${event}:${uid}`));
@@ -412,3 +412,11 @@ async function bulkMention(body, actor, db, env) {
 }
 
 // Atomic push-claim handling is validated by the FCM gateway tests.
+
+// One atomic statement: retries cannot repeat notification fan-out after losing the claim.
+export async function claimBulkEvent(db,key,actor,now) {
+  const result=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key,actor,created_at)
+    VALUES (?,?,?) ON CONFLICT(event_key) DO NOTHING`).bind(key,actor,now).run();
+  if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('Bulk claim metadata unavailable');
+  return result.meta.changes===1;
+}

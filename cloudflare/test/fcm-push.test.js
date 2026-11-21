@@ -60,3 +60,13 @@ test('unchanged device registrations do not rewrite the token; changes and daily
     assert.equal(sql.prepare('SELECT user_id FROM friendbook_cf_fcm_devices').get().user_id,'bob');
   } finally {sql.close();}
 });
+
+test('bulk mention retries across concurrent requests only acquire one fan-out claim', async () => {
+  const {claimBulkEvent}=await import('../fcm-push.js');
+  const sql=new DatabaseSync(':memory:');
+  sql.exec(readFileSync(new URL('../migrations/0015_additive_fcm_devices.sql',import.meta.url),'utf8'));
+  const db={prepare(q){const stmt=sql.prepare(q);return {bind(...args){return {run:async()=>({success:true,meta:{changes:Number(stmt.run(...args).changes)}})};}};}};
+  assert.deepEqual(await Promise.all([claimBulkEvent(db,'event','alice',1),claimBulkEvent(db,'event','alice',2)]),[true,false]);
+  assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_push_claims').get().n,1);
+  sql.close();
+});
