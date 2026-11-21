@@ -593,6 +593,17 @@ function rowToDocument(row) {
 // Recompute a profile transform after a conflicting friend/follow/profile write.
 // The snapshot guard and both copies commit together, so concurrent edits cannot
 // silently erase relationship counters or another device's profile changes.
+// Existing clients also mirror presence into the profile. Skip only repeated
+// heartbeat-only patches, never visibility transitions or profile edits.
+export function redundantProfileHeartbeat(before,next,fields,now) {
+  const keys=Object.keys(fields);
+  const allowed=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
+  if(!before || keys.length!==allowed.length || !keys.every(key=>allowed.includes(key)))return false;
+  if(!['isOnline','isActive','showActiveStatus'].every(key=>typeof before[key]==='boolean' && before[key]===next[key]))return false;
+  const previous=before.lastSeen?.__type==='timestamp'?before.lastSeen.millis:0;
+  return Number.isFinite(previous) && previous>0 && now>=previous && now-previous<180_000;
+}
+
 async function mutateProfile(db, uid, path, body, method, now) {
   if (splitPath(path)[1] !== uid) return json({error:'Forbidden'},403);
   for (let attempt=0; attempt<4; attempt++) {
@@ -601,9 +612,11 @@ async function mutateProfile(db, uid, path, body, method, now) {
       if (method==='PATCH' && !existing) return json({error:'NOT_FOUND'},404);
       if (body.createOnly===true && existing) return json({error:'ALREADY_EXISTS'},409);
       const before=existing ? decodeValue(JSON.parse(existing.document_json)) : null;
-      const next=method==='PATCH' ? applyUpdate(before,body?.fields || body?.data || body?.updates || {},now)
+      const fields=body?.fields || body?.data || body?.updates || {};
+      const next=method==='PATCH' ? applyUpdate(before,fields,now)
         : applySet(before,body?.data || {},Boolean(body?.merge),body?.mergeFields || null,now);
       if (!profileWriteAllowed(path,uid,before,next)) return json({error:'Forbidden'},403);
+      if(method==='PATCH' && redundantProfileHeartbeat(before,next,fields,now))return json(rowToDocument(existing));
       return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
     } catch (error) {
       const message=String(error?.message || '');
