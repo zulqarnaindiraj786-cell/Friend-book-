@@ -79,13 +79,24 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** When >= 0 (in PostDetailActivity for a Sponsored Ad), renders ONLY that 1 real AdVH and ZERO PostVH! */
     public int standaloneAdSlotOrdinal = -1;
 
-    public FeedAdapter(Activity a, Host h) {
+    private final com.friendbook.social.core.AnchoredBannerPool feedBanners;
+    private final java.util.Set<PostVH> attachedBannerPosts = new java.util.LinkedHashSet<>();
+    public void setFeedBannersVisible(boolean visible) {
+        if (feedBanners == null) return;
+        feedBanners.setActive(visible);
+        if (visible) for (PostVH holder : attachedBannerPosts) feedBanners.show(holder.feedBanner, holder.bannerPostId);
+    }
+
+    public FeedAdapter(Activity a, Host h) { this(a,h,false); }
+
+    public FeedAdapter(Activity a, Host h, boolean homeBanners) {
         this.activity = a;
         this.host = h;
+        feedBanners = homeBanners ? new com.friendbook.social.core.AnchoredBannerPool(a,
+                com.friendbook.social.core.AnchoredBannerPool.Placement.FEED) : null;
         adsEnabled = adsEnabled && com.friendbook.social.core.ConsentManager.canRequestAds(a);
         setHasStableIds(true);
-        com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
-        com.friendbook.social.core.AdsConfig.warmUpPools(a);
+        if (!homeBanners) com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
     }
 
     @Override
@@ -332,6 +343,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private boolean adsEnabled = com.friendbook.social.core.AdsConfig.nativeAdsEnabled();
 
     public void setAdsConfig(String id, boolean enabled) {
+        if (feedBanners != null) {
+            for (PostVH holder : attachedBannerPosts) feedBanners.show(holder.feedBanner, holder.bannerPostId);
+            return;
+        }
         String cleanId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(id)
                 ? id.trim()
                 : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
@@ -367,7 +382,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private boolean adsActive() {
-        return adsEnabled
+        return feedBanners == null && adsEnabled
                 && nativeAdUnitId != null
                 && !nativeAdUnitId.isEmpty();
     }
@@ -573,7 +588,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
             try {
-                bindPost((PostVH) h, posts.get(idx));
+                PostVH holder = (PostVH) h;
+                holder.bannerPostId = posts.get(idx).id;
+                if (feedBanners != null && attachedBannerPosts.contains(holder)) feedBanners.show(holder.feedBanner,holder.bannerPostId);
+                bindPost(holder, posts.get(idx));
                 bindFirstPostDiscoverySection(activity, (PostVH) h, idx);
             } catch (Throwable t) {
                 android.util.Log.e("HomeFeed", "bindPost failed for "
@@ -846,6 +864,24 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String n = Fb.myName();
         int i = n.indexOf(' ');
         return i > 0 ? n.substring(0, i) : n;
+    }
+
+    @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder holder) {
+        super.onViewAttachedToWindow(holder);
+        if (feedBanners != null && holder instanceof PostVH) {
+            PostVH post = (PostVH) holder;
+            attachedBannerPosts.add(post);
+            feedBanners.show(post.feedBanner, post.bannerPostId);
+        }
+    }
+
+    @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder holder) {
+        if (feedBanners != null && holder instanceof PostVH) {
+            PostVH post = (PostVH) holder;
+            attachedBannerPosts.remove(post);
+            feedBanners.clear(post.feedBanner);
+        }
+        super.onViewDetachedFromWindow(holder);
     }
 
     @Override
@@ -2794,6 +2830,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
         TextView name, meta, more, closeBtn, content;
         TextView extraReactsTv, likeEmojiTv, likeTxt, commentTxt, shareTxt;
+        final FrameLayout feedBanner;
+        String bannerPostId;
         TextView tagSummary, commentsSummary;
         TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout like, comment, share, reactSummaryWrap;
@@ -3083,6 +3121,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             inlineCommentsBox.addView(inlineQuickRow);
 
             card.addView(inlineCommentsBox, new LinearLayout.LayoutParams(-1, -2));
+
+            feedBanner = new FrameLayout(c);
+            feedBanner.setVisibility(View.GONE);
+            card.addView(feedBanner, new LinearLayout.LayoutParams(-1, -2));
 
             // friendbook gap between posts
             View gap = new View(c);

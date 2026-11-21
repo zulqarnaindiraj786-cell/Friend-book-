@@ -35,7 +35,7 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
-import com.friendbook.social.core.AdsConfig;
+import com.friendbook.social.core.AnchoredBannerPool;
 import com.friendbook.social.core.ConsentManager;
 import com.friendbook.social.core.ContentSafetyEngine;
 import com.friendbook.social.core.Fb;
@@ -172,9 +172,8 @@ public class ReelsFragment extends Fragment {
 
         pager = new ViewPager2(a);
         pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
-        // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes & prebound Ads!
+        // Pre-layout & pre-prepare 2 offscreen pages above/below for instant zero-lag swipes & prebound video!
         pager.setOffscreenPageLimit(1);
-        AdsConfig.warmUpPools(a);
         if (pager.getChildAt(0) instanceof RecyclerView) {
             ((RecyclerView) pager.getChildAt(0)).setItemAnimator(null);
         }
@@ -335,9 +334,7 @@ public class ReelsFragment extends Fragment {
 
             @Override
             public void onPageSelected(int position) {
-                if (adapter.isAdPos(position) || adapter.isAdPos(position + 1) || adapter.isAdPos(position + 2)) {
-                    AdsConfig.ensureReelsPoolReplenished(getActivity());
-                }
+                updateReelBanner();
                 if(pager.getScrollState()==ViewPager2.SCROLL_STATE_IDLE) adapter.playOnly(pager, position);
                 Models.Reel cur = adapter.reelAtPosition(position);
                 if (cur != null && cur.id != null) {
@@ -353,7 +350,15 @@ public class ReelsFragment extends Fragment {
                 }
             }
         });
-        return root;
+        // Banner is outside the pager so it cannot cover the right-side controls.
+        LinearLayout screen = Ui.col(a);
+        screen.setBackgroundColor(Color.BLACK);
+        screen.addView(root, new LinearLayout.LayoutParams(-1, 0, 1f));
+        reelBannerSlot = new FrameLayout(a);
+        reelBannerSlot.setVisibility(View.GONE);
+        screen.addView(reelBannerSlot, new LinearLayout.LayoutParams(-1, -2));
+        reelBanners = new AnchoredBannerPool(a, AnchoredBannerPool.Placement.REELS);
+        return screen;
     }
 
     /** Advances the friendbook discovery epoch so new/unwatched Reels & fresh Sponsored Ads appear immediately! */
@@ -370,6 +375,19 @@ public class ReelsFragment extends Fragment {
         if (forYouPill == null || followingPill == null) return;
         forYouPill.setBackground(Ui.round(a, !followingOnlyMode ? Ui.BLUE : 0x66000000, 16));
         followingPill.setBackground(Ui.round(a, followingOnlyMode ? Ui.BLUE : 0x66000000, 16));
+    }
+
+    private AnchoredBannerPool reelBanners;
+    private FrameLayout reelBannerSlot;
+
+    private void updateReelBanner() {
+        if (reelBanners == null || pager == null || adapter == null) return;
+        boolean visible = isResumed() && !isHidden();
+        reelBanners.setActive(visible);
+        if (!visible) return;
+        int position = pager.getCurrentItem();
+        Models.Reel reel = adapter.reelAtPosition(position);
+        reelBanners.show(reelBannerSlot, reel == null ? null : position + ":" + reel.id);
     }
 
     private void rebuildMergedFeed(boolean forceReset) {
@@ -494,6 +512,7 @@ public class ReelsFragment extends Fragment {
 
         boolean wasEmpty = adapter.rawReels().isEmpty();
         adapter.setData(pager, merged, forceReset);
+        updateReelBanner();
 
         if (!isHidden() && !merged.isEmpty() && pager != null && (wasEmpty || forceReset)) {
             pager.post(() -> {
@@ -752,29 +771,33 @@ public class ReelsFragment extends Fragment {
     @Override public void onResume(){
         super.onResume();
         if (getActivity() != null) ConsentManager.retryConsentOnResume(getActivity());
-        AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
-        AdsConfig.setReelsPoolListener(() -> {
-            if (adapter != null && pager != null) {
-                adapter.onPoolAdAvailable();
-                if (com.friendbook.social.core.ConsentManager.canRequestAds(getActivity())) AdsConfig.ensureReelsPoolReplenished(getActivity());
-            }
-        });
+        updateReelBanner();
         if(pager!=null && adapter!=null){
-            adapter.onPoolAdAvailable();
             adapter.refreshVisibleHoldersInPlace(pager);
             pager.post(()->adapter.playOnly(pager,pager.getCurrentItem()));
         }
     }
-    @Override public void onPause(){if(adapter!=null && pager!=null)adapter.pauseAll(pager);super.onPause();}
+    @Override public void onPause(){
+        if(reelBanners!=null)reelBanners.setActive(false);
+        if(adapter!=null && pager!=null)adapter.pauseAll(pager);
+        super.onPause();
+    }
+
+    @Override public void onDestroyView() {
+        if (reelBanners != null) reelBanners.setActive(false);
+        reelBanners = null;
+        reelBannerSlot = null;
+        super.onDestroyView();
+    }
 
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
+        updateReelBanner();
         if (adapter == null || pager == null) return;
         if (hidden) {
             adapter.pauseAll(pager);
         } else {
-            AdsConfig.preloadReelsBatchNow(getActivity(), AdsConfig.AD_POOL_SIZE);
             if (adapter.rawReels().isEmpty()) {
                 resetVideoPages();
             } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
@@ -789,7 +812,6 @@ public class ReelsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        AdsConfig.setReelsPoolListener(null);
         videoGeneration++; pagingVideos=false; watchdogGen++;
         reelsWatchdog.removeCallbacksAndMessages(null);
         ReelUploadManager.removeListener(bgUploadListener);
@@ -798,13 +820,9 @@ public class ReelsFragment extends Fragment {
         if (adapter != null && pager != null) adapter.pauseAll(pager);
     }
 
-    // ================== Reel Adapter (Reels + Production Reels Native Ads) ==================
+    // ================== Reel Adapter ==================
 
     static class ReelAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
-        private static final int VT_REEL = 0;
-        private static final int VT_REEL_AD = 1;
-        private static final int REELS_PER_AD = 3;
-        private static final int REEL_AD_STEP = REELS_PER_AD + 1;
         /**
          * Reels this process has already sent a view for. Counting rule (product decision): ONE view
          * per user per Reel, forever - watching it again, looping it or finishing it changes nothing.
@@ -870,8 +888,6 @@ public class ReelsFragment extends Fragment {
                         int ap = vh.getAdapterPosition();
                         Models.Reel updated = reelAtPosition(ap);
                         if (updated != null) vh.updateMetaInPlace(updated);
-                    } else if (h instanceof ReelAdVH) {
-                        ((ReelAdVH) h).refreshReelAdSocial(activity);
                     }
                 }
             }
@@ -897,38 +913,10 @@ public class ReelsFragment extends Fragment {
             return true;
         }
 
-        private boolean lastAdsActive = false;
-
-        private boolean adsActive() { return lastAdsActive; }
-
-        void onPoolAdAvailable() {
-            boolean permitted=AdsConfig.nativeAdsEnabled() && com.friendbook.social.core.ConsentManager.canRequestAds(activity);
-            boolean next=permitted && (lastAdsActive || AdsConfig.hasReadyReelsSlotOrPoolAd(0));
-            if(next==lastAdsActive)return;
-            lastAdsActive=next;
-            if (!next) { notifyDataSetChanged(); return; }
-            for (int k=0;k<data.size()/REELS_PER_AD;k++) notifyItemInserted((k+1)*REEL_AD_STEP-1);
-        }
-
-        private int adCount() {
-            if (!adsActive() || data.isEmpty()) return 0;
-            return data.size() / REELS_PER_AD;
-        }
-
-        boolean isAdPos(int pos) {
-            if (!adsActive() || data.isEmpty() || pos < 0) return false;
-            return ((pos + 1) % REEL_AD_STEP == 0) && ((pos / REEL_AD_STEP) < adCount());
-        }
-
-        int reelIndexForPos(int pos) {
-            if (!adsActive()) return pos;
-            return pos - ((pos + 1) / REEL_AD_STEP);
-        }
+        int reelIndexForPos(int pos) { return pos; }
 
         Models.Reel reelAtPosition(int pos) {
-            if (isAdPos(pos)) return null;
-            int idx = reelIndexForPos(pos);
-            return (idx >= 0 && idx < data.size()) ? data.get(idx) : null;
+            return (pos >= 0 && pos < data.size()) ? data.get(pos) : null;
         }
 
         void pauseAll(ViewPager2 pager) {
@@ -939,7 +927,6 @@ public class ReelsFragment extends Fragment {
             for (int i = 0; i < rv.getChildCount(); i++) {
                 RecyclerView.ViewHolder h = rv.getChildViewHolder(rv.getChildAt(i));
                 if (h instanceof VH) ((VH) h).pause();
-                else if (h instanceof ReelAdVH) ((ReelAdVH) h).pauseAdVideo();
             }
         }
 
@@ -954,40 +941,22 @@ public class ReelsFragment extends Fragment {
                 RecyclerView.ViewHolder holder=rv.getChildViewHolder(rv.getChildAt(i));
                 if(holder.getBindingAdapterPosition()==pos) { selected=holder; continue; }
                 if(holder instanceof VH) ((VH)holder).pause();
-                else if(holder instanceof ReelAdVH) ((ReelAdVH)holder).pauseAdVideo();
             }
             if(selected instanceof VH) ((VH)selected).play();
-            else if(selected instanceof ReelAdVH) ((ReelAdVH)selected).playAdVideo();
         }
 
-        @Override public int getItemCount() { return data.size() + adCount(); }
-
-        @Override
-        public int getItemViewType(int position) {
-            return isAdPos(position) ? VT_REEL_AD : VT_REEL;
-        }
+        @Override public int getItemCount() { return data.size(); }
 
         @NonNull
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            if (viewType == VT_REEL_AD) {
-                return new ReelAdVH(activity);
-            }
             return new VH(activity);
         }
 
         @Override
         public void onBindViewHolder(@NonNull RecyclerView.ViewHolder h, int position) {
-            if (h instanceof ReelAdVH) {
-                int adSlotOrdinal = Math.max(0, position / REEL_AD_STEP);
-                ((ReelAdVH) h).loadFreshReelsNativeAd(AdsConfig.reelsNativeId(), adSlotOrdinal);
-            } else if (h instanceof VH) {
-                Models.Reel r = reelAtPosition(position);
-                if (r != null) {
-                    VH vh = (VH) h;
-                    vh.bind(r, visible.getAsBoolean() && position == playingPos);
-                }
-            }
+            Models.Reel r = reelAtPosition(position);
+            if (r != null) ((VH) h).bind(r, visible.getAsBoolean() && position == playingPos);
         }
 
         @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder h){
@@ -1001,461 +970,7 @@ public class ReelsFragment extends Fragment {
         @Override
         public void onViewRecycled(@NonNull RecyclerView.ViewHolder h) {
             super.onViewRecycled(h);
-            if (h instanceof VH) {
-                ((VH) h).releasePlayer();
-            } else if (h instanceof ReelAdVH) {
-                ((ReelAdVH) h).onRecycled();
-            }
-        }
-
-        /**
-         * 📢 Full-Screen Reels Production Native Ad ViewHolder (`ca-app-pub-3387480177023669/6468085788`):
-         * - Loads a FRESH NativeAd via `AdLoader.Builder` every time it binds (never reuses old/failed ads).
-         * - Logs exact `adError.getCode()` + details in Logcat (`FriendBookAds`) via `AdListener`.
-         */
-        static class ReelAdVH extends RecyclerView.ViewHolder {
-            final com.google.android.gms.ads.nativead.NativeAdView nativeAdView;
-            final com.google.android.gms.ads.nativead.MediaView mediaView;
-            final ImageView iconView;
-            final TextView headlineView, advertiserView, bodyView, storeView, priceView, statusView;
-            final android.widget.RatingBar starsView;
-            final android.widget.Button ctaButton;
-            final LinearLayout loadingBox, adHeroBanner;
-            final TextView adHeroBadgeTv, adHeroTitleTv, adHeroSubTv;
-            final ImageView adLikeOutlineIv;
-            final TextView adLikeIcon, adLikeCount, adCommentCount, adShareCount, adQuickCommentPill;
-            final FrameLayout adLikeBox, adCommentBox, adShareBox;
-            com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
-            int requestSeq = 0;
-            int boundSlotOrdinal = -1;
-            boolean adRequestInFlight = false;
-
-            ReelAdVH(final Activity a) {
-                super(buildAdRoot(a));
-                FrameLayout root = (FrameLayout) itemView;
-
-                loadingBox = Ui.col(a);
-                loadingBox.setGravity(Gravity.CENTER);
-                loadingBox.setVisibility(View.GONE);
-                Ui.pad(loadingBox, 24, 24, 24, 24);
-                statusView = Ui.tv(a, "", 13.5f, 0xFFBBBBBB);
-                statusView.setGravity(Gravity.CENTER);
-                loadingBox.addView(statusView);
-                root.addView(loadingBox, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-
-                nativeAdView = new com.google.android.gms.ads.nativead.NativeAdView(a);
-                nativeAdView.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-                nativeAdView.setPadding(0, Ui.dp(a, 58), 0, 0);
-                nativeAdView.setVisibility(View.VISIBLE);
-
-                FrameLayout inner = new FrameLayout(a);
-                inner.setLayoutParams(new FrameLayout.LayoutParams(-1, -1));
-
-                // Full-screen vibrant visual hero banner for each unseen Sponsored creative!
-                adHeroBanner = Ui.col(a);
-                adHeroBanner.setGravity(Gravity.CENTER);
-                Ui.pad(adHeroBanner, 28, 36, 76, 190);
-                adHeroBadgeTv = Ui.roundChip(a, "SPONSORED REEL", 0x33FFFFFF, Color.WHITE, 12f);
-                Ui.pad(adHeroBadgeTv, 14, 6, 14, 6);
-                adHeroBanner.addView(adHeroBadgeTv, new LinearLayout.LayoutParams(-2, -2));
-
-                adHeroTitleTv = Ui.tvBold(a, "", 27f, Color.WHITE);
-                adHeroTitleTv.setGravity(Gravity.CENTER);
-                adHeroTitleTv.setPadding(0, Ui.dp(a, 16), 0, Ui.dp(a, 8));
-                adHeroBanner.addView(adHeroTitleTv);
-
-                adHeroSubTv = Ui.tv(a, "", 15f, 0xEEFFFFFF);
-                adHeroSubTv.setGravity(Gravity.CENTER);
-                adHeroBanner.addView(adHeroSubTv);
-                inner.addView(adHeroBanner, new FrameLayout.LayoutParams(-1, -1));
-
-                mediaView = new com.google.android.gms.ads.nativead.MediaView(a);
-                mediaView.setImageScaleType(ImageView.ScaleType.FIT_CENTER);
-                FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER);
-                mlp.bottomMargin = Ui.dp(a, 160);
-                inner.addView(mediaView, mlp);
-
-                TextView badge = Ui.tvBold(a, "Sponsored", 11.5f, 0xFFFFD54F);
-                badge.setBackground(Ui.roundStroke(a, 0xAA000000, 12, 0x55FFD54F, 1));
-                Ui.pad(badge, 10, 4, 10, 4);
-                FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-                blp.setMargins(Ui.dp(a, 14), Ui.dp(a, 8), 0, 0);
-                inner.addView(badge, blp);
-
-                // 100% Identical to Reels VH Right-Side Action Rail (ic_like_outline · 💬 · ↗)
-                LinearLayout adRail = Ui.col(a);
-                adRail.setGravity(Gravity.CENTER_HORIZONTAL);
-                adRail.setElevation(Ui.dp(a, 24));
-                FrameLayout.LayoutParams arLp = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.BOTTOM);
-                arLp.setMargins(0, 0, Ui.dp(a, 10), Ui.dp(a, 210));
-                adRail.setLayoutParams(arLp);
-
-                int btnSz = Ui.dp(a, 44);
-                adLikeOutlineIv = new ImageView(a);
-                adLikeOutlineIv.setImageResource(com.friendbook.social.R.drawable.ic_like_outline);
-                adLikeOutlineIv.setColorFilter(Color.WHITE);
-                adLikeIcon = Ui.tv(a, "", 22, Color.WHITE);
-                adLikeIcon.setGravity(Gravity.CENTER);
-                adLikeIcon.setVisibility(View.GONE);
-                adLikeBox = new FrameLayout(a);
-                adLikeBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
-                adLikeBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
-                int lkIconSz = Ui.dp(a, 22);
-                adLikeBox.addView(adLikeOutlineIv, new FrameLayout.LayoutParams(lkIconSz, lkIconSz, Gravity.CENTER));
-                adLikeBox.addView(adLikeIcon, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-                adLikeCount = Ui.tvBold(a, "Like", 11f, Color.WHITE);
-                adLikeCount.setGravity(Gravity.CENTER);
-                adLikeCount.setPadding(0, Ui.dp(a, 2), 0, Ui.dp(a, 10));
-
-                ImageView cmtIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "captions", 22, Color.WHITE);
-                adCommentBox = new FrameLayout(a);
-                adCommentBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
-                adCommentBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
-                int adIcSz = Ui.dp(a, 22);
-                adCommentBox.addView(cmtIcon, new FrameLayout.LayoutParams(adIcSz, adIcSz, Gravity.CENTER));
-                adCommentCount = Ui.tvBold(a, "Comment", 11f, Color.WHITE);
-                adCommentCount.setGravity(Gravity.CENTER);
-                adCommentCount.setPadding(0, Ui.dp(a, 2), 0, Ui.dp(a, 10));
-
-                ImageView shrIcon = com.friendbook.social.core.StudioVectorIcons.iconView(a, "send", 21, Color.WHITE);
-                adShareBox = new FrameLayout(a);
-                adShareBox.setBackground(Ui.roundStroke(a, 0x66000000, 22, 0x33FFFFFF, 1));
-                adShareBox.setLayoutParams(new LinearLayout.LayoutParams(btnSz, btnSz));
-                int adShSz = Ui.dp(a, 21);
-                adShareBox.addView(shrIcon, new FrameLayout.LayoutParams(adShSz, adShSz, Gravity.CENTER));
-                adShareCount = Ui.tvBold(a, "Share", 11f, Color.WHITE);
-                adShareCount.setGravity(Gravity.CENTER);
-                adShareCount.setPadding(0, Ui.dp(a, 2), 0, 0);
-
-                adRail.addView(adLikeBox);
-                adRail.addView(adLikeCount);
-                adRail.addView(adCommentBox);
-                adRail.addView(adCommentCount);
-                adRail.addView(adShareBox);
-                adRail.addView(adShareCount);
-                inner.addView(adRail);
-
-                LinearLayout bottomCard = Ui.col(a);
-                bottomCard.setBackground(Ui.roundStroke(a, 0xDD121418, 16, 0x33FFFFFF, 1));
-                Ui.pad(bottomCard, 14, 12, 14, 12);
-                FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-                clp.setMargins(Ui.dp(a, 12), 0, Ui.dp(a, 12), Ui.dp(a, 14));
-
-                LinearLayout headerRow = Ui.row(a);
-                headerRow.setGravity(Gravity.CENTER_VERTICAL);
-                iconView = new ImageView(a);
-                int iconSz = Ui.dp(a, 42);
-                LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(iconSz, iconSz);
-                ilp.rightMargin = Ui.dp(a, 10);
-                iconView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                headerRow.addView(iconView, ilp);
-
-                LinearLayout titleCol = Ui.col(a);
-                headlineView = Ui.tvBold(a, "Sponsored", 15.5f, Color.WHITE);
-                headlineView.setMaxLines(2);
-                titleCol.addView(headlineView);
-
-                LinearLayout subRow = Ui.row(a);
-                subRow.setGravity(Gravity.CENTER_VERTICAL);
-                advertiserView = Ui.tv(a, "", 12f, 0xFFCCCCCC);
-                advertiserView.setSingleLine(true);
-                subRow.addView(advertiserView);
-
-                starsView = new android.widget.RatingBar(a, null, android.R.attr.ratingBarStyleSmall);
-                starsView.setNumStars(5);
-                starsView.setStepSize(0.5f);
-                starsView.setIsIndicator(true);
-                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
-                slp.leftMargin = Ui.dp(a, 6);
-                subRow.addView(starsView, slp);
-                titleCol.addView(subRow);
-
-                headerRow.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                LinearLayout metaRight = Ui.col(a);
-                metaRight.setGravity(Gravity.END);
-                storeView = Ui.tv(a, "", 11f, 0xFFAAAAAA);
-                priceView = Ui.tvBold(a, "", 11.5f, 0xFF81C784);
-                metaRight.addView(storeView);
-                metaRight.addView(priceView);
-                headerRow.addView(metaRight);
-                bottomCard.addView(headerRow);
-
-                bodyView = Ui.tv(a, "", 13f, 0xFFE4E6EB);
-                bodyView.setMaxLines(2);
-                bodyView.setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 10));
-                bottomCard.addView(bodyView);
-
-                ctaButton = new android.widget.Button(a);
-                ctaButton.setAllCaps(false);
-                ctaButton.setTextColor(Color.WHITE);
-                ctaButton.setTextSize(14.5f);
-                ctaButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                ctaButton.setBackground(Ui.round(a, Ui.BLUE, 10));
-                bottomCard.addView(ctaButton, new LinearLayout.LayoutParams(-1, Ui.dp(a, 42)));
-
-                // 100% Identical to Reels VH Quick "💬  Add a comment…" Pill!
-                adQuickCommentPill = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                        a, "captions", "Add a comment…", 13f, 0, 0xEEFFFFFF, 0xEEFFFFFF);
-                adQuickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
-                Ui.pad(adQuickCommentPill, 14, 7, 14, 7);
-                LinearLayout.LayoutParams qclp = new LinearLayout.LayoutParams(-1, -2);
-                qclp.topMargin = Ui.dp(a, 8);
-                bottomCard.addView(adQuickCommentPill, qclp);
-
-                inner.addView(bottomCard, clp);
-                nativeAdView.addView(inner);
-                root.addView(nativeAdView);
-
-                nativeAdView.setMediaView(mediaView);
-                nativeAdView.setHeadlineView(headlineView);
-                nativeAdView.setBodyView(bodyView);
-                nativeAdView.setCallToActionView(ctaButton);
-                nativeAdView.setIconView(iconView);
-                nativeAdView.setAdvertiserView(advertiserView);
-                nativeAdView.setStarRatingView(starsView);
-                nativeAdView.setStoreView(storeView);
-                nativeAdView.setPriceView(priceView);
-
-                adLikeBox.setOnClickListener(v -> {
-                    Ui.haptic(v);
-                    AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 10000, null, () -> refreshReelAdSocial(a));
-                });
-                adLikeBox.setOnLongClickListener(v -> {
-                    Reactions.show(adLikeBox, picked ->
-                            AdsConfig.setOrToggleAdReaction(a, boundSlotOrdinal + 10000, picked, () -> refreshReelAdSocial(a)));
-                    return true;
-                });
-                adLikeCount.setOnClickListener(v -> AdsConfig.showWhoReactedToAd(a, boundSlotOrdinal + 10000));
-                View.OnClickListener openReelAdCmts = v ->
-                        AdsConfig.openSponsoredCommentsSheet(a, boundSlotOrdinal + 10000, headlineView.getText(), () -> refreshReelAdSocial(a));
-                adCommentBox.setOnClickListener(openReelAdCmts);
-                adCommentCount.setOnClickListener(openReelAdCmts);
-                adQuickCommentPill.setOnClickListener(openReelAdCmts);
-                adShareBox.setOnClickListener(v ->
-                        AdsConfig.shareSponsoredAd(a, boundSlotOrdinal + 10000, headlineView.getText(), bodyView.getText(), () -> refreshReelAdSocial(a)));
-            }
-
-            private static FrameLayout buildAdRoot(Activity a) {
-                FrameLayout f = new FrameLayout(a);
-                f.setBackgroundColor(0xFF0A0B0E);
-                f.setLayoutParams(new ViewGroup.LayoutParams(-1, -1));
-                return f;
-            }
-
-            private void destroyCurrentAd() {
-                if (currentNativeAd != null && boundSlotOrdinal >= 0) {
-                    AdsConfig.disposeShownSlotAd(
-                            itemView.getContext(), boundSlotOrdinal + 10000, currentNativeAd);
-                }
-                currentNativeAd = null;
-            }
-
-            private void refreshReelAdSocial(Context c) {
-                int key = boundSlotOrdinal + 10000;
-                AdsConfig.resolveUniqueAdId(c, key);
-                String myRx = AdsConfig.getAdMyReaction(c, key);
-                int likes = AdsConfig.getAdLikeCount(c, key);
-                int cmts = AdsConfig.getAdCommentCount(c, key);
-                int shares = AdsConfig.getAdShareCount(c, key);
-                adLikeCount.setText(likes > 0 ? String.valueOf(likes) : "Like");
-                adCommentCount.setText(cmts > 0 ? String.valueOf(cmts) : "Comment");
-                adShareCount.setText(shares > 0 ? String.valueOf(shares) : "Share");
-                if (myRx == null || myRx.isEmpty()) {
-                    adLikeOutlineIv.setVisibility(View.VISIBLE);
-                    adLikeIcon.setVisibility(View.GONE);
-                } else {
-                    adLikeOutlineIv.setVisibility(View.GONE);
-                    adLikeIcon.setText(Reactions.emojiFor(myRx));
-                    adLikeIcon.setVisibility(View.VISIBLE);
-                }
-            }
-
-            private void populateReelShowcaseFallback(int slotOrdinal) {
-                AdsConfig.SponsoredCreative cr = AdsConfig.getCreativeForSlot(itemView.getContext(), slotOrdinal + 10000);
-                headlineView.setText(cr.headline);
-                advertiserView.setText(cr.advertiser + " · Sponsored");
-                advertiserView.setVisibility(View.VISIBLE);
-                bodyView.setText(cr.body);
-                bodyView.setVisibility(View.VISIBLE);
-                ctaButton.setText(cr.cta);
-                ctaButton.setVisibility(View.VISIBLE);
-                iconView.setImageDrawable(AdsConfig.createCompanyLogoDrawable(itemView.getContext(), cr));
-                iconView.setVisibility(View.VISIBLE);
-                mediaView.setVisibility(View.GONE);
-
-                android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable(
-                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                        new int[]{cr.bannerColorStart, cr.bannerColorEnd});
-                adHeroBanner.setBackground(gd);
-                adHeroBadgeTv.setText(cr.bannerBadge);
-                adHeroTitleTv.setText(cr.bannerBigTitle);
-                adHeroSubTv.setText(cr.bannerSubTitle);
-                adHeroBanner.setVisibility(View.VISIBLE);
-
-                starsView.setRating(cr.stars);
-                starsView.setVisibility(View.VISIBLE);
-                storeView.setText(cr.storeOrPrice);
-                storeView.setVisibility(View.VISIBLE);
-                priceView.setText("Verified");
-                priceView.setVisibility(View.VISIBLE);
-            }
-
-            /**
-             * Binds a preloaded NativeAd from the 5-ad Reels Pool (`AdsConfig.getOrPollReelsAd`).
-             * NEVER calls `loadAd` inside `onBindViewHolder` and NEVER retries in a loop on failure!
-             */
-            void loadFreshReelsNativeAd(final String rawUnitId, final int slotOrdinal) {
-                final Context ctx = itemView.getContext();
-                if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
-                    loadingBox.setVisibility(View.GONE);
-                    nativeAdView.setVisibility(View.VISIBLE);
-                    populateReelsNativeAd(currentNativeAd, ctx);
-                    refreshReelAdSocial(ctx);
-                    return;
-                }
-
-                final int mySeq = ++requestSeq;
-                destroyCurrentAd();
-                this.boundSlotOrdinal = slotOrdinal;
-                this.adRequestInFlight = false;
-                loadingBox.setVisibility(View.GONE);
-                statusView.setText("");
-
-                // Always allocate a brand-new unseen ad creative for every Reel Ad bind — NEVER repeat an old ad!
-                AdsConfig.allocateFreshAdForBind(ctx, slotOrdinal + 10000);
-                refreshReelAdSocial(ctx);
-                AdsConfig.hydrateAdSocialFromFirestore(ctx, slotOrdinal + 10000, () -> {
-                    if (mySeq == requestSeq) refreshReelAdSocial(ctx);
-                });
-
-                ConsentManager.ensureInitialized(ctx);
-                adHeroBanner.setVisibility(View.GONE);
-                com.google.android.gms.ads.nativead.NativeAd preloaded =
-                        AdsConfig.getOrPollReelsAd(ctx, slotOrdinal);
-                if (preloaded != null) {
-                    currentNativeAd = preloaded;
-                    loadingBox.setVisibility(View.GONE);
-                    nativeAdView.setVisibility(View.VISIBLE);
-                    populateReelsNativeAd(preloaded, ctx);
-                    refreshReelAdSocial(ctx);
-                    nativeAdView.requestLayout();
-                    return;
-                }
-
-                // Wait for the background 5-ad Reels Pool (never call loadAd inside onBindViewHolder!)
-                adRequestInFlight = true;
-                nativeAdView.setVisibility(View.GONE);
-                statusView.setText("");
-                loadingBox.setVisibility(View.GONE);
-                AdsConfig.registerReelsSlotWaiter(slotOrdinal, readyAd -> {
-                    if (mySeq != requestSeq) return;
-                    adRequestInFlight = false;
-                    if (readyAd == null || currentNativeAd != null || !AdsConfig.nativeAdsEnabled()
-                            || !ConsentManager.canRequestAds(ctx)) {
-                        loadingBox.setVisibility(View.GONE);
-                        return;
-                    }
-                    currentNativeAd = readyAd;
-                    loadingBox.setVisibility(View.GONE);
-                    nativeAdView.setVisibility(View.VISIBLE);
-                    populateReelsNativeAd(readyAd, ctx);
-                    refreshReelAdSocial(ctx);
-                    nativeAdView.requestLayout();
-                });
-                AdsConfig.ensureReelsPoolReplenished(ctx);
-            }
-
-            void playAdVideo() {
-                if (currentNativeAd != null && currentNativeAd.getMediaContent() != null
-                        && currentNativeAd.getMediaContent().hasVideoContent()
-                        && currentNativeAd.getMediaContent().getVideoController() != null) {
-                    try { currentNativeAd.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
-                }
-            }
-
-            void pauseAdVideo() {
-                if (currentNativeAd != null && currentNativeAd.getMediaContent() != null
-                        && currentNativeAd.getMediaContent().hasVideoContent()
-                        && currentNativeAd.getMediaContent().getVideoController() != null) {
-                    try { currentNativeAd.getMediaContent().getVideoController().pause(); } catch (Throwable ignored) { }
-                }
-            }
-
-            private void populateReelsNativeAd(com.google.android.gms.ads.nativead.NativeAd ad, Context c) {
-                adHeroBanner.setVisibility(View.GONE);
-                headlineView.setText(ad.getHeadline() != null ? ad.getHeadline() : "Sponsored");
-
-                if (ad.getMediaContent() != null) {
-                    mediaView.setMediaContent(ad.getMediaContent());
-                    mediaView.setVisibility(View.VISIBLE);
-                    if (ad.getMediaContent().hasVideoContent() && ad.getMediaContent().getVideoController() != null) {
-                        try { ad.getMediaContent().getVideoController().play(); } catch (Throwable ignored) { }
-                    }
-                } else {
-                    mediaView.setVisibility(View.GONE);
-                }
-
-                if (ad.getBody() == null || ad.getBody().isEmpty()) {
-                    bodyView.setVisibility(View.GONE);
-                } else {
-                    bodyView.setVisibility(View.VISIBLE);
-                    bodyView.setText(ad.getBody());
-                }
-
-                if (ad.getCallToAction() == null || ad.getCallToAction().isEmpty()) {
-                    ctaButton.setVisibility(View.GONE);
-                } else {
-                    ctaButton.setVisibility(View.VISIBLE);
-                    ctaButton.setText(ad.getCallToAction());
-                }
-
-                if (ad.getIcon() == null || ad.getIcon().getDrawable() == null) {
-                    iconView.setVisibility(View.GONE);
-                } else {
-                    iconView.setImageDrawable(ad.getIcon().getDrawable());
-                    iconView.setClipToOutline(true);
-                    iconView.setBackground(Ui.circle(0xFF242526));
-                    iconView.setVisibility(View.VISIBLE);
-                }
-
-                if (ad.getAdvertiser() == null || ad.getAdvertiser().isEmpty()) {
-                    advertiserView.setVisibility(View.GONE);
-                } else {
-                    advertiserView.setText(ad.getAdvertiser());
-                    advertiserView.setVisibility(View.VISIBLE);
-                }
-
-                if (ad.getStarRating() == null) {
-                    starsView.setVisibility(View.GONE);
-                } else {
-                    starsView.setRating(ad.getStarRating().floatValue());
-                    starsView.setVisibility(View.VISIBLE);
-                }
-
-                if (ad.getStore() == null || ad.getStore().isEmpty()) {
-                    storeView.setVisibility(View.GONE);
-                } else {
-                    storeView.setText(ad.getStore());
-                    storeView.setVisibility(View.VISIBLE);
-                }
-
-                if (ad.getPrice() == null || ad.getPrice().isEmpty()) {
-                    priceView.setVisibility(View.GONE);
-                } else {
-                    priceView.setText(ad.getPrice());
-                    priceView.setVisibility(View.VISIBLE);
-                }
-
-                nativeAdView.setNativeAd(ad);
-            }
-
-            void onRecycled() {
-                requestSeq++;
-                adRequestInFlight = false;
-                destroyCurrentAd();
-                AdsConfig.evictSlotAd(boundSlotOrdinal + 10000);
-            }
+            ((VH) h).releasePlayer();
         }
 
         // ================== Ultra-Fast TextureView + SSD Cache Reel ViewHolder ==================
@@ -1472,7 +987,7 @@ public class ReelsFragment extends Fragment {
             final TextView likeIcon, likeCount, commentCount, saveCount, shareCount;
             final ImageView commentIcon;
             final ImageView heartBurst;
-            final TextView nameT, captionT, audioT, followT, quickCommentPill;
+            final TextView nameT, captionT, audioT, followT;
             final ImageView avatar, tick;
             final View filterTintView;
             final TextView overlayTextPill, overlayStickerTv;
@@ -1675,7 +1190,7 @@ public class ReelsFragment extends Fragment {
                 rail.addView(soundBtnBox);
                 root.addView(rail);
 
-                // Bottom Creator Info + Quick "Add a comment…" + Ultra-Thin Playback Scrub Bar
+                // Bottom creator info and playback scrub bar
                 LinearLayout bottomCol = Ui.col(a);
                 bottomCol.setElevation(Ui.dp(a, 22));
                 android.graphics.drawable.GradientDrawable bottomGrad = new android.graphics.drawable.GradientDrawable(
@@ -1724,12 +1239,6 @@ public class ReelsFragment extends Fragment {
                 audioT.setSingleLine(true);
                 audioT.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 8));
                 bottomCol.addView(audioT);
-
-                quickCommentPill = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                        a, "captions", "Add a comment…", 13f, 0, 0xEEFFFFFF, 0xEEFFFFFF);
-                quickCommentPill.setBackground(Ui.roundStroke(a, 0x44FFFFFF, 18, 0x55FFFFFF, 1));
-                Ui.pad(quickCommentPill, 14, 7, 14, 7);
-                bottomCol.addView(quickCommentPill, new LinearLayout.LayoutParams(-1, -2));
 
                 root.addView(bottomCol);
 
@@ -1838,7 +1347,6 @@ public class ReelsFragment extends Fragment {
                 };
                 commentBtnBox.setOnClickListener(openCommentsListener);
                 commentCount.setOnClickListener(openCommentsListener);
-                quickCommentPill.setOnClickListener(openCommentsListener);
 
                 View.OnClickListener openShareListener = v -> shareSheet(a);
                 shareBtnBox.setOnClickListener(openShareListener);

@@ -141,7 +141,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setItemAnimator(null); // zero jank / zero blink on realtime updates
         rv.setItemViewCacheSize(constrainedFeed ? 8 : 24);
         rv.getRecycledViewPool().setMaxRecycledViews(1, 30);
-        adapter = new FeedAdapter(a, this);
+        adapter = new FeedAdapter(a, this, true);
         adapter.feedEngagementInPage = true;
         rv.setAdapter(adapter);
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
@@ -261,6 +261,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
+        if (adapter != null) adapter.setFeedBannersVisible(homeStarted && !hidden);
         if (hidden) {
             cancelHomeSecondary();
             stopHomeWatchers();
@@ -530,6 +531,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     public void onStart() {
         super.onStart();
         homeStarted=true;
+        if (adapter != null) adapter.setFeedBannersVisible(!isHidden());
         FastCache.addReactionObserver(reactionObserver);
         refreshPostsIfNeeded();
         if (!isHidden()) {
@@ -546,6 +548,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onStop() {
         homeStarted=false;
+        if (adapter != null) adapter.setFeedBannersVisible(false);
         super.onStop();
         cancelHomeSecondary();
         FastCache.removeReactionObserver(reactionObserver);

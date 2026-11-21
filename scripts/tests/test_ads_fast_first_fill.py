@@ -34,11 +34,34 @@ class AdsFastFirstFillGuards(unittest.TestCase):
         self.assertIn('flushSdkReadyCallbacks();', consent)
         self.assertIn('if (sdkInitCompleted.compareAndSet(false, true))', consent)
 
-    def test_pools_still_boot_from_application_oncreate(self):
+    def test_only_screen_owned_banners_preload_for_home_and_reels(self):
         self.assertIn('ConsentManager.ensureInitialized(this)', (JAVA / 'App.java').read_text())
         consent = (JAVA / 'core/ConsentManager.java').read_text()
-        self.assertIn('AdsConfig.preloadFeedBatchNow(appCtx, AdsConfig.AD_POOL_SIZE);', consent)
-        self.assertIn('AdsConfig.warmUpPools(appCtx);', consent)
+        main = (JAVA / 'main/MainActivity.java').read_text()
+        self.assertNotIn('preloadFeedBatchNow', consent + main)
+        self.assertNotIn('preloadReelsBatchNow', consent + main)
+        pool = (JAVA / 'core/AnchoredBannerPool.java').read_text()
+        self.assertIn('PRELOAD = 3', pool)
+        self.assertIn('PRELOAD - ready.size() - loading.size()', pool)
+        self.assertIn('RETRY_MS = 10_000L', pool)
+        self.assertIn('getCurrentOrientationAnchoredAdaptiveBannerAdSize', pool)
+        self.assertIn('ConsentManager.canRequestAds(activity)', pool)
+        self.assertIn('FEED("ca-app-pub-3387480177023669/8179691467")', pool)
+        self.assertIn('REELS("ca-app-pub-3387480177023669/5275819818")', pool)
+
+    def test_banner_slots_are_separate_from_post_and_reel_controls(self):
+        feed = (JAVA / 'post/FeedAdapter.java').read_text()
+        self.assertLess(feed.index('card.addView(inlineCommentsBox'), feed.index('card.addView(feedBanner'))
+        self.assertIn('Placement.FEED', feed)
+        reels = (JAVA / 'reels/ReelsFragment.java').read_text()
+        self.assertNotIn('quickCommentPill', reels)
+        self.assertNotIn('ReelAdVH', reels)
+        self.assertIn('Placement.REELS', reels)
+        self.assertIn('screen.addView(reelBannerSlot', reels)
+        self.assertIn('commentBtnBox.setOnClickListener', reels)
+        gradle = (ROOT / 'app/build.gradle').read_text()
+        self.assertNotIn('mediation:facebook', gradle)
+        self.assertNotIn('mediation:applovin', gradle)
 
 
 if __name__ == '__main__':

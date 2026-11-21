@@ -21,11 +21,5 @@
 -dontwarn okio.**
 
 # Meta Audience Network carries compile-time Infer nullability metadata.
--dontwarn com.facebook.infer.annotation.Nullsafe
--dontwarn com.facebook.infer.annotation.Nullsafe$Mode
 
 # AdMob waterfall loads adapter entry points by their server-supplied class names.
--keep,allowoptimization class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationAdapter { public <init>(); }
--keep,allowoptimization class com.google.ads.mediation.applovin.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
--keep,allowoptimization class com.google.ads.mediation.facebook.** extends com.google.android.gms.ads.mediation.Adapter { public <init>(); }
--keep,allowoptimization class com.google.ads.mediation.applovin.** implements com.google.android.gms.ads.mediation.MediationNativeAdapter { public <init>(); }

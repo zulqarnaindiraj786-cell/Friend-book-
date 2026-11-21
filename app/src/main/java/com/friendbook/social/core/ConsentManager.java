@@ -108,7 +108,6 @@ public final class ConsentManager {
     private static void finishConsent(Context context, String status, Runnable callback) {
         consentDiagnostic = status;
         consentInFlight.set(false);
-        if (canRequestAds(context)) AdsConfig.warmUpPools(context);
         AdsConfig.notifyChange();
         if (callback != null) callback.run();
     }
@@ -253,7 +252,6 @@ public final class ConsentManager {
         MAIN_HANDLER.post(() -> {
             if (sdkInitCompleted.get()) {
                 flushSdkReadyCallbacks();
-                preloadAdPools(appCtx);
             } else {
                 scheduleBootPreload(appCtx);
             }
@@ -264,24 +262,14 @@ public final class ConsentManager {
         });
     }
 
-    /** Kicks the 5-ad Feed pool (fast single-ad first fill) and the Reels pool. Idempotent. */
-    private static void preloadAdPools(final Context appCtx) {
-        if (appCtx == null) return;
-        try {
-            AdsConfig.preloadFeedBatchNow(appCtx, AdsConfig.AD_POOL_SIZE);
-            AdsConfig.warmUpPools(appCtx);
-        } catch (Throwable ignored) { }
-    }
-
-    /** One-shot fallback so ads still boot if the Play Services callback never arrives. */
+    /** One-shot fallback so SDK waiters are not stranded if the callback never arrives. */
     private static void scheduleBootPreload(final Context appCtx) {
         if (appCtx == null || !bootPreloadScheduled.compareAndSet(false, true)) return;
         MAIN_HANDLER.postDelayed(() -> {
             // Waited long enough: treat the SDK as usable so deferred ad requests can never be
-            // stranded, then boot the pools.
+            // stranded.
             if (sdkInitCompleted.compareAndSet(false, true)) {
                 flushSdkReadyCallbacks();
-                preloadAdPools(appCtx);
             }
         }, SDK_BOOT_PRELOAD_FALLBACK_MS);
     }
