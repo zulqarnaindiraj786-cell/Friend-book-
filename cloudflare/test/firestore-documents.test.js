@@ -2002,6 +2002,12 @@ test('indexed tag search observes private posts, canonical precedence and edits'
   }
   sql.exec(readFileSync(new URL('../migrations/0041_post_tag_search.sql',import.meta.url),'utf8'));
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('posts/shadow','posts','posts','shadow','alice','{"authorId":"alice","createdAt":1,"content":"no tag"}',1,1);
+  sql.exec(readFileSync(new URL('../migrations/0065_skip_unchanged_post_search.sql',import.meta.url),'utf8'));
+  const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
+  const before=changes();
+  sql.exec(`UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.likesCount',1) WHERE path='posts/visible';
+    UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.likesCount',1) WHERE path='posts/shadow'`);
+  assert.equal(changes()-before,2,'metadata-only updates must not write into FTS');
   const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
   const app=createWorker(async()=> 'bob');
   const search=async postTag=>{
@@ -2014,6 +2020,8 @@ test('indexed tag search observes private posts, canonical precedence and edits'
   sql.exec(`UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.content','@Carol') WHERE path='posts/visible'`);
   assert.deepEqual(await search('@alice'),[]);
   assert.deepEqual(await search('@carol'),['posts/visible']);
+  sql.exec(`UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.content','@Carol') WHERE path='posts/shadow'`);
+  assert.deepEqual((await search('@carol')).sort(),['posts/shadow','posts/visible']);
   sql.close();
 });
 
