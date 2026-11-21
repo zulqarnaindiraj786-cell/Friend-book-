@@ -20,7 +20,7 @@ jobs:
       AUDIT_METRIC: ${{ matrix.metric }}
       CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - name: Read incident top query patterns without exposing SQL values
+      - name: Read remaining high-cost query patterns without exposing SQL values
         run: |
           python - <<'PY'
           import datetime as dt, os, urllib.request, urllib.error, json, re
