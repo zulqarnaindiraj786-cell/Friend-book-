@@ -66,7 +66,7 @@ class AdsKeepAskingGuards(unittest.TestCase):
     def test_first_fill_rules_from_the_previous_speed_up_are_still_in_place(self):
         self.assertIn('preloadMediatedAd(appCtx, feedNativeId(), true)', self.ads)
         self.assertIn('preloadMediatedAd(appCtx, reelsNativeId(), false)', self.ads)
-        self.assertIn('private static final long FAIL_COOLDOWN_MS = 8_000L;', self.ads)
+        self.assertIn('private static final long FAIL_COOLDOWN_MS = 10_000L;', self.ads)
         self.assertIn('if (!ConsentManager.isAdsSdkInitialized())', self.ads)
         consent = (JAVA / 'core/ConsentManager.java').read_text()
         self.assertIn('public static boolean isAdsSdkInitialized()', consent)

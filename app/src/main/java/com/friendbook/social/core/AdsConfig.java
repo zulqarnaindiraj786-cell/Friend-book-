@@ -313,7 +313,7 @@ public class AdsConfig {
      * replenish — can ask again soon after a failure instead of leaving the feed ad-less for 20s.
      * Still a cooldown, never a retry loop.
      */
-    private static final long FAIL_COOLDOWN_MS = 8_000L;
+    private static final long FAIL_COOLDOWN_MS = 10_000L;
     // Shared opening allowance: 2 Feed + 1 Reels. Only an impression earns a replacement.
     private static final AdRequestBudget REQUEST_BUDGET = new AdRequestBudget();
 
@@ -1121,9 +1121,10 @@ public class AdsConfig {
                     if (feed) feedRecoveryUsed = false; else reelsRecoveryUsed = false;
                     return;
                 }
+                REQUEST_BUDGET.allowSingleRecovery(feed);
             }
             if (feed) ensureFeedPoolReplenished(app); else ensureReelsPoolReplenished(app);
-        }, Math.max(250L, FAIL_COOLDOWN_MS + 250L - (System.currentTimeMillis() - failedAt)));
+        }, Math.max(1L, FAIL_COOLDOWN_MS - (System.currentTimeMillis() - failedAt)));
     }
 
     private static void preloadMediatedAd(
@@ -1245,6 +1246,7 @@ public class AdsConfig {
                 }
             }
             notifyWaitersNoAdYet(isFeedPool);
+            recoverWaitingSlot(appCtx,isFeedPool);
         }
     }
 

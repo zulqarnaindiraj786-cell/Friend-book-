@@ -12,6 +12,7 @@ import java.util.*;
 public final class D1Reactions {
  private D1Reactions(){}
  private static String actor;
+ private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
  private static final android.util.LruCache<String,Long> FETCHED_AT=new android.util.LruCache<>(512);
  private static final long REFRESH_MS=8000;
@@ -113,11 +114,7 @@ public final class D1Reactions {
   mutation.add(requested,onlyAdd,toggleAny,render);
   JSONObject initial=CACHE.get(key);
   if(initial!=null && !UNCONFIRMED.contains(key) && !initial.optBoolean("reactionStateUnknown"))mutation.start(initial);
-  else D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
-   if(!mutation.current())return;
-   if(data.optJSONArray("types")==null)mutation.finish("Couldn't load reaction. Tap to try again.");
-   else mutation.start(data);
-  }).addOnFailureListener(e->{if(mutation.current())mutation.finish("Couldn't load reaction. Check connection and try again.");});
+  else mutation.loadInitial(0);
  }
 
  private static final class PendingReaction {
@@ -135,6 +132,17 @@ public final class D1Reactions {
    render=callback;
    queue.add(type,onlyAdd,toggleAny);
    if(confirmed!=null)publishOptimistic();
+  }
+  void loadInitial(int attempt){
+   D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
+    if(!current())return;
+    if(data.optJSONArray("types")==null){if(attempt==0)MAIN.postDelayed(()->{if(current())loadInitial(1);},700L);else finish("Couldn't load reaction. Try again.");}
+    else start(data);
+   }).addOnFailureListener(error->{
+    if(!current())return;
+    if(attempt==0 && D1Client.isRetryableReactionFailure(error))MAIN.postDelayed(()->{if(current())loadInitial(1);},700L);
+    else finish("Couldn't load reaction. Try again.");
+   });
   }
   void start(JSONObject initial){
    UNCONFIRMED.remove(key);
@@ -163,29 +171,46 @@ public final class D1Reactions {
   void sendNext(){
    ReactionWriteQueue.Target target=queue.begin();
    if(target==null){finish(null);return;}
+   sendTarget(target,0);
+  }
+  void sendTarget(ReactionWriteQueue.Target target,int attempt){
    D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",target.type))
     .addOnSuccessListener(data->{
      if(!current())return;
      JSONArray types=data.optJSONArray("types");
-     if(types==null){failed(target);return;}
+     if(types==null){recover(target,attempt);return;}
      if(data.optBoolean("reactionOnly")){
       try{JSONObject merged=new JSONObject(confirmed.toString());merged.put("types",types);confirmed=merged;}
-      catch(JSONException invalid){failed(target);return;}
+      catch(JSONException invalid){recover(target,attempt);return;}
      }else confirmed=data;
-     owner=data.optString("owner",owner);
-     queue.complete(target);
-     // Intermediate responses only advance the confirmed baseline. Do not repaint
-     // stale state while the current visible intent still has writes in the queue.
-     if(queue.hasPending())sendNext();else finish(null);
-    }).addOnFailureListener(e->{if(current())failed(target);});
+     completed(target,data);
+    }).addOnFailureListener(e->{if(current()){
+     if(D1Client.isRetryableReactionFailure(e))recover(target,attempt);
+     else failed(target);
+    }});
+  }
+  void completed(ReactionWriteQueue.Target target,JSONObject data){
+   owner=data.optString("owner",owner);
+   queue.complete(target);
+   if(queue.hasPending())sendNext();else finish(null);
+  }
+  void recover(ReactionWriteQueue.Target target,int attempt){
+   // Replay the same absolute state, never the tap. Keep later taps serialized.
+   if(attempt==0){MAIN.postDelayed(()->{if(current())sendTarget(target,1);},700L);return;}
+   D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
+    if(!current())return;
+    if(data.optJSONArray("types")!=null){
+     confirmed=data;
+     if(Objects.equals(target.type,mine(data))){completed(target,data);return;}
+    }
+    failed(target);
+   }).addOnFailureListener(e->{if(current())failed(target);});
   }
   void failed(ReactionWriteQueue.Target target){
    queue.complete(target);
    if(queue.hasPending()){sendNext();return;}
-   // A timeout may mean that the write committed but its response was lost.
-   // Read the current server state before interpreting the next tap.
    UNCONFIRMED.add(key);
-   finish("Like not confirmed. Check connection and tap again.");
+   finish("Reaction couldn't be saved. Reconnect and try again.");
   }
   void finish(String error){
    if(!current())return;

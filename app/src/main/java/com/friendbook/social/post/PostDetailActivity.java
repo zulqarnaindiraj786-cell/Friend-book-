@@ -183,9 +183,6 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         cHeader.addView(older);
         if(com.friendbook.social.core.D1Client.enabled("posts")){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
 
-        TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
-        seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
-        cHeader.addView(seeLikes);
         headerBox.addView(cHeader);
         headerBox.addView(Ui.divider(this));
 
@@ -400,6 +397,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if(olderCommentsButton==null || commentsHandle==null) return;
         olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
                 !commentsHandle.error.isEmpty()?(commentsHandle.hasInitialPage()?"Retry older comments":"Retry loading comments"):commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setVisibility(commentsHandle.isLoading() || commentsHandle.hasMore()
+                || !commentsHandle.error.isEmpty()?View.VISIBLE:View.GONE);
         olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 

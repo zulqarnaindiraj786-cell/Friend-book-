@@ -18,4 +18,13 @@ public final class AdRequestBudgetTest {
         assertTrue(budget.tryRequest(false));
         assertFalse(budget.tryRequest(false));
     }
+    @Test public void recoveryCanFundOneRequestAfterInitialCreditIsSpent() {
+        AdRequestBudget budget = new AdRequestBudget();
+        assertTrue(budget.tryRequest(false));
+        assertFalse(budget.tryRequest(false));
+        budget.allowSingleRecovery(false);
+        budget.allowSingleRecovery(false);
+        assertTrue(budget.tryRequest(false));
+        assertFalse(budget.tryRequest(false));
+    }
 }

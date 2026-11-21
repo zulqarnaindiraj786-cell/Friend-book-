@@ -63,6 +63,18 @@ public final class D1Client {
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
     }
+    public static boolean isRetryableReactionFailure(Throwable error) {
+        for(Throwable cause=error;cause!=null;cause=cause.getCause()) {
+            if(cause instanceof D1HttpTransport.HttpStatusException) {
+                int status=((D1HttpTransport.HttpStatusException)cause).status;
+                return status==408 || status==429 || status>=500;
+            }
+            if(cause instanceof java.net.UnknownHostException || cause instanceof java.net.SocketException
+                    || cause instanceof java.io.InterruptedIOException || cause instanceof java.util.concurrent.TimeoutException
+                    || cause instanceof org.json.JSONException)return true;
+        }
+        return false;
+    }
     public static boolean isAccessDenied(Throwable error) {
         for(Throwable cause=error;cause!=null;cause=cause.getCause())if(cause instanceof D1HttpTransport.HttpStatusException) {
             int status=((D1HttpTransport.HttpStatusException)cause).status;
