@@ -2739,6 +2739,22 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
       if (unchangedNotificationRead(docPath,existing,body.fields||body.data||body.updates)
           || unchangedChatReceipt(docPath,uid,existing,next,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
+      const receiptFields=body.fields||body.data||body.updates||{};
+      const receiptKeys=Object.keys(receiptFields);
+      if (chatAuth.room?.[canonicalRootSnapshot] && /^chats\/[^/]+\/messages\/[^/]+$/.test(docPath)
+          && receiptKeys.length && receiptKeys.every(key=>['isSeen','isDelivered'].includes(key) && receiptFields[key]===true)) {
+        // A single UPDATE can enforce both authorized snapshots without
+        // inserting and deleting temporary guard rows.
+        const serialized=JSON.stringify(next);
+        if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+        const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents
+          SET document_json=?, owner_uid=?, update_time=? WHERE path=? AND document_json=? AND update_time=?
+          AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND document_json=?) RETURNING path`)
+          .bind(serialized,ownerOf(next,existing.owner_uid||uid),now,docPath,existing.document_json,existing.update_time,
+            chatAuth.roomPath,chatAuth.room.document_json).first();
+        if (!updated) return json({error:'Update unavailable'},503);
+        return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
+      }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') {
         const fields=body.fields||body.data||body.updates||{};

@@ -450,7 +450,7 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const beforeDelivered=profileChanges();
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isDelivered:true}})).status,200);
   assert.equal(roomReads,1,'single receipt does not re-read membership before its atomic guard');
-  assert.equal(profileChanges()-beforeDelivered,3,'one message change and one guard insert/delete');
+  assert.equal(profileChanges()-beforeDelivered,1,'a single receipt changes only the message row');
   assert.equal((await call('bob','/v1/firestore/batch','POST',batch([{op:'update',path:'chats/c1/messages/m1',updates:{isSeen:true}}]))).status,200);
   const beforeRepeatReceipt=profileChanges();
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1','PATCH',{fields:{isSeen:true}})).status,200);
@@ -887,7 +887,7 @@ test('follow and unfollow change only the actor and target atomically', async ()
 test('chat atomic guards reject concurrent room and message changes and orphan adoption', async () => {
   const sql=new DatabaseSync(':memory:'); sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
   let race=null;
-  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){
+  const db={prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>{if(race && query.includes('RETURNING path')){const fn=race;race=null;fn();}return stmt.get(...args)||null;}};}};},async batch(stmts){
     if(race){const fn=race;race=null;fn();}
     sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
   }};
@@ -909,6 +909,10 @@ test('chat atomic guards reject concurrent room and message changes and orphan a
   race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({senderId:'bob',text:'new owner'}),'chats/room/messages/m2');
   assert.notEqual((await call('alice','/v1/firestore/document?path=chats/room/messages/m2','PATCH',{fields:{text:'overwrite'}})).status,200);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m2').document_json).text,'new owner');
+  race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?')
+    .run(JSON.stringify({participants:['alice']}),'chats/room');
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/room/messages/m2','PATCH',{fields:{isSeen:true}})).status,503);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m2').document_json).isSeen,undefined);
   race=()=>insert('chats/new','chats','chats','new',{participants:['eve']});
   const res=await call('alice','/v1/firestore/batch','POST',{operations:[{op:'set',path:'chats/new/messages/m',data:{senderId:'alice',text:'private'}},{op:'set',path:'chats/new',data:{participants:['alice','bob']}}]});
   assert.notEqual(res.status,200);
