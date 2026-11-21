@@ -465,6 +465,12 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.deepEqual(exactMirror(),oldMirror,'receipt does not rewrite historical room mirror');
   sql.prepare("UPDATE friendbook_cf_documents SET updated_at=1 WHERE path='chats/c1'").run();
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/older','chats','older','alice',JSON.stringify({participants:['alice','bob']}),2);
+  const beforeStandaloneMirror=exactMirror();
+  sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.unreadCount.bob',7) WHERE path='chats/c1'");
+  const beforeStandaloneReset=profileChanges();
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/c1','PATCH',{fields:{'unreadCount.bob':0}})).status,200);
+  assert.equal(profileChanges()-beforeStandaloneReset,3,'standalone reset writes only the canonical room and its guard');
+  assert.deepEqual(exactMirror(),beforeStandaloneMirror);
   roomReads=0;
   const chatList=await (await call('bob','/v1/docs?collection=chats&limit=1')).json();
   assert.equal(chatList.documents[0].id,'c1','older list endpoint uses the current room order');

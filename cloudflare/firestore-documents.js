@@ -2274,7 +2274,7 @@ async function groupChatLedgerChanges(db,path,before,after) {
   return {guards:[guard],writes};
 }
 
-async function writeChatRoot(db,path,doc,now,row,uid) {
+async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false}={}) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   const guards=await chatRootGuards(db,path,row), before=row?decodeValue(JSON.parse(row.document_json)):null;
   const ledger=await groupChatLedgerChanges(db,path,before,doc);
@@ -2283,7 +2283,7 @@ async function writeChatRoot(db,path,doc,now,row,uid) {
   const owner=ownerOf(doc,row?.owner_uid||uid), createTime=row?.create_time||now;
   await db.batch([...guards,...ledger.guards,...ledger.writes,
     db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now),
-    db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now),
+    ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
     db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
   return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
 }
@@ -2727,7 +2727,12 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (unchangedNotificationRead(docPath,existing,body.fields||body.data||body.updates)
           || unchangedChatReceipt(docPath,uid,existing,next,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
-      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
+      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') {
+        const fields=body.fields||body.data||body.updates||{};
+        const canonicalOnly=existing[canonicalRootSnapshot] && Object.keys(fields).length===1
+          && fields[`unreadCount.${uid}`]===0;
+        return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
+      }
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
     } catch {
@@ -3147,10 +3152,22 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
             || unchangedChatReceipt(op.path,uid,entry?.existingRow,entry?.doc,fields))) unchangedBatchRows.add(op.path);
       }
     }
+    const unreadOnlyRooms=new Set();
+    if (path==='/v1/firestore/batch') {
+      const byPath=new Map();
+      for (const op of ops) {
+        const fields=op.fields||op.updates||op.data||{};
+        const onlyReset=(op.type||op.op)==='update' && Object.keys(fields).length===1 && fields[`unreadCount.${uid}`]===0;
+        byPath.set(op.path,(byPath.get(op.path)??true) && onlyReset);
+      }
+      for (const [p,onlyReset] of byPath) if (onlyReset && /^chats\/[^/]+$/.test(p)) unreadOnlyRooms.add(p);
+    }
     const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
     const previewKeys=new Set(['lastMessage','lastMessageTime','lastMessageTimeMs','unreadCount','typing','participantNames','participantPhotos']);
     const canonicalOnlyRoom=(p,entry)=>{
-      if (!messageRoomPaths.has(p) || !entry.existingRow?.[canonicalRootSnapshot]) return false;
+      if (!entry.existingRow?.[canonicalRootSnapshot]) return false;
+      if (unreadOnlyRooms.has(p)) return true;
+      if (!messageRoomPaths.has(p)) return false;
       const before=decodeValue(JSON.parse(entry.existingRow.document_json));
       return [...new Set([...Object.keys(before),...Object.keys(entry.doc)])].every(key=>
         previewKeys.has(key) || JSON.stringify(before[key])===JSON.stringify(entry.doc[key]));
