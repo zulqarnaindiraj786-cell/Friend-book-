@@ -35,6 +35,11 @@ test('typing is shared across isolates and only room members can observe or send
   const call=(uid,method,body,database)=>presenceRealtime(new Request('https://example.test/v1/presence/typing/room',{
     method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})
   }),{DB:database,REALTIME_WS_ENABLED:'true'},{uid});
+  let rejectedReads=0;
+  const guarded={prepare(){rejectedReads++;throw new Error('unexpected storage access');}};
+  assert.equal((await call('alice','PUT',{typing:'invalid'},guarded)).status,400);
+  assert.equal((await call('alice','POST',null,guarded)).status,405);
+  assert.equal(rejectedReads,0);
   const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
   const initial=changes();
   assert.equal((await call('alice','PUT',{typing:false,sessionId:'phone'},db())).status,200);

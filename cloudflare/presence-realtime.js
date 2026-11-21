@@ -114,6 +114,13 @@ export async function presenceRealtime(request, env, identity) {
     let chatId;
     try { chatId = decodeURIComponent(typing[1]); } catch { return json({ error: 'Invalid chat' }, 400); }
     if (!validId(chatId)) return json({ error: 'Invalid chat' }, 400);
+    if (request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
+    let body;
+    if (request.method === 'PUT') {
+      try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
+      if (!body || typeof body.typing !== 'boolean' || Object.keys(body).some(k=>!['typing','sessionId'].includes(k))
+          || (body.sessionId!==undefined && !validId(body.sessionId))) return json({ error: 'Invalid typing state' }, 400);
+    }
     let room;
     try {
       room = await loadChat(env.DB, chatId);
@@ -121,10 +128,6 @@ export async function presenceRealtime(request, env, identity) {
     } catch { return json({ error: 'Presence unavailable' }, 503); }
     const now = Date.now();
     if (request.method === 'PUT') {
-      let body;
-      try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
-      if (!body || typeof body.typing !== 'boolean' || Object.keys(body).some(k=>!['typing','sessionId'].includes(k))
-          || (body.sessionId!==undefined && !validId(body.sessionId))) return json({ error: 'Invalid typing state' }, 400);
       const session=body.sessionId || 'legacy';
       try {
         if (!body.typing) {
