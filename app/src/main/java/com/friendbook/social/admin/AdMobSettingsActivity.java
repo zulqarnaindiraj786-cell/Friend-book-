@@ -69,6 +69,7 @@ public class AdMobSettingsActivity extends Activity {
             new android.app.AlertDialog.Builder(this)
                     .setTitle("Banner Fill Diagnostics")
                     .setMessage(diagnostic + "\n" + ConsentManager.consentDiagnostic()
+                            + "\n\nNative placements (separate from banners):\n" + AdsConfig.statsSummary(this)
                             + "\n\nCode 3 means AdMob returned no fill. If requests are zero, check the switches, consent, and SDK status above.")
                     .setPositiveButton("OK", null)
                     .show();

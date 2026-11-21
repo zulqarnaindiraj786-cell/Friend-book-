@@ -147,6 +147,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.setAdapter(adapter);
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
+                adapter.refreshFeedBannerVisibility();
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
                 // Start one five-post page only after the user scrolls the last
                 // post into view. The last adapter row is the paging footer.

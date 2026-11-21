@@ -93,6 +93,10 @@ public class AdsConfig {
         listener = l;
     }
 
+    private static final java.util.Set<ChangeListener> placementListeners = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    public static void addPlacementListener(ChangeListener listener) { placementListeners.add(listener); }
+    public static void removePlacementListener(ChangeListener listener) { placementListeners.remove(listener); }
+
     public static void setReelsPoolListener(Runnable r) {
         reelsPoolListener = r;
     }
@@ -101,6 +105,9 @@ public class AdsConfig {
         MAIN_UI_HANDLER.post(() -> {
             if (listener != null) {
                 listener.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
+            }
+            for (ChangeListener observer : new java.util.ArrayList<>(placementListeners)) {
+                observer.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
             }
             if (reelsPoolListener != null) {
                 reelsPoolListener.run();

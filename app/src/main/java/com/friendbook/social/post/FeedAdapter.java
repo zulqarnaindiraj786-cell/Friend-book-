@@ -84,7 +84,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     public void setFeedBannersVisible(boolean visible) {
         if (feedBanners == null) return;
         feedBanners.setActive(visible);
-        if (visible) for (PostVH holder : attachedBannerPosts) feedBanners.show(holder.feedBanner, holder.bannerPostId);
+        if (visible) for (PostVH holder : attachedBannerPosts) showFeedBanner(holder);
+    }
+
+    private void showFeedBanner(PostVH holder) {
+        View anchor = holder.inlineCommentsBox.getVisibility() == View.VISIBLE ? holder.inlineCommentsBox : holder.itemView;
+        feedBanners.show(holder.feedBanner, holder.bannerPostId, anchor);
+    }
+
+    public void refreshFeedBannerVisibility() {
+        if (feedBanners != null) feedBanners.refreshVisibleSlots();
+    }
+
+    private boolean nativeAllowedByHost = true;
+    private final com.friendbook.social.core.AdsConfig.ChangeListener nativePlacementListener =
+            (id, enabled) -> applyAdsConfig(id, enabled && nativeAllowedByHost);
+
+    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
+        super.onAttachedToRecyclerView(recyclerView);
+        if (feedBanners == null) {
+            com.friendbook.social.core.AdsConfig.addPlacementListener(nativePlacementListener);
+            recyclerView.post(() -> {
+                if (recyclerView.getAdapter() == this) nativePlacementListener.onAdsConfigChanged(
+                        com.friendbook.social.core.AdsConfig.feedNativeId(), com.friendbook.social.core.AdsConfig.nativeAdsEnabled());
+            });
+        }
+    }
+
+    @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        com.friendbook.social.core.AdsConfig.removePlacementListener(nativePlacementListener);
+        super.onDetachedFromRecyclerView(recyclerView);
     }
 
     public FeedAdapter(Activity a, Host h) { this(a,h,false); }
@@ -344,9 +373,14 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     public void setAdsConfig(String id, boolean enabled) {
         if (feedBanners != null) {
-            for (PostVH holder : attachedBannerPosts) feedBanners.show(holder.feedBanner, holder.bannerPostId);
+            for (PostVH holder : attachedBannerPosts) showFeedBanner(holder);
             return;
         }
+        nativeAllowedByHost = enabled;
+        applyAdsConfig(id, enabled);
+    }
+
+    private void applyAdsConfig(String id, boolean enabled) {
         String cleanId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(id)
                 ? id.trim()
                 : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
@@ -590,8 +624,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             try {
                 PostVH holder = (PostVH) h;
                 holder.bannerPostId = posts.get(idx).id;
-                if (feedBanners != null && attachedBannerPosts.contains(holder)) feedBanners.show(holder.feedBanner,holder.bannerPostId);
                 bindPost(holder, posts.get(idx));
+                if (feedBanners != null && attachedBannerPosts.contains(holder)) showFeedBanner(holder);
                 bindFirstPostDiscoverySection(activity, (PostVH) h, idx);
             } catch (Throwable t) {
                 android.util.Log.e("HomeFeed", "bindPost failed for "
@@ -871,7 +905,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (feedBanners != null && holder instanceof PostVH) {
             PostVH post = (PostVH) holder;
             attachedBannerPosts.add(post);
-            feedBanners.show(post.feedBanner, post.bannerPostId);
+            showFeedBanner(post);
+            post.itemView.post(this::refreshFeedBannerVisibility);
         }
     }
 
@@ -879,7 +914,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (feedBanners != null && holder instanceof PostVH) {
             PostVH post = (PostVH) holder;
             attachedBannerPosts.remove(post);
-            feedBanners.clear(post.feedBanner);
+            feedBanners.detach(post.feedBanner);
         }
         super.onViewDetachedFromWindow(holder);
     }
