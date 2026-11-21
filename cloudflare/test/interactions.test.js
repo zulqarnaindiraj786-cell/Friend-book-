@@ -187,6 +187,7 @@ test('media, edits, pins, comment reactions and soft removal stay authorized', a
   assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true},{authorize:owner})).status,200);
   await call(f.env,'comments','PUT',{op:'react',id:'media1',type:'love'});
   const before=f.sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call(f.env,'comments','PUT',{op:'edit',id:'media1',text:'edited',mentions:[]})).status,200);
   assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true},{authorize:owner})).status,200);
   assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'media1',type:'love'})).status,200);
   assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);

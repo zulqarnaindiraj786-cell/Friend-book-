@@ -253,8 +253,8 @@ export async function commentsAPI(request, db, identity, resource, data, context
   } else if(data.op==='edit') {
     if(row.uid!==uid)return reply({error:'Forbidden'},403);
     let content;try{content=input({...data,mediaUrl:row.media_url||''});}catch{return reply({error:'Invalid edit'},400);}
-    return mutateComment(data.id, db.prepare('UPDATE friendbook_cf_comments SET text=? WHERE resource=? AND id=?').bind(content.text,resource,data.id),
-      db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,mentions,edited) VALUES(?,?,?,1) ON CONFLICT(resource,id) DO UPDATE SET mentions=excluded.mentions,edited=1`).bind(resource,data.id,content.mentions));
+    return mutateComment(data.id, db.prepare('UPDATE friendbook_cf_comments SET text=? WHERE resource=? AND id=? AND text IS NOT ?').bind(content.text,resource,data.id,content.text),
+      db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,mentions,edited) VALUES(?,?,?,1) ON CONFLICT(resource,id) DO UPDATE SET mentions=excluded.mentions,edited=1 WHERE friendbook_cf_comment_details.mentions IS NOT excluded.mentions OR friendbook_cf_comment_details.edited IS NOT 1`).bind(resource,data.id,content.mentions));
   } else return reply({error:'Unknown operation'},400);
 }
 export async function reactorsAPI(request,db,resource,context={}) {

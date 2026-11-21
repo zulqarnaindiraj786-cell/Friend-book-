@@ -134,6 +134,13 @@ async function canonicalRoot(db, path, fallback) {
   return row || fallback;
 }
 
+export function saveProfileProjection(db, uid, displayName, avatarUrl) {
+  return db.prepare(`INSERT INTO friendbook_cf_profiles(uid,display_name,cloudinary_avatar_url) VALUES (?,?,?)
+    ON CONFLICT(uid) DO UPDATE SET display_name=excluded.display_name, cloudinary_avatar_url=excluded.cloudinary_avatar_url
+    WHERE friendbook_cf_profiles.display_name IS NOT excluded.display_name
+       OR friendbook_cf_profiles.cloudinary_avatar_url IS NOT excluded.cloudinary_avatar_url`).bind(uid,displayName,avatarUrl).run();
+}
+
 export async function appDocuments(request, env, identity) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
@@ -244,8 +251,8 @@ export async function appDocuments(request, env, identity) {
       // This separate projection is only a convenience for /v1/me; failure must
       // never turn an already committed canonical profile update into a retry.
       if (collection==='users') try {
-        await env.DB.prepare('INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url')
-          .bind(uid,typeof profile.displayName==='string' ? profile.displayName.slice(0,200) : '',typeof profile.photoUrl==='string' ? profile.photoUrl.slice(0,2048) : null).run();
+        await saveProfileProjection(env.DB,uid,typeof profile.displayName==='string' ? profile.displayName.slice(0,200) : '',
+          typeof profile.photoUrl==='string' ? profile.photoUrl.slice(0,2048) : null);
       } catch { /* Canonical profile remains authoritative. */ }
       return json({id:docId,path:docPath,document:{...profile,id:docId}});
     }
@@ -288,10 +295,7 @@ export async function appDocuments(request, env, identity) {
       if (collection === 'users' && docId === uid) {
         const displayName = typeof merged.displayName === 'string' ? merged.displayName.slice(0, 200) : '';
         const avatarUrl = typeof merged.photoUrl === 'string' ? merged.photoUrl.slice(0, 2048) : null;
-        await env.DB.prepare(
-          'INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) '
-          + 'ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url'
-        ).bind(uid, displayName, avatarUrl).run();
+        await saveProfileProjection(env.DB,uid,displayName,avatarUrl);
       }
       return json({ id: docId, path: docPath, document: merged });
     } catch {

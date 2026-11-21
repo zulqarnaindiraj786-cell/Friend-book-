@@ -9,7 +9,7 @@ import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r
 import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
-import { appDocuments, toFirestoreFields } from './cloudflare/app-documents.js';
+import { appDocuments, toFirestoreFields, saveProfileProjection } from './cloudflare/app-documents.js';
 import { drainBroadcastPush } from './cloudflare/fcm-push.js';
 import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
@@ -175,10 +175,7 @@ export function createWorker(verify = verifyFirebaseToken) {
           try { body = await request.json(); } catch { return json({ error: 'Invalid profile payload' }, 400); }
           const displayName = typeof body?.displayName === 'string' ? body.displayName.slice(0, 200) : '';
           const avatarUrl = typeof body?.photoUrl === 'string' ? body.photoUrl.slice(0, 2048) : null;
-          await env.DB.prepare(
-            'INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) '
-            + 'ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url'
-          ).bind(uid, displayName, avatarUrl).run();
+          await saveProfileProjection(env.DB,uid,displayName,avatarUrl);
         }
         // UID comes only from a verified Firebase token, never from query/client JSON.
         const profile = await env.DB.prepare(

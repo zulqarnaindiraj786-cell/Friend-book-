@@ -744,6 +744,11 @@ async function mutateProfile(db, uid, path, body, method, now) {
         : applySet(before,body?.data || {},Boolean(body?.merge),body?.mergeFields || null,now);
       if (!profileWriteAllowed(path,uid,before,next)) return json({error:'Forbidden'},403);
       if(method==='PATCH' && redundantProfileHeartbeat(before,next,fields,now))return json(rowToDocument(existing));
+      // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
+      // and guard rows. Keep transforms and legacy promotion on the write path.
+      if(method==='PATCH' && existing?.[canonicalRootSnapshot] && Object.keys(fields).length>0
+          && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value))
+          && existing.document_json===JSON.stringify(next)) return json(rowToDocument(existing));
       return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
     } catch (error) {
       const message=String(error?.message || '');

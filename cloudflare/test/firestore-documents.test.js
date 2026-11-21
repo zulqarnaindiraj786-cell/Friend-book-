@@ -380,6 +380,12 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const put=(uid,path,data)=>call(uid,'/v1/firestore/document?path='+path,'PUT',{data});
   assert.equal((await put('alice','users/alice',{uid:'alice',displayName:'Alice',email:'private@example.test',twoFactorPin:'1234',isAdmin:false})).status,200);
+  const profileChanges=()=>sql.prepare('SELECT total_changes() n').get().n;
+  const saved=profileChanges();
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{displayName:'Alice'}})).status,200);
+  assert.equal(profileChanges(),saved,'unchanged literal profile edit uses no writes');
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{bio:'new'}})).status,200);
+  assert.ok(profileChanges()>saved,'a changed profile still commits');
   const profile=await (await call('bob','/v1/firestore/document?path=users/alice')).json();
   assert.equal(profile.data.displayName,'Alice');assert.equal(profile.data.email,undefined);assert.equal(profile.data.twoFactorPin,undefined);
   const other=await (await call('bob','/v1/docs/users/alice')).json();assert.equal(other.document.email,undefined);
