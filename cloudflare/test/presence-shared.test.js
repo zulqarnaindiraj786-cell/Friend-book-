@@ -6,7 +6,7 @@ import { readPresence, writePresence, presenceRealtime, PRESENCE_TTL_MS } from '
 
 function fixture() {
   const sql=new DatabaseSync(':memory:');
-  for (const file of ['0010_additive_presence_realtime.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0031_presence_sessions.sql','0033_typing_sessions.sql'])
+  for (const file of ['0010_additive_presence_realtime.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0031_presence_sessions.sql','0033_typing_sessions.sql','0064_presence_read_seeks.sql'])
     sql.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
   const db=()=>({prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>s.get(...args)||null,all:async()=>({results:s.all(...args)})};}};}});
   return {sql,db};
@@ -89,4 +89,27 @@ test('offline, error and close share one write until the socket is active again'
   state.active=true;
   await offline(200);
   assert.deepEqual(writes,[100,200]);
+});
+
+test('presence uses constant-size index probes for large session histories', async () => {
+  const {sql,db}=fixture(), now=2_000_000;
+  const insert=sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)');
+  for(let i=0;i<500;i++) insert.run('alice',`old${i}`,1,i%2,i+1);
+  insert.run('alice','fresh',1,1,now-10);
+  insert.run('alice','offline',0,1,now-5);
+  insert.run('alice','future',1,1,now+10);
+  insert.run('bob','hidden',1,0,now);
+  const plans=[];
+  const storage={prepare(q){const delegate=db().prepare(q);return {bind(...args){
+    if(q.includes('idx_cf_presence_visible_seen')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    return delegate.bind(...args);
+  }};}};
+  assert.deepEqual(await readPresence(storage,'alice',now),{uid:'alice',online:true,lastSeen:now+10});
+  sql.prepare("DELETE FROM friendbook_cf_presence_sessions WHERE uid='alice' AND session_id='fresh'").run();
+  assert.deepEqual(await readPresence(storage,'alice',now),{uid:'alice',online:false,lastSeen:now+10});
+  assert.deepEqual(await readPresence(storage,'bob',now),{uid:'bob',online:false,lastSeen:0});
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_presence_visible_seen/);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_presence_visible_online_seen/);
+  assert.doesNotMatch(plans.join('\n'),/SCAN friendbook_cf_presence_sessions|TEMP B-TREE/);
+  sql.close();
 });

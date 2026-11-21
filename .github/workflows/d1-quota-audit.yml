@@ -59,6 +59,7 @@ jobs:
                       if re.search(r'\bCOUNT\s*\(\s*f\.path\s*\)',sql,re.I): flags.append('one-off-overlap-audit')
                       if re.search(r'\bidx_cf_(?:legacy_)?posts_feed_page\b',sql,re.I): flags.append('bounded-feed')
                       if re.search(r'\bidx_cf_(?:legacy_)?lives_status\b',sql,re.I): flags.append('bounded-live-discovery')
+                      if re.search(r'\bidx_cf_presence_visible(?:_online)?_seen\b',sql,re.I): flags.append('bounded-presence')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       parts=(label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
                       if printed<8:
@@ -68,4 +69,18 @@ jobs:
                           focus.append(' '.join(map(str,parts)))
                   if focus: print('::notice:: Focus patterns %0A'+'%0A'.join(focus))
           query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=30),now,os.environ['AUDIT_WINDOW'])
+          if os.environ['AUDIT_METRIC']=='rowsRead':
+              midnight=now.replace(hour=0,minute=0,second=0,microsecond=0)
+              q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
+                  d1QueriesAdaptiveGroups(limit:1,filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
+                    sum { rowsRead rowsWritten } count
+                  } } } }'''%(fmt(midnight),fmt(now))
+              req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
+              try:
+                  with urllib.request.urlopen(req,timeout=25) as r: totals=json.load(r)
+                  if totals.get('errors'): print('::notice:: UTC daily analytics aggregate unavailable')
+                  else:
+                      for account in totals['data']['viewer']['accounts']:
+                          print('::notice:: UTC daily adaptive query analytics',account['d1QueriesAdaptiveGroups'],fmt(now))
+              except (urllib.error.URLError, KeyError, ValueError): print('::notice:: UTC daily analytics aggregate unavailable')
           PY
