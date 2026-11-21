@@ -118,11 +118,19 @@ export async function presenceRealtime(request, env, identity) {
           || (body.sessionId!==undefined && !validId(body.sessionId))) return json({ error: 'Invalid typing state' }, 400);
       const session=body.sessionId || 'legacy';
       try {
-        await env.DB.prepare(`INSERT INTO friendbook_cf_typing_sessions(chat_id,uid,session_id,typing,updated_at) VALUES (?,?,?,?,?)
-          ON CONFLICT(chat_id,uid,session_id) DO UPDATE SET typing=excluded.typing,updated_at=excluded.updated_at
-          WHERE excluded.updated_at>friendbook_cf_typing_sessions.updated_at
-          OR (excluded.updated_at=friendbook_cf_typing_sessions.updated_at AND friendbook_cf_typing_sessions.typing=1 AND excluded.typing=0)`)
-          .bind(chatId,uid,session,body.typing?1:0,now).run();
+        if (!body.typing) {
+          // A clear for an idle or unknown session has nothing to persist.
+          await env.DB.prepare(`UPDATE friendbook_cf_typing_sessions SET typing=0,updated_at=?
+            WHERE chat_id=? AND uid=? AND session_id=? AND typing=1 AND updated_at<=?`)
+            .bind(now,chatId,uid,session,now).run();
+        } else {
+          await env.DB.prepare(`INSERT INTO friendbook_cf_typing_sessions(chat_id,uid,session_id,typing,updated_at) VALUES (?,?,?,1,?)
+            ON CONFLICT(chat_id,uid,session_id) DO UPDATE SET typing=1,updated_at=excluded.updated_at
+            WHERE excluded.updated_at>friendbook_cf_typing_sessions.updated_at
+              AND (friendbook_cf_typing_sessions.typing=0
+                OR excluded.updated_at-friendbook_cf_typing_sessions.updated_at>=?)`)
+            .bind(chatId,uid,session,now,TYPING_TTL_MS/4).run();
+        }
         return json({ chatId, typing: body.typing });
       } catch { return json({error:'Typing unavailable'},503); }
     }

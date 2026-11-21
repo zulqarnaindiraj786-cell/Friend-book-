@@ -35,12 +35,22 @@ test('typing is shared across isolates and only room members can observe or send
   const call=(uid,method,body,database)=>presenceRealtime(new Request('https://example.test/v1/presence/typing/room',{
     method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})
   }),{DB:database,REALTIME_WS_ENABLED:'true'},{uid});
+  const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
+  const initial=changes();
+  assert.equal((await call('alice','PUT',{typing:false,sessionId:'phone'},db())).status,200);
+  assert.equal(changes(),initial,'unknown session clear writes nothing');
   assert.equal((await call('alice','PUT',{typing:true,sessionId:'phone'},db())).status,200);
+  const active=changes();
+  assert.equal((await call('alice','PUT',{typing:true,sessionId:'phone'},db())).status,200);
+  assert.equal(changes(),active,'rapid repeat writes nothing');
   assert.equal((await call('alice','PUT',{typing:true,sessionId:'tablet'},db())).status,200);
   assert.equal((await (await call('bob','GET',null,db())).json()).typing,true);
   assert.equal((await call('mallory','GET',null,db())).status,403);
   assert.equal((await call('mallory','PUT',{typing:true},db())).status,403);
   assert.equal((await call('alice','PUT',{typing:false,sessionId:'phone'},db())).status,200);
+  const cleared=changes();
+  assert.equal((await call('alice','PUT',{typing:false,sessionId:'phone'},db())).status,200);
+  assert.equal(changes(),cleared,'repeat clear writes nothing');
   assert.equal((await (await call('bob','GET',null,db())).json()).typing,true,'one device must not hide another');
   assert.equal((await call('alice','PUT',{typing:false,sessionId:'tablet'},db())).status,200);
   assert.equal((await (await call('bob','GET',null,db())).json()).typing,false);
