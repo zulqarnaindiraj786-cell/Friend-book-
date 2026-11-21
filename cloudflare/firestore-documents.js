@@ -399,6 +399,35 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
         if (!/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) throw error;
       }
     }
+    const order=Array.isArray(spec?.orderBy) && spec.orderBy.length===1 ? spec.orderBy[0] : null;
+    const lower=Array.isArray(spec?.startAt) && spec.startAt.length===1 ? spec.startAt[0] : null;
+    if (order?.field==='displayName' && order.direction!=='DESCENDING' && !spec.startAfter && !spec.endBefore
+        && typeof lower==='string' && /^[ -~]{1,60}$/.test(lower)
+        && Array.isArray(spec.endAt) && spec.endAt.length===1 && spec.endAt[0]===lower+'\uf8ff') {
+      const upper=lower.slice(0,-1)+String.fromCharCode(lower.charCodeAt(lower.length-1)+1);
+      const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
+    WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
+    WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
+    WHEN json_type(document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
+    ELSE json_extract(document_json,'$.displayName') END`;
+      try {
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+            WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=?
+            AND json_extract(document_json,'$.displayName')<?`).bind(lower,upper).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
+            WHERE a.collection='users' AND (${legacyName})>=? AND (${legacyName})<? AND NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')
+            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
+            WHERE a.collection='users' AND (${legacyName})=1 AND NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')`).bind(lower,upper).all(),
+        ]);
+        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        if (new Set(rows.map(row=>row.doc_id)).size===rows.length) return rows;
+      } catch(error) {
+        if (!/no such index: idx_cf_(?:users_display_name|legacy_people_cursor_prefix)/.test(String(error))) throw error;
+      }
+    }
     const lo=filters?.find(f=>f.field==='displayName' && f.op==='>=')?.value;
     const hi=filters?.find(f=>f.field==='displayName' && f.op==='<=')?.value;
     if (typeof lo==='string' && /^[\x20-\x7e]{2,60}$/.test(lo) && hi===lo+'\uf8ff') {

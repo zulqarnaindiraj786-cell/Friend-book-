@@ -2093,6 +2093,8 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   const sql = new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema, appSchema, schema,
     readFileSync(new URL('../migrations/0053_people_name_prefix.sql', import.meta.url), 'utf8')]) sql.exec(ddl);
+  sql.exec(readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql', import.meta.url), 'utf8'));
+  const plans=[];
   const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   put.run('users/actor','users','users','actor','actor','{"displayName":"Viewer"}',1,1);
@@ -2100,7 +2102,7 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   put.run('users/match','users','users','match','match','{"displayName":"Amir"}',1,1);
   legacy.run('users/changed','users','changed','changed','{"displayName":"Amir old"}',1);
   legacy.run('users/legacy','users','legacy','legacy','{"fields":{"displayName":{"stringValue":"Amina"}}}',1);
-  const db={prepare(q){const s=sql.prepare(q);return {bind(...a){return {first:async()=>s.get(...a)||null,all:async()=>({results:s.all(...a)})};}};}};
+  const db={prepare(q){const s=sql.prepare(q);return {bind(...a){return {first:async()=>s.get(...a)||null,all:async()=>{if(q.includes('idx_cf_legacy_people_cursor_prefix')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...a).map(row=>row.detail));return {results:s.all(...a)};}};}};}};
   const response=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
     method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},
     body:JSON.stringify({parent:'users',limit:12,filters:[{field:'displayName',op:'>=',value:'Am'},{field:'displayName',op:'<=',value:'Am\uf8ff'}]}),
@@ -2109,6 +2111,22 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   assert.deepEqual((await response.json()).documents.map(doc=>doc.id).sort(),['legacy','match']);
   const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?").all('Am','An');
   assert.ok(plan.some(row=>row.detail.includes('idx_cf_users_display_name')));
+  legacy.run('users/primitive','users','primitive','primitive','{"fields":{"displayName":"Amber"}}',1);
+  legacy.run('users/coerced','users','coerced','coerced','{"fields":{"displayName":{"stringValue":["Amanda"]}}}',1);
+  for(let i=0;i<250;i++) legacy.run(`users/unrelated${i}`,'users',`unrelated${i}`,'',JSON.stringify({displayName:'No match'}),1);
+  const mentions=async extra=>{
+    const r=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
+      method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},body:JSON.stringify({
+        parent:'users',limit:10,orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:['Am'],endAt:['Am\uf8ff'],...extra,
+      }),
+    }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+    assert.equal(r.status,200);return (await r.json()).documents.map(doc=>doc.id);
+  };
+  const wanted=['coerced','primitive','legacy','match'];
+  assert.deepEqual(await mentions({}),wanted);
+  assert.deepEqual(await mentions({endBefore:[]}),wanted); // no-op cursor forces compatibility path
+  assert.match(plans.join('\n'),/SEARCH a USING INDEX idx_cf_legacy_people_cursor_prefix/);
+
 });
 
 test('notification pages use bounded per-store reads and do not expose stale mirrors', async () => {
