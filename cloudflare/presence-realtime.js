@@ -54,18 +54,34 @@ export function offlineOnce(state, persist) {
 export async function readPresence(db, uid, now) {
   let row;
   try {
-    row=await db.prepare(`SELECT
-      EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions WHERE uid=?1) AS has_session,
-      (SELECT last_seen FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_seen
-        WHERE uid=?1 AND visible=1 ORDER BY last_seen DESC LIMIT 1) AS last_seen,
-      EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
-        WHERE uid=?1 AND visible=1 AND online=1 AND last_seen>?2 AND last_seen<=?3) AS online`)
+    row=await db.prepare(`WITH snapshot AS MATERIALIZED (SELECT
+        EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions WHERE uid=?1) AS has_session,
+        (SELECT last_seen FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
+          WHERE uid=?1 AND visible=1 AND online=1 ORDER BY last_seen DESC LIMIT 1) AS online_seen,
+        (SELECT last_seen FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_offline_seen
+          WHERE uid=?1 AND visible=1 AND online=0 ORDER BY last_seen DESC LIMIT 1) AS offline_seen,
+        EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
+          WHERE uid=?1 AND visible=1 AND online=1 AND last_seen>?2 AND last_seen<=?3) AS online)
+      SELECT has_session,online,COALESCE(MAX(online_seen,offline_seen),online_seen,offline_seen) AS last_seen
+      FROM snapshot`)
       .bind(uid,now-PRESENCE_TTL_MS,now).first();
   } catch(error) {
-    if (!/no such index: idx_cf_presence_visible_(?:online_)?seen/.test(String(error))) throw error;
-    row=await db.prepare(`SELECT COUNT(*) AS has_session, MAX(CASE WHEN visible=1 THEN last_seen END) AS last_seen,
-      MAX(CASE WHEN online=1 AND visible=1 AND last_seen>? AND last_seen<=? THEN 1 ELSE 0 END) AS online
-      FROM friendbook_cf_presence_sessions WHERE uid=?`).bind(now-PRESENCE_TTL_MS,now,uid).first();
+    if (!/no such index: idx_cf_presence_visible_(?:on|off)line_seen/.test(String(error))) throw error;
+    try {
+      // Existing deployments can use their bounded indexes until 0071 applies.
+      row=await db.prepare(`SELECT
+        EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions WHERE uid=?1) AS has_session,
+        (SELECT last_seen FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_seen
+          WHERE uid=?1 AND visible=1 ORDER BY last_seen DESC LIMIT 1) AS last_seen,
+        EXISTS(SELECT 1 FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
+          WHERE uid=?1 AND visible=1 AND online=1 AND last_seen>?2 AND last_seen<=?3) AS online`)
+        .bind(uid,now-PRESENCE_TTL_MS,now).first();
+    } catch (legacyError) {
+      if (!/no such index: idx_cf_presence_visible_(?:online_)?seen/.test(String(legacyError))) throw legacyError;
+      row=await db.prepare(`SELECT COUNT(*) AS has_session, MAX(CASE WHEN visible=1 THEN last_seen END) AS last_seen,
+        MAX(CASE WHEN online=1 AND visible=1 AND last_seen>? AND last_seen<=? THEN 1 ELSE 0 END) AS online
+        FROM friendbook_cf_presence_sessions WHERE uid=?`).bind(now-PRESENCE_TTL_MS,now,uid).first();
+    }
   }
   if (Number(row?.has_session)>0) return {uid,online:row.online===1,lastSeen:Number(row.last_seen)||0};
   // Only pre-migration installations can have an old legacy presence row.

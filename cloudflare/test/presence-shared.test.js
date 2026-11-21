@@ -140,16 +140,24 @@ test('presence uses constant-size index probes for large session histories', asy
   insert.run('alice','offline',0,1,now-5);
   insert.run('alice','future',1,1,now+10);
   insert.run('bob','hidden',1,0,now);
+  const prior=await readPresence(db(),'alice',now);
+  const ddl=readFileSync(new URL('../migrations/0071_split_presence_visibility_indexes.sql',import.meta.url),'utf8');
+  assert.equal(sql.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='idx_cf_presence_visible_seen'").get().n,1);
+  sql.exec(ddl);
+  assert.equal(sql.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='idx_cf_presence_visible_seen'").get().n,0);
   const plans=[];
   const storage={prepare(q){const delegate=db().prepare(q);return {bind(...args){
-    if(q.includes('idx_cf_presence_visible_seen')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    if(q.includes('idx_cf_presence_visible_offline_seen')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
     return delegate.bind(...args);
   }};}};
-  assert.deepEqual(await readPresence(storage,'alice',now),{uid:'alice',online:true,lastSeen:now+10});
+  assert.deepEqual(await readPresence(storage,'alice',now),prior);
+  assert.deepEqual(prior,{uid:'alice',online:true,lastSeen:now+10});
   sql.prepare("DELETE FROM friendbook_cf_presence_sessions WHERE uid='alice' AND session_id='fresh'").run();
   assert.deepEqual(await readPresence(storage,'alice',now),{uid:'alice',online:false,lastSeen:now+10});
+  sql.prepare("DELETE FROM friendbook_cf_presence_sessions WHERE uid='alice' AND session_id='future'").run();
+  assert.deepEqual(await readPresence(storage,'alice',now),{uid:'alice',online:false,lastSeen:now-5});
   assert.deepEqual(await readPresence(storage,'bob',now),{uid:'bob',online:false,lastSeen:0});
-  assert.match(plans.join('\n'),/SEARCH.*idx_cf_presence_visible_seen/);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_presence_visible_offline_seen/);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_presence_visible_online_seen/);
   assert.doesNotMatch(plans.join('\n'),/SCAN friendbook_cf_presence_sessions|TEMP B-TREE/);
   sql.close();
