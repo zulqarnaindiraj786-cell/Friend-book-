@@ -55,6 +55,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private int historyPageAttempt;
     private TextView historyButton;
     private android.widget.ProgressBar historySpinner;
+    private TextView threadStatus;
     private boolean chatVisible;
     private String messageActor;
     // Until the next snapshot reflects the acknowledgement, don't write the same receipt again.
@@ -276,10 +277,13 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView list,int dx,int dy) {
                 LinearLayoutManager manager=(LinearLayoutManager)list.getLayoutManager();
-                if(dy<0 && !historyFailed && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
+                if(dy<0 && list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !historyFailed && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
             }
         });
         android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(rv,new android.widget.FrameLayout.LayoutParams(-1,-1));
+        threadStatus=Ui.tv(this,"Opening conversation…",14,Ui.sub(this));
+        threadStatus.setGravity(Gravity.CENTER); Ui.pad(threadStatus,20,8,20,8);
+        messageWrap.addView(threadStatus,new android.widget.FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));
         historySpinner=new android.widget.ProgressBar(this);historySpinner.setVisibility(View.GONE);historySpinner.setContentDescription("Loading older messages");
         messageWrap.addView(historySpinner,new android.widget.FrameLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26),Gravity.TOP|Gravity.CENTER_HORIZONTAL));
         root.addView(messageWrap, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -569,34 +573,75 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
         if(!java.util.Objects.equals(messageActor,Fb.uid())){
-            messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;messageActor=Fb.uid();
+            messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;adapter.setData(new ArrayList<>());messageActor=Fb.uid();
         }
         historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
         final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
         final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
         final boolean[] firstServer={true};
+        final Set<String> previewIds=new HashSet<>();
         final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (snap == null || snap.getMetadata().isFromCache() || chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if (chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if(snap==null) {
+                        if(err!=null && (err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED
+                                || err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.UNAUTHENTICATED)) {
+                            historyMessages.clear();messageSnapshots.clear();pendingMessages.clear();previewIds.clear();
+                            historyRanges.clear();historyCursor=null;lastServerMessage=null;historyMore=false;
+                            adapter.setData(new ArrayList<>());
+                        }
+                        setThreadStatus("Conversation unavailable. Reopen to retry.");return;
+                    }
+                    if(snap.getMetadata().isFromCache()) {
+                        if(adapter.getItemCount()>0 || snap.isEmpty())return;
+                        List<Models.Message> preview=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+                        for(DocumentSnapshot doc:snap) {
+                            Models.Message message=Models.Message.fromDoc(doc);
+                            historyMessages.put(message.id,message);previewIds.add(message.id);
+                            if(!hidden.contains(message.id))preview.add(message);
+                        }
+                        historyCursor=snap.getDocuments().get(0);lastServerMessage=snap.getDocuments().get(snap.size()-1);
+                        historyMore=snap.size()==10;
+                        adapter.setData(preview);setThreadStatus("Opening conversation…");
+                        if(!preview.isEmpty()){initialScrollDone=true;rv.scrollToPosition(preview.size()-1);}
+                        return; // Display only: no receipts, sound or inbox handoff from disk.
+                    }
+                    final boolean openedFromCache=firstServer[0] && !previewIds.isEmpty();
+                    if(openedFromCache) {
+                        if(snap.isEmpty()) {
+                            for(String id:previewIds)historyMessages.remove(id);
+                            historyCursor=null;lastServerMessage=null;historyMore=false;
+                        } else {
+                            Models.Message oldest=Models.Message.fromDoc(snap.getDocuments().get(0));
+                            java.util.Comparator<Models.Message> order=java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id);
+                            for(String id:previewIds) {
+                                Models.Message cached=historyMessages.get(id);
+                                if(cached!=null && (snap.size()<10 || order.compare(cached,oldest)>=0))historyMessages.remove(id);
+                            }
+                            if(snap.size()<10){historyCursor=snap.getDocuments().get(0);historyMore=false;}
+                        }
+                        previewIds.clear();
+                    }
                     if(chatVisible && !snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty())
                         handOffInboxHead(chatActor, snap.getDocuments().get(snap.size()-1));
                     boolean bridged=false;
                     if(!snap.getMetadata().isFromCache() && !snap.getMetadata().hasPendingWrites() && !snap.isEmpty()){
-                        Set<String> known=firstServer[0]?knownAtAttach:new HashSet<>(historyMessages.keySet());
+                        Set<String> known=firstServer[0]?new HashSet<>(knownAtAttach):new HashSet<>(historyMessages.keySet());
+                        if(firstServer[0])known.addAll(historyMessages.keySet());
                         if(!firstServer[0])known.addAll(messageSnapshots.keySet());
                         Set<String> headIds=new HashSet<>();for(DocumentSnapshot doc:snap)headIds.add(doc.getId());
                         if(lastServerMessage!=null && historyCursor!=null && !known.isEmpty() && java.util.Collections.disjoint(known,headIds)){
                             historyRanges.push(new HistoryResume(historyCursor,historyEnd,historyMore,maskedHistoryIds));
-                            historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=new HashSet<>(known);bridged=true;
+                            historyEnd=lastServerMessage;historyCursor=snap.getDocuments().get(0);historyMore=true;maskedHistoryIds=openedFromCache?new HashSet<>():new HashSet<>(known);bridged=true;
                         }
                         if(historyCursor==null){historyCursor=snap.getDocuments().get(0);historyMore=snap.size()==10;}
                         lastServerMessage=snap.getDocuments().get(snap.size()-1);firstServer[0]=false;
                     }
-                    if(snap.getDocumentChanges(com.friendbook.social.d1.documents.MetadataChanges.EXCLUDE).isEmpty() && !bridged){
+                    if(snap.getDocumentChanges(com.friendbook.social.d1.documents.MetadataChanges.EXCLUDE).isEmpty() && !bridged && !snap.isEmpty()){
                         boolean cached=snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites(),playSound=false;
                         boolean eligible=soundGate.begin(cached);Set<String> hidden=hiddenMsgs();
                         for(DocumentSnapshot doc:snap){Models.Message m=messageSnapshots.get(doc.getId());
@@ -648,6 +693,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     String anchorId = anchor == null ? null : adapter.idAt(first);
                     int offset = anchor == null ? 0 : lm.getDecoratedTop(anchor) - rv.getPaddingTop();
                     adapter.setData(list);
+                    setThreadStatus("No messages yet");
                     if (!nearBottom && anchorId != null && rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
                         for (int i=0;i<list.size();i++) if (anchorId.equals(list.get(i).id)) {
                             if (i != first) lm.scrollToPositionWithOffset(i,offset);
@@ -663,6 +709,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     }
 
                 });
+    }
+
+    private void setThreadStatus(String text) {
+        threadStatus.setText(text);
+        threadStatus.setVisibility(adapter.getItemCount()==0?View.VISIBLE:View.GONE);
     }
 
     private void handOffInboxHead(String actor, DocumentSnapshot doc) {
@@ -693,19 +744,19 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
+        older.limit(11).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     historySpinner.removeCallbacks(deadline);
                     if(!isCurrentHistoryPage(generation,attempt,actor)) return;
                     if(historyCursor!=requestedCursor){failHistoryPage(generation,attempt,actor);return;}
-                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
-                    if(!page.isEmpty()) historyCursor=page.getDocuments().get(page.size()-1);
-                    if(historyEnd!=null && page.size()<10){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()>10;
+                    if(!page.isEmpty()) historyCursor=page.getDocuments().get(Math.min(10,page.size())-1);
+                    if(historyEnd!=null && !historyMore){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
                     LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
                     int first=manager.findFirstVisibleItemPosition(); View anchor=manager.findViewByPosition(first);
                     int top=anchor==null?0:anchor.getTop();
                     String anchorId=adapter.idAt(first);
-                    for(DocumentSnapshot doc:page) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
+                    for(DocumentSnapshot doc:page.getDocuments().subList(0,Math.min(10,page.size()))) { Models.Message message=Models.Message.fromDoc(doc); historyMessages.put(message.id,message); }
                     Map<String,Models.Message> combined=new HashMap<>(historyMessages); combined.putAll(messageSnapshots); pendingMessages.mergeInto(combined);
                     Set<String> hidden=hiddenMsgs(); List<Models.Message> rows=new ArrayList<>(combined.values());
                     rows.removeIf(message -> hidden.contains(message.id) || maskedHistoryIds.contains(message.id)); rows.sort(java.util.Comparator.comparingLong((Models.Message m)->m.createdAt).thenComparing(m->m.id));

@@ -361,6 +361,7 @@ public class D1DocumentStore {
                     String cachedJson = getCachedQuery(queryCacheKey(query, entry.actor));
                     if (cachedJson != null) {
                         org.json.JSONArray cached = new org.json.JSONArray(cachedJson);
+                        if (ListenerPollingPolicy.isChatMessages(query.parentPath)) restoreChatRevisions(entry,cached);
                         QuerySnapshot snapshot = query.parseQuerySnapshot(cached, true);
                         entry.deliveryState.cached(cached.toString());
                         mainHandler.post(() -> {
@@ -527,6 +528,30 @@ public class D1DocumentStore {
         }
     }
 
+    // Persist the exact server tokens alongside their message bodies in a single cache entry.
+    // Do not guess tokens from timestamps: edits and receipts may share a timestamp.
+    private static void restoreChatRevisions(QueryListenerEntry entry, org.json.JSONArray rows) throws org.json.JSONException {
+        org.json.JSONObject known=new org.json.JSONObject();
+        boolean complete=rows.length()<=40;
+        for(int i=0;i<rows.length();i++) {
+            org.json.JSONObject row=rows.getJSONObject(i);
+            Object revision=row.remove("__cachedListenerRevision");
+            if(revision instanceof String && !((String)revision).isEmpty())known.put(row.getString("id"),revision);
+            else complete=false;
+        }
+        if(complete){entry.revisions=known;entry.priorRows=rows;}
+    }
+
+    private static String chatRowsForCache(org.json.JSONArray rows,org.json.JSONObject revisions) throws org.json.JSONException {
+        org.json.JSONArray copy=new org.json.JSONArray(rows.toString());
+        for(int i=0;i<copy.length();i++) {
+            org.json.JSONObject row=copy.getJSONObject(i);
+            String revision=revisions.optString(row.getString("id"));
+            if(!revision.isEmpty())row.put("__cachedListenerRevision",revision);
+        }
+        return copy.toString();
+    }
+
     private void deliverQuery(QueryListenerEntry entry) {
         if (!entry.active) return;
         try {
@@ -559,7 +584,8 @@ public class D1DocumentStore {
             } else arr=D1DocumentTransport.query(body);
             if (!entry.actor.equals(authenticatedUid())) return;
             String fp = arr.toString();
-            cacheQuery(queryCacheKey(entry.query, entry.actor), fp);
+            cacheQuery(queryCacheKey(entry.query, entry.actor), ListenerPollingPolicy.isChatMessages(entry.query.parentPath)
+                    ? chatRowsForCache(arr,entry.revisions) : fp);
             // Cached rows are not server confirmation: the first server result
             // must be delivered even when its contents match the cached snapshot.
             boolean changed = entry.deliveryState.server(fp);
