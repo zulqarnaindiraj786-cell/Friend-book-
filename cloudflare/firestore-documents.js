@@ -1157,8 +1157,15 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
-    for(let i=0;i<merged.length && visible.length<spec.limit;i+=chunk) {
-      visible.push(...await visibleDocuments(db,uid,root,merged.slice(i,i+chunk),requestUserReads));
+    let deniedBurst=1;
+    for(let i=0;i<merged.length && visible.length<spec.limit;) {
+      // Do not authorize the entire SQL lookahead when a short page is nearly
+      // full. If a candidate is hidden, advance and fill the vacant slot.
+      const count=Math.min(chunk,Math.max(deniedBurst,spec.limit-visible.length));
+      const allowed=await visibleDocuments(db,uid,root,merged.slice(i,i+count),requestUserReads);
+      visible.push(...allowed);
+      deniedBurst=allowed.length ? 1 : Math.min(chunk,count*2);
+      i+=count;
     }
     if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
     cursor=nextCursor;

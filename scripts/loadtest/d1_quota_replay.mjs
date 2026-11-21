@@ -10,16 +10,19 @@ for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort())
   sql.exec(readFileSync(new URL(file,migrations),'utf8'));
 }
 let statements=0;
+const executeWrite=Symbol('executeWrite');
 const db={
-  prepare(query){const stmt=sql.prepare(query);return {bind(...args){return {
+  prepare(query){const stmt=sql.prepare(query);return {bind(...args){const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;return stmt.get(...args)||null;},
     all:async()=>{statements++;return {results:stmt.all(...args)};},
-    run:async()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};},
+    run:async()=>write(), [executeWrite]:write,
   };}};},
-  async batch(writes){sql.exec('BEGIN');try{for(const write of writes)await write.run();sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}},
+  async batch(writes){sql.exec('BEGIN');try{for(const write of writes)write[executeWrite]();sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}},
 };
 const users=Number(process.argv[2]??30);
 assert.ok(Number.isInteger(users)&&users>=2&&users<=1000&&users%2===0,'use an even user count between 2 and 1000');
+const concurrency=Number(process.argv[3]??1);
+assert.ok(Number.isInteger(concurrency)&&concurrency>=1&&concurrency<=users,'concurrency must be between 1 and the user count');
 const now=Date.now();
 const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
 const add=(parent,id,owner,data)=>insert.run(`${parent}/${id}`,parent,parent.split('/').at(-1),id,owner,JSON.stringify(data),now,now);
@@ -33,10 +36,11 @@ const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay'};
 async function call(uid,path,method='GET',body){
   const res=await app.fetch(new Request(`https://offline.invalid${path}`,{method,
     headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
-  assert.ok(res.ok,`${path} returned HTTP ${res.status}: ${await res.text()}`);
+  assert.ok(res.ok,`${path} returned HTTP ${res.status}: ${res.ok ? '' : await res.text()}`);
+  return res.json();
 }
 const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
-const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,workloads:{}};
+const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,concurrency,workloads:{}};
 async function measure(name,requests,run){
   const before=changes(), start=statements;
   await run();
@@ -46,13 +50,37 @@ const heartbeat=uid=>call(uid,`/v1/firestore/document?path=users/${uid}`,'PATCH'
 const messages=i=>`chats/room${i}/messages/message0`;
 const batch=(uid,operations)=>call(uid,'/v1/firestore/batch','POST',{operations});
 const receipt=i=>batch(`user${i+1}`, [{op:'update',path:messages(i),updates:{isDelivered:true,isSeen:true}},{op:'update',path:`chats/room${i}`,updates:{[`unreadCount.user${i+1}`]:0}}]);
-await measure('unchangedProfileHeartbeat',users,async()=>{for(let i=0;i<users;i++)await heartbeat(`user${i}`);});
-await measure('sendMessageAndUpdateRoom',users/2,async()=>{for(let i=0;i<users;i+=2)await batch(`user${i}`,[
-  {op:'set',path:messages(i),data:{senderId:`user${i}`,receiverId:`user${i+1}`,text:'offline workload'}},
-  {op:'update',path:`chats/room${i}`,updates:{lastMessage:'offline workload',[`unreadCount.user${i+1}`]:1}},
-]);});
-await measure('firstReceiptAndUnreadReset',users/2,async()=>{for(let i=0;i<users;i+=2)await receipt(i);});
-await measure('duplicateReceiptAndUnreadReset',users/2,async()=>{for(let i=0;i<users;i+=2)await receipt(i);});
+async function wave(count, operation) {
+  for(let start=0;start<count;start+=concurrency){
+    await Promise.all(Array.from({length:Math.min(concurrency,count-start)},(_,offset)=>operation(start+offset)));
+  }
+}
+await measure('unchangedProfileHeartbeat',users,()=>wave(users,i=>heartbeat(`user${i}`)));
+await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
+  const i=slot*2;
+  return batch(`user${i}`,[
+    {op:'set',path:messages(i),data:{senderId:`user${i}`,receiverId:`user${i+1}`,text:'offline workload'}},
+    {op:'update',path:`chats/room${i}`,updates:{lastMessage:'offline workload',[`unreadCount.user${i+1}`]:1}},
+  ]);
+}));
+await measure('firstReceiptAndUnreadReset',users/2,()=>wave(users/2,i=>receipt(i*2)));
+await measure('duplicateReceiptAndUnreadReset',users/2,()=>wave(users/2,i=>receipt(i*2)));
+for(let i=0;i<users;i+=2){
+  const row=sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?');
+  const message=JSON.parse(row.get(messages(i)).document_json);
+  assert.equal(message.receiverId,`user${i+1}`);
+  assert.equal(message.isSeen,true);
+  assert.equal(message.isDelivered,true);
+  assert.equal(JSON.parse(row.get(`chats/room${i}`).document_json).unreadCount[`user${i+1}`],0);
+}
+for(const root of ['posts','reels']){
+  for(let i=0;i<40;i++) add(root,`item${i}`,'user0',{authorId:'user0',createdAt:now+i,privacy:'Public'});
+  add(root,'private','user0',{authorId:'user0',createdAt:now+100,privacy:'Only me'});
+  await measure(`page-${root}`,users-1,()=>wave(users-1,async index=>{
+    const page=await call(`user${index+1}`,'/v1/firestore/query','POST',{parent:root,limit:5,orderBy:[{field:'createdAt',direction:'DESCENDING'}]});
+    assert.deepEqual(page.documents.map(doc=>doc.id),['item39','item38','item37','item36','item35']);
+  }));
+}
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
 console.log(JSON.stringify(report,null,2));
