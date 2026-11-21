@@ -256,7 +256,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
     return reply({pinned:await pin()});
   } else if(data.op==='remove') {
     if(row.uid!==uid && context.owner!==uid && !context.moderator)return reply({error:'Forbidden'},403);
-    await db.batch([db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES(?,?,1) ON CONFLICT(resource,id) DO UPDATE SET removed=1`).bind(resource,data.id),
+    await db.batch([db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES(?,?,1) ON CONFLICT(resource,id) DO UPDATE SET removed=1 WHERE friendbook_cf_comment_details.removed IS NOT 1`).bind(resource,data.id),
       db.prepare('UPDATE friendbook_cf_comment_pins SET id=NULL WHERE resource=? AND id=?').bind(resource,data.id)]);
     return reply({removed:data.id,pinned:await pin()});
   } else if(data.op==='edit') {

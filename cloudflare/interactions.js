@@ -34,12 +34,18 @@ const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', 
 
 // Shared by explicit post details and the bounded Home response; no writes here.
 function engagementStatement(db, resource, uid, blocked, useTotals = true) {
-  const countFor = condition => `(SELECT COUNT(*) FROM friendbook_cf_comments c
-      LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
-      WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
-        AND c.uid ${condition} (SELECT value FROM json_each(?3)))`;
+  // Seek each blocked author instead of scanning the resource's entire comment
+  // history to subtract a usually tiny subset. DISTINCT prevents double counts.
+  const blockedCount = `(SELECT COUNT(*) FROM (SELECT DISTINCT value FROM json_each(?3)) blocked
+      CROSS JOIN friendbook_cf_comments c INDEXED BY idx_cf_comment_resource_author
+        ON c.resource=?2 AND c.uid=blocked.value
+      LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+      WHERE COALESCE(d.removed,0)=0)`;
   const count = useTotals ? `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
-        ${blocked.length ? `- ${countFor('IN')}` : ''}` : countFor('NOT IN');
+        ${blocked.length ? `- ${blockedCount}` : ''}` : `(SELECT COUNT(*) FROM friendbook_cf_comments c
+      LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+      WHERE c.resource=?2 AND COALESCE(d.removed,0)=0
+        AND c.uid NOT IN (SELECT value FROM json_each(?3)))`;
   return db.prepare(`SELECT
     ${reactionTypesSql} AS types_json,
     ${count} AS total_comments,
@@ -60,7 +66,7 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
     try {
       return await engagementStatement(db,resource,uid,blocked).first();
     } catch (error) {
-      if (!String(error).includes('no such table: friendbook_cf_visible_comment_totals')) throw error;
+      if (!/no such (table: friendbook_cf_visible_comment_totals|index: idx_cf_comment_resource_author)/.test(String(error))) throw error;
       return engagementStatement(db,resource,uid,blocked,false).first();
     }
   };

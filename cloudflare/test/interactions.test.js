@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './fixtures/interaction-db.js';
 import { readFileSync } from 'node:fs';
-import { interactions } from '../interactions.js';
+import { interactions, engagementSummary } from '../interactions.js';
 import { authorizePost } from '../firebase-post-access.js';
 import { createWorker } from '../../worker.js';
 const identity = { uid: 'user1', project: 'friendbook-17551', token: 'test' };
@@ -379,4 +379,26 @@ test('post detail returns only newer comments, stable continuation and reaction 
   assert.deepEqual(last.comments.map(c=>c.id),['c12','c13','c14']);
   assert.equal(last.next,null);
   assert.equal((await call(f.env,'comments','GET',undefined,{query:`?before=${after}&after=${after}`})).status,400);
+});
+
+
+test('engagement subtracts blocked comments using author seeks without double counting', async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(`WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<2000)
+    INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at)
+    SELECT 'posts/p1', 'c'||i, CASE WHEN i<=2 THEN 'blocked' ELSE 'allowed' END, 'text',i FROM seq;
+    INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES('posts/p1','c1',1);`);
+  const plans=[];
+  const db={prepare(query){
+    if(!plans.length && query.includes('CROSS JOIN friendbook_cf_comments')) {
+      const literal=query.replaceAll('?1',"'viewer'").replaceAll('?2',"'posts/p1'").replaceAll('?3',"'[\"blocked\",\"blocked\"]'");
+      plans.push(...f.sql.prepare('EXPLAIN QUERY PLAN '+literal).all().map(row=>row.detail));
+    }
+    return f.env.DB.prepare(query);
+  }};
+  const summarize=()=>engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.equal((await summarize()).comments,1998);
+  assert.ok(plans.some(plan=>/SEARCH c USING INDEX idx_cf_comment_resource_author \(resource=\? AND uid=\?\)/.test(plan)),plans.join('\n'));
+  f.sql.exec('DROP INDEX idx_cf_comment_resource_author');
+  assert.equal((await summarize()).comments,1998,'old schemas retain the compatible path');
 });
