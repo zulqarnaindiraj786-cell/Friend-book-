@@ -1336,16 +1336,17 @@ async function boundedNotificationPage(db,uid,spec) {
   const byRecipient=` AND ${field}=?`;
   const byLegacyRecipient=` AND (${legacyField})=?`;
   const unreadOnly=unread.length?" AND json_type(document_json,'$.isRead')='false'":'';
+  const delta=spec?.limitToLast===true && !!spec.endBefore && !spec.startAfter;
   if (spec?.parent!=='notifications' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
-      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'  || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'  || (!delta && (spec.limitToLast || spec.endBefore)) || spec.startAt || spec.endAt
       || (spec.orderBy[0].fieldPath!==undefined) || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
   let cursor=null;
-  if (spec.startAfter) {
-    const c=spec.startAfter;
+  if (spec.startAfter || delta) {
+    const c=delta?spec.endBefore:spec.startAfter;
     if (!Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
     const rank=typeof c[0]==='number'?2:c[0]?.__type==='timestamp'?4:0;
     const time=rank===2?c[0]:c[0]?.millis;
-    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
+    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER || (rank===4 && !Number.isInteger(time))) return null;
     cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
   }
   const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
@@ -1368,30 +1369,48 @@ async function boundedNotificationPage(db,uid,spec) {
   if (canonicalBad || legacyBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
-  const chunk=spec.limit;
+  const chunk=spec.limit, direction=delta?'ASC':'DESC';
+  const seekSpec=delta?{...spec,orderBy:[{field:'createdAt',direction:'ASCENDING'}]}:spec;
   const visible=[];
+  const ordered=`ORDER BY ${rank} ${direction},${time} ${direction},a.doc_id ${direction} LIMIT ?`;
+  async function readStore(legacy,bound,args) {
+    if(!legacy)return db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+      FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
+      ${ordered}`).bind(...args).all();
+    return db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path) AS shadowed
+      FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+        FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
+        ${ordered}) a`).bind(...args).all();
+  }
+  async function readWindow(legacy) {
+    if(!delta) {
+      const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
+      return readStore(legacy,bound,[...recipientArgs,...(cursor||[]),chunk]);
+    }
+    // The cache requests the first page after its anchor, not the newest
+    // page in the burst. Explicit rank/time seeks avoid reading old inbox rows.
+    const results=[];
+    for(const group of [2,4]) {
+      if(group<cursor[0] || results.length>=chunk)continue;
+      const atAnchorRank=group===cursor[0];
+      const bound=` AND (${rank})=?`+(atAnchorRank?` AND (${time})>=? AND ((${time})>? OR a.doc_id>?)`:'');
+      const args=[...recipientArgs,group,...(atAnchorRank?[cursor[1],cursor[1],cursor[2]]:[]),chunk-results.length];
+      results.push(...((await readStore(legacy,bound,args)).results||[]));
+    }
+    return {results};
+  }
   for (;;) {
-    const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
-    const args=[...recipientArgs,...(cursor||[]),chunk];
-    const [canonical,legacy]=await Promise.all([
-      db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-        FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
-        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-      db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path) AS shadowed
-        FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-          FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
-          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?) a`).bind(...args).all(),
-    ]);
-    const docs=mergeMirroredWindow(canonical,legacy,spec,chunk);
+    const [canonical,legacy]=await Promise.all([readWindow(false),readWindow(true)]);
+    const docs=mergeMirroredWindow(canonical,legacy,seekSpec,chunk);
     if (!docs.length) break;
     const allowed=docs.filter(doc=>!doc.shadowed && canReadNotification(doc.path,uid,doc.data));
     visible.push(...allowed);
-    if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
+    if (visible.length>=spec.limit) return sortDocuments(visible.slice(0,spec.limit),spec.orderBy);
     const last=docs[docs.length-1], value=last.data.createdAt;
     cursor=[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id];
     if (docs.length<chunk) break;
   }
-  return visible;
+  return delta?sortDocuments(visible,spec.orderBy):visible;
 }
 
 // ---------- operations ----------

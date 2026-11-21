@@ -2261,9 +2261,9 @@ test('notification pages use bounded per-store reads and do not expose stale mir
   f.run(path,'notifications','notifications',id,'sender',data('alice',-i),1,1);
   a.run(path,'notifications',id,'sender',data('alice',-i),1);
  }
- let rows=0,probes=0;
+ let rows=0,probes=0;const deltaPlans=[];
  sql.function('quota_probe',path=>{probes++;return path;});
- const db={prepare(q){const stmt=sql.prepare(q.includes("ORDER BY CASE WHEN json_type(a.document_json")?q.replace("f.path=a.path","f.path=quota_probe(a.path)"):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q.includes("ORDER BY CASE WHEN json_type(a.document_json")?q.replace("f.path=a.path","f.path=quota_probe(a.path)"):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes(' ASC') && q.includes('>=?'))deltaPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const filters=[{field:'toUserId',op:'==',value:'alice'},{field:'isRead',op:'==',value:false}];
  const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return await res.json();};
@@ -2280,6 +2280,14 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  const mirrorOnly=(await query({startAfter:[{__type:'timestamp',millis:0},'n0']})).documents;
  assert.deepEqual(mirrorOnly.map(d=>d.id),Array.from({length:16},(_,i)=>i+1).filter(i=>i%3!==0).slice(0,10).map(i=>`old${i}`));
  assert.ok(probes<=10,`older copies probed: ${probes}`);
+ rows=0;probes=0;
+ const anchor=[{__type:'timestamp',millis:165},'n165'];
+ const headDelta=(await query({endBefore:anchor,limitToLast:true})).documents;
+ const expected=Array.from({length:34},(_,i)=>166+i).filter(i=>i%3!==0).slice(0,10).reverse().map(i=>`n${i}`);
+ assert.deepEqual(headDelta.map(d=>d.id),expected,'large bursts deliver the closest newer page first');
+ assert.equal(rows,20,'head refresh must not return old inbox history from SQLite');
+ assert.match(deltaPlans.join('\n'),/SEARCH.*idx_cf_notif_unread.*<expr>>/);
+ assert.match(deltaPlans.join('\n'),/SEARCH.*idx_cf_legacy_notif_unread.*<expr>>/);
  sql.close();
 });
 

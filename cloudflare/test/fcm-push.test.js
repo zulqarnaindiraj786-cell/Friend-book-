@@ -43,7 +43,7 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
   } finally {globalThis.fetch=original;sql.close();}
 });
 
-test('unchanged device registrations do not rewrite the token; changes and daily refresh still persist', async () => {
+test('unchanged device registrations never rewrite the token; token and account changes persist', async () => {
   const sql=new DatabaseSync(':memory:');
   sql.exec(readFileSync(new URL('../migrations/0015_additive_fcm_devices.sql',import.meta.url),'utf8'));
   const writes=[];
@@ -56,7 +56,7 @@ test('unchanged device registrations do not rewrite the token; changes and daily
     for(const [uid,token] of [['alice',a],['alice',a],['alice',b],['bob',b]]) assert.equal((await register(uid,token)).status,200);
     sql.exec('UPDATE friendbook_cf_fcm_devices SET updated_at=1');
     assert.equal((await register('bob',b)).status,200);
-    assert.deepEqual(writes,[1,0,1,1,1]);
+    assert.deepEqual(writes,[1,0,1,1,0]);
     assert.equal(sql.prepare('SELECT user_id FROM friendbook_cf_fcm_devices').get().user_id,'bob');
   } finally {sql.close();}
 });
