@@ -1,5 +1,5 @@
 import { readRow } from './firestore-documents.js';
-import { readD1DocumentFields } from './app-documents.js';
+import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
 // Cloudflare Worker FCM gateway (/functions/v1/send-fcm-notification, /functions/v1/bulk-mentions).
 // Firebase keeps ONLY Auth (token verification in worker.js) + FCM delivery.
 // Device tokens + push claims live in D1; event payloads are derived from D1
@@ -78,8 +78,8 @@ async function d1Doc(db, path) {
     return null;
   }
 }
-async function pushProfile(db, uid) {
-  const fields=await readD1DocumentFields(db, `users/${uid}`);
+async function pushProfile(db, uid, viewerProfile) {
+  const fields=viewerProfile===undefined ? await readD1DocumentFields(db,`users/${uid}`) : toFirestoreFields(viewerProfile);
   if (!fields) return null;
   const strings=key=>(fields[key]?.arrayValue?.values||[]).map(x=>x.stringValue).filter(x=>typeof x==='string');
   return {displayName:fields.displayName?.stringValue, name:fields.name?.stringValue,
@@ -277,7 +277,7 @@ export async function fcmGateway(request, env, identity) {
       const messageRead=messageEvent ? Promise.all([d1Doc(db,`chats/${input.chatId}`),
         d1Doc(db,`chats/${input.chatId}/messages/${input.messageId}`)]).then(rows=>({rows}),error=>({error})) : null;
       let sender, recipient;
-      try { [sender,recipient]=await Promise.all([pushProfile(db,actor),pushProfile(db,target)]); }
+      try { [sender,recipient]=await Promise.all([pushProfile(db,actor,identity.viewerProfile),pushProfile(db,target)]); }
       catch { return json({error:'FCM_PROFILE_UNAVAILABLE'},503); }
       if (!sender || !recipient) return json({ error: 'INVALID_OR_UNAVAILABLE_EVENT' }, 400);
       if (sender.banned || recipient.banned || sender.deactivated || recipient.deactivated) return json({ error: 'Unavailable account' }, 403);

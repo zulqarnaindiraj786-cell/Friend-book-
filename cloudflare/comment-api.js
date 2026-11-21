@@ -240,10 +240,10 @@ export async function commentsAPI(request, db, identity, resource, data, context
   if(!row || row.removed || (context.blocked||[]).includes(row.uid))return reply({error:'Not found'},404);
   if(data.op==='react') {
     if(data.type!==null && !types.has(data.type))return reply({error:'Invalid reaction'},400);
-    return mutateComment(data.id, db.prepare(`INSERT INTO friendbook_cf_comment_reactions VALUES(?,?,?,?) ON CONFLICT(resource,id,uid) DO UPDATE SET type=excluded.type`).bind(resource,data.id,uid,data.type));
+    return mutateComment(data.id, db.prepare(`INSERT INTO friendbook_cf_comment_reactions VALUES(?,?,?,?) ON CONFLICT(resource,id,uid) DO UPDATE SET type=excluded.type WHERE friendbook_cf_comment_reactions.type IS NOT excluded.type`).bind(resource,data.id,uid,data.type));
   } else if(data.op==='pin') {
     if(context.owner!==uid || typeof data.pin!=='boolean')return reply({error:'Forbidden'},403);
-    await db.prepare(`INSERT INTO friendbook_cf_comment_pins VALUES(?,?) ON CONFLICT(resource) DO UPDATE SET id=excluded.id`).bind(resource,data.pin?data.id:null).run();
+    await db.prepare(`INSERT INTO friendbook_cf_comment_pins VALUES(?,?) ON CONFLICT(resource) DO UPDATE SET id=excluded.id WHERE friendbook_cf_comment_pins.id IS NOT excluded.id`).bind(resource,data.pin?data.id:null).run();
     return reply({pinned:await pin()});
   } else if(data.op==='remove') {
     if(row.uid!==uid && context.owner!==uid && !context.moderator)return reply({error:'Forbidden'},403);

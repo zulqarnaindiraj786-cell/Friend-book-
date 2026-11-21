@@ -77,10 +77,12 @@ test('compact reaction writes acknowledge within the batch without reading comme
   const db=f.env.DB, prepare=db.prepare;
   db.prepare=function(sql){assert.doesNotMatch(sql,/comment/i);return prepare.call(this,sql);};
   const options={query:'?response=reaction'};
-  for(const type of ['like','like',null]) {
+  for(const [index,type] of ['like','like',null].entries()) {
+    const before=f.sql.prepare('SELECT total_changes() n').get().n;
     const response=await call(f.env,'reactions','PUT',{type},options);
     assert.equal(response.status,200);
     assert.deepEqual(await response.json(),{reactionOnly:true,types:type?[{type,count:1,mine:1}]:[]});
+    if(index===1) assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
   }
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,post:'p2'})).status,503);
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,authorize:async()=>false})).status,403);
@@ -184,6 +186,10 @@ test('media, edits, pins, comment reactions and soft removal stay authorized', a
   assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true})).status,403);
   assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true},{authorize:owner})).status,200);
   await call(f.env,'comments','PUT',{op:'react',id:'media1',type:'love'});
+  const before=f.sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call(f.env,'comments','PUT',{op:'pin',id:'media1',pin:true},{authorize:owner})).status,200);
+  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'media1',type:'love'})).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
   const page = await (await call(f.env,'comments')).json();
   assert.equal(page.pinned,'media1'); assert.equal(page.comments[0].likes,1); assert.equal(page.comments[0].edited,true);
   assert.deepEqual(page.comments[0].reactions,{user1:'love'});
@@ -219,7 +225,7 @@ test('unknown historical reaction time is null, not a fabricated epoch date; fre
   let page = await (await call(f.env, 'reactors')).json();
   assert.equal(page.reactors[0].createdAt, null);
   assert.equal(page.reactors[0].timestampKnown, 0);
-  assert.equal((await call(f.env, 'reactions', 'PUT', {type:'love'})).status, 200);
+  assert.equal((await call(f.env, 'reactions', 'PUT', {type:'like'})).status, 200);
   page = await (await call(f.env, 'reactors')).json();
   assert.ok(page.reactors[0].createdAt > 0);
   assert.equal(page.reactors[0].timestampKnown, 1);

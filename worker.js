@@ -140,7 +140,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         }
         return response;
       }
-      if (fcm) return fcmGateway(request, env, { uid, token: bearer[1] });
+      if (fcm) return fcmGateway(request, env, { uid, token: bearer[1], viewerProfile });
       if (docs) return appDocuments(request, env, { uid, suspended, token: bearer[1] });
       if (views) {
         const validId=id=>typeof id==='string' && id.length>0 && id.length<=128 && !/[\\/,\x00-\x1f]/.test(id) && id!=='.' && id!=='..';
@@ -168,7 +168,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         } catch { return json({error:'View access unavailable'},503); }
       }
       if (presence) return presenceRealtime(request, env, { uid, token: bearer[1], viewerProfile });
-      if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB }, engagement);
+      if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB, viewerProfile }, engagement);
       try {
         if (request.method === 'PUT') {
           let body = {};

@@ -1,4 +1,5 @@
 import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountStatement, legacyPage } from './comment-api.js';
+import { toFirestoreFields } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -101,12 +102,14 @@ export async function interactions(request, env, identity, match, authorize = au
   let id; try { id = identifier(encodedId); } catch { return json({ error: 'Invalid resource' }, 400); }
   const resource = `${collection}/${id}`;
   let db;const context={};
+  const accountReads=new Map();
+  if(identity.viewerProfile!==undefined) accountReads.set(`users/${identity.uid}`,toFirestoreFields(identity.viewerProfile));
   try {
     db = env.DB.withSession('first-primary');
     // Keep a primary-first session, but overlap the independent readiness and access reads.
     const [ready,allowed] = await Promise.all([
       db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first(),
-      authorize({...identity,db}, collection, id, undefined, context),
+      authorize({...identity,db}, collection, id, undefined, context, accountReads),
     ]);
     if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     if (!allowed) return json({ error: 'Forbidden' }, 403);
@@ -135,10 +138,13 @@ export async function interactions(request, env, identity, match, authorize = au
         // Set desired state, not toggle: a retried request cannot double-increment.
         const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
-            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at`)
+            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
+            WHERE friendbook_cf_reactions.type IS NOT excluded.type OR NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_reaction_history h WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=1
+            )`)
             .bind(resource, identity.uid, data.type, Date.now()),
           db.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known)
-            VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1`)
+            VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1 WHERE friendbook_cf_reaction_history.timestamp_known IS NOT 1`)
             .bind(resource, identity.uid)
         ];
         if (new URL(request.url).searchParams.get('response') === 'reaction') {
