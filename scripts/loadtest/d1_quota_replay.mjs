@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 
+globalThis.fetch=async()=>{throw new Error('Network access is disabled in the quota replay');};
 const sql = new DatabaseSync(':memory:');
 const migrations = new URL('../../cloudflare/migrations/', import.meta.url);
 for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort()) {
@@ -12,12 +13,14 @@ for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort())
 let statements=0;
 const executeWrite=Symbol('executeWrite');
 const db={
+  withSession(){return db;},
   prepare(query){const stmt=sql.prepare(query);return {bind(...args){const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;return stmt.get(...args)||null;},
     all:async()=>{statements++;return {results:stmt.all(...args)};},
-    run:async()=>write(), [executeWrite]:write,
+    run:async()=>write(), [executeWrite]:()=>/^\s*(SELECT|WITH)\b/i.test(query)||/\bRETURNING\b/i.test(query)
+      ? (statements++,{success:true,results:stmt.all(...args)}) : write(),
   };}};},
-  async batch(writes){sql.exec('BEGIN');try{for(const write of writes)write[executeWrite]();sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}},
+  async batch(writes){sql.exec('BEGIN');try{const results=writes.map(write=>write[executeWrite]());sql.exec('COMMIT');return results;}catch(error){sql.exec('ROLLBACK');throw error;}},
 };
 const users=Number(process.argv[2]??30);
 assert.ok(Number.isInteger(users)&&users>=2&&users<=1000&&users%2===0,'use an even user count between 2 and 1000');
@@ -32,7 +35,7 @@ for(let i=0;i<users;i++){
   if(i%2===0) add('chats',`room${i}`,uid,{participants:[uid,`user${i+1}`],unreadCount:{[uid]:0,[`user${i+1}`]:0}});
 }
 const app=createWorker(async token=>token);
-const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay'};
+const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay',D1_INTERACTIONS_ENABLED:'true'};
 async function call(uid,path,method='GET',body){
   const res=await app.fetch(new Request(`https://offline.invalid${path}`,{method,
     headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
@@ -101,6 +104,18 @@ await measure('profileDetail',users,()=>wave(users,async i=>{
   assert.equal(profile.document.email,undefined);
 }));
 for(const root of ['posts','reels','stories','lives','notifications']) assert.equal(report.workloads[`page-${root}`].changedRowsIncludingTriggers,0);
+sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
+const engagement='/v1/engagement/posts/item39';
+const like=i=>call(`user${i}`,`${engagement}/reactions?response=reaction`,'PUT',{type:'like'});
+const comment=i=>call(`user${i}`,`${engagement}/comments`,'POST',{id:`reply${i}`,text:'A synthetic quota replay comment'});
+const register=i=>call(`user${i}`,'/functions/v1/send-fcm-notification','POST',{action:'register',device_id:`device${i}`,token:`synthetic-not-a-provider-token-${i}`});
+const mark=i=>call(`user${i}`,`/v1/firestore/document?path=notifications/notice${i}`,'PATCH',{fields:{isRead:true}});
+for(const [label,operation] of [['PostReaction',like],['Comment',comment],['DeviceRegistration',register],['NotificationOpen',mark]]){
+  await measure(`first${label}`,users,()=>wave(users,operation));
+  await measure(`repeat${label}`,users,()=>wave(users,operation));
+  assert.equal(report.workloads[`repeat${label}`].changedRowsIncludingTriggers,0,`repeated ${label}`);
+}
+assert.equal(sql.prepare("SELECT total FROM friendbook_cf_reaction_totals WHERE resource='posts/item39' AND type='like'").get().total,users);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
 console.log(JSON.stringify(report,null,2));
