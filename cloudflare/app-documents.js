@@ -1,7 +1,7 @@
 import { canReadPayment, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
-import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
+import { chatReadAllowed, chatWriteAllowed, storedChatMember } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
@@ -167,9 +167,9 @@ export async function appDocuments(request, env, identity) {
       // Chat previews and unread counters can advance without rewriting the
       // historical room mirror. Sort current rooms by their canonical timestamp.
       const rows = collection==='chats' ? await env.DB.prepare(`
-        SELECT doc_id,document_json,update_time AS updated_at FROM friendbook_cf_firestore_documents
+        SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE collection_id='chats' AND parent_path='chats'
-        UNION ALL SELECT a.doc_id,a.document_json,a.updated_at FROM friendbook_cf_documents a
+        UNION ALL SELECT a.path,a.doc_id,a.document_json,a.updated_at,0 AS canonical FROM friendbook_cf_documents a
           WHERE a.collection='chats' AND NOT EXISTS (
             SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='chats'
           ) ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(
@@ -177,11 +177,13 @@ export async function appDocuments(request, env, identity) {
       ).bind(collection, limit).all();
       let documents = [];
       for (const row of rows?.results || []) {
-        const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
+        const docPath = `${collection}/${row.doc_id}`;
+        const currentChat = collection==='chats' && row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
+        const current = currentChat ? row : await canonicalRoot(env.DB, docPath, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));
-          if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
+          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc))) documents.push(view);
         }
       }
       if (['posts','reels','stories','lives'].includes(collection)) {
@@ -219,7 +221,7 @@ export async function appDocuments(request, env, identity) {
       if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
-      if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
+      if (!(collection==='chats' ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
       const view = collection === 'groups' ? groupReadView(uid,document,await trustedGroupOwner(env.DB,docPath)) : collection === 'friends' ? friendshipReadView(uid,document) : profileReadView(docPath, uid, document, isPaymentAdmin(env,uid));
       if (view === null) return json({ error: 'Forbidden' }, 403);
       return json({ id: docId, document: view });

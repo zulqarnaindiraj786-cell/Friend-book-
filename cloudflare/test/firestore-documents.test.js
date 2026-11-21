@@ -410,6 +410,11 @@ test('profiles and chats: private fields, membership and write bypasses across A
   ]))).status,200);
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1')).status,403);
   assert.equal((await call('eve','/v1/docs/chats/c1')).status,403);
+  for (const path of ['/v1/docs/chats/c1','/v1/firestore/document?path=chats/c1']) {
+    roomReads=0;
+    assert.equal((await call('bob',path)).status,200);
+    assert.equal(roomReads,1,'authorize against the fetched room without another point read');
+  }
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1/messages/m1')).status,403);
   const chats=await (await call('eve','/v1/firestore/query','POST',{parent:'chats'})).json();assert.deepEqual(chats.documents,[]);
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','eve']}})).status,403);
@@ -442,9 +447,11 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.deepEqual(exactMirror(),oldMirror,'receipt does not rewrite historical room mirror');
   sql.prepare("UPDATE friendbook_cf_documents SET updated_at=1 WHERE path='chats/c1'").run();
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/older','chats','older','alice',JSON.stringify({participants:['alice','bob']}),2);
+  roomReads=0;
   const chatList=await (await call('bob','/v1/docs?collection=chats&limit=1')).json();
   assert.equal(chatList.documents[0].id,'c1','older list endpoint uses the current room order');
   assert.equal(chatList.documents[0].unreadCount.bob,0);
+  assert.equal(roomReads,0,'the canonical list row needs no additional room lookup');
 
   roomGuards=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
@@ -1860,21 +1867,20 @@ test('unrecognized chat subcollections are denied without attempting to read or 
   }
 });
 
-test('direct chat reads fail closed with a JSON 503 when membership lookup fails', async () => {
+test('direct chat reads fail closed with a JSON 503 when room snapshot lookup fails', async () => {
   const app = createWorker(async () => 'alice');
-  const env = {FIREBASE_PROJECT_ID:'friendbook-test', DB:{prepare(query) {
+  const env = {FIREBASE_PROJECT_ID:'friendbook-test', DB:{prepare() {
     return {bind(path) { return {first:async()=>{
       if (path==='users/alice') return null;
       assert.equal(path,'chats/room');
-      if (query.startsWith('SELECT document_json')) throw new Error('private storage diagnostic');
-      return {path,doc_id:'room',parent_path:'chats',collection_id:'chats',document_json:'{"participants":["alice","bob"]}'};
+      throw new Error('private storage diagnostic');
     }}; }};
   }}};
   const response=await app.fetch(new Request('https://example.test/v1/firestore/document?path=chats/room',{
     headers:{authorization:'Bearer token'},
   }),env);
   assert.equal(response.status,503);
-  assert.deepEqual(await response.json(),{error:'Chat access unavailable'});
+  assert.deepEqual(await response.json(),{error:'Read unavailable'});
 });
 
 test('query and count reject malformed filters rather than falling back to an unfiltered read', async () => {

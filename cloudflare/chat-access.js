@@ -16,6 +16,9 @@ export async function loadChat(db, chatId) {
   return unpack(JSON.parse(row.document_json));
 }
 const member=(room,uid)=>Array.isArray(room?.participants) && room.participants.includes(uid);
+export function storedChatMember(documentJson, uid) {
+  return member(unpack(JSON.parse(documentJson)), uid);
+}
 function chatIdFor(path, data) {
   const parts=path.split('/');
   if (parts[0] === 'chats' && parts.length >= 2) return parts[1];
@@ -23,7 +26,6 @@ function chatIdFor(path, data) {
   return null;
 }
 export async function chatReadAllowed(db,path,uid,data) {
-  const parts=path.split('/');
   const id=chatIdFor(path,data);
   if (id === null) return true;
   if (!id) return false;

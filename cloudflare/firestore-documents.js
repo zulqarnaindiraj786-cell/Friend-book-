@@ -8,7 +8,7 @@ import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
-import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
+import { chatReadAllowed, chatWriteAllowed, storedChatMember } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
 import { canReadReports, reportForCreate, feedbackForCreate } from './report-access.js';
@@ -2608,7 +2608,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     try {
-      if (!(await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
+      if (!(parts[0]==='chats' && parts.length===2 && row[canonicalRootSnapshot] ? storedChatMember(row.document_json,uid) : await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
     } catch { return json({error:'Chat access unavailable'},503); }
     let view;
     try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }
