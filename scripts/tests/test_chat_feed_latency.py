@@ -22,7 +22,7 @@ class ChatFeedLatencyTest(unittest.TestCase):
         home = (ROOT / 'main/HomeFragment.java').read_text()
         hidden = home.split('void onHiddenChanged', 1)[1].split('private void refreshPostsIfNeeded', 1)[0]
         self.assertNotIn('refreshSponsoredAds', hidden)
-        self.assertIn('view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE', home)
+        self.assertIn('rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE', home)
         feed = (ROOT / 'post/FeedAdapter.java').read_text()
         self.assertIn('isCurrentFeedSlotAd(slotOrdinal, currentNativeAd)', feed)
         self.assertIn('return id & Long.MAX_VALUE', feed)
@@ -46,10 +46,10 @@ class ChatFeedLatencyTest(unittest.TestCase):
         batch = (ROOT / 'd1/documents/WriteBatch.java').read_text()
         self.assertIn('firestore.runChatSend(path, task)', batch)
 
-    def test_slow_feed_prioritizes_visible_cards_and_keeps_tail_pagination(self):
+    def test_slow_feed_prioritizes_visible_cards_and_does_not_auto_page(self):
         home = (ROOT / 'main/HomeFragment.java').read_text()
         section = home.split('FastCache.NetTier tier = FastCache.netTier(a);', 1)[1].split('rv.setBackgroundColor', 1)[0]
         for marker in ('NET_2G', 'NET_3G', 'Prefs.dataSaver(a)', 'Prefs.turbo2g(a)',
-                       'setItemPrefetchEnabled(!constrainedFeed)',
-                       'getItemCount()-(constrainedFeed ? 4 : 7)', 'loadMore()'):
+                       'setItemPrefetchEnabled(!constrainedFeed)'):
             self.assertIn(marker, section)
+        self.assertNotIn('loadMore()', section)

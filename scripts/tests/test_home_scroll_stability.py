@@ -4,10 +4,10 @@ from pathlib import Path
 ROOT = Path('app/src/main/java/com/friendbook/social')
 
 class HomeScrollStability(unittest.TestCase):
-    def test_warm_return_keeps_older_pages_and_does_not_force_top(self):
+    def test_warm_return_keeps_five_posts_and_does_not_force_top(self):
         home = (ROOT/'main/HomeFragment.java').read_text()
-        self.assertIn('loadedPostIds.size()>PAGE || rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE', home)
-        self.assertIn('lastDoc=previousCursor;moreAvailable=previousMore', home)
+        self.assertIn('rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE', home)
+        self.assertIn('setPostsKeepingScroll(finalFeed)', home)
         main = (ROOT/'main/MainActivity.java').read_text()
         self.assertNotIn('.scrollToTop()', main)
 

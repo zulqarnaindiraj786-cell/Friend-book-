@@ -4,9 +4,9 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class FeedReadBudgetTest(unittest.TestCase):
-    def test_feed_first_page_is_twenty_and_cache_first(self):
+    def test_feed_first_page_is_five_and_cache_first(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('private static final int PAGE = 20;',source)
+        self.assertIn('private static final int PAGE = 5;',source)
         first=source.split('private void startPostsQuery(boolean forceReload)',1)[1].split('private void consumePostsSnapshot',1)[0]
         self.assertIn('first.refreshCachedHead(saved)',first)
         self.assertIn('if(forceReload)first.get(Source.SERVER)',first)
@@ -16,19 +16,22 @@ class FeedReadBudgetTest(unittest.TestCase):
         self.assertIn('orderBy("createdAt",Query.Direction.DESCENDING)',first)
     def test_home_uses_page_engagement_without_background_engagement_reads(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('feedQuery=query.withFeedEngagement()', source)
+        self.assertIn('query.withFeedEngagement().limit(PAGE)', source)
         self.assertIn('D1Reactions.seedFeed', source)
         self.assertNotIn('refreshVisibleEngagement', source)
         self.assertNotIn('watchLatestPosts', source)
         self.assertIn('>= 120_000L', source)
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('!feedEngagementInPage &&', adapter)
-    def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
+    def test_feed_caps_cached_and_fresh_posts_and_does_not_page(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
+        self.assertIn('docs.subList(0,Math.min(PAGE,docs.size()))',source)
+        self.assertIn('public boolean hasMore() { return false; }',source)
         more=source.split('public void loadMore()',1)[1].split('public boolean hasMore()',1)[0]
-        for token in ['if(loadingPosts','feedQuery.startAfter(lastDoc).limit(PAGE)','loadedPostIds.add','generation!=feedGeneration','addOnFailureListener','loadingPosts=false','matchesFilter(post,filter)']:
-            self.assertIn(token,more)
-        self.assertIn('existing.add(post.id)',(JAVA/'post/FeedAdapter.java').read_text())
+        self.assertIn('pageError && !loadingPosts',more)
+        self.assertNotIn('startAfter',more)
+        self.assertNotIn('addOnScrollListener',source)
+        self.assertIn('FEATURED_REELS_PAGE = 20;',source)
     def test_stories_have_cursor_pages_and_discoverable_more_control(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         stories=source.split('private void startStoriesListener()',1)[1].split('// ---------- Host ----------',1)[0]
