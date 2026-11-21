@@ -11,7 +11,7 @@ import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments, requestAccountReads, saveProfileProjection } from './cloudflare/app-documents.js';
 import { drainBroadcastPush } from './cloudflare/fcm-push.js';
-import { firestoreDocuments, resumeOfficialBroadcasts } from './cloudflare/firestore-documents.js';
+import { firestoreDocuments, resumeOfficialBroadcasts, readProfileMutationSnapshot } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
@@ -111,10 +111,14 @@ export function createWorker(verify = verifyFirebaseToken) {
       // and sign out, but reject all other operations for disabled accounts.
       const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'
         && new URL(request.url).searchParams.get('path')===`users/${uid}`;
-      let suspended=false, viewerProfile;
+      let suspended=false, viewerProfile, profileRow;
       if (!ownProfileRead && !isPaymentAdmin(env,uid)) {
         try {
-          const state=await accountStatus(env.DB,uid);
+          const ownProfilePatch=path==='/v1/firestore/document' && request.method==='PATCH'
+            && new URL(request.url).searchParams.get('path')===`users/${uid}`;
+          const snapshot=ownProfilePatch ? await readProfileMutationSnapshot(env.DB,uid) : undefined;
+          const state=await accountStatus(env.DB,uid,snapshot?.accountRow);
+          profileRow=snapshot?.profileRow;
           if (state.disabled) return json({error:'Account disabled'},403);
           suspended=state.suspended;
           viewerProfile=state.profile;
@@ -133,7 +137,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) {
-        const response=await firestoreDocuments(request, env, { uid, suspended, viewerProfile, token: bearer[1] }, 0, ctx);
+        const response=await firestoreDocuments(request, env, { uid, suspended, viewerProfile, profileRow, token: bearer[1] }, 0, ctx);
         if(path==='/v1/chat/call' && response.ok && ctx?.waitUntil){
           const call=await response.clone().json();
           if(call.status==='ringing') ctx.waitUntil(pushIncomingCall(env,call).catch(()=>{}));

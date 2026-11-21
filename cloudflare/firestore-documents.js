@@ -1,3 +1,4 @@
+import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
@@ -283,23 +284,35 @@ function appDocumentToFirestoreRow(row) {
 
 // Internal source marker; not serialized in any document response.
 const canonicalRootSnapshot=Symbol('canonicalRootSnapshot');
-export async function readRow(db, path) {
-  if (!isRootDocument(path)) {
-    return db.prepare('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
-  }
+async function readRootStorageRow(db,path) {
   // Root point reads include the historical mirror in the same D1 request.
   // A current row always wins, including when its data fails later validation.
-  const row = await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time,
+  return db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time,
       NULL AS collection, NULL AS updated_at, 0 AS legacy_source
     FROM friendbook_cf_firestore_documents WHERE path = ?1
     UNION ALL SELECT path, NULL, NULL, doc_id, owner_uid, document_json, NULL, NULL, collection, updated_at, 1
     FROM friendbook_cf_documents WHERE path = ?1
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
     LIMIT 1`).bind(path).first();
+}
+function normalizeRootStorageRow(row) {
   if (!row) return null;
   if (row.legacy_source === 1) return appDocumentToFirestoreRow(row);
   const { legacy_source, collection, updated_at, ...canonical } = row;
   return {...canonical,[canonicalRootSnapshot]:true};
+}
+
+export async function readRow(db, path) {
+  if (!isRootDocument(path)) {
+    return db.prepare('SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
+  }
+  return normalizeRootStorageRow(await readRootStorageRow(db,path));
+}
+
+// Only the trusted Worker entry point creates this request-local snapshot.
+export async function readProfileMutationSnapshot(db,uid) {
+  const accountRow=await readRootStorageRow(db,`users/${uid}`);
+  return {accountRow, profileRow:normalizeRootStorageRow(accountRow)};
 }
 
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
@@ -776,11 +789,15 @@ export async function liveSocketCoversProfileHeartbeat(db,uid,before,next,fields
   } catch { return false; } // Pre-migration/missing session state uses the existing fallback.
 }
 
-async function mutateProfile(db, uid, path, body, method, now) {
+async function mutateProfile(db, uid, path, body, method, now, profileRow) {
   if (splitPath(path)[1] !== uid) return json({error:'Forbidden'},403);
   for (let attempt=0; attempt<4; attempt++) {
     try {
-      const existing=await readRow(db,path);
+      const retrySnapshot=attempt>0 && profileRow!==undefined ? await readProfileMutationSnapshot(db,uid) : null;
+      if (retrySnapshot && (await accountStatus(db,uid,retrySnapshot.accountRow)).disabled)
+        return json({error:'Account disabled'},403);
+      const existing=retrySnapshot ? retrySnapshot.profileRow
+        : attempt===0 && profileRow!==undefined ? profileRow : await readRow(db,path);
       if (method==='PATCH' && !existing) return json({error:'NOT_FOUND'},404);
       if (body.createOnly===true && existing) return json({error:'ALREADY_EXISTS'},409);
       const before=existing ? decodeValue(JSON.parse(existing.document_json)) : null;
@@ -2731,7 +2748,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({error:'Invalid body'},400);
     if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='users')
-      return await mutateProfile(db,uid,docPath,body,'PATCH',now);
+      return await mutateProfile(db,uid,docPath,body,'PATCH',now,identity.profileRow);
     if (splitPath(docPath).length===2 && ['posts','reels'].includes(splitPath(docPath)[0]))
       return await mutatePost(db,uid,docPath,body,'PATCH',now);
     if (splitPath(docPath)[0] === 'payments') {

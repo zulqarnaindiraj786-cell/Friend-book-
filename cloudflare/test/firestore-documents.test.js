@@ -2533,12 +2533,14 @@ test('healthy socket saves redundant profile writes without suppressing fallback
  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(profile),prior,prior);
  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify(profile),prior);
  sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)').run('alice','socket',1,1,now-1000);
- let batches=0, changes=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>{const result=stmt.run(...args);changes+=result.changes;return result;},all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){batches++;sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ let batches=0, changes=0, profileReads=0;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>{const result=stmt.run(...args);changes+=result.changes;return result;},all:async()=>({results:stmt.all(...args)}),first:async()=>{if(args[0]==='users/alice')profileReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){batches++;sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
  const patch=(flags={},actor='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PATCH',headers:{authorization:`Bearer ${actor}`,'content-type':'application/json'},body:JSON.stringify({fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:now,lastSeen:{__fieldValue:'serverTimestamp'},...flags}})}),env);
  assert.equal((await patch({},'bob')).status,403);
+ profileReads=0;
  assert.equal((await patch()).status,200);
+ assert.equal(profileReads,1,'the account gate and heartbeat share one profile read');
  assert.equal(batches,0);assert.equal(changes,0);
  sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-220_000);
  const beforeFallback=sql.prepare('SELECT total_changes() n').get().n;
