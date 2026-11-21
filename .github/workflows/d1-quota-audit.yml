@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        window: [pre-feed-deploy, post-feed-deploy, latest-30m]
+        window: [latest-12m]
         metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -27,7 +27,7 @@ jobs:
           fmt=lambda t:t.strftime('%Y-%m-%dT%H:%M:%SZ')
           def query(metric,start,end,label):
               q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
-                  d1QueriesAdaptiveGroups(limit:10, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
+                  d1QueriesAdaptiveGroups(limit:60, orderBy:[sum_%s_DESC], filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
                       dimensions { query } sum { rowsRead rowsWritten } count
                   } } } }'''%(metric,fmt(start),fmt(end))
               req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
@@ -40,6 +40,8 @@ jobs:
                   raise SystemExit('Analytics query rejected: '+re.sub(r'[^a-zA-Z0-9 _.:,-]','',msg)[:200])
               print('Top by '+metric)
               for account in result['data']['viewer']['accounts']:
+                  printed=0
+                  focus=[]
                   for row in account['d1QueriesAdaptiveGroups']:
                       sql=row['dimensions']['query'] or ''
                       op=re.match(r'\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b',sql,re.I)
@@ -57,8 +59,12 @@ jobs:
                       if re.search(r'\bCOUNT\s*\(\s*f\.path\s*\)',sql,re.I): flags.append('one-off-overlap-audit')
                       if re.search(r'\bidx_cf_(?:legacy_)?posts_feed_page\b',sql,re.I): flags.append('bounded-feed')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
-                      print('::notice::',label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
-          cutoff=dt.datetime.fromisoformat('2026-11-21T04:24:50+00:00')
-          window=dt.timedelta(minutes=6)
-          for start,end,label in ((cutoff-window,cutoff,'pre-feed-deploy'),(cutoff,cutoff+window,'post-feed-deploy'),(now-dt.timedelta(minutes=30),now,'latest-30m')):
-              if label==os.environ['AUDIT_WINDOW']: query(os.environ['AUDIT_METRIC'],start,end,label)
+                      parts=(label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
+                      if printed<8:
+                          print('::notice::',*parts)
+                          printed+=1
+                      elif any(f.startswith(('bounded-','scan=')) for f in flags):
+                          focus.append(' '.join(map(str,parts)))
+                  if focus: print('::notice:: Focus patterns %0A'+'%0A'.join(focus))
+          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=12),now,os.environ['AUDIT_WINDOW'])
+          PY

@@ -57,6 +57,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private android.widget.ProgressBar historySpinner;
     private boolean chatVisible;
     private String messageActor;
+    // Until the next snapshot reflects the acknowledgement, don't write the same receipt again.
+    private final java.util.Map<String,Boolean> confirmedReceipts = new java.util.LinkedHashMap<>();
     private final Set<String> receiptInFlight=new HashSet<>(),receiptFailed=new HashSet<>();
     private final Map<String,Models.Message> historyMessages=new HashMap<>();
     private final PendingMessages pendingMessages = new PendingMessages();
@@ -734,17 +736,26 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private void markVisibleReceipts(){
         String me=Fb.uid();if(!chatVisible || me==null || !me.equals(messageActor) || messageSnapshots.isEmpty())return;
         WriteBatch batch=Fb.db().batch();List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+        final boolean markSeen=Prefs.readReceipts(this);
         for(Models.Message m:messageSnapshots.values()){
             if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
-            if(m.isDelivered && (m.isSeen || !Prefs.readReceipts(this)))continue;
-            Map<String,Object> patch=Fb.map("isDelivered",true);if(Prefs.readReceipts(this))patch.put("isSeen", true);
+            if(m.isDelivered && (m.isSeen || !markSeen)) { confirmedReceipts.remove(m.id);continue; }
+            Boolean confirmed=confirmedReceipts.get(m.id);
+            if(confirmed!=null && (confirmed || !markSeen))continue;
+            Map<String,Object> patch=Fb.map("isDelivered",true);if(markSeen)patch.put("isSeen", true);
             batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
         if(claimed.isEmpty() && unreadResetOnce)return;
         unreadResetOnce=true;
         batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
-        batch.commit().addOnCompleteListener(done->{receiptInFlight.removeAll(claimed);if(!done.isSuccessful())receiptFailed.addAll(claimed);});
+        batch.commit().addOnCompleteListener(done->{
+            receiptInFlight.removeAll(claimed);
+            if(!done.isSuccessful()){receiptFailed.addAll(claimed);return;}
+            if(!me.equals(Fb.uid()))return;
+            for(String id:claimed)confirmedReceipts.put(id,markSeen);
+            while(confirmedReceipts.size()>128)confirmedReceipts.remove(confirmedReceipts.keySet().iterator().next());
+        });
     }
 
     private boolean typingOn = false;

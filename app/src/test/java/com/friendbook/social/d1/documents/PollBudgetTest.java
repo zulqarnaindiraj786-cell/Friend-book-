@@ -19,4 +19,16 @@ public class PollBudgetTest {
         assertTrue(budget.due("lives/room",true,30_000));
         assertFalse(budget.due("lives/room",false,600_000));
     }
+    @Test public void quietChatFallsBackLessOftenAndNewActivityRestoresFastChecks() {
+        PollBudget budget = new PollBudget();
+        assertTrue(budget.chatFallbackDue(2_000, true));
+        for (int i = 0; i < 3; i++) budget.success(false);
+        assertFalse(budget.chatFallbackDue(15_999, true));
+        assertTrue(budget.chatFallbackDue(16_000, true));
+        assertFalse(budget.chatFallbackDue(31_999, false));
+        assertTrue(budget.chatFallbackDue(32_000, false));
+        budget.success(true);
+        assertTrue(budget.chatFallbackDue(2_000, true));
+        assertTrue(budget.chatFallbackDue(4_000, false));
+    }
 }

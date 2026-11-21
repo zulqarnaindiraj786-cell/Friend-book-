@@ -18,7 +18,7 @@ final class PollBudget {
     boolean chatFallbackDue(long elapsed, boolean openChat) {
         if (failures > 0) return elapsed >= Math.min(120_000L, 5_000L << failures);
         // Quiet sessions back off, but stop short of a long stale interval.
-        return elapsed >= Math.min(openChat ? 6_000L : 10_000L, (openChat ? 2_000L : 4_000L) << idle);
+        return elapsed >= Math.min(openChat ? 16_000L : 32_000L, (openChat ? 2_000L : 4_000L) << idle);
     }
 
     boolean due(String path, boolean foreground, long elapsed) {
