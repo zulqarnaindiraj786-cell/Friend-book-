@@ -1325,14 +1325,19 @@ test('bounded chat pages match full merge across ties, cursors and legacy fallba
  assert.deepEqual(await query(first),await query(first,true));
  const older={orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:11,startAfter:[{__type:'timestamp',millis:20},'m061']};
  assert.deepEqual(await query(older),await query(older,true));assert.equal(fastCalls,2);await query(first,false,'eve');
+ const gap={...older,endBefore:[{__type:'timestamp',millis:18},'m055']};
+ assert.deepEqual(await query(gap),await query(gap,true));
+ assert.equal(fastCalls,3,'gap paging must not use the full history scan');
+ assert.deepEqual(await query({...gap,startAfter:[{__type:'timestamp',millis:1},'m005']}),[]);
+ assert.equal(fastCalls,4);
  const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT path FROM friendbook_cf_firestore_documents WHERE parent_path=? ORDER BY CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END DESC, CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') ELSE json_extract(document_json,'$.createdAt.millis') END DESC,doc_id DESC LIMIT ?").all('chats/r/messages',10).map(x=>x.detail).join('\n');
  assert.match(plan,/idx_cf_firestore_chat_created_page/);
  // Legacy bridge triggers the existing full merge instead of silently losing old messages.
  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('messages/r_old','messages','r_old','alice',JSON.stringify({senderId:'alice',chatId:'r',createdAt:100}),1);
- assert.deepEqual(await query(first),await query(first,true));assert.equal(fastCalls,2);
+ assert.deepEqual(await query(first),await query(first,true));assert.equal(fastCalls,4);
  sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='messages/r_old'").run();
  f.run('chats/r/messages/weird','chats/r/messages','messages','weird','alice',JSON.stringify({senderId:'alice',createdAt:'old'}),1,1);
- assert.deepEqual(await query(first),await query(first,true));assert.equal(fastCalls,2);assert.ok(fullCalls>0);
+ assert.deepEqual(await query(first),await query(first,true));assert.equal(fastCalls,4);assert.ok(fullCalls>0);
  sql.close();
 });
 

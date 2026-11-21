@@ -311,18 +311,19 @@ async function boundedChatRows(db,parent,spec) {
   if (parts?.length!==3 || parts[0]!=='chats' || parts[2]!=='messages'
       || !Array.isArray(orders) || orders.length!==1 || orders[0]?.field!=='createdAt'
       || !['ASCENDING','DESCENDING'].includes(orders[0]?.direction)
-      || (Array.isArray(spec?.filters) && spec.filters.length) || spec?.startAt || spec?.endAt || spec?.endBefore
+      || (Array.isArray(spec?.filters) && spec.filters.length) || spec?.startAt || spec?.endAt
       || !Number.isInteger(spec?.limit) || spec.limit<=0 || spec.limit>1000
       || (spec.limitToLast!==undefined && spec.limitToLast!==true && spec.limitToLast!==false)) return null;
-  let cursor=null;
-  if (spec.startAfter) {
-    const c=spec.startAfter;
-    if (spec.limitToLast || !Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
+  const parseCursor=c=>{
+    if (!Array.isArray(c) || c.length!==2 || typeof c[1]!=='string' || !/^[\x20-\x7e]+$/.test(c[1])) return null;
     const value=c[0], rank=typeof value==='number'?2:value?.__type==='timestamp'?4:0;
     const time=rank===2?value:value?.millis;
-    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER) return null;
-    cursor=[rank,rank===4?Math.trunc(time):time,c[1]];
-  }
+    if (!rank || !Number.isFinite(time) || Math.abs(time)>Number.MAX_SAFE_INTEGER || rank===4 && !Number.isInteger(time)) return null;
+    return [rank,time,c[1]];
+  };
+  const after=spec.startAfter ? parseCursor(spec.startAfter) : null;
+  const before=spec.endBefore ? parseCursor(spec.endBefore) : null;
+  if ((spec.startAfter && (!after || spec.limitToLast)) || (spec.endBefore && !before))return null;
   const prefix=`${parts[1]}_`, upper=`${parts[1]}\``;
   // Both compatibility probes are independent; keep one wait before the page read.
   const [legacy,bad]=await Promise.all([
@@ -341,11 +342,20 @@ async function boundedChatRows(db,parent,spec) {
   const descending=orders[0].direction==='DESCENDING';
   const takeLast=spec.limitToLast===true;
   const direction=(descending !== takeLast)?'DESC':'ASC';
-  const boundary=cursor?` AND (${chatRank},${chatTime},doc_id) ${descending?'<':'>'} (?,?,?)`:'';
+  const args=[parent];
+  let boundary='';
+  if(after && before && after[0]===before[0]) {
+    // Both edges constrain the same sort rank. Expose the timestamp range
+    // explicitly so SQLite seeks to the gap instead of walking newer rows.
+    boundary+=` AND (${chatRank})=? AND (${chatTime}) BETWEEN ? AND ?`;
+    args.push(after[0],Math.min(after[1],before[1]),Math.max(after[1],before[1]));
+  }
+  if(after){boundary+=` AND (${chatRank},${chatTime},doc_id) ${descending?'<':'>'} (?,?,?)`;args.push(...after);}
+  if(before){boundary+=` AND (${chatRank},${chatTime},doc_id) ${descending?'>':'<'} (?,?,?)`;args.push(...before);}
   const statement=db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
     FROM friendbook_cf_firestore_documents WHERE parent_path=?${boundary}
     ORDER BY ${chatRank} ${direction}, ${chatTime} ${direction}, doc_id ${direction} LIMIT ?`);
-  const result=await statement.bind(parent,...(cursor||[]),spec.limit).all();
+  const result=await statement.bind(...args,spec.limit).all();
   return result?.results || [];
 }
 

@@ -4,6 +4,7 @@ import { readD1DocumentFields, hasD1Friendship, toFirestoreFields } from './app-
 export const PRESENCE_TTL_MS = 300_000; // 5 minutes (300 seconds)
 export const WRITE_COALESCE_MS = 120_000; // Quiet socket renewals only; transitions remain immediate.
 export const TYPING_TTL_MS = 8_000;
+const TYPING_RENEW_MIN_MS = 3_500; // Old clients may send a pulse every two seconds.
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
@@ -133,15 +134,15 @@ export async function presenceRealtime(request, env, identity) {
         if (!body.typing) {
           // A clear for an idle or unknown session has nothing to persist.
           await env.DB.prepare(`UPDATE friendbook_cf_typing_sessions SET typing=0,updated_at=?
-            WHERE chat_id=? AND uid=? AND session_id=? AND typing=1 AND updated_at<=?`)
-            .bind(now,chatId,uid,session,now).run();
+            WHERE chat_id=? AND uid=? AND session_id=? AND typing=1 AND updated_at BETWEEN ? AND ?`)
+            .bind(now,chatId,uid,session,now-TYPING_TTL_MS,now).run();
         } else {
           await env.DB.prepare(`INSERT INTO friendbook_cf_typing_sessions(chat_id,uid,session_id,typing,updated_at) VALUES (?,?,?,1,?)
             ON CONFLICT(chat_id,uid,session_id) DO UPDATE SET typing=1,updated_at=excluded.updated_at
             WHERE excluded.updated_at>friendbook_cf_typing_sessions.updated_at
               AND (friendbook_cf_typing_sessions.typing=0
                 OR excluded.updated_at-friendbook_cf_typing_sessions.updated_at>=?)`)
-            .bind(chatId,uid,session,now,TYPING_TTL_MS/4).run();
+            .bind(chatId,uid,session,now,TYPING_RENEW_MIN_MS).run();
         }
         return json({ chatId, typing: body.typing });
       } catch { return json({error:'Typing unavailable'},503); }

@@ -62,6 +62,21 @@ test('typing is shared across isolates and only room members can observe or send
   assert.equal((await call('alice','PUT',{typing:true,sessionId:'invalid/session'},db())).status,400);
   assert.equal((await call('alice','PUT',{typing:true},db())).status,200,'old clients remain compatible');
   assert.equal((await (await call('bob','GET',null,db())).json()).typing,true);
+  const backdate=sql.prepare("UPDATE friendbook_cf_typing_sessions SET updated_at=? WHERE session_id='legacy'");
+  backdate.run(Date.now()-2100);
+  const beforePulse=changes();
+  assert.equal((await call('alice','PUT',{typing:true},db())).status,200);
+  assert.equal(changes(),beforePulse,'two-second heartbeat does not renew early');
+  backdate.run(Date.now()-4100);
+  const beforeRenew=changes();
+  assert.equal((await call('alice','PUT',{typing:true},db())).status,200);
+  assert.equal(changes(),beforeRenew+1,'renewal happens before expiry');
+  backdate.run(Date.now()-9000);
+  const beforeExpiredClear=changes();
+  assert.equal((await call('alice','PUT',{typing:false},db())).status,200);
+  assert.equal(changes(),beforeExpiredClear,'an expired clear does not change storage');
+  assert.equal((await (await call('bob','GET',null,db())).json()).typing,false);
+  assert.equal((await call('alice','PUT',{typing:true},db())).status,200);
   sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?')
     .run(JSON.stringify({participants:['bob','carol']}),'chats/room');
   assert.equal((await (await call('bob','GET',null,db())).json()).typing,false,'removed member typing must not leak until TTL');
