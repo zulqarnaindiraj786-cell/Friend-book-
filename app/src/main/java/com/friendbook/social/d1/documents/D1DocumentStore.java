@@ -108,7 +108,7 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
-        poller.scheduleWithFixedDelay(this::pollVisibleChatFallback, 2, 2, TimeUnit.SECONDS);
+        poller.scheduleWithFixedDelay(this::pollVisibleChatFallback, 5, 5, TimeUnit.SECONDS);
     }
 
     /** A single authenticated refresh when the process actually returns to foreground. */

@@ -884,11 +884,6 @@ public class AdsConfig {
         }
     }
 
-    private static int requestTopicCounter = 0;
-    private static final String[] BROAD_AUCTION_TOPICS = new String[]{
-            "", "shopping", "games", "finance", "technology", "automotive", "travel", "entertainment"
-    };
-
     /**
      * Pops a distinct preloaded Feed `NativeAd` from the 3-ad `FEED_POOL` (loaded strictly from `FEED_NATIVE_ID`).
      * Never calls `loadAd` on the caller thread, never reuses a shown ad across slots, and triggers background replenishment.
@@ -1086,23 +1081,6 @@ public class AdsConfig {
     }
 
     /**
-     * Builds a Production AdRequest that rotates single broad auction categories across calls
-     * so AdMob serves diverse campaigns without triggering No-Fill (Code 3).
-     */
-    public static com.google.android.gms.ads.AdRequest buildHighValueAdRequest(boolean isReels) {
-        com.google.android.gms.ads.AdRequest.Builder b = new com.google.android.gms.ads.AdRequest.Builder();
-        int idx;
-        synchronized (AdsConfig.class) {
-            idx = (requestTopicCounter++) % BROAD_AUCTION_TOPICS.length;
-        }
-        String topic = BROAD_AUCTION_TOPICS[idx];
-        if (topic != null && !topic.isEmpty()) {
-            try { b.addKeyword(topic); } catch (Throwable ignored) { }
-        }
-        return b.build();
-    }
-
-    /**
      * Tells every waiting Feed/Reels slot "no ad yet", so the slot collapses and content shows with
      * zero gap — but it KEEPS the waiter registered, because the next preloaded ad must still fill
      * that slot. Clearing the waiters is what made a slot that collapsed once stay empty until the
@@ -1254,7 +1232,8 @@ public class AdsConfig {
                             .withNativeAdOptions(adOptions)
                             .build();
             // Single requests participate in mediation; bulk requests do not.
-            adLoader.loadAd(buildHighValueAdRequest(!isFeedPool));
+            // Let the configured ad units and mediation decide eligibility without rotating keywords.
+            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
                 if (isFeedPool) {
