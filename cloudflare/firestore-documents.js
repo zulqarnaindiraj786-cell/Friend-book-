@@ -1177,10 +1177,10 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
   const probe=async (table,index,where,args)=>{
-    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
+    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} a INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
     catch(error) {
       if (!String(error).includes(`no such index: ${index}`)) throw error;
-      return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
+      return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
   const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
@@ -1191,7 +1191,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   if (author!==null) {
     const [canonicalBad,legacyBad]=await Promise.all([
       probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='${root}'${byAuthor} AND ${canonicalException}`,authorArgs),
-      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`collection='${root}'${byLegacyAuthor} AND ${legacyException}`,authorArgs),
+      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`a.collection='${root}'${byLegacyAuthor} AND ${legacyException} AND ${legacyUnshadowed}`,authorArgs),
     ]);
     if (canonicalBad || legacyBad) return null;
   } else {
@@ -1288,10 +1288,10 @@ async function boundedNotificationPage(db,uid,spec) {
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
   const probe=async (table,index,where,args)=>{
-    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
+    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} a INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
     catch(error) {
       if (!String(error).includes(`no such index: ${index}`)) throw error;
-      return db.prepare(`SELECT 1 AS hit FROM ${table} WHERE ${where} LIMIT 1`).bind(...args).first();
+      return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
   const [canonicalBad,legacyBad]=await Promise.all([

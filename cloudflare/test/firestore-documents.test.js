@@ -1337,6 +1337,15 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  const query=async(spec,full=false)=>{let body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
  const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
+ if(root==='posts') {
+  sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p098'").run(JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}}));
+  const filter={field:'authorId',op:'==',value:'alice'};
+  const before=batchReads;
+  const scoped=await query({filters:[filter]});
+  assert.ok(batchReads>before,'shadowed historical mirror must not disable the indexed page');
+  assert.deepEqual(scoped.map(d=>d.id),first.map(d=>d.id));
+  assert.ok(!scoped.some(d=>d.id==='p098'),'private canonical row must still win');
+ }
  let prior=batchReads;
  // A fractional timestamp still uses the JS comparator, without forcing a full scan.
  f.run(root+'/odd',root,root,'odd','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:22.5}}),1,1);
