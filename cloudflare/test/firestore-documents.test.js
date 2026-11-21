@@ -2219,3 +2219,48 @@ test('default people picker uses both ordered indexes and fills its page after p
   assert.doesNotMatch(plan,/USE TEMP B-TREE/);
   sql.close();
 });
+
+test('Home story expiry uses indexed candidate seeks and preserves legacy and privacy behavior', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
+  sql.exec(readFileSync(new URL('../migrations/0062_story_timestamp_expiry_lookup.sql',import.meta.url),'utf8'));
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const ts=millis=>({__type:'timestamp',millis});
+  const story=(id,data,modern=true)=>{
+    const payload=JSON.stringify(data);
+    if(modern) canonical.run(`stories/${id}`,'stories','stories',id,'alice',payload,1,1);
+    else legacy.run(`stories/${id}`,'stories',id,'alice',payload,1);
+  };
+  for(const uid of ['alice','bob'])legacy.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
+  const data={authorId:'alice',privacy:'Public'};
+  for(let i=0;i<300;i++)story(`expired${i}`,{...data,expiresAt:ts(9)},i%2===0);
+  story('current',{...data,expiresAt:ts(15),viewedBy:['alice']});
+  story('private',{...data,privacy:'Only me',expiresAt:ts(15)});
+  story('shadow',{...data,expiresAt:ts(9)});
+  story('shadow',{...data,expiresAt:ts(20)},false);
+  story('wrapped',{fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'},expiresAt:{timestampValue:'1970-01-01T00:00:00.020Z'}}},false);
+  story('oldNumber',{...data,expiresAt:1000},false);
+  const plans=[];
+  let candidates=0;
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const results=stmt.all(...args);if(q.includes('INDEXED BY') && q.includes('story_timestamp_expiry_lookup')){
+      candidates+=results.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return {results};},
+  };}};}};
+  const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async millis=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',
+      headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'stories',
+        filters:[{field:'expiresAt',op:'>',value:ts(millis)}],orderBy:[{field:'expiresAt',direction:'ASCENDING'}],limit:10})}),env);
+    assert.equal(response.status,200);return (await response.json()).documents;
+  };
+  const indexed=await query(10);
+  assert.deepEqual(indexed,await query(10.5)); // decoding truncates; fractional cursor uses compatibility path
+  assert.deepEqual(indexed.map(row=>row.id),['current','wrapped']);
+  assert.equal(indexed[0].data.viewedBy,undefined);
+  assert.equal(candidates,3);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_story_timestamp_expiry_lookup/);
+  assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_story_timestamp_expiry_lookup/);
+  sql.close();
+});

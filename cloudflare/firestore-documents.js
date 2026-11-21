@@ -524,6 +524,40 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     ]);
     return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
+  if (parent==='stories' && !filters?.some(f=>f.field==='authorId' && f.op==='==')) {
+    const expiry=filters?.find(f=>f.field==='expiresAt' && f.op==='>' && f.value?.__type==='timestamp' && Number.isSafeInteger(f.value.millis));
+    if (expiry) {
+      const modernExpiry=`CASE WHEN json_type(document_json,'$.expiresAt') IN ('object','array') THEN
+      CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
+        AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
+        THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END`;
+      const historicalExpiry=`CASE WHEN json_type(document_json,'$.fields')='object' THEN
+      CASE WHEN json_type(document_json,'$.fields.expiresAt') IN ('object','array') THEN 'compat' END
+    ELSE (CASE WHEN json_type(document_json,'$.expiresAt') IN ('object','array') THEN
+      CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
+        AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
+        THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END) END`;
+      try {
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_timestamp_expiry_lookup
+            WHERE parent_path='stories' AND (${modernExpiry})>?`).bind(expiry.value.millis).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_story_timestamp_expiry_lookup
+            WHERE a.collection='stories' AND (${historicalExpiry})>? AND NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='stories'
+            )`).bind(expiry.value.millis).all(),
+        ]);
+        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        // SQLite sorts the text compatibility bucket after numeric timestamps.
+        // Recheck it with the existing decoder and filter, before story ACL work.
+        if (new Set(rows.map(row=>row.doc_id)).size===rows.length) return rows.filter(row=>{
+          const doc=rowToDocument(row);
+          return matchesFilter(doc.data,expiry,doc.id);
+        });
+      } catch(error) {
+        if (!/no such index: idx_cf_(?:legacy_)?story_timestamp_expiry_lookup/.test(String(error))) throw error;
+      }
+    }
+  }
   // Only hard-coded root/field pairs can be interpolated into SQL. Privacy
   // filtering still happens after candidate selection, before the page limit.
   const indexedFields={posts:['groupId','authorId'],reels:['authorId'],stories:['authorId'],pages:['ownerId'],referrals:['refBy']};
