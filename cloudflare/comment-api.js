@@ -129,7 +129,7 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
 // matching legacy rows by indexed storage order, retaining only the 21 newest
 // matches for the requested creation-time cursor. This avoids silently losing
 // older comments beyond an arbitrary first thousand rows.
-export async function legacyPage(db,resource,uid,blocked,before) {
+export async function legacyPage(db,resource,uid,blocked,before,after=null) {
   let storageCursor=null, best=[];
   for(let batch=0;batch<100;batch++) {
     const extra=storageCursor?' AND (a.updated_at<? OR (a.updated_at=? AND a.path<?))':'';
@@ -138,9 +138,9 @@ export async function legacyPage(db,resource,uid,blocked,before) {
     const rows=(await db.prepare(`SELECT a.path,a.doc_id,a.document_json,a.updated_at FROM friendbook_cf_documents a WHERE ${legacyWhere}${extra} ORDER BY a.updated_at DESC,a.path DESC LIMIT 500`).bind(...args).all()).results||[];
     for(const row of rows) {
       const comment=legacyComment(row,uid,resource),time=comment?.createdAt||0;
-      if(comment && (time<before[0] || (time===before[0] && comment.id<before[1])))best.push(comment);
+      if(comment && (after ? time>after[0] || (time===after[0] && comment.id>after[1]) : time<before[0] || (time===before[0] && comment.id<before[1])))best.push(comment);
     }
-    best.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0));
+    best.sort((a,b)=>(after?-1:1)*((b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)));
     if(best.length>21)best=best.slice(0,21);
     if(rows.length<500)return best;
     storageCursor=rows.at(-1);
@@ -179,20 +179,29 @@ export async function commentsAPI(request, db, identity, resource, data, context
       const old=source && legacyComment(source,uid,resource);
       return old && !(context.blocked||[]).includes(old.uid)?reply({comment:old}):reply({error:'Not found'},404);
     }
-    let before=[Number.MAX_SAFE_INTEGER,''];const cursor=url.searchParams.get('before');
-    if(cursor!==null){try{if(cursor.length>512)throw Error();before=JSON.parse(atob(cursor));if(!Array.isArray(before)||before.length!==2||!Number.isSafeInteger(before[0])||before[0]<0||!validId(before[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
+    const afterRaw=url.searchParams.get('after');
+    const beforeRaw=url.searchParams.get('before');
+    if(afterRaw!==null && beforeRaw!==null)return reply({error:'Invalid cursor'},400);
+    const delta=afterRaw!==null;
+    const cursor=delta?afterRaw:beforeRaw;
+    let boundary=[Number.MAX_SAFE_INTEGER,''];
+    if(cursor!==null){try{if(cursor.length>512)throw Error();boundary=JSON.parse(atob(cursor));if(!Array.isArray(boundary)||boundary.length!==2||!Number.isSafeInteger(boundary[0])||boundary[0]<0||!validId(boundary[1]))throw Error();}catch{return reply({error:'Invalid cursor'},400);}}
+    const compare=delta?'>':'<', direction=delta?'ASC':'DESC';
     const size=url.searchParams.get('limit')==='10'?10:20;
-    const [page,old,pinned]=await Promise.all([
+    const [page,old,pinned,reactions]=await Promise.all([
       db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
-        AND (c.created_at<? OR (c.created_at=? AND c.id<?)) ORDER BY c.created_at DESC,c.id DESC LIMIT ?`).bind(uid,resource,JSON.stringify(context.blocked||[]),before[0],before[0],before[1],size+1).all(),
-      legacyPage(db,resource,uid,context.blocked||[],before),pin(),
+        AND (c.created_at,c.id) ${compare} (?,?) ORDER BY c.created_at ${direction},c.id ${direction} LIMIT ?`).bind(uid,resource,JSON.stringify(context.blocked||[]),...boundary,size+1).all(),
+      legacyPage(db,resource,uid,context.blocked||[],boundary,delta?boundary:null),pin(),
+      url.searchParams.get('includeReactions')==='1' && context.reactionTotals ? context.reactionTotals() : null,
     ]);
     const current=page.results.map(row=>normalized(row,uid));
-    const merged=[...current,...old].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0));
+    const time=c=>c.created_at??c.createdAt??0;
+    const merged=[...current,...old].sort((a,b)=>(delta?-1:1)*(time(b)-time(a) || (a.id<b.id?1:a.id>b.id?-1:0)));
     const comments=merged.slice(0,size);
     const last=comments.at(-1);
     const hasMore=merged.length>size;
-    return reply({comments,pinned,next:hasMore&&last?btoa(JSON.stringify([last.createdAt||0,last.id])):null});
+    return reply({comments,pinned,...(delta?{delta:true}:{}),...(reactions?{reactions}:{}),
+      next:hasMore&&last?btoa(JSON.stringify([time(last),last.id])):null});
   }
   if(!validId(data.id))return reply({error:'Invalid ID'},400);
   if(request.method==='POST') {

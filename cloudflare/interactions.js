@@ -129,6 +129,7 @@ export async function interactions(request, env, identity, match, authorize = au
   try {
     if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') {
+      context.reactionTotals=async()=>JSON.parse((await db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource).first()).types_json);
       return await commentsAPI(request,db,identity,resource,data,context);
     }
     if (kind === 'reactions') {

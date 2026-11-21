@@ -61,6 +61,17 @@ public final class D1Reactions {
    if(doc.getMetadata().isFromCache())FETCHED_AT.remove(key);
   }catch(JSONException ignored){}
  }
+ public static void refreshDetailTotals(String id){fetch(null,"posts",id,false,()->{});}
+ public static void acceptDetailTotals(String id,JSONArray types,long requestedAt){
+  scope();String key=D1Client.key("posts",id);Long last=FETCHED_AT.get(key);
+  if(types==null || WRITING.contains(key) || UNCONFIRMED.contains(key) || (last!=null && last>requestedAt))return;
+  try{
+   JSONObject old=CACHE.get(key);
+   JSONObject next=old==null?new JSONObject():new JSONObject(old.toString());
+   next.remove("reactionStateUnknown");next.put("types",types);
+   remember(null,"posts",id,next);
+  }catch(JSONException ignored){}
+ }
  public static void loadPost(Context context,Models.Post post,Runnable render){
   if(post==null || post.id==null)return;
   hydrate(post);

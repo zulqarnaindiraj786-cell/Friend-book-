@@ -362,3 +362,21 @@ test('Home returns authorized reaction state and comment previews with the bound
   f.sql.exec("UPDATE friendbook_cf_comment_details SET removed=0 WHERE resource='posts/p1' AND id='third'");
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,3);
 });
+
+test('post detail returns only newer comments, stable continuation and reaction totals', async t=>{
+  const f=fixture();t.after(f.close);
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');
+  for(let i=0;i<15;i++)insert.run('posts/p1',`c${String(i).padStart(2,'0')}`,'user1','text',null,100);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'})).status,200);
+  const after=btoa(JSON.stringify([100,'c01']));
+  const response=await call(f.env,'comments','GET',undefined,{query:`?limit=10&includeReactions=1&after=${encodeURIComponent(after)}`});
+  assert.equal(response.status,200);
+  const first=await response.json();
+  assert.equal(first.delta,true);
+  assert.deepEqual(first.comments.map(c=>c.id),Array.from({length:10},(_,i)=>`c${String(i+2).padStart(2,'0')}`));
+  assert.deepEqual(first.reactions,[{type:'like',count:1,mine:1}]);
+  const last=await (await call(f.env,'comments','GET',undefined,{query:`?limit=10&after=${encodeURIComponent(first.next)}`})).json();
+  assert.deepEqual(last.comments.map(c=>c.id),['c12','c13','c14']);
+  assert.equal(last.next,null);
+  assert.equal((await call(f.env,'comments','GET',undefined,{query:`?before=${after}&after=${after}`})).status,400);
+});

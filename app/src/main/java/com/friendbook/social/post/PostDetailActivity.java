@@ -117,6 +117,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postAdapter.showFooter = false;
         postAdapter.showInlineComments = false; // Full comment thread is rendered directly below!
         final boolean isSponsoredAdDetail = postId.startsWith("sponsored_ad_");
+        postAdapter.feedEngagementInPage=!isSponsoredAdDetail && com.friendbook.social.core.D1Client.enabled("posts");
         final int adSlotOrdinal = getIntent().getIntExtra("ad_slot_ordinal", 0);
         if (isSponsoredAdDetail) {
             // Render ONLY the 1 real AdMob AdVH card — NEVER render a fake PostVH card above it!
@@ -133,9 +134,10 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             for (Models.Post cached : FastCache.getFeed()) {
                 if (cached != null && postId.equals(cached.id)) {
                     post = cached;
+                    reactionObserver.onReactionChanged(postId,FastCache.getMyReaction(postId),FastCache.getReactionTotal(postId,post.likes));
                     postAdapter.setPosts(Collections.singletonList(post));
-                    if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
-                        rawComments.addAll(post.inlineComments);
+                    if (!post.detailPreview().isEmpty()) {
+                        for(Models.Comment comment:post.detailPreview())if(Fb.me==null || Fb.me.blocked==null || !Fb.me.blocked.contains(comment.authorId))rawComments.add(comment);
                     }
                     break;
                 }
@@ -346,7 +348,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         if (postReg != null) { postReg.remove(); postReg = null; }
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
-        postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
+        if(forceHeader || post==null || !postAdapter.feedEngagementInPage)postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
             // A listener may first emit null while the D1/Firestore-compatible endpoint is
             // connecting, or report an error during an offline/network transition. Do not close
             // the comments screen on a transient read failure; retain cached post/comments and
@@ -377,7 +379,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         });
 
         // Latest canonical page stays live; older pages are explicit one-shot reads.
-        commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+        commentsHandle = CommentsEngine.watchPostDetail(postId, forceHeader?null:post, (allComments, pinnedId) -> {
             if (commentsHandle==null) return;
             updateCommentPager();
             if(commentsHandle.isLoading())return;
@@ -389,7 +391,8 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-        });
+        }, this::finish);
+        commentsHandle.publishCached();
         updateCommentPager();
     }
 

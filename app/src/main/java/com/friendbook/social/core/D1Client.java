@@ -59,9 +59,16 @@ public final class D1Client {
                 }
                 final JSONObject data=response;
                 MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
-            }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.")));}
+            }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.",error)));}
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
+    }
+    public static boolean isAccessDenied(Throwable error) {
+        for(Throwable cause=error;cause!=null;cause=cause.getCause())if(cause instanceof D1HttpTransport.HttpStatusException) {
+            int status=((D1HttpTransport.HttpStatusException)cause).status;
+            return status==401 || status==403 || status==404;
+        }
+        return false;
     }
     public static List<Map<String,Object>> maps(JSONArray rows)throws JSONException{
         List<Map<String,Object>> list=new ArrayList<>();if(rows!=null)for(int i=0;i<rows.length();i++)list.add(map(rows.getJSONObject(i)));return list;

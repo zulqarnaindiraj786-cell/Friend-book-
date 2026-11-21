@@ -195,6 +195,8 @@ public class Models {
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
         public String pinnedCommentId = "";
+        public final List<Comment> savedDetailPreview = new ArrayList<>();
+        public List<Comment> detailPreview() { return inlineComments.isEmpty()?savedDetailPreview:inlineComments; }
         public List<Comment> inlineComments = new ArrayList<>(); // synced multi-user commentsMap on post doc
         public Map<String, Map<String, Object>> reactionsMap = new HashMap<>(); // synced multi-user reactions on post doc
 
