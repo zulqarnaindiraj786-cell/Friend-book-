@@ -659,6 +659,12 @@ async function canReadChatMessages(db, chatId, uid) {
   return Array.isArray(data?.participants) && data.participants.includes(uid);
 }
 
+function unchangedNotificationRead(path,row,fields) {
+  if (splitPath(path)?.[0]!=='notifications' || !row?.[canonicalRootSnapshot]
+      || !fields || Object.keys(fields).length!==1 || fields.isRead!==true) return false;
+  return decodeValue(JSON.parse(row.document_json)).isRead===true;
+}
+
 async function writeRow(db, path, doc, now, existing, guarded = false) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
@@ -2522,6 +2528,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      if (unchangedNotificationRead(docPath,existing,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
@@ -2922,6 +2929,12 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       const chatAuth=await authorizeChat(db,p,uid,before,entry.deleted ? null : entry.doc,pendingRooms,cache);
       chatAuths.set(p,chatAuth);
       if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !chatAuth.allowed || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
+    }
+    // Tap/push-open or a badge refresh can attempt to mark an already-read
+    // notification again. Only skip a whole, authorized non-transaction batch.
+    if (path==='/v1/firestore/batch' && ops.every(op=>(op.type||op.op)==='update'
+        && unchangedNotificationRead(op.path,finalDocs.get(op.path)?.existingRow,op.fields||op.updates||op.data))) {
+      return json({ok:true,operations:ops.length});
     }
     // An older client can replay the same receipt and zero unread counter.
     // Only an entirely unchanged, single-room receipt batch can return early:

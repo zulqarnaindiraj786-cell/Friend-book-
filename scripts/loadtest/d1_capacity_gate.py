@@ -19,7 +19,7 @@ def capacity(users, sends, write_limit, include_first_receipt=False):
         'daily_write_limit': write_limit,
         'minimum_document_rows_written_per_day': minimum,
         'maximum_daily_active_users_at_this_workload_before_overhead': write_limit // (sends * rows_per_send),
-        'gate': 'FAILS_WRITE_FLOOR' if minimum > write_limit else 'NOT_VERIFIED',
+        'gate': 'FAILS_WRITE_FLOOR' if minimum > write_limit else ('NO_WRITE_HEADROOM' if minimum == write_limit else 'NOT_VERIFIED'),
     }
 
 

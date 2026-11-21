@@ -347,6 +347,16 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
   const unreadCount=uid=>call(uid,`/v1/firestore/count?parent=notifications&filters=${encodeURIComponent(JSON.stringify(unread))}`);
   assert.equal((await (await unreadCount('u2')).json()).count,2);
   assert.equal((await (await unreadCount('u1')).json()).count,0);
+  const path='/v1/firestore/document?path=notifications/n1', read={fields:{isRead:true}};
+  assert.equal((await call('u2',path,'PATCH',read)).status,200);
+  const writes=()=>sql.prepare('SELECT total_changes() n').get().n;
+  const before=writes();
+  assert.equal((await call('u2',path,'PATCH',read)).status,200);
+  assert.equal((await call('u2','/v1/firestore/batch','POST',{operations:[{op:'update',path:'notifications/n1',fields:{isRead:true}}]})).status,200);
+  assert.equal(writes(),before,'duplicate notification opens write no rows');
+  assert.equal((await call('u1',path,'PATCH',read)).status,403);
+  assert.equal((await (await unreadCount('u2')).json()).count,1);
+
   const plan=sql.prepare("EXPLAIN QUERY PLAN SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_type(document_json,'$.isRead')='false' AND json_extract(document_json,'$.toUserId')=?").all('u2');
   assert.ok(plan.some(row=>row.detail.includes('idx_cf_inbox_unread')));
   const count=await call('u1','/v1/firestore/count?parent=notifications');
