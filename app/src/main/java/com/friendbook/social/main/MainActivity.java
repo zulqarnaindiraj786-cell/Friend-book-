@@ -765,7 +765,7 @@ public class MainActivity extends Activity {
         com.friendbook.social.push.PushManager.sync(this);
         com.friendbook.social.push.PushOpenActivity.resumePending(this);
         refreshLiteUi();
-        else ConsentManager.retryConsentOnResume(this);
+        if (!ConsentManager.canRequestAds(this)) ConsentManager.retryConsentOnResume(this);
         Fb.ensureMeFresh();
         Presence.init();
         // Delay until Main is visible; never show a permission dialog from background/PIN/login.
