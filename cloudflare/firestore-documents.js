@@ -1006,7 +1006,8 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   if (parts?.length===3 && ['posts','reels'].includes(parts[0]) && ['comments','reactions'].includes(parts[2])) {
     return await contentReadAllowed(db,uid,`${parts[0]}/${parts[1]}`,requestUserReads) ? docs : [];
   }
-  if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return await authorizeLiveRoom(db,parts[1],uid) ? docs : [];
+  // Query/count authorize the live room before accessing its chat collection.
+  if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return docs;
   const allowed=new Array(docs.length).fill(false);
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
@@ -3106,15 +3107,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     }
     // Keep the original authorization and optimistic snapshots, but don't
     // rewrite identical receipt rows alongside a genuinely changed receipt.
-    const unchangedReceipts=new Set();
+    const unchangedBatchRows=new Set();
     if(path==='/v1/firestore/batch') {
       const writesPerPath=new Map();
       for(const op of ops)writesPerPath.set(op.path,(writesPerPath.get(op.path)||0)+1);
       for(const op of ops) {
-        if(writesPerPath.get(op.path)!==1 || (op.type||op.op)!=='update' || !/^chats\/[^/]+\/messages\/[^/]+$/.test(op.path))continue;
+        if(writesPerPath.get(op.path)!==1 || (op.type||op.op)!=='update')continue;
         const fields=op.fields||op.updates||op.data||{},keys=Object.keys(fields),entry=finalDocs.get(op.path);
+        if(unchangedNotificationRead(op.path,entry?.existingRow,fields)) {
+          unchangedBatchRows.add(op.path);continue;
+        }
+        if(!/^chats\/[^/]+\/messages\/[^/]+$/.test(op.path))continue;
         if(keys.length && keys.every(k=>['isSeen','isDelivered'].includes(k) && fields[k]===true)
-            && entry?.existingRow && !entry.deleted && entry.existingRow.document_json===JSON.stringify(entry.doc))unchangedReceipts.add(op.path);
+            && entry?.existingRow && !entry.deleted && entry.existingRow.document_json===JSON.stringify(entry.doc))unchangedBatchRows.add(op.path);
       }
     }
     const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
@@ -3171,7 +3176,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       }
       flushSnapshots();
       for (const p of order) {
-        if(unchangedReceipts.has(p))continue;
+        if(unchangedBatchRows.has(p))continue;
         const entry = finalDocs.get(p);
       if (entry.deleted) {
         statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));

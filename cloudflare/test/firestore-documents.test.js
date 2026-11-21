@@ -369,6 +369,14 @@ test('notification inbox is scoped across document APIs and batch cannot reassig
   assert.equal((await (await unreadCount('u2')).json()).count,1);
   assert.equal((await call('u2','/v1/firestore/document?path=notifications/n1','PATCH',{fields:{text:'tampered'}})).status,403);
   assert.equal((await call('u3','/v1/firestore/document?parent=notifications','POST',{data:{fromUserId:'u1',toUserId:'u2',isRead:false}})).status,403);
+  assert.equal((await call('u1','/v1/firestore/document?path=notifications/n2','PUT',{data:{fromUserId:'u1',toUserId:'u2',isRead:false}})).status,200);
+  const snapshot=sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='notifications/n1'").get();
+  const mixedBefore=writes();
+  const mixed={operations:['n1','n2'].map(id=>({op:'update',path:`notifications/${id}`,fields:{isRead:true}}))};
+  assert.equal((await call('u2','/v1/firestore/batch','POST',mixed)).status,200);
+  assert.equal(writes()-mixedBefore,2,'only newly read notification writes canonical and mirror');
+  assert.deepEqual(sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='notifications/n1'").get(),snapshot);
+  assert.equal((await call('u1','/v1/firestore/batch','POST',mixed)).status,403);
   sql.close();
 });
 
@@ -1916,10 +1924,10 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   const sql=new DatabaseSync(':memory:');
   for (const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8')]) sql.exec(ddl);
   sql.exec(readFileSync(new URL('../migrations/0060_live_status_indexes.sql',import.meta.url),'utf8'));
-  const plans=[];
+  const plans=[];let roomReads=0;
   const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},first:async()=>{if(args[0]==='lives/room')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const doc='/v1/firestore/document?path=lives/room';
@@ -1954,8 +1962,12 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   assert.equal((await call('bob',send,'POST',{data:{...msg,type:'system'}})).status,403);
   assert.equal((await call('alice',doc,'PATCH',{fields:{slowMode:true}})).status,200);
   assert.equal((await call('bob',send,'POST',{data:msg})).status,409);
-  const chatQuery='/v1/firestore/query';
+  const chatQuery='/v1/firestore/query';roomReads=0;
   assert.equal((await (await call('bob',chatQuery,'POST',{parent:chat})).json()).documents.length,1);
+  assert.equal(roomReads,1,'live chat only authorizes its room once');
+  roomReads=0;
+  assert.equal((await (await call('bob',`/v1/firestore/count?parent=${chat}`)).json()).count,1);
+  assert.equal(roomReads,1);
   assert.equal((await call('alice',doc,'PATCH',{fields:{kickedUserIds:['bob']}})).status,200);
   assert.equal((await call('bob',chatQuery,'POST',{parent:chat})).status,403);
   assert.equal((await call('bob',send,'POST',{data:msg})).status,403);
