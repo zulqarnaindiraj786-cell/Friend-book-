@@ -2630,9 +2630,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (!supportedDocumentPath(docPath)) return json({error:'Forbidden'},403);
     const parts = splitPath(docPath);
     if (['reports','feedback','gifts','referrals','officialBroadcasts'].includes(parts[0]) && !canReadReports(env,uid)) return json({error:'Forbidden'},403);
+    let checkedCanonicalRoom=false;
     if (parts?.length === 4 && parts[0] === 'chats' && parts[2] === 'messages') {
-      try { if (!(await canReadChatMessages(db,parts[1],uid))) return json({error:'Forbidden'},403); }
-      catch { return json({error:'Chat access unavailable'},503); }
+      try {
+        const room=await readRow(db,`chats/${parts[1]}`);
+        const data=room && decodeValue(JSON.parse(room.document_json));
+        if (!Array.isArray(data?.participants) || !data.participants.includes(uid)) return json({error:'Forbidden'},403);
+        // Apply both existing membership interpretations to the same raw
+        // canonical snapshot. Legacy conversion can change the raw payload.
+        if (room[canonicalRootSnapshot]) {
+          if (!storedChatMember(room.document_json,uid)) return json({error:'Forbidden'},403);
+          checkedCanonicalRoom=true;
+        }
+      } catch { return json({error:'Chat access unavailable'},503); }
     }
     let row;
     try { row = await readRow(db, docPath); }
@@ -2647,7 +2657,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (parts[0] === 'payments' && !canReadPayment(env,uid,document.data)) return json({error:'Forbidden'},403);
     if (!canReadNotification(docPath, uid, document.data)) return json({ error: 'Forbidden' }, 403);
     try {
-      if (!(parts[0]==='chats' && parts.length===2 && row[canonicalRootSnapshot] ? storedChatMember(row.document_json,uid) : await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
+      if (!checkedCanonicalRoom && !(parts[0]==='chats' && parts.length===2 && row[canonicalRootSnapshot] ? storedChatMember(row.document_json,uid) : await chatReadAllowed(db, docPath, uid, document.data))) return json({ error: 'Forbidden' }, 403);
     } catch { return json({error:'Chat access unavailable'},503); }
     let view;
     try { view = parts[0] === 'groups' ? groupReadView(uid,document.data,await trustedGroupOwner(db,docPath)) : parts[0] === 'friends' ? friendshipReadView(uid, document.data) : profileReadView(docPath, uid, document.data, isPaymentAdmin(env,uid)); }

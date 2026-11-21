@@ -430,6 +430,9 @@ test('profiles and chats: private fields, membership and write bypasses across A
     assert.equal(roomReads,1,'authorize against the fetched room without another point read');
   }
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1/messages/m1')).status,403);
+  roomReads=0;
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/c1/messages/m1')).status,200);
+  assert.equal(roomReads,1,'direct message reads authorize against one canonical room snapshot');
   sql.exec(readFileSync(new URL('../migrations/0040_chat_participant_lookup.sql',import.meta.url),'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0058_skip_unchanged_chat_members.sql',import.meta.url),'utf8'));
   roomReads=0;
