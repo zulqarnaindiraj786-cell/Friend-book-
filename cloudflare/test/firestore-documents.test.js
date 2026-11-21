@@ -416,6 +416,15 @@ test('profiles and chats: private fields, membership and write bypasses across A
     assert.equal(roomReads,1,'authorize against the fetched room without another point read');
   }
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1/messages/m1')).status,403);
+  sql.exec(readFileSync(new URL('../migrations/0040_chat_participant_lookup.sql',import.meta.url),'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0058_skip_unchanged_chat_members.sql',import.meta.url),'utf8'));
+  roomReads=0;
+  const inbox=await (await call('bob','/v1/firestore/query','POST',{parent:'chats'})).json();
+  assert.deepEqual(inbox.documents.map(doc=>doc.id),['c1']);
+  assert.equal((await (await call('bob','/v1/firestore/count?parent=chats')).json()).count,1);
+  assert.equal(roomReads,0,'indexed inbox pages and counts do not re-fetch canonical rooms');
+  // The lookup index identifies candidates, but the stored room still decides access.
+  sql.exec("INSERT INTO friendbook_cf_chat_participants(participant_uid,chat_path,source) VALUES ('eve','chats/c1',1)");
   const chats=await (await call('eve','/v1/firestore/query','POST',{parent:'chats'})).json();assert.deepEqual(chats.documents,[]);
   assert.equal((await call('eve','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','eve']}})).status,403);
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1','PATCH',{fields:{participants:['alice','bob','eve']}})).status,403);

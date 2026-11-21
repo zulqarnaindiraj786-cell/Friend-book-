@@ -494,7 +494,7 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
         WHERE m.participant_uid=? AND m.source=0
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all(),
       ]);
-      return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+      return [...(canonical?.results || []).map(row=>({...row,[canonicalRootSnapshot]:true})), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
     } catch (error) {
       if (!String(error).includes('no such table: friendbook_cf_chat_participants')) throw error;
     }
@@ -727,6 +727,8 @@ function rowToDocument(row) {
     data: decodeValue(data),
     createTime: row.create_time || 0,
     updateTime: row.update_time || 0,
+    ...(row[canonicalRootSnapshot] && row.parent_path==='chats' && isRootDocument(row.path) && splitPath(row.path)?.[0]==='chats'
+      ? {[canonicalRootSnapshot]:row.document_json} : {}),
   };
 }
 
@@ -1014,7 +1016,8 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
     for (;;) {
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
-      allowed[i]=(nestedChat || await chatReadAllowed(db,doc.path,uid,doc.data)) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
+      allowed[i]=(nestedChat || (parent==='chats' && doc[canonicalRootSnapshot]!==undefined
+        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
