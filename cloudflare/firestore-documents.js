@@ -1,3 +1,4 @@
+import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads } from './interactions.js';
@@ -2451,7 +2452,7 @@ async function queryResponse(parent, documents, known) {
     documents:entries.filter(([id,rev])=>!Object.hasOwn(known,id)||known[id]!==rev).map(([, ,doc])=>doc)});
 }
 
-export async function firestoreDocuments(request, env, identity, chatRetry=0) {
+export async function firestoreDocuments(request, env, identity, chatRetry=0, ctx=null) {
   if (!env.DB) return json({ error: 'Database unavailable' }, 503);
   const uid = identity?.uid;
   if (!validSegment(uid)) return json({ error: 'Unauthorized' }, 401);
@@ -3120,7 +3121,22 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       } else {
         for (const s of statements) await s.run();
       }
-      return json({ ok: true, operations: ops.length });
+      let pushScheduled=false;
+      if(ctx?.waitUntil && env.FIREBASE_ADMIN_SERVICE_ACCOUNT && body.chatPush===true && path==='/v1/firestore/batch' && order.length===2 && ops.length===2) {
+        const roomPath=order.find(p=>/^chats\/[^/]+$/.test(p));
+        const msgPath=order.find(p=>/^chats\/[^/]+\/messages\/[^/]+$/.test(p));
+        const chat=finalDocs.get(roomPath)?.doc, entry=finalDocs.get(msgPath);
+        if(roomPath && msgPath && parentPath(parentPath(msgPath))===roomPath && chat && entry?.doc?.senderId===uid
+            && !entry.existingRow && !entry.doc.isDeleted && Array.isArray(chat.participants)
+            && chat.participants.includes(uid) && chat.participants.length>=2 && chat.participants.length<=8) {
+          const [,chatId,,messageId]=splitPath(msgPath);
+          try {
+            ctx.waitUntil(pushCommittedChat(env,identity,chatId,messageId,chat,entry.doc).catch(()=>{}));
+            pushScheduled=true;
+          } catch { /* Caller retains its original push fallback. */ }
+        }
+      }
+      return json({ ok: true, operations: ops.length, ...(pushScheduled?{pushScheduled}:{}) });
     } catch (error) {
       // Retry only a definitely rolled-back optimistic guard conflict, and only the
       // two-operation chat send shape. Re-run all reads, transforms and ACL checks;
@@ -3131,7 +3147,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0) {
       if (chatRetry<2 && guardConflict && ops.length===2 && messages.length===1 && rooms.length===1
           && parentPath(parentPath(messages[0].path))===rooms[0].path) {
         const replay=new Request(request.url,{method:'POST',headers:request.headers,body:JSON.stringify(body)});
-        return firestoreDocuments(replay,env,identity,chatRetry+1);
+        return firestoreDocuments(replay,env,identity,chatRetry+1,ctx);
       }
       return json({ error: 'Batch unavailable' }, 503);
     }

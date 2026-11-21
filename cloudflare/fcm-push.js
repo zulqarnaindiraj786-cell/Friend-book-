@@ -169,6 +169,25 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
 }
 
+// Called only with an authorized chat/message pair after the D1 commit.
+export async function pushCommittedChat(env, identity, chatId, messageId, chat, message, send=sendToDevices) {
+  const actor=identity.uid, db=env.DB;
+  const sender=await pushProfile(db,actor,identity.viewerProfile);
+  if(!sender || sender.banned || sender.deactivated)return;
+  await Promise.all([...new Set(chat.participants)].filter(target=>target!==actor && validId(target)).map(async target=>{
+    for(let attempt=0;attempt<2;attempt++)try {
+      const recipient=await pushProfile(db,target);
+      if(!recipient || recipient.banned || recipient.deactivated || blockedList(recipient).includes(actor))return;
+      const event=`message_${chatId}_${messageId}_${target}`;
+      const result=await send(env,db,actor,target,{type:'message',chatId,isGroup:String(chat.isGroup===true),
+        toUserId:target,fromUserId:actor,eventId:event,
+        title:String(sender.displayName||sender.name||'friendbook').slice(0,100),
+        body:String(message.text||'Sent an attachment').slice(0,500)},event);
+      if(result.status<500)return;
+    }catch { /* Retry once; successful per-device claims are retained. */ }
+  }));
+}
+
 export async function pushIncomingCall(env,call) {
   const {chatId,callId,callerId,calleeId,callerName}=call;
   const event=`call_${chatId}_${callId}`;

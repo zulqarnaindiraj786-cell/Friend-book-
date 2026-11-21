@@ -87,32 +87,34 @@ public class WriteBatch {
         return this;
     }
 
-    public Task<Void> commit() { return commit(false); }
+    public Task<Void> commit() {
+        JSONArray ops=new JSONArray(operations);
+        return firestore.runAsync(() -> { send(ops,false); return null; });
+    }
 
-    public Task<Void> commitChatSend() { return commit(true); }
-
-    private Task<Void> commit(boolean chatSend) {
+    public Task<Boolean> commitChatSend() {
         JSONArray ops = new JSONArray(operations);
-        java.util.concurrent.Callable<Void> task = () -> {
-            D1DocumentTransport.batch(ops);
-            for (int i = 0; i < ops.length(); i++) {
-                JSONObject o = ops.optJSONObject(i);
-                if (o != null) {
-                    String p = o.optString("path", "");
-                    if (!p.isEmpty()) {
-                        firestore.invalidateDoc(p);
-                        firestore.notifyDocListeners(p);
-                    }
-                }
-            }
-            return null;
-        };
-        if (!chatSend) return firestore.runAsync(task);
+        java.util.concurrent.Callable<Boolean> task = () -> send(ops,true);
         for (int i = 0; i < ops.length(); i++) {
             JSONObject op = ops.optJSONObject(i);
             String path = op == null ? "" : op.optString("path", "");
             if (path.matches("chats/[^/]+")) return firestore.runChatSend(path, task);
         }
         return firestore.runChatSend("", task);
+    }
+
+    private boolean send(JSONArray ops,boolean chatSend) throws Exception {
+        boolean pushScheduled=D1DocumentTransport.batch(ops,chatSend);
+        for (int i = 0; i < ops.length(); i++) {
+            JSONObject o = ops.optJSONObject(i);
+            if (o != null) {
+                String p = o.optString("path", "");
+                if (!p.isEmpty()) {
+                    firestore.invalidateDoc(p);
+                    firestore.notifyDocListeners(p);
+                }
+            }
+        }
+        return pushScheduled;
     }
 }

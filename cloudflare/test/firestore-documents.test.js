@@ -1120,11 +1120,17 @@ test('chat send retries rolled-back room metadata conflicts without duplicating 
     if(race){race=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.otherUpdate','new') WHERE path='chats/room'").run();}
     sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
   }};
-  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
-  const call=(uid,ops)=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({operations:ops})}),env);
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',FIREBASE_ADMIN_SERVICE_ACCOUNT:'test-not-used'};
+  const pending=[];let commitObserved=false;
+  const ctx={waitUntil(promise){commitObserved=!!sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/m1'").get();pending.push(promise);}};
+  const call=(uid,ops,chatPush=false)=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({operations:ops,chatPush})}),env,ctx);
   const send=[{op:'set',path:'chats/room/messages/m1',data:{senderId:'alice',text:'hello'}},{op:'set',path:'chats/room',merge:true,data:{participants:['alice','bob'],unreadCount:{bob:{__fieldValue:'increment',value:1}}}}];
   assert.equal((await call('alice',[{op:'set',path:'chats/room',data:{participants:['alice','bob'],unreadCount:{bob:0}}}])).status,200);
-  race=true;const sent=await call('alice',send);assert.equal(sent.status,200,await sent.text());
+  race=true;const sent=await call('alice',send,true);assert.equal(sent.status,200);
+  assert.equal((await sent.json()).pushScheduled,true);
+  assert.equal(commitObserved,true);assert.equal(pending.length,1);
+  assert.equal((await call('mallory',send,true)).status,403);
+  assert.equal(pending.length,1);await Promise.all(pending);
   assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/m1'").get().n,1);
   const room=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json);
   assert.equal(room.unreadCount.bob,1);assert.equal(room.otherUpdate,'new');

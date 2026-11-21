@@ -966,7 +966,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commitChatSend().addOnSuccessListener(x -> {
-            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
+            if (!Boolean.TRUE.equals(x) && java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
         })
                 .addOnFailureListener(e -> {
                     reconcileUncertainSend(msgRef, me, e, "Voice note", null);
@@ -1065,7 +1065,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commitChatSend()
                 .addOnSuccessListener(x -> {
-                    if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
+                    if (!Boolean.TRUE.equals(x) && java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
                 })
                 .addOnFailureListener(e -> {
                     reconcileUncertainSend(msgRef, me, e, "Sticker", null);
@@ -1145,7 +1145,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.set(Fb.db().collection("chats").document(chatId), chatDoc, SetOptions.merge());
         com.friendbook.social.core.SoundManager.action(this, "sent", me);
         batch.commitChatSend().addOnSuccessListener(x -> {
-            if (java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
+            if (!Boolean.TRUE.equals(x) && java.util.Objects.equals(me, Fb.uid())) com.friendbook.social.push.FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId);
         }).addOnFailureListener(e -> {
             reconcileUncertainSend(msgRef, me, e, "Message", () -> {
                 if (imageUrl == null && rawOverride == null && input != null && input.length() == 0) input.setText(finalText);

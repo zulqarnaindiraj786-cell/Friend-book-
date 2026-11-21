@@ -172,8 +172,13 @@ final class D1DocumentTransport {
     }
 
     static void batch(JSONArray operations) throws Exception {
+        batch(operations,false);
+    }
+
+    static boolean batch(JSONArray operations,boolean chatSend) throws Exception {
         JSONObject body = new JSONObject().put("operations", operations);
-        request("POST", "/v1/firestore/batch", body);
+        if(chatSend)body.put("chatPush",true);
+        return request("POST", "/v1/firestore/batch", body).optBoolean("pushScheduled");
     }
 
     static void transaction(JSONArray operations) throws Exception {

@@ -133,7 +133,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);
       if (firestore) {
-        const response=await firestoreDocuments(request, env, { uid, suspended, viewerProfile, token: bearer[1] });
+        const response=await firestoreDocuments(request, env, { uid, suspended, viewerProfile, token: bearer[1] }, 0, ctx);
         if(path==='/v1/chat/call' && response.ok && ctx?.waitUntil){
           const call=await response.clone().json();
           if(call.status==='ringing') ctx.waitUntil(pushIncomingCall(env,call).catch(()=>{}));
