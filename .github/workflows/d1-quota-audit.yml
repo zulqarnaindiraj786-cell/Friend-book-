@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        window: [latest-15m]
+        window: [latest-15m, latest-60m]
         metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -69,7 +69,7 @@ jobs:
                       elif any(f.startswith(('bounded-','scan=')) for f in flags):
                           focus.append(' '.join(map(str,parts)))
                   if focus: print('::notice:: Focus patterns %0A'+'%0A'.join(focus))
-          if os.environ['AUDIT_METRIC']=='rowsRead':
+          if os.environ['AUDIT_METRIC']=='rowsRead' and os.environ['AUDIT_WINDOW']=='latest-15m':
               midnight=now.replace(hour=0,minute=0,second=0,microsecond=0)
               q='''{ viewer { accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {
                   d1QueriesAdaptiveGroups(limit:1,filter:{databaseId:"e1c605ca-a50b-46c6-9deb-56dd1f70d163",datetime_geq:"%s",datetime_leq:"%s"}) {
@@ -83,5 +83,6 @@ jobs:
                       for account in totals['data']['viewer']['accounts']:
                           print('::notice:: UTC daily adaptive query analytics',account['d1QueriesAdaptiveGroups'],fmt(now))
               except (urllib.error.URLError, KeyError, ValueError): print('::notice:: UTC daily analytics aggregate unavailable')
-          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=15),now,os.environ['AUDIT_WINDOW'])
+          window=os.environ["AUDIT_WINDOW"]
+          query(os.environ["AUDIT_METRIC"],now-dt.timedelta(minutes=int(window.removeprefix("latest-").removesuffix("m"))),now,window)
           PY
