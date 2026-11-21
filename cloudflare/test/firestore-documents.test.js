@@ -2142,6 +2142,7 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
     readFileSync(new URL('../migrations/0053_people_name_prefix.sql', import.meta.url), 'utf8')]) sql.exec(ddl);
   sql.exec(readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql', import.meta.url), 'utf8'));
   const plans=[];
+  let scans=0;
   const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   put.run('users/actor','users','users','actor','actor','{"displayName":"Viewer"}',1,1);
@@ -2149,7 +2150,7 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   put.run('users/match','users','users','match','match','{"displayName":"Amir"}',1,1);
   legacy.run('users/changed','users','changed','changed','{"displayName":"Amir old"}',1);
   legacy.run('users/legacy','users','legacy','legacy','{"fields":{"displayName":{"stringValue":"Amina"}}}',1);
-  const db={prepare(q){const s=sql.prepare(q);return {bind(...a){return {first:async()=>s.get(...a)||null,all:async()=>{if(q.includes('idx_cf_legacy_people_cursor_prefix')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...a).map(row=>row.detail));return {results:s.all(...a)};}};}};}};
+  const db={prepare(q){if(q.includes('quota_root_users_name')) scans++;const s=sql.prepare(q);return {bind(...a){return {first:async()=>s.get(...a)||null,all:async()=>{if(q.includes('idx_cf_legacy_people_cursor_prefix')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...a).map(row=>row.detail));return {results:s.all(...a)};}};}};}};
   const response=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
     method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},
     body:JSON.stringify({parent:'users',limit:12,filters:[{field:'displayName',op:'>=',value:'Am'},{field:'displayName',op:'<=',value:'Am\uf8ff'}]}),
@@ -2171,7 +2172,9 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   };
   const wanted=['coerced','primitive','legacy','match'];
   assert.deepEqual(await mentions({}),wanted);
-  assert.deepEqual(await mentions({endBefore:[]}),wanted); // no-op cursor forces compatibility path
+  assert.deepEqual(await mentions({startAfter:['Amber','primitive']}),['legacy','match']);
+  assert.deepEqual(await mentions({endBefore:['Amir','match']}),wanted.slice(0,-1));
+  assert.equal(scans,0,'prefix pages must not scan the users collection');
   assert.match(plans.join('\n'),/SEARCH a USING INDEX idx_cf_legacy_people_cursor_prefix/);
 
 });

@@ -403,7 +403,9 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     }
     const order=Array.isArray(spec?.orderBy) && spec.orderBy.length===1 ? spec.orderBy[0] : null;
     const lower=Array.isArray(spec?.startAt) && spec.startAt.length===1 ? spec.startAt[0] : null;
-    if (order?.field==='displayName' && order.direction!=='DESCENDING' && !spec.startAfter && !spec.endBefore
+    // Additional cursor bounds can only narrow this prefix. The common query
+    // evaluator still applies them after profile projection and shadow handling.
+    if (order?.field==='displayName' && order.direction!=='DESCENDING'
         && typeof lower==='string' && /^[ -~]{1,60}$/.test(lower)
         && Array.isArray(spec.endAt) && spec.endAt.length===1 && spec.endAt[0]===lower+'\uf8ff') {
       const upper=lower.slice(0,-1)+String.fromCharCode(lower.charCodeAt(lower.length-1)+1);
