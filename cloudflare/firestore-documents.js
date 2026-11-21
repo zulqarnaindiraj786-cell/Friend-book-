@@ -2787,6 +2787,17 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const fields=body.fields||body.data||body.updates||{};
         const canonicalOnly=existing[canonicalRootSnapshot] && Object.keys(fields).length===1
           && fields[`unreadCount.${uid}`]===0;
+        if (canonicalOnly && existingDoc.isGroup!==true) {
+          // Direct rooms have no group authority ledger to update. The row
+          // comparison itself keeps membership and unread changes atomic.
+          const serialized=JSON.stringify(next);
+          if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+          const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents
+            SET document_json=?,owner_uid=?,update_time=? WHERE path=? AND document_json=? AND update_time=? RETURNING path`)
+            .bind(serialized,ownerOf(next,existing.owner_uid||uid),now,docPath,existing.document_json,existing.update_time).first();
+          if (!updated) return json({error:'Update unavailable'},503);
+          return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
+        }
         return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
       }
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));

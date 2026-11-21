@@ -486,7 +486,7 @@ test('profiles and chats: private fields, membership and write bypasses across A
   sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.unreadCount.bob',7) WHERE path='chats/c1'");
   const beforeStandaloneReset=profileChanges();
   assert.equal((await call('bob','/v1/firestore/document?path=chats/c1','PATCH',{fields:{'unreadCount.bob':0}})).status,200);
-  assert.equal(profileChanges()-beforeStandaloneReset,3,'standalone reset writes only the canonical room and its guard');
+  assert.equal(profileChanges()-beforeStandaloneReset,1,'standalone direct reset writes only the canonical room');
   assert.deepEqual(exactMirror(),beforeStandaloneMirror);
   roomReads=0;
   const chatList=await (await call('bob','/v1/docs?collection=chats&limit=1')).json();
@@ -916,6 +916,12 @@ test('chat atomic guards reject concurrent room and message changes and orphan a
     .run(JSON.stringify({participants:['alice']}),'chats/room');
   assert.equal((await call('bob','/v1/firestore/document?path=chats/room/messages/m2','PATCH',{fields:{isSeen:true}})).status,503);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m2').document_json).isSeen,undefined);
+  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?')
+    .run(JSON.stringify({participants:['alice','bob'],unreadCount:{bob:7}}),'chats/room');
+  race=()=>sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?')
+    .run(JSON.stringify({participants:['alice','bob'],unreadCount:{bob:8}}),'chats/room');
+  assert.equal((await call('bob','/v1/firestore/document?path=chats/room','PATCH',{fields:{'unreadCount.bob':0}})).status,503);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room').document_json).unreadCount.bob,8);
   race=()=>insert('chats/new','chats','chats','new',{participants:['eve']});
   const res=await call('alice','/v1/firestore/batch','POST',{operations:[{op:'set',path:'chats/new/messages/m',data:{senderId:'alice',text:'private'}},{op:'set',path:'chats/new',data:{participants:['alice','bob']}}]});
   assert.notEqual(res.status,200);
