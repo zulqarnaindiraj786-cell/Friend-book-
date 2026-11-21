@@ -7,6 +7,11 @@ public final class PresenceWritePolicyCheck {
         if (!value) throw new AssertionError("Presence write policy regression");
     }
     public static void main(String[] args) {
+        check(2 * PresencePolicy.PROFILE_HEARTBEAT_MS < PresencePolicy.ONLINE_TTL_MS);
+        check(3_600_000L / PresencePolicy.PROFILE_HEARTBEAT_MS == 30);
+        check(PresencePolicy.typingPollMs(true) == 3_000L);
+        check(PresencePolicy.typingPollMs(false) > PresencePolicy.typingPollMs(true));
+        check(PresencePolicy.typingPollMs(false) < PresencePolicy.TYPING_IDLE_CLEAR_MS);
         PresenceWritePolicy p = new PresenceWritePolicy();
         long first = p.begin("a", true, 0);
         check(first > 0 && p.begin("a", true, 2500) == 0); // 2.5s < 5s interval -> suppressed

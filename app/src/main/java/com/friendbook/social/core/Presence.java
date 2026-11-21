@@ -39,7 +39,7 @@ public class Presence {
     /** Callback for presence updates: (online, lastSeenMs). */
     public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
-    public static final long HEARTBEAT_INTERVAL_MS = 90_000L; // Profile fallback; the WebSocket handles live presence.
+    public static final long HEARTBEAT_INTERVAL_MS = PresencePolicy.PROFILE_HEARTBEAT_MS;
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 minutes (300s)
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();
@@ -333,7 +333,7 @@ public class Presence {
         if (typing) {
             Runnable clear = () -> { if (uid.equals(Fb.uid())) setTyping(chatId, false); };
             typingClear.put(chatId, clear);
-            H.postDelayed(clear, 4000);
+            H.postDelayed(clear, PresencePolicy.TYPING_IDLE_CLEAR_MS);
         }
     }
 
@@ -398,7 +398,7 @@ public class Presence {
             h.ticker = () -> {
                 if (!h.closed) {
                     if (com.friendbook.social.App.isForeground()) fetchCloudflareTyping(chatId, myUid, h, cfTyping, emit);
-                    H.postDelayed(h.ticker, 3_000L); // poll every 3s
+                    H.postDelayed(h.ticker, PresencePolicy.typingPollMs(cfTyping[0]));
                 }
             };
             H.post(h.ticker); // immediate first fetch
