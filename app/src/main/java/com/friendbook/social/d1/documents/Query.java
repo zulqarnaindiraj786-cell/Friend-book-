@@ -281,6 +281,36 @@ public class Query {
         return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
     }
 
+    /** Refresh a descending head without skipping a burst larger than one page. */
+    public Task<QuerySnapshot> refreshCachedHead(QuerySnapshot cached) {
+        if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.SERVER);
+        final String actor = D1DocumentStore.authenticatedUid();
+        final Query delta = endBefore(cached.getDocuments().get(0)).limitToLast(limitValue);
+        final String key = D1DocumentStore.queryCacheKey(this, actor);
+        return firestore.runAsync(() -> {
+            JSONArray updated = D1DocumentTransport.query(delta.toQueryBody());
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during delta read");
+            java.util.LinkedHashMap<String,JSONObject> rows = new java.util.LinkedHashMap<>();
+            for(int i=0;i<updated.length();i++) {
+                JSONObject row=updated.getJSONObject(i);
+                rows.put(row.getString("id"),row);
+            }
+            for(DocumentSnapshot doc:cached.getDocuments()) {
+                if(rows.size()>=limitValue)break;
+                if(rows.containsKey(doc.getId()))continue;
+                JSONObject row=new JSONObject();
+                row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(doc.getData()));
+                if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
+                if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
+                rows.put(doc.getId(),row);
+            }
+            JSONArray merged=new JSONArray(rows.values());
+            firestore.cacheQuery(key,merged.toString());
+            return parseQuerySnapshot(merged);
+        });
+    }
+
     public ListenerRegistration addSnapshotListener(EventListener<QuerySnapshot> listener) {
         return firestore.registerQueryListener(this, listener);
     }

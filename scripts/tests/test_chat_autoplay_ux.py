@@ -4,7 +4,7 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class ChatAutoplayUx(unittest.TestCase):
     def test_ten_chats_and_ten_latest_and_older_messages(self):
         inbox=(JAVA/'chat/ConversationsActivity.java').read_text();chat=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['cachedRooms++>=10','inboxSwipe.setOnRefreshListener','query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)']:
+        for token in ['cachedRooms++>=10','inboxSwipe.setOnRefreshListener','page.refreshCachedHead(cached)']:
             self.assertIn(token,inbox)
         self.assertNotIn('addSnapshotListener',inbox)
         self.assertIn('.limitToLast(10)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(10)',chat)

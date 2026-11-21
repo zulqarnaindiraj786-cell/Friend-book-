@@ -30,6 +30,30 @@ public final class CursorPager {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
     public void start() { start(false); }
+    public void startDelta() {
+        if(!active() || loading)return;
+        loading=true;
+        final int request=++requestGeneration;
+        Query head=query.limit(size);
+        head.get(Source.CACHE).addOnCompleteListener(cache -> {
+            if(!active() || request!=requestGeneration)return;
+            QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
+            if(cached!=null && !cached.isEmpty()) {
+                for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
+                cursor=cached.getDocuments().get(cached.size()-1);
+                more=cached.size()==size;
+                loading=false;emit("");loading=true;
+            } else emit("");
+            head.refreshCachedHead(cached).addOnSuccessListener(page -> {
+                if(!active() || request!=requestGeneration)return;
+                loading=false;
+                acceptObservedFirstPage(page);
+            }).addOnFailureListener(error -> {
+                if(!active() || request!=requestGeneration)return;
+                loading=false;emit("Couldn't refresh. Pull down to retry.");
+            });
+        });
+    }
     public void startObserved() { start(true); }
     private void start(boolean observed) {
         if (!active()) return;

@@ -29,7 +29,6 @@ import com.friendbook.social.models.Models;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
 import com.friendbook.social.d1.documents.DocumentSnapshot;
-import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,7 +38,6 @@ import java.util.List;
 public class NotificationsFragment extends Fragment {
 
     private NotifAdapter adapter;
-    private ListenerRegistration reg;
     private com.friendbook.social.core.CursorPager pager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private TextView moreButton;
@@ -170,7 +168,7 @@ public class NotificationsFragment extends Fragment {
         }
         String me = Fb.uid();
         if (me == null || isHidden()) return;
-        if (reg == null || !java.util.Objects.equals(loadedActor, me)) {
+        if (pager == null || !java.util.Objects.equals(loadedActor, me)) {
             startPages();
         }
     }
@@ -197,14 +195,7 @@ public class NotificationsFragment extends Fragment {
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        // The same verified head query is both the first page and the live refresh.
-        // CursorPager reads the saved query on disk first, then accepts that live snapshot.
-        pager.startObserved();
-        reg=query.limit(20).addSnapshotListener((snapshot,error)->{
-            if(pager==null || isHidden() || !me.equals(Fb.uid()))return;
-            if(error!=null) pager.observedError();
-            else pager.acceptObservedFirstPage(snapshot);
-        });
+        pager.startDelta();
     }
 
     private void setUnreadOnly(boolean on) {
@@ -218,7 +209,6 @@ public class NotificationsFragment extends Fragment {
         chipAll.setTextColor(on ? Ui.sub(a) : 0xFFFFFFFF);
         chipUnread.setBackground(Ui.round(a, on ? Ui.BLUE : Ui.inputBg(a), 10));
         chipUnread.setTextColor(on ? 0xFFFFFFFF : Ui.sub(a));
-        if (reg != null) { reg.remove(); reg = null; }
         startPages(); // Reset cursor and cache key when the filter changes.
     }
 
@@ -253,7 +243,6 @@ public class NotificationsFragment extends Fragment {
     }
 
     private void stopPages() {
-        if(reg!=null){reg.remove();reg=null;}
         if(pager!=null){pager.close();pager=null;}
     }
 

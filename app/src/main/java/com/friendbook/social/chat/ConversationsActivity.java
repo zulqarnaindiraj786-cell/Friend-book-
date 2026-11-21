@@ -309,8 +309,17 @@ public class ConversationsActivity extends Activity {
             if(generation!=inboxGeneration)return;
             inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxSwipe.setRefreshing(false);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setOnClickListener(v -> loadInboxPage(reset));inboxMoreButton.setVisibility(View.VISIBLE);
         };
-        query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
-                .addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        com.friendbook.social.d1.documents.Query page=query.limit(10);
+        if(!reset)page.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        else page.get(com.friendbook.social.d1.documents.Source.CACHE).addOnCompleteListener(cache -> {
+            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing())return;
+            com.friendbook.social.d1.documents.QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
+            if(cached!=null && !cached.isEmpty() && allRooms.isEmpty()) {
+                apply.accept(cached);
+                inboxLoading=true;
+            }
+            page.refreshCachedHead(cached).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        });
     }
 
     private void applyFilter() {

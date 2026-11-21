@@ -860,6 +860,16 @@ test('trusted group chats support admin management, member leave, transfer and a
   const room={isGroup:true,createdBy:'alice',adminIds:['alice'],participants:['alice','bob','carol'],onlyAdminsCanSend:false,groupName:'Group'};
   assert.equal((await call('alice','chats/g','PUT',{data:{...room,adminIds:['alice','bob']}})).status,403);
   assert.equal((await call('alice','chats/g','PUT',{data:room})).status,200);
+  const created=await app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({operations:[
+    {op:'set',path:'chats/newGroup',data:room},
+    {op:'set',path:'chats/newGroup/messages/welcome',data:{senderId:'alice',type:'system',text:'Group created'}},
+  ]})}),env);
+  assert.equal(created.status,200,await created.text());
+  const added=await call('alice','chats/newGroup','PATCH',{fields:{participants:{__fieldValue:'arrayUnion',values:['eve']}}});
+  assert.equal(added.status,200);
+  const guest=await app.fetch(new Request('https://example.test/v1/firestore/document?path=chats/newGroup',{headers:{authorization:'Bearer eve'}}),env);
+  assert.equal(guest.status,200);
+
   assert.equal(sql.prepare('SELECT owner_uid FROM friendbook_cf_trusted_group_chats WHERE chat_path=?').get('chats/g').owner_uid,'alice');
   assert.equal((await call('bob','chats/g','PATCH',{fields:{adminIds:['alice','bob']}})).status,403);
   assert.equal((await call('bob','chats/g','PATCH',{fields:{participants:['alice','bob','carol','eve']}})).status,403);

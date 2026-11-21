@@ -17,7 +17,7 @@ class ProfileFeedScope(unittest.TestCase):
   self.assertIn('loadingProfiles=new HashSet<>()',s)
   self.assertIn('Fb.getUserFresh(uid)',s)
   self.assertIn('this::loadInlineSuggestions',s)
-  self.assertIn('if(req.fromName.isEmpty())ensureUser(req.fromUid)',s)
+  self.assertNotIn('ensureUser(req.fromUid)',s)
   self.assertNotIn('suggestionPager.start()',s.split('private void loadInlineSuggestions',1)[0])
  def test_offline_page_does_not_replace_confirmed_rows(self):
   s=(ROOT/'core/CursorPager.java').read_text()

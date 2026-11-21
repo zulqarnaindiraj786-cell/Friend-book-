@@ -6,7 +6,7 @@ class CursorContracts(unittest.TestCase):
         code=(ROOT/'core/CursorPager.java').read_text()
         for token in ['page.startAfter(cursor)','page.limit(size).get()','Objects.equals(actor,Fb.uid())','if(!offline && !result.isEmpty())cursor=', 'public void close(){closed=true;requestGeneration++;','timeoutHandler.postDelayed(timeout,20000L)','request!=requestGeneration','LruCache<>(24)']:
             self.assertIn(token,code)
-        self.assertNotIn('cursor=',code.split('.addOnFailureListener',1)[1])
+        self.assertNotIn('cursor=',code.split('public void next()',1)[1].split('.addOnFailureListener',1)[1])
     def test_requested_list_pages_and_controls(self):
         for path,token in [('friends/FollowListActivity.java',',20,"follow:'),('main/NotificationsFragment.java',',20,"notifications:'),('profile/ProfileActivity.java',',10,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',30,"post-reactions:')]:
             self.assertIn(token,(ROOT/path).read_text())
