@@ -1200,6 +1200,24 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
+// Merge raw indexed windows before applying shadow filtering. Equal canonical
+// keys win; stale legacy entries only advance the cursor and never render.
+function mergeMirroredWindow(canonical,legacy,spec,chunk) {
+  const nativeDocs=(canonical?.results||[]).map(rowToDocument).filter(Boolean);
+  const nativeById=new Map(nativeDocs.map(doc=>[doc.id,doc]));
+  // Select the raw legacy window before testing canonical precedence. An
+  // almost entirely mirrored collection must not be walked to find N
+  // legacy-only rows. Shadowed entries advance the cursor but never render.
+  const oldDocs=(legacy?.results||[]).flatMap(row=>{
+    const doc=rowToDocument(appDocumentToFirestoreRow(row));
+    if(!doc)return [];
+    const n=nativeById.get(doc.id);
+    if(n && compareDocumentToCursor(n,[doc.data.createdAt,doc.id],spec.orderBy)===0)return [];
+    return [{...doc,shadowed:Boolean(row.shadowed)}];
+  });
+  return sortDocuments([...nativeDocs,...oldDocs],spec.orderBy).slice(0,chunk);
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
@@ -1271,19 +1289,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       throw error;
     }
     const [canonical,legacy]=batches;
-    const nativeDocs=(canonical?.results||[]).map(rowToDocument).filter(Boolean);
-    const nativeById=new Map(nativeDocs.map(doc=>[doc.id,doc]));
-    // Select the raw legacy window before testing canonical precedence. An
-    // almost entirely mirrored collection must not be walked to find N
-    // legacy-only rows. Shadowed entries advance the cursor but never render.
-    const oldDocs=(legacy?.results||[]).flatMap(row=>{
-      const doc=rowToDocument(appDocumentToFirestoreRow(row));
-      if(!doc)return [];
-      const n=nativeById.get(doc.id);
-      if(n && compareDocumentToCursor(n,[doc.data.createdAt,doc.id],spec.orderBy)===0)return [];
-      return [{...doc,shadowed:Boolean(row.shadowed)}];
-    });
-    const docs=sortDocuments([...nativeDocs,...oldDocs],spec.orderBy).slice(0,chunk);
+    const docs=mergeMirroredWindow(canonical,legacy,spec,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
@@ -1360,15 +1366,14 @@ async function boundedNotificationPage(db,uid,spec) {
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
         FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+      db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path) AS shadowed
+        FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+          FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
+          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?) a`).bind(...args).all(),
     ]);
-    const rows=[...(canonical?.results || []),...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
-    const docs=sortDocuments(rows.map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    const docs=mergeMirroredWindow(canonical,legacy,spec,chunk);
     if (!docs.length) break;
-    const allowed=docs.filter(doc=>canReadNotification(doc.path,uid,doc.data));
+    const allowed=docs.filter(doc=>!doc.shadowed && canReadNotification(doc.path,uid,doc.data));
     visible.push(...allowed);
     if (visible.length>=spec.limit) return visible.slice(0,spec.limit);
     const last=docs[docs.length-1], value=last.data.createdAt;
@@ -3089,6 +3094,19 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           .bind(`chats/${[...receiptRooms][0]}`).first()) return json({ok:true,operations:ops.length});
       } catch { /* Keep the existing guarded write path on an unavailable probe. */ }
     }
+    // Keep the original authorization and optimistic snapshots, but don't
+    // rewrite identical receipt rows alongside a genuinely changed receipt.
+    const unchangedReceipts=new Set();
+    if(path==='/v1/firestore/batch') {
+      const writesPerPath=new Map();
+      for(const op of ops)writesPerPath.set(op.path,(writesPerPath.get(op.path)||0)+1);
+      for(const op of ops) {
+        if(writesPerPath.get(op.path)!==1 || (op.type||op.op)!=='update' || !/^chats\/[^/]+\/messages\/[^/]+$/.test(op.path))continue;
+        const fields=op.fields||op.updates||op.data||{},keys=Object.keys(fields),entry=finalDocs.get(op.path);
+        if(keys.length && keys.every(k=>['isSeen','isDelivered'].includes(k) && fields[k]===true)
+            && entry?.existingRow && !entry.deleted && entry.existingRow.document_json===JSON.stringify(entry.doc))unchangedReceipts.add(op.path);
+      }
+    }
     const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
     const previewKeys=new Set(['lastMessage','lastMessageTime','lastMessageTimeMs','unreadCount','typing','participantNames','participantPhotos']);
     const canonicalOnlyRoom=(p,entry)=>{
@@ -3143,6 +3161,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       }
       flushSnapshots();
       for (const p of order) {
+        if(unchangedReceipts.has(p))continue;
         const entry = finalDocs.get(p);
       if (entry.deleted) {
         statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));

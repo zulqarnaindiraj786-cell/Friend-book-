@@ -425,8 +425,12 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const oldMirror=exactMirror();
   const reset={op:'update',path:'chats/c1',updates:{'unreadCount.bob':0}};
   const resetBatch=batch([...receipts.operations,reset]);
+  const unchangedBefore=sql.prepare("SELECT doc_id,update_time FROM friendbook_cf_firestore_documents WHERE parent_path='chats/c1/messages' ORDER BY doc_id").all();
+  const beforeReset=profileChanges();
   assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
   assert.equal(roomGuards,1,'first unread reset still commits');
+  assert.equal(profileChanges()-beforeReset,3,'only the room update and guard insert/delete write rows');
+  assert.deepEqual(sql.prepare("SELECT doc_id,update_time FROM friendbook_cf_firestore_documents WHERE parent_path='chats/c1/messages' ORDER BY doc_id").all(),unchangedBefore);
   assert.deepEqual(exactMirror(),oldMirror,'receipt does not rewrite historical room mirror');
   sql.prepare("UPDATE friendbook_cf_documents SET updated_at=1 WHERE path='chats/c1'").run();
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/older','chats','older','alice',JSON.stringify({participants:['alice','bob']}),2);
@@ -2235,8 +2239,14 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  }
  f.run('notifications/shadow','notifications','notifications','shadow','sender',data('bob',999),1,1);
  a.run('notifications/shadow','notifications','shadow','sender',JSON.stringify({fields:{toUserId:{stringValue:'alice'},isRead:{booleanValue:false}}}),1);
- let rows=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
+ for(let i=1;i<=1000;i++){
+  const id=`old${i}`,path=`notifications/${id}`;
+  f.run(path,'notifications','notifications',id,'sender',data('alice',-i),1,1);
+  a.run(path,'notifications',id,'sender',data('alice',-i),1);
+ }
+ let rows=0,probes=0;
+ sql.function('quota_probe',path=>{probes++;return path;});
+ const db={prepare(q){const stmt=sql.prepare(q.includes("ORDER BY CASE WHEN json_type(a.document_json")?q.replace("f.path=a.path","f.path=quota_probe(a.path)"):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const filters=[{field:'toUserId',op:'==',value:'alice'},{field:'isRead',op:'==',value:false}];
  const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return await res.json();};
@@ -2249,6 +2259,10 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  const removed=initial.order[0];sql.prepare('DELETE FROM friendbook_cf_documents WHERE doc_id=?').run(removed);
  const delta=await query({knownRevisions:initial.revisions});
  assert.ok(!delta.order.includes(removed));assert.equal(delta.documents.length,1);
+ probes=0;
+ const mirrorOnly=(await query({startAfter:[{__type:'timestamp',millis:0},'n0']})).documents;
+ assert.deepEqual(mirrorOnly.map(d=>d.id),Array.from({length:16},(_,i)=>i+1).filter(i=>i%3!==0).slice(0,10).map(i=>`old${i}`));
+ assert.ok(probes<=10,`older copies probed: ${probes}`);
  sql.close();
 });
 
