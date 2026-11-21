@@ -112,7 +112,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void setPosts(List<Models.Post> list) {
-        if (list == null) list = new ArrayList<>();
+        list = uniquePosts(list, new java.util.HashSet<>());
         // ⚡ Anti-Jump In-Place Diff: if post IDs & order are identical, NEVER call notifyDataSetChanged()!
         if (!posts.isEmpty() && posts.size() == list.size()) {
             boolean sameOrder = true;
@@ -147,8 +147,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         List<Long> before=rowIds();
         int oldFirst=posts.isEmpty()?-1:offset();
         posts.clear();
-        java.util.Set<String> existing=new java.util.HashSet<>();
-        for(Models.Post post:list) if(post!=null && existing.add(post.id)) posts.add(post);
+        posts.addAll(list);
         dispatchRowDiff(before,false);
         if(showHeader && !posts.isEmpty() && (oldFirst<0 || before.get(oldFirst)!=getItemId(offset())))
             notifyItemChanged(offset(), "DISCOVERY_SECTION");
@@ -243,10 +242,20 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Home receives engagement with the page; detail adapters still hydrate on demand. */
     public boolean feedEngagementInPage;
 
+    private static List<Models.Post> uniquePosts(List<Models.Post> list, java.util.Set<String> seen) {
+        List<Models.Post> unique=new ArrayList<>();
+        if(list!=null)for(Models.Post post:list)if(post!=null && seen.add(post.id))unique.add(post);
+        return unique;
+    }
+
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
+        java.util.Set<String> existing=new java.util.HashSet<>();
+        for(Models.Post post:posts)existing.add(post.id);
+        List<Models.Post> page=uniquePosts(list,existing);
+        if(page.isEmpty())return;
         int oldItemCount = getItemCount();
-        posts.addAll(list);
+        posts.addAll(page);
         int newItemCount = getItemCount();
         if (newItemCount > oldItemCount) {
             int insertStart = Math.max(0, oldItemCount - footerCount());

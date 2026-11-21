@@ -45,16 +45,12 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertNotIn('statusRef', source)
         self.assertNotIn('connListener', source)
         self.assertNotIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
-    def test_active_strip_uses_live_presence_not_cached_flags(self):
+    def test_manual_inbox_has_no_background_presence_reads(self):
         source=(JAVA/'chat/ConversationsActivity.java').read_text()
-        strip=method(source,'private void renderActiveNow()')
-        self.assertIn('Boolean.TRUE.equals(onlineUsers.get(u.uid))',strip)
-        self.assertIn('if (!online) continue',strip)
-        self.assertNotIn('u.isOnline', strip)
-        self.assertNotIn('online && r.unread == 0',source)
-        self.assertIn('h.dot.setVisibility(online ? View.VISIBLE : View.GONE)',source)
-        self.assertIn('h.lastActive.setVisibility(!online && seen > 0',source)
-        self.assertIn('handle.close()',method(source,'protected void onStop()'))
+        self.assertNotIn('Presence.watch(',source)
+        self.assertNotIn('addSnapshotListener',source)
+        self.assertNotIn('Fb.getUser(',source)
+        self.assertIn('inboxSwipe.setOnRefreshListener',source)
     def test_chat_profile_use_the_shared_presence_policy(self):
         for file in ['chat/ChatActivity.java','profile/ProfileActivity.java']:
             self.assertIn('Presence.watch(', (JAVA/file).read_text())

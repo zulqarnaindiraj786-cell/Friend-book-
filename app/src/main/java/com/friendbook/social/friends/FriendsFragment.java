@@ -58,7 +58,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     }
 
     private void watchRequestPage(Query query, String actor, int selected) {
-        if (selected != SEC_REQUESTS && selected != SEC_SENT) { stopRequestWatch(); return; }
+        if (selected != SEC_REQUESTS) { stopRequestWatch(); return; }
         String key = actor + ":" + selected;
         stopRequestWatch();
         requestWatchKey = key;
@@ -140,7 +140,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         rv.setAdapter(adapter);
         com.friendbook.social.core.NearEndPaging.attach(rv,()->{
             if(section==SEC_REQUESTS){if(suggestionPager!=null)suggestionPager.next();}
-            else if(activePager!=null)activePager.next();
+            else if(section!=SEC_SENT && activePager!=null)activePager.next();
         });
         rv.addOnScrollListener(new RecyclerView.OnScrollListener(){
             @Override public void onScrolled(RecyclerView list,int dx,int dy){
@@ -202,13 +202,20 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(selected==SEC_REQUESTS && (error.isEmpty() || !docs.isEmpty())){incoming.clear();for(DocumentSnapshot doc:docs){Models.FriendRequest req=Models.FriendRequest.fromDoc(doc);
                 if("pending".equals(req.status) && !dismissedReqIds.contains(req.id)){incoming.add(req);if(req.fromName.isEmpty())ensureUser(req.fromUid);}}
                 tabs[SEC_REQUESTS].setText("Requests");
-            }else if(selected==SEC_SENT){outgoing.clear();sentIds.clear();for(DocumentSnapshot doc:docs){if(cancelledRequestIds.contains(doc.getId()))continue;String other=doc.getString("toUid");if(other!=null){outgoing.add(other);sentIds.put(other,doc.getId());ensureUser(other);}}}
+            }else if(selected==SEC_SENT){
+                outgoing.clear();sentIds.clear();
+                for(DocumentSnapshot doc:docs){
+                    String other=doc.getString("toUid");
+                    if(other==null || other.isEmpty() || me.equals(other) || cancelledRequestIds.contains(doc.getId()))continue;
+                    if(outgoing.add(other))sentIds.put(other,doc.getId());
+                }
+            }
             else if(selected==SEC_FRIENDS){friendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!me.equals(other) && !removedFriendIds.contains(other) && !friendIds.contains(other)){friendIds.add(other);ensureUser(other);}}
             else if(selected==SEC_SUGGESTIONS)consumeSuggestions(docs,me,token);
             render();
         });render();
-        if(selected==SEC_REQUESTS || selected==SEC_SENT){
+        if(selected==SEC_REQUESTS){
             activePager.startObserved();
             watchRequestPage(query,me,selected);
         }else{stopRequestWatch();activePager.start();}
@@ -321,7 +328,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             empty.setText("No pending sent requests.");
             for (String uid : outgoing) {
                 Models.User u = userCache.get(uid);
-                if(u==null){u=new Models.User();u.uid=uid;u.displayName="Loading…";}
+                if(u==null)u=com.friendbook.social.core.FastCache.getUser(uid);
+                if(u==null){u=new Models.User();u.uid=uid;u.displayName="FriendBook user";}
                 UsersAdapter.Row row = new UsersAdapter.Row();
                 row.user = u;
                 row.requestId=sentIds.get(uid);
@@ -343,7 +351,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 rows.add(row);
             }
         }
-        if(section!=SEC_REQUESTS && (pageLoading || pageMore || !pageError.isEmpty()))rows.add(control(!pageError.isEmpty()?"Tap to retry":!pageLoading && rows.isEmpty()?"See more people":"",pageLoading,()->{if(activePager!=null)activePager.next();}));
+        if(section!=SEC_REQUESTS && (pageLoading || pageMore || !pageError.isEmpty()))rows.add(control(!pageError.isEmpty()?"Tap to retry":!pageLoading && section==SEC_SENT?"Load more sent requests":!pageLoading && rows.isEmpty()?"See more people":"",pageLoading,()->{if(activePager!=null)activePager.next();}));
         if(swipe!=null && !pageLoading && !suggestionLoading)swipe.setRefreshing(false);
         adapter.setData(rows);
         empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);

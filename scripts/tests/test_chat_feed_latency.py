@@ -32,8 +32,8 @@ class ChatFeedLatencyTest(unittest.TestCase):
         fallback = store.split('private void pollVisibleChatFallback()', 1)[1].split('private void pollActiveListeners()', 1)[0]
         self.assertIn('App.isForeground()', fallback)
         self.assertIn('periodicAllowed(now)', fallback)
-        self.assertIn('entry.active && (chat || inbox)', fallback)
-        self.assertIn('chatFallbackDue(now - entry.lastAttemptMs, chat)', fallback)
+        self.assertIn('entry.active && chat', fallback)
+        self.assertIn('chatFallbackDue(now - entry.lastAttemptMs, true)', fallback)
         self.assertIn('scheduleQueryRead(entry)', fallback)
 
     def test_feed_first_page_does_not_queue_behind_other_reads(self):

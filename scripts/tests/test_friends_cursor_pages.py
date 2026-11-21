@@ -9,7 +9,14 @@ class FriendsCursorPages(unittest.TestCase):
             self.assertIn(token,code)
         self.assertEqual(code.count('addSnapshotListener'),1)
         self.assertIn('query.limit(20).addSnapshotListener',code)
-        self.assertIn('selected != SEC_REQUESTS && selected != SEC_SENT',code)
+        self.assertIn('selected != SEC_REQUESTS',code)
+    def test_sent_uses_manual_pages_without_profile_requests(self):
+        code=(JAVA/'friends/FriendsFragment.java').read_text()
+        sent=code.split('}else if(selected==SEC_SENT){',1)[1].split('else if(selected==SEC_FRIENDS)',1)[0]
+        self.assertIn('if(outgoing.add(other))sentIds.put(other,doc.getId())',sent)
+        self.assertNotIn('ensureUser',sent)
+        self.assertIn('section!=SEC_SENT && activePager!=null',code)
+        self.assertIn('Load more sent requests',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
         for token in ['offset+=10','FriendCandidatePages.pairs(me,ids)','Tasks.whenAllSuccess','a.getMetadata().isFromCache()','a.size()==20','if(!current(token,me) || !checkingUsers.containsAll(ids))return','},20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:

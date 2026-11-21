@@ -419,8 +419,7 @@ public class D1DocumentStore {
         for (QueryListenerEntry entry : queryListeners) {
             String path = entry.query.parentPath;
             boolean chat = ListenerPollingPolicy.isChatMessages(path);
-            boolean inbox = "chats".equals(path) && Integer.valueOf(10).equals(entry.query.limitValue);
-            if (entry.active && (chat || inbox) && entry.budget.chatFallbackDue(now - entry.lastAttemptMs, chat))
+            if (entry.active && chat && entry.budget.chatFallbackDue(now - entry.lastAttemptMs, true))
                 scheduleQueryRead(entry);
         }
     }

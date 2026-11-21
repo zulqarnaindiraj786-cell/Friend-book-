@@ -7,8 +7,11 @@ class SeamlessPaging(unittest.TestCase):
         helper=(ROOT/'core/NearEndPaging.java').read_text()
         self.assertIn('SCROLL_STATE_IDLE',helper)
         self.assertIn('gate.shouldLoad',helper)
-        for path in ['main/NotificationsFragment.java','friends/FollowListActivity.java','chat/ConversationsActivity.java']:
+        for path in ['main/NotificationsFragment.java','friends/FollowListActivity.java']:
             self.assertIn('NearEndPaging.attach(rv,', (ROOT/path).read_text())
+        inbox=(ROOT/'chat/ConversationsActivity.java').read_text()
+        self.assertNotIn('NearEndPaging.attach',inbox)
+        self.assertIn('inboxMoreButton.setOnClickListener',inbox)
         for path in ['post/PostDetailActivity.java','reels/ReelCommentsActivity.java']:
             self.assertIn('NearEndPaging.attachComments(', (ROOT/path).read_text())
     def test_no_unchanged_list_rebuild_during_background_page_request(self):
