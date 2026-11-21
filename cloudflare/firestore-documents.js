@@ -1856,6 +1856,11 @@ function chatMessageRoom(path, before, after) {
   return null;
 }
 async function chatDocumentGuard(db,path,row) {
+  // Canonical root reads already carry the exact authorized JSON. The batch
+  // itself must still compare it so a concurrent edit aborts the mutation.
+  if (row?.[canonicalRootSnapshot]) return db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
+    SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?)=? THEN 1 ELSE 0 END`)
+    .bind(path,row.document_json);
   const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
   const legacy=!canonical && isRootDocument(path) ? await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first() : null;
   if (!row) {
@@ -3120,19 +3125,14 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       chatAuths.set(p,chatAuth);
       if (!notificationWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !profileWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc) || !chatAuth.allowed || !contentWriteAllowed(p, uid, before, entry.deleted ? null : entry.doc)) return json({ error: 'Forbidden' }, 403);
     }
-    // Tap/push-open or a badge refresh can attempt to mark an already-read
-    // notification again. Only skip a whole, authorized non-transaction batch.
-    if (path==='/v1/firestore/batch' && ops.every(op=>(op.type||op.op)==='update'
-        && unchangedNotificationRead(op.path,finalDocs.get(op.path)?.existingRow,op.fields||op.updates||op.data))) {
-      return json({ok:true,operations:ops.length});
-    }
-    // An older client can replay the same receipt and zero unread counter.
-    // Only an entirely unchanged, single-room receipt batch can return early:
-    // no writes or optimistic guard rows are needed after the full ACL above.
+    // An authorized batch may mix already-read notifications with replayed
+    // message receipts and an already-zero unread counter. No guard or data
+    // writes are needed if every operation is a literal acknowledgement no-op.
     if (path==='/v1/firestore/batch' && ops.every(op=>{
-      const entry=finalDocs.get(op.path);
-      return (op.type||op.op)==='update' && !entry?.deleted && unchangedChatReceipt(
-        op.path,uid,entry?.existingRow,entry?.doc,op.fields||op.updates||op.data);
+      const entry=finalDocs.get(op.path),fields=op.fields||op.updates||op.data;
+      return (op.type||op.op)==='update' && !entry?.deleted && (
+        unchangedNotificationRead(op.path,entry?.existingRow,fields) ||
+        unchangedChatReceipt(op.path,uid,entry?.existingRow,entry?.doc,fields));
     })) return json({ok:true,operations:ops.length});
     // Keep the original authorization and optimistic snapshots, but don't
     // rewrite identical receipt rows alongside a genuinely changed receipt.
@@ -3142,13 +3142,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       for(const op of ops)writesPerPath.set(op.path,(writesPerPath.get(op.path)||0)+1);
       for(const op of ops) {
         if(writesPerPath.get(op.path)!==1 || (op.type||op.op)!=='update')continue;
-        const fields=op.fields||op.updates||op.data||{},keys=Object.keys(fields),entry=finalDocs.get(op.path);
-        if(unchangedNotificationRead(op.path,entry?.existingRow,fields)) {
-          unchangedBatchRows.add(op.path);continue;
-        }
-        if(!/^chats\/[^/]+\/messages\/[^/]+$/.test(op.path))continue;
-        if(keys.length && keys.every(k=>['isSeen','isDelivered'].includes(k) && fields[k]===true)
-            && entry?.existingRow && !entry.deleted && entry.existingRow.document_json===JSON.stringify(entry.doc))unchangedBatchRows.add(op.path);
+        const fields=op.fields||op.updates||op.data||{},entry=finalDocs.get(op.path);
+        if(!entry?.deleted && (unchangedNotificationRead(op.path,entry?.existingRow,fields)
+            || unchangedChatReceipt(op.path,uid,entry?.existingRow,entry?.doc,fields))) unchangedBatchRows.add(op.path);
       }
     }
     const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
