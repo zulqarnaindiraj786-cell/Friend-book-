@@ -1176,44 +1176,27 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const standard=`COALESCE(((json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991)
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
-  const probe=async (table,index,where,args)=>{
-    try { return await db.prepare(`SELECT 1 AS hit FROM ${table} a INDEXED BY ${index} WHERE ${where} LIMIT 1`).bind(...args).first(); }
-    catch(error) {
-      if (!String(error).includes(`no such index: ${index}`)) throw error;
-      return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
-    }
-  };
   const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
   const legacyException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`;
   const legacyUnshadowed=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='${root}')`;
   const exceptionIndex=root==='posts'?'feed_exceptions':'reels_feed_exceptions';
-  let exceptions=[];
-  if (author!==null) {
-    const [canonicalBad,legacyBad]=await Promise.all([
-      probe('friendbook_cf_firestore_documents','idx_cf_feed_exceptions',`parent_path='${root}'${byAuthor} AND ${canonicalException}`,authorArgs),
-      probe('friendbook_cf_documents','idx_cf_legacy_feed_exceptions',`a.collection='${root}'${byLegacyAuthor} AND ${legacyException} AND ${legacyUnshadowed}`,authorArgs),
+  // A few unusual timestamps (including on author pages) must not force
+  // the fallback. Merge only matching exceptions into the normal keyset stream.
+  let unusual;
+  try {
+    unusual=await Promise.all([
+      db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
+        WHERE parent_path='${root}'${byAuthor} AND ${canonicalException} LIMIT 129`).bind(...authorArgs).all(),
+      db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_${exceptionIndex}
+        WHERE a.collection='${root}'${byLegacyAuthor} AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind(...authorArgs).all(),
     ]);
-    if (canonicalBad || legacyBad) return null;
-  } else {
-    // A handful of unusual historical timestamps must not force every feed
-    // refresh to scan both collections. Read only the exception indexes and
-    // merge those documents into the standard keyset stream in JS order.
-    let unusual;
-    try {
-      unusual=await Promise.all([
-        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
-          WHERE parent_path='${root}' AND ${canonicalException} LIMIT 129`).bind().all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_${exceptionIndex}
-          WHERE a.collection='${root}' AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind().all(),
-      ]);
-    } catch(error) {
-      if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
-      throw error;
-    }
-    const [odd,old]=unusual.map(x=>x.results||[]);
-    if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
-    exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
+  } catch(error) {
+    if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
+    throw error;
   }
+  const [odd,old]=unusual.map(x=>x.results||[]);
+  if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
+  const exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const chunk=Math.min(100,Math.max(20,spec.limit*2));

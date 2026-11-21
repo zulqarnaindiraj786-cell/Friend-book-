@@ -1358,6 +1358,15 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  const next=await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]});
  assert.deepEqual(next.map(d=>d.id),(await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]},true)).map(d=>d.id));
  assert.equal(new Set([...fallback,...next].map(d=>d.id)).size,24);
+ if(root==='posts') {
+  const filters=[{field:'authorId',op:'==',value:'alice'}];
+  const before=batchReads;
+  const scoped=await query({filters});
+  const scopedNext=await query({filters,startAfter:[scoped.at(-1).data.createdAt,scoped.at(-1).id]});
+  assert.ok(batchReads>before,'unshadowed historical posts must still use bounded pages');
+  assert.deepEqual(scoped.map(d=>d.id),fallback.map(d=>d.id));
+  assert.deepEqual(scopedNext.map(d=>d.id),next.map(d=>d.id));
+ }
  sql.close();
 });
 
