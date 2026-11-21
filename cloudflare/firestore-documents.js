@@ -725,13 +725,32 @@ function rowToDocument(row) {
 // silently erase relationship counters or another device's profile changes.
 // Existing clients also mirror presence into the profile. Skip only repeated
 // heartbeat-only patches, never visibility transitions or profile edits.
-export function redundantProfileHeartbeat(before,next,fields,now) {
-  const keys=Object.keys(fields);
+function unchangedHeartbeatFlags(before,next,fields) {
   const allowed=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
-  if(!before || keys.length!==allowed.length || !keys.every(key=>allowed.includes(key)))return false;
-  if(!['isOnline','isActive','showActiveStatus'].every(key=>typeof before[key]==='boolean' && before[key]===next[key]))return false;
+  const keys=Object.keys(fields);
+  return !!before && keys.length===allowed.length && keys.every(key=>allowed.includes(key))
+    && ['isOnline','isActive','showActiveStatus'].every(key=>typeof before[key]==='boolean' && before[key]===next[key]);
+}
+
+export function redundantProfileHeartbeat(before,next,fields,now) {
+  if(!unchangedHeartbeatFlags(before,next,fields))return false;
   const previous=before.lastSeen?.__type==='timestamp'?before.lastSeen.millis:0;
-  return Number.isFinite(previous) && previous>0 && now>=previous && now-previous<180_000;
+  if(!Number.isFinite(previous) || previous<=0 || now<previous)return false;
+  // Signing out/backgrounding twice does not mean the user was seen again.
+  return (!next.isOnline && !next.isActive) || now-previous<180_000;
+}
+
+export async function liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now) {
+  if(!unchangedHeartbeatFlags(before,next,fields) || !next.isOnline || !next.isActive || !next.showActiveStatus
+      || fields.lastSeen?.__fieldValue!=='serverTimestamp')return false;
+  try {
+    // Socket beats every 180s; leave a short grace window but allow the legacy
+    // heartbeat to write when the socket has not actually renewed its lease.
+    const row=await db.prepare(`SELECT 1 AS fresh FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
+      WHERE uid=? AND visible=1 AND online=1 AND last_seen>? AND last_seen<=? LIMIT 1`)
+      .bind(uid,now-210_000,now).first();
+    return row?.fresh===1;
+  } catch { return false; } // Pre-migration/missing session state uses the existing fallback.
 }
 
 async function mutateProfile(db, uid, path, body, method, now) {
@@ -746,7 +765,8 @@ async function mutateProfile(db, uid, path, body, method, now) {
       const next=method==='PATCH' ? applyUpdate(before,fields,now)
         : applySet(before,body?.data || {},Boolean(body?.merge),body?.mergeFields || null,now);
       if (!profileWriteAllowed(path,uid,before,next)) return json({error:'Forbidden'},403);
-      if(method==='PATCH' && redundantProfileHeartbeat(before,next,fields,now))return json(rowToDocument(existing));
+      if(method==='PATCH' && (redundantProfileHeartbeat(before,next,fields,now)
+          || await liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now)))return json(rowToDocument(existing));
       // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
       // and guard rows. Keep transforms and legacy promotion on the write path.
       if(method==='PATCH' && existing?.[canonicalRootSnapshot] && Object.keys(fields).length>0

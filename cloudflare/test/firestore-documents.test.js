@@ -2420,3 +2420,33 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   assert.doesNotMatch(plans.join('\n'),/USE TEMP B-TREE/);
   sql.close();
 });
+
+test('healthy socket saves redundant profile writes without suppressing fallback or visibility changes', async t=>{
+ const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+ for(const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(ddl);
+ for(const file of ['0031_presence_sessions.sql','0064_presence_read_seeks.sql'])
+   sql.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
+ const now=Date.now(), prior=now-240_000;
+ const profile={uid:'alice',isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:prior,lastSeen:{__type:'timestamp',millis:prior}};
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(profile),prior,prior);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify(profile),prior);
+ sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)').run('alice','socket',1,1,now-1000);
+ let batches=0, changes=0;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>{const result=stmt.run(...args);changes+=result.changes;return result;},all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){batches++;sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+ const patch=(flags={},actor='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PATCH',headers:{authorization:`Bearer ${actor}`,'content-type':'application/json'},body:JSON.stringify({fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:now,lastSeen:{__fieldValue:'serverTimestamp'},...flags}})}),env);
+ assert.equal((await patch({},'bob')).status,403);
+ assert.equal((await patch()).status,200);
+ assert.equal(batches,0);assert.equal(changes,0);
+ sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-220_000);
+ assert.equal((await patch()).status,200);
+ assert.equal(batches,1);assert.equal(changes,4);
+ sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-1000);
+ const offline={isOnline:false,isActive:false,showActiveStatus:false};
+ assert.equal((await patch(offline)).status,200);
+ assert.equal(batches,2);assert.equal(changes,8);
+ assert.equal((await patch(offline)).status,200);
+ assert.equal(batches,2);assert.equal(changes,8);
+ const row=sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get();
+ assert.equal(JSON.parse(row.document_json).showActiveStatus,false);
+});
