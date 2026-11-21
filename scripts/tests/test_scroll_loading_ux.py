@@ -28,6 +28,6 @@ class ScrollLoadingUx(unittest.TestCase):
         self.assertIn('notifyItemChanged(getItemCount()-1,"paging")',code)
     def test_first_page_error_retries_without_invalid_cursor(self):
         code=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('if (pageError && !loadingPosts) restartPostsListener();',code)
-        self.assertIn('public boolean hasMore() { return false; }',code)
-        self.assertNotIn('startAfter(lastDoc)',code)
+        self.assertIn('if(lastDoc==null){if(pageError)restartPostsListener();return;}',code)
+        self.assertIn('pageError=moreAvailable && page.isEmpty()',code)
+        self.assertIn('pageError=moreAvailable && finalFeed.isEmpty()',code)
