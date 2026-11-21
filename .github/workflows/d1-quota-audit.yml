@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        window: [latest-60m]
+        window: [latest-5m]
         metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -83,5 +83,5 @@ jobs:
                       for account in totals['data']['viewer']['accounts']:
                           print('::notice:: UTC daily adaptive query analytics',account['d1QueriesAdaptiveGroups'],fmt(now))
               except (urllib.error.URLError, KeyError, ValueError): print('::notice:: UTC daily analytics aggregate unavailable')
-          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=60),now,os.environ['AUDIT_WINDOW'])
+          query(os.environ['AUDIT_METRIC'],now-dt.timedelta(minutes=5),now,os.environ['AUDIT_WINDOW'])
           PY
