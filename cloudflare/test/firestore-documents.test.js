@@ -1347,12 +1347,21 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  }
  // A stale public mirror cannot override the newer private canonical row.
  a.run(root+'/p098',root,'p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
- let batchReads=0,maxRows=0,postReads=0;
+ for(let i=0;i<2000;i++){
+  const id=`old${i}`, data=JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:-1-i}});
+  f.run(root+'/'+id,root,root,id,'alice',data,1,1);a.run(root+'/'+id,root,id,'alice',data,1);
+ }
+ let batchReads=0,maxRows=0,postReads=0,legacyProbes=0;
+ sql.function('quota_probe',path=>{legacyProbes++;return path;});
  const pageLimits=[];
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;pageLimits.push(args.at(-1));maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q.includes('ORDER BY CASE WHEN json_type(a.document_json')?q.replace('f.path=a.path','f.path=quota_probe(a.path)'):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;pageLimits.push(args.at(-1));maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=async(spec,full=false)=>{let body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
- const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);assert.deepEqual(pageLimits.slice(0,2),[12,12]);
+ const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);assert.deepEqual(pageLimits.slice(0,2),[12,12]);assert.ok(legacyProbes<=72,`legacy probes: ${legacyProbes}`);
+ legacyProbes=0;
+ const mirrorCursor={startAfter:[{__type:'timestamp',millis:0},'p000']};
+ assert.deepEqual((await query(mirrorCursor)).map(d=>d.id),(await query(mirrorCursor,true)).map(d=>d.id));
+ assert.ok(legacyProbes<=12,`mirror-only page must not scan older copies: ${legacyProbes}`);
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  if(root==='posts') {
   sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p098'").run(JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}}));
@@ -2368,9 +2377,17 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   for(let i=0;i<45;i++) add(`hidden${i}`,{createdAt:ts(1000+i),...(i%2?{banned:true}:{deactivated:true})},i%3!==0);
   add('wrapped',{fields:{createdAt:{timestampValue:'1970-01-01T00:00:00.248Z'}}},false);
   add('fraction',{createdAt:ts(247.5)});
+  // Production mirrors nearly all canonical profiles. Return-row counters alone
+  // won't catch a scan of mirrors rejected by NOT EXISTS.
+  for(let i=0;i<2000;i++) {
+    const id=`mirror${i}`, data={createdAt:ts(-1-i)};
+    add(id,data);add(id,data,false);
+  }
+  let legacyProbes=0;
+  sql.function('quota_probe',path=>{legacyProbes++;return path;});
   let reads=0, scans=0, largestStandardRead=0;
   const plans=[];
-  const db={prepare(q){if(q.includes('quota_root_users_recent')) scans++;const stmt=sql.prepare(q);return{bind(...args){return{
+  const db={prepare(q){if(q.includes('quota_root_users_recent')) scans++;const stmt=sql.prepare(q.includes('idx_cf_legacy_recent_people')?q.replace('f.path=a.path','f.path=quota_probe(a.path)'):q);return{bind(...args){return{
     first:async()=>stmt.get(...args)||null,
     all:async()=>{const results=stmt.all(...args);if(q.includes('INDEXED BY')&&q.includes('recent_people')){
       if(q.includes('ORDER BY')) largestStandardRead=Math.max(largestStandardRead,results.length);
@@ -2384,6 +2401,7 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
     assert.equal(r.status,200);return (await r.json()).documents;
   };
   const page=await query({});
+  assert.ok(legacyProbes<100,`old legacy mirrors must not be examined: ${legacyProbes}`);
   assert.equal(scans,0,'hidden profiles must not trigger a users collection scan');
   assert.deepEqual(page,await query({endBefore:[]}));
   assert.equal(page[1].id,'wrapped');
@@ -2393,6 +2411,10 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   assert.deepEqual(await query({startAfter}),await query({startAfter,endBefore:[]}));
   assert.ok(reads>0 && reads<=24);
   assert.equal(largestStandardRead,5);
+  legacyProbes=0;
+  const mirrorCursor={startAfter:[ts(0),'person000']};
+  assert.deepEqual(await query(mirrorCursor),await query({...mirrorCursor,endBefore:[]}));
+  assert.ok(legacyProbes<=8,`mirror-only people page must stop at the canonical floor: ${legacyProbes}`);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_recent_people/);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_recent_people/);
   assert.doesNotMatch(plans.join('\n'),/USE TEMP B-TREE/);

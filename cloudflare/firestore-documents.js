@@ -1123,21 +1123,45 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   ];
   const unpack=(rows,i)=>i===0 ? rows : rows.map(appDocumentToFirestoreRow).filter(Boolean);
   try {
-    const [odd,normal]=await Promise.all([false,true].map(standard=>Promise.all(stores.map(async ([table,index,where,rank,shadow],i)=>{
-      const bound=standard && cursor ? `AND (${rank},${time},doc_id)<(?,?,?)` : '';
-      // Ordinary viewers cannot see suspended listings marked banned/deactivated.
-      // Apply the same strict Boolean check before LIMIT so a run of hidden rows
-      // cannot force a whole-collection fallback. Wrapped legacy rows stay on
-      // the exceptional path and are projected after decoding.
-      const visibility=standard && !admin ? `AND (a.path=? OR (
-        json_type(document_json,'$.banned') IS NOT 'true'
-        AND json_type(document_json,'$.deactivated') IS NOT 'true'))` : '';
-      const args=[...(visibility?[`users/${uid}`]:[]),...(standard && cursor ? cursor : []),standard?size:65];
+    const oddPromise=Promise.all(stores.map(async ([table,index,where,rank,shadow],i)=>{
       const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
-        WHERE ${where} AND (${rank})${standard?'>=0':'=-1'} ${shadow} ${visibility} ${bound}
-        ${standard?`ORDER BY (${rank}) DESC,(${time}) DESC,doc_id DESC`:''} LIMIT ?`).bind(...args).all();
+        WHERE ${where} AND (${rank})=-1 ${shadow} LIMIT ?`).bind(65).all();
       return unpack(results,i);
-    }))));
+    }));
+    // Start with the canonical head. The Nth canonical profile is a safe lower
+    // bound for legacy profiles: anything older cannot enter this page. Split
+    // into rank equality ranges so SQLite can seek the expression index on time.
+    async function readStandard(i, floor) {
+      const [table,index,where,rank,shadow]=stores[i];
+      const rows=[];
+      for(const group of [4,2,0]) {
+        if((cursor && group>cursor[0]) || (floor && group<floor[0]) || rows.length>=size)continue;
+        const args=[group];
+        const bounds=[];
+        if(cursor && group===cursor[0]) {
+          bounds.push(`(${time})<=? AND ((${time})<? OR doc_id<?)`);
+          args.push(cursor[1],cursor[1],cursor[2]);
+        }
+        if(floor && group===floor[0]) {
+          bounds.push(`(${time})>=? AND ((${time})>? OR doc_id>=?)`);
+          args.push(floor[1],floor[1],floor[2]);
+        }
+        const visibility=!admin ? `AND (a.path=? OR (
+          json_type(document_json,'$.banned') IS NOT 'true'
+          AND json_type(document_json,'$.deactivated') IS NOT 'true'))` : '';
+        if(visibility)args.push(`users/${uid}`);
+        const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
+          WHERE ${where} AND (${rank})=? ${bounds.map(b=>'AND '+b).join(' ')} ${shadow} ${visibility}
+          ORDER BY (${time}) DESC,doc_id DESC LIMIT ?`).bind(...args,size-rows.length).all();
+        rows.push(...unpack(results,i));
+      }
+      return rows;
+    }
+    const [odd,canonical]=await Promise.all([oddPromise,readStandard(0,null)]);
+    const last=canonical.length===size?canonical.at(-1):null;
+    const value=last && rowToDocument(last)?.data.createdAt;
+    const floor=last ? [value==null?0:typeof value==='number'?2:4,value==null?0:typeof value==='number'?value:value.millis,last.doc_id] : null;
+    const normal=[canonical,await readStandard(1,floor)];
     const unusual=odd.flat();
     if(unusual.length>64 || unusual.some(row=>row.path!==`users/${row.doc_id}`)) return null;
     const standard=sortDocuments(normal.flat().map(rowToDocument),spec.orderBy).slice(0,size);
@@ -1217,22 +1241,34 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
         FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''} WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
-        AND ${legacyUnshadowed}
-        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+      db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='${root}') AS shadowed
+        FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+          FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''}
+          WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
+          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?) a`).bind(...args).all(),
     ]); } catch(error) {
       if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
       throw error;
     }
     const [canonical,legacy]=batches;
-    const rows=[...(canonical?.results || []),...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
-    const docs=sortDocuments(rows.map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    const nativeDocs=(canonical?.results||[]).map(rowToDocument).filter(Boolean);
+    const nativeById=new Map(nativeDocs.map(doc=>[doc.id,doc]));
+    // Select the raw legacy window before testing canonical precedence. An
+    // almost entirely mirrored collection must not be walked to find N
+    // legacy-only rows. Shadowed entries advance the cursor but never render.
+    const oldDocs=(legacy?.results||[]).flatMap(row=>{
+      const doc=rowToDocument(appDocumentToFirestoreRow(row));
+      if(!doc)return [];
+      const n=nativeById.get(doc.id);
+      if(n && compareDocumentToCursor(n,[doc.data.createdAt,doc.id],spec.orderBy)===0)return [];
+      return [{...doc,shadowed:Boolean(row.shadowed)}];
+    });
+    const docs=sortDocuments([...nativeDocs,...oldDocs],spec.orderBy).slice(0,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
       compareDocumentToCursor(doc,[value,last.id],spec.orderBy)>0);
-    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
+    const merged=sortDocuments([...docs.filter(doc=>!doc.shadowed),...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     let deniedBurst=1;
