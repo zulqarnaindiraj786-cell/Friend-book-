@@ -32,6 +32,14 @@ test('typing is shared across isolates and only room members can observe or send
   const {sql,db}=fixture();
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
     .run('chats/room','chats','chats','room','alice',JSON.stringify({participants:['alice','bob']}),1,1);
+  sql.exec(readFileSync(new URL('../migrations/0068_active_typing_seek.sql',import.meta.url),'utf8'));
+  const plans=[];
+  const track={prepare(q){const stmt=db().prepare(q);if(!q.includes('SELECT 1 AS typing'))return stmt;
+    return {bind(...args){plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));return stmt.bind(...args);}};
+  }};
+  const insert=sql.prepare('INSERT INTO friendbook_cf_typing_sessions VALUES (?,?,?,?,?)');
+  for(let i=0;i<1500;i++)insert.run('room','alice',`idle${i}`,0,Date.now());
+  insert.run('room','removed','phone',1,Date.now());
   const call=(uid,method,body,database)=>presenceRealtime(new Request('https://example.test/v1/presence/typing/room',{
     method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})
   }),{DB:database,REALTIME_WS_ENABLED:'true'},{uid});
@@ -40,6 +48,8 @@ test('typing is shared across isolates and only room members can observe or send
   assert.equal((await call('alice','PUT',{typing:'invalid'},guarded)).status,400);
   assert.equal((await call('alice','POST',null,guarded)).status,405);
   assert.equal(rejectedReads,0);
+  assert.equal((await (await call('bob','GET',null,track)).json()).typing,false);
+  assert.ok(plans.some(plan=>/SEARCH .* USING (COVERING )?INDEX idx_cf_typing_active_seek/.test(plan)),plans.join('\n'));
   const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
   const initial=changes();
   assert.equal((await call('alice','PUT',{typing:false,sessionId:'phone'},db())).status,200);

@@ -149,10 +149,13 @@ export async function presenceRealtime(request, env, identity) {
     }
     if (request.method === 'GET') {
       try {
-        const rows=await env.DB.prepare('SELECT DISTINCT uid FROM friendbook_cf_typing_sessions WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at>=? AND updated_at<=?')
-          .bind(chatId,uid,now-TYPING_TTL_MS,now).all();
-        const members = new Set(room.participants);
-        return json({ chatId, typing: rows.results.some(row => members.has(row.uid)) });
+        // A recent session from a removed member cannot satisfy the probe.
+        // Filter before LIMIT so D1 can stop at the first eligible peer.
+        const row=await env.DB.prepare(`SELECT 1 AS typing FROM friendbook_cf_typing_sessions
+          WHERE chat_id=? AND uid<>? AND typing=1 AND updated_at BETWEEN ? AND ?
+          AND uid IN (SELECT value FROM json_each(?)) LIMIT 1`)
+          .bind(chatId,uid,now-TYPING_TTL_MS,now,JSON.stringify(room.participants)).first();
+        return json({ chatId, typing: row!==null });
       } catch { return json({error:'Typing unavailable'},503); }
     }
     return json({ error: 'Method not allowed' }, 405);
