@@ -550,3 +550,13 @@ function readMigration(name) {
   const { readFileSync } = require('node:fs');
   return readFileSync(resolve(root, 'cloudflare', 'migrations', name), 'utf8');
 }
+
+test('rejected view requests do not seed storage on a cold isolate', async () => {
+  resetViewState();
+  let reads = 0;
+  const env = { DB: { prepare() { reads++; throw new Error('unexpected D1 read'); } } };
+  const url = new URL('https://example.test/v1/views?collection=unknown');
+  assert.equal((await viewCounters(new Request(url), env, { uid: 'alice' }, null, url)).status, 400);
+  assert.equal((await viewCounters(new Request(url, { method: 'PUT' }), env, { uid: 'alice' }, ['', 'posts', 'post1'], url)).status, 405);
+  assert.equal(reads, 0);
+});
