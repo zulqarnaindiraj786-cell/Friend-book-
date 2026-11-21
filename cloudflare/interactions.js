@@ -87,10 +87,12 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
   };
 }
 
+export const MAX_FEED_ENGAGEMENT_PAGE = 20;
+
 // A small authorized Home page can fetch summary rows in one D1 round trip.
 // Preserve the existing individual read path for incomplete schemas and failures.
 export async function batchEngagementReads(db, resources, uid, blocked) {
-  if (resources.length < 2 || resources.length > 10 || typeof db.batch !== 'function') return new Map();
+  if (resources.length < 2 || resources.length > MAX_FEED_ENGAGEMENT_PAGE || typeof db.batch !== 'function') return new Map();
   try {
     const rows=await db.batch(resources.flatMap(resource=>[
       engagementStatement(db,resource,uid,blocked),legacyCommentCountStatement(db,resource,blocked),

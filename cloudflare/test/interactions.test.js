@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './fixtures/interaction-db.js';
 import { readFileSync } from 'node:fs';
-import { interactions, engagementSummary } from '../interactions.js';
+import { interactions, engagementSummary, batchEngagementReads } from '../interactions.js';
 import { authorizePost } from '../firebase-post-access.js';
 import { createWorker } from '../../worker.js';
 const identity = { uid: 'user1', project: 'friendbook-17551', token: 'test' };
@@ -343,7 +343,8 @@ test('Home returns authorized reaction state and comment previews with the bound
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,2);
   const worker=createWorker(async token=>token);
   const get=(uid,limit)=>worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'posts',feedEngagement:true,limit,orderBy:[{field:'createdAt',direction:'DESCENDING'}]})}),{...f.env,FIREBASE_PROJECT_ID:'test'});
-  const r=await get('user1',10);assert.equal(r.status,200,await r.clone().text());
+  // Android Home requests twenty posts both for the head and older pages.
+  const r=await get('user1',20);assert.equal(r.status,200,await r.clone().text());
   const {documents}=await r.json();
   assert.deepEqual(documents.map(d=>d.id),['p2','p1']);
   assert.equal(documents[0].engagement,undefined);
@@ -358,9 +359,23 @@ test('Home returns authorized reaction state and comment previews with the bound
   assert.deepEqual(documents[1].engagement.preview.map(c=>c.id),['first']);
   const another=await (await get('author',7)).json();
   assert.equal(another.documents.find(d=>d.id==='p1').engagement.types[0].mine,0);
-  assert.ok((await (await get('user1',11)).json()).documents.every(d=>!d.engagement));
+  assert.ok((await (await get('user1',21)).json()).documents.every(d=>!d.engagement));
   f.sql.exec("UPDATE friendbook_cf_comment_details SET removed=0 WHERE resource='posts/p1' AND id='third'");
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,3);
+});
+
+test('a full 20-post Feed page batches engagement without individual summary requests', async t=>{
+  const f=fixture();t.after(f.close);
+  const resources=Array.from({length:20},(_,i)=>`posts/page-${i}`);
+  let batchCalls=0;
+  const db={...f.env.DB,async batch(statements){
+    batchCalls++;
+    assert.equal(statements.length,40);
+    return f.env.DB.batch(statements);
+  }};
+  const result=await batchEngagementReads(db,resources,'user1',[]);
+  assert.equal(batchCalls,1);
+  assert.equal(result.size,20);
 });
 
 test('post detail returns only newer comments, stable continuation and reaction totals', async t=>{

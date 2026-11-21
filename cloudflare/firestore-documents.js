@@ -2,7 +2,7 @@ import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
-import { engagementSummary, batchEngagementReads } from './interactions.js';
+import { engagementSummary, batchEngagementReads, MAX_FEED_ENGAGEMENT_PAGE } from './interactions.js';
 import { requestAccountReads, readD1DocumentFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
@@ -1105,7 +1105,7 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
 // Enrich only a bounded page that already passed the authoritative post ACL.
 async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
-      || body.limit<1 || body.limit>10 || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
+      || body.limit<1 || body.limit>MAX_FEED_ENGAGEMENT_PAGE || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
     const resources=docs.map(d=>`posts/${d.id}`);
     const [viewer,states]=await Promise.all([
