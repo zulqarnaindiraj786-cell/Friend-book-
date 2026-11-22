@@ -55,6 +55,18 @@ class FriendGuardPreflightTests(unittest.TestCase):
         self.assertEqual(row['legacy_sample'], p.CAP)
         self.assertTrue(p.summarize({'success': True, 'result': [{'success': True, 'results': [row]}]})['truncated'])
 
+    def test_index_build_guard_rejects_unknown_and_large_snapshots(self):
+        base = {'truncated': False, 'canonical_sample': 13333, 'legacy_sample': 10011,
+                'canonical_exceptions': 0, 'legacy_exceptions': 0,
+                'canonical_invalid_json': 0, 'legacy_invalid_json': 0,
+                'd1_reported_rows_read': 23345}
+        self.assertTrue(p.within_index_build_bounds(base))
+        for update in ({'truncated': True}, {'canonical_sample': 20000},
+                       {'canonical_exceptions': 1001}, {'legacy_invalid_json': 1},
+                       {'d1_reported_rows_read': None}, {'d1_reported_rows_read': True},
+                       {'d1_reported_rows_read': 60001}):
+            self.assertFalse(p.within_index_build_bounds({**base, **update}), update)
+
     def test_rejects_incomplete_or_impossible_response(self):
         empty = {k: 0 for k in p.KEYS}
         with self.assertRaises(ValueError): p.summarize({'success': False})

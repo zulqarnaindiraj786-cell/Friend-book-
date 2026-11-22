@@ -8,6 +8,7 @@ deploy; traffic can change immediately after the snapshot.
 """
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -67,6 +68,18 @@ def summarize(payload):
     return summary
 
 
+def within_index_build_bounds(summary):
+    # Bound complete source-table scans and potential new index entries. This
+    # snapshot is not a quota guarantee: account analytics can lag and tables
+    # can change, so recheck headroom immediately before and after this query.
+    return (not summary['truncated']
+            and summary['canonical_sample'] + summary['legacy_sample'] <= 30_000
+            and summary['canonical_exceptions'] + summary['legacy_exceptions'] <= 1_000
+            and summary['canonical_invalid_json'] == 0 and summary['legacy_invalid_json'] == 0
+            and type(summary['d1_reported_rows_read']) is int
+            and 0 <= summary['d1_reported_rows_read'] <= 60_000)
+
+
 def main():
     token = os.environ.get('CLOUDFLARE_API_TOKEN')
     if not token:
@@ -88,6 +101,8 @@ def main():
     if summary['canonical_invalid_json'] or summary['legacy_invalid_json']:
         print('::warning:: Invalid JSON found; do not create indexes before investigation.')
     print('::notice:: No migration was attempted; billed quota headroom and index-build cost are not verified by this preflight.')
+    if '--require-index-build-safe' in sys.argv and not within_index_build_bounds(summary):
+        raise SystemExit('Friendship index preflight exceeded conservative bounds; no migration attempted.')
 
 
 if __name__ == '__main__':

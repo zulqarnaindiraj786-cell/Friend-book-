@@ -9,6 +9,7 @@ import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
+import { friendshipCandidates, friendshipDuplicateGuard } from './friendship-candidates.js';
 import { chatReadAllowed, chatWriteAllowed, storedChatMember } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
@@ -1880,7 +1881,7 @@ async function applyOperation(db, op, uid, now, existingCache) {
 
 // The legacy Android acceptance batch is recognized as one strictly defined operation.
 // All authorization snapshots, duplicate checks and writes run in a single D1 batch.
-async function acceptFriendBatch(db, uid, ops, now) {
+async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
   const forbidden = () => json({error:'Forbidden'},403);
   if (ops.length !== 4 || typeof db.batch !== 'function') return forbidden();
   const requests=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friend_requests');
@@ -1923,16 +1924,13 @@ async function acceptFriendBatch(db, uid, ops, now) {
   // A fresh, recipient-accepted request can safely reconfirm a legacy friendship.
   // Reuse the existing row and counters: neither legacy fields nor a one-sided
   // action alone grants access to friends-only content.
-  const existingPair = await db.prepare(`SELECT path FROM (
-    SELECT path,document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
-    UNION ALL SELECT a.path,a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-  ) d WHERE (json_array_length(document_json,'$.participants')=2 AND
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const existingPair = await db.prepare(`SELECT path FROM (${candidates.sql}) d WHERE (json_array_length(document_json,'$.participants')=2 AND
     ((json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?) OR
      (json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?))) OR
     (json_array_length(document_json,'$.fields.participants.arrayValue.values')=2 AND
     ((json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
-     (json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?))) ORDER BY path LIMIT 1`).bind(uid,other,other,uid,uid,other,other,uid).first();
+     (json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?))) ORDER BY path LIMIT 1`).bind(...candidates.args,uid,other,other,uid,uid,other,other,uid).first();
   const prior=existingPair ? await readRow(db,existingPair.path) : null;
   if (existingPair && (!prior || !friendshipReadView(uid,decodeValue(JSON.parse(prior.document_json)))?.participants.includes(other))) return json({error:'Friendship changed'},409);
   const snapshots=[reqRow,...userRows,...(prior?[prior]:[])];
@@ -1952,17 +1950,9 @@ async function acceptFriendBatch(db, uid, ops, now) {
   }
   // Check both native and historical array envelopes, with canonical rows winning over mirrors.
   if (!prior) {
-    guardPredicates.push(`NOT EXISTS (SELECT 1 FROM (
-      SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
-      UNION ALL SELECT a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-    ) d WHERE (
-      (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?)
-       AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?))
-      OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?)
-       AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?))
-    ))`);
-    guardArgs.push(uid,other,uid,other);
+    const duplicateGuard=friendshipDuplicateGuard(candidates,uid,other);
+    guardPredicates.push(duplicateGuard.sql);
+    guardArgs.push(...duplicateGuard.args);
   }
   // A create must not overwrite either table, even if the caller guesses an ID.
   guardPredicates.push(`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
@@ -2006,7 +1996,7 @@ async function acceptFriendBatch(db, uid, ops, now) {
 
 // Remove all records for one pair and adjust both counters together. A caller may
 // never supply another pair, an arbitrary counter delta, or a partial duplicate set.
-async function unfriendBatch(db,uid,ops,now) {
+async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
   const forbidden=()=>json({error:'Forbidden'},403);
   if (typeof db.batch!=='function' || ops.length<3 || ops.length>21) return forbidden();
   const type=o=>o.op || o.type || 'set';
@@ -2042,11 +2032,8 @@ async function unfriendBatch(db,uid,ops,now) {
   }
   // Refuse a partial removal if duplicate friendship rows exist. Test both native
   // JSON and historical Firestore envelopes, ignoring stale legacy mirrors.
-  const countSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT count(*) FROM (
-    SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
-    UNION ALL SELECT a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-  ) d WHERE (
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const countSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT count(*) FROM (${candidates.sql}) d WHERE (
     (json_array_length(d.document_json,'$.participants')=2 AND
      ((json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?) OR
       (json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?))) OR
@@ -2054,7 +2041,7 @@ async function unfriendBatch(db,uid,ops,now) {
      ((json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
       (json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?)))
   ))=? THEN 1 ELSE 0 END`;
-  guards.push(db.prepare(countSql).bind(uid,other,other,uid,uid,other,other,uid,friendRows.length));
+  guards.push(db.prepare(countSql).bind(...candidates.args,uid,other,other,uid,uid,other,other,uid,friendRows.length));
   const statements=[...guards];
   for (const row of friendRows) {
     statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path));
@@ -3649,7 +3636,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (ops.some(op=>splitPath(op?.path)?.[0]==='friends')) {
       try {
         const friendOp=ops.find(op=>splitPath(op?.path)?.[0]==='friends');
-        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now) : await acceptFriendBatch(db,uid,ops,now);
+        const indexedCandidates=env.FRIEND_GUARD_INDEXED==='true';
+        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now,indexedCandidates) : await acceptFriendBatch(db,uid,ops,now,indexedCandidates);
       }
       catch { return json({error:'Friendship changed or unavailable'},409); }
     }

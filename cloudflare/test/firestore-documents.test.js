@@ -3243,3 +3243,45 @@ test('healthy socket saves redundant profile writes without suppressing fallback
  const row=sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get();
  assert.equal(JSON.parse(row.document_json).showActiveStatus,false);
 });
+
+test('indexed friendship guards reject racing historical duplicates without partial changes', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0019_trusted_friendships.sql','0027_friend_participant_indexes.sql']) sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0084_friend_guard_exceptions.sql',import.meta.url),'utf8'));
+  let race=null;
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){if(race){const f=race;race=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const put=(path,data)=>{const [coll,id]=path.split('/');insert.run(path,coll,coll,id,'',JSON.stringify(data),1,1);};
+  for(const uid of ['alice','bob']) put(`users/${uid}`,{uid,friendsCount:0});
+  put('friend_requests/r',{fromUid:'alice',toUid:'bob',status:'pending'});
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',FRIEND_GUARD_INDEXED:'true'};
+  const call=ops=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({operations:ops})}),env);
+  const accept=[{op:'update',path:'friend_requests/r',updates:{status:'accepted'}},{op:'set',path:'friends/new',data:{participants:['alice','bob'],createdAt:{__fieldValue:'serverTimestamp'}}},...['alice','bob'].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:1}}}))];
+  race=()=>put('friends/race',{participants:['eve','alice','bob']});
+  assert.notEqual((await call(accept)).status,200);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='friend_requests/r'").get().document_json).status,'pending');
+  assert.equal(sql.prepare("SELECT path FROM friendbook_cf_firestore_documents WHERE path='friends/new'").get(),undefined);
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/race'").run();
+  // These invalid wrapped values arrive after the initial candidate probe. The
+  // guard must detect them inside the transaction and retain the full scan's
+  // malformed-JSON failure rather than relying on the earlier snapshot.
+  for(const storage of ['canonical','legacy']) {
+    const bad={fields:{participants:{arrayValue:{values:['not-json']}}}};
+    race=()=>storage==='canonical' ? put('friends/race',bad)
+      : sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('friends/race','friends','race','',JSON.stringify(bad),1);
+    assert.equal((await call(accept)).status,409,storage);
+    assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_trusted_friendships").get().n,0);
+    assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='friend_requests/r'").get().document_json).status,'pending');
+    sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/race'").run();
+    sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='friends/race'").run();
+  }
+  assert.equal((await call(accept)).status,200);
+  const remove=[{op:'delete',path:'friends/new'},...['alice','bob'].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:-1}}}))];
+  race=()=>sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('friends/race','friends','race','',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'bob'},{stringValue:'alice'}]}}}}),1);
+  assert.notEqual((await call(remove)).status,200);
+  assert.ok(sql.prepare("SELECT path FROM friendbook_cf_firestore_documents WHERE path='friends/new'").get());
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json).friendsCount,1);
+  sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='friends/race'").run();
+  assert.equal((await call(remove)).status,200);
+  sql.close();
+});

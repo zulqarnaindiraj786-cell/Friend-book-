@@ -58,7 +58,8 @@ for(let i=0;i<users;i++){
   if(i%2===0) add('chats',`room${i}`,uid,{participants:[uid,`user${i+1}`],unreadCount:{[uid]:0,[`user${i+1}`]:0}});
 }
 const app=createWorker(async token=>token);
-const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay',D1_INTERACTIONS_ENABLED:'true'};
+const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay',D1_INTERACTIONS_ENABLED:'true',
+  FRIEND_GUARD_INDEXED:process.env.QUOTA_EXPERIMENT_FRIEND_INDEXES==='1'?'true':'false'};
 async function call(uid,path,method='GET',body){
   const res=await app.fetch(new Request(`https://offline.invalid${path}`,{method,
     headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);

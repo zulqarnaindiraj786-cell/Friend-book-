@@ -202,6 +202,32 @@ jobs:
                 exit 0
               fi
             fi
+            if printf '%s\n' "$pending" | grep -q '0084_friend_guard_exceptions.sql'; then
+              # One bounded aggregate only. Refuse truncated/large data, invalid
+              # JSON, excessive exceptions, unknown D1 read cost, or low/delayed
+              # account headroom; never infer a hard billing guarantee.
+              python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+              before_status=${PIPESTATUS[0]}
+              if [ "$before_status" -eq 0 ]; then
+                python3 scripts/loadtest/friend_guard_index_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+                friend_status=${PIPESTATUS[0]}
+              else
+                friend_status=1
+              fi
+              if [ "$friend_status" -eq 0 ]; then
+                python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+                after_status=${PIPESTATUS[0]}
+              else
+                after_status=1
+              fi
+              if [ "$before_status" -ne 0 ] || [ "$friend_status" -ne 0 ] || [ "$after_status" -ne 0 ]; then
+                echo 'Friendship index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=friend-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
             if printf '%s\n' "$pending" | grep -q '0076_legacy_comment_page_indexes.sql'; then
               # Only aggregate bounded comment data; refuse an unexpectedly large
               # index build or exception-heavy data rather than consume quota blindly.

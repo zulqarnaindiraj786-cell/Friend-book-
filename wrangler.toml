@@ -11,6 +11,8 @@ FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
 PAYMENT_ADMIN_UIDS = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2"
 D1_INTERACTIONS_ENABLED = "true"
+# Additive indexes have an automatic fallback when absent; disable to roll back.
+FRIEND_GUARD_INDEXED = "true"
 VIDEO_R2_ENABLED = "true"
 VIDEO_R2_RETENTION_VERIFIED = "true"
 REALTIME_WS_ENABLED = "true"
