@@ -54,11 +54,13 @@ jobs:
           npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > pending-migrations.log 2>&1
           status=$?
           cat pending-migrations.log
-          echo "migrations_list_exit=$status" >> "$GITHUB_ENV"
+          # GITHUB_ENV only reaches later steps, so record the status for the
+          # parser that runs inside this same step.
+          printf '%s' "$status" > migrations-list-exit.txt
           python3 - <<'PY'
-          import os, re, sys
+          import re, sys
           text = open('pending-migrations.log', encoding='utf-8', errors='replace').read()
-          status = int(os.environ.get('migrations_list_exit', '1'))
+          status = int(open('migrations-list-exit.txt').read().strip() or '1')
           names = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
           allowed = {'0086_remove_unused_status_tables.sql'}
           print('::notice::pending migrations seen: ' + str(names or 'none reported'))
