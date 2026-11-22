@@ -853,6 +853,58 @@ test('trusted groups enforce role and membership changes on both document APIs',
   assert.equal((await call('alice',post,'PATCH',{fields:{groupApprovalStatus:'approved',content:'tampered'}})).status,403);
   assert.equal((await call('alice',post,'PATCH',{fields:{groupApprovalStatus:'approved'}})).status,200);
   assert.equal((await call('charlie',post)).status,200);
+
+  // Existing canonical snapshots are guarded inside the write batch; avoid
+  // re-reading each and do not rewrite an already-verified marker.
+  sql.exec(`CREATE TABLE marker_updates(n INTEGER); INSERT INTO marker_updates VALUES(0);
+    CREATE TRIGGER marker_update AFTER UPDATE ON friendbook_cf_interaction_resources
+    WHEN NEW.resource='posts/gpost' BEGIN UPDATE marker_updates SET n=n+1; END;`);
+  const prepared=db.prepare; let redundantReads=0;
+  db.prepare=function(query){
+    if(query==='SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?') redundantReads++;
+    return prepared.call(this,query);
+  };
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'edited once'}})).status,200);
+  assert.equal(redundantReads,0,'canonical group and post snapshots do not get redundant point reads');
+  assert.equal(sql.prepare('SELECT n FROM marker_updates').get().n,0,'verified marker is not rewritten');
+  sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/gpost'").run();
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'edited twice'}})).status,200);
+  assert.equal(sql.prepare("SELECT state FROM friendbook_cf_interaction_resources WHERE resource='posts/gpost'").get().state,'verified');
+  assert.equal(sql.prepare('SELECT n FROM marker_updates').get().n,2,'a staging marker is still promoted');
+  db.prepare=prepared;
+
+  // Membership can be revoked after authorization but before the batch. Its
+  // guarded snapshot must abort the old write and the retry must reject Bob.
+  const groupPath=`groups/${id}`, beforeRace=sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(groupPath).document_json;
+  let raced=false;
+  db.batch=async stmts=>{
+    if(!raced){raced=true;const current=JSON.parse(beforeRace);current.members=current.members.filter(member=>member!=='bob');
+      sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify(current),groupPath);}
+    return actualBatch(stmts);
+  };
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'must not write'}})).status,403);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json).content,'edited twice');
+  db.batch=actualBatch;
+  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(beforeRace,groupPath);
+  // A competing post change is retried against the new canonical state, not
+  // silently overwritten by the previously authorized snapshot.
+  raced=false;
+  db.batch=async stmts=>{
+    if(!raced){raced=true;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.otherEdit','preserved') WHERE path='posts/gpost'").run();}
+    return actualBatch(stmts);
+  };
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'after race'}})).status,200);
+  const afterRace=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json);
+  assert.equal(afterRace.content,'after race'); assert.equal(afterRace.otherEdit,'preserved');
+  db.batch=actualBatch;
+  // Historical group rows still take the checked legacy path, rather than
+  // treating an unverified mirror as a canonical snapshot.
+  const storedGroup=sql.prepare('SELECT * FROM friendbook_cf_firestore_documents WHERE path=?').get(groupPath);
+  sql.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').run(groupPath);
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'legacy group'}})).status,200);
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(
+    storedGroup.path,storedGroup.parent_path,storedGroup.collection_id,storedGroup.doc_id,storedGroup.owner_uid,
+    storedGroup.document_json,storedGroup.create_time,storedGroup.update_time);
   assert.equal((await call('charlie',post,'DELETE')).status,403);
   assert.equal((await call('alice',post,'DELETE')).status,200);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'delete',path:`groups/${id}`}]})).status,403);

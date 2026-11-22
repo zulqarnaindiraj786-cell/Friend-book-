@@ -136,6 +136,20 @@ await measure('repeatStoryView',users-1,()=>wave(users-1,storyView));
 assert.equal(report.workloads.repeatStoryView.changedRowsIncludingTriggers,0,'repeat story views');
 assert.equal(report.workloads.privateGroupProjection.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.tagSearch.changedRowsIncludingTriggers,0);
+// Actual guarded group-post edits from distinct members against a single
+// unchanged trusted group. The verification marker starts out verified.
+const members=Array.from({length:users},(_,i)=>`user${i}`);
+add('groups','quota-group','user0',{name:'quota fixture',privacy:'Private',adminId:'user0',adminIds:['user0'],moderatorIds:[],members,bannedMemberIds:[],requirePostApproval:false});
+sql.prepare("INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES ('groups/quota-group','user0')").run();
+for(let i=0;i<users;i++) {
+  add('posts',`group${i}`,`user${i}`,{authorId:`user${i}`,groupId:'quota-group',privacy:'Public',groupApprovalStatus:'approved',content:'original'});
+  sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES (?, 'verified')").run(`posts/group${i}`);
+}
+await measure('groupPostEdit',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,`/v1/firestore/document?path=posts/group${i}`,'PATCH',{fields:{content:'edited'}});
+  assert.equal(result.data.content,'edited');
+}));
+assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_interaction_resources WHERE resource LIKE 'posts/group%' AND state='verified'").get().n,users);
 // Mirror-backed, identical profile merges and actor-scoped saves are retries,
 // not new user actions. The Worker must still authorize and verify both stores.
 const addMirror=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
