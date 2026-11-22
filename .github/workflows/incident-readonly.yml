@@ -1,0 +1,35 @@
+# Incident diagnostic: bounded, read-only probes; no account or user data returned.
+name: Incident read-only D1 availability
+on:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/incident-readonly.yml']
+permissions: {}
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[incident-readonly]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probe one stored row without exposing it
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json,os,urllib.request,urllib.error,sys,re
+          account='92f3d04598822de2e49e14561218d090'; db='e1c605ca-a50b-46c6-9deb-56dd1f70d163'
+          req=urllib.request.Request(f'https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{db}/query',data=json.dumps({'sql':'SELECT 1 AS present FROM friendbook_cf_firestore_documents LIMIT 1'}).encode(),headers={'Authorization':'Bearer '+os.environ['TOKEN'],'Content-Type':'application/json'})
+          try:
+            with urllib.request.urlopen(req,timeout=30) as r: body=json.load(r)
+          except urllib.error.HTTPError as e:
+            try: body=json.load(e)
+            except Exception: body={}
+            errors=body.get('errors') or []
+            print('::error::D1 API HTTP',e.code,'errors',json.dumps([{'code':x.get('code'),'message':re.sub(r'[^A-Za-z0-9 _.,:;()/-]','',str(x.get('message','')))[:300]} for x in errors]));sys.exit(1)
+          except Exception: sys.exit('D1 API request failed; no changes made')
+          rows=body.get('result') or []
+          if not body.get('success') or len(rows)!=1 or not rows[0].get('success'):
+            print('::error::D1 probe rejected',json.dumps(body.get('errors',[])));sys.exit(1)
+          meta=rows[0].get('meta') or {}
+          print('::notice::Bounded D1 read succeeded; rows_read=',meta.get('rows_read'),'rows_written=',meta.get('rows_written'))
+          PY

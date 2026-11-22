@@ -1,4 +1,5 @@
 # Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
+# Incident follow-up: check current UTC-day usage without making app requests.
 name: Read-only account D1 usage
 on:
   push:
