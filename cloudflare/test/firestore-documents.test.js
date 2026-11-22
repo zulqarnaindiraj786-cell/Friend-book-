@@ -1819,10 +1819,11 @@ test('story engagement records only authorized actor, retries races, and mirrors
  const put=(coll,id,obj)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(obj),1,1);
  put('users','alice',{uid:'alice'});put('users','bob',{uid:'bob'});put('users','carol',{uid:'carol'});
  put('stories','s1',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
- let race=true,blockRace=false;
- const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+ let race=true,blockRace=false,friendRace=false,preferredAccounts=[];
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>{if(q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1') && String(args[0]).startsWith('users/'))preferredAccounts.push(args[0]);return s.get(...args)||null;}};}};},async batch(stmts){
   if(race){race=false;const row=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);row.viewedBy=['carol'];sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='stories/s1'").run(JSON.stringify(row));}
   if(blockRace){blockRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({uid:'alice',blocked:['bob']}));}
+  if(friendRace){friendRace=false;sql.prepare("DELETE FROM friendbook_cf_trusted_friendships WHERE uid_low='alice' AND uid_high='bob'").run();}
   sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
  }};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
@@ -1830,6 +1831,17 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
  let story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.deepEqual(story.viewedBy,['carol','bob']);
+ put('stories','s2',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
+ preferredAccounts=[];
+ assert.equal((await call('bob',{id:'s2',op:'view'})).status,200);
+ assert.ok(!preferredAccounts.includes('users/alice'),'a changing engagement reuses the guarded author snapshot');
+ preferredAccounts=[];
+ assert.equal((await call('bob',{id:'s2',op:'view'})).status,200);
+ assert.ok(preferredAccounts.includes('users/alice'),'a no-op still reads current authorization without committing guards');
+ sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.expiresAt',1) WHERE path='stories/s2'");
+ preferredAccounts=[];
+ assert.equal((await call('bob',{id:'s2',op:'react',emoji:'x'})).status,403);
+ assert.ok(preferredAccounts.includes('users/alice'),'an expired story uses fresh authorization before returning its error');
  const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
  let before=changes();
  assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
@@ -1850,6 +1862,11 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x'})).status,403);
  story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.equal(story.reactions.bob,'❤️'); // a block racing the batch prevented the write
+ sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({uid:'alice'}));
+ friendRace=true;
+ assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x'})).status,403);
+ story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
+ assert.equal(story.reactions.bob,'❤️','friendship removal racing the batch prevents the write');
  sql.close();
 });
 

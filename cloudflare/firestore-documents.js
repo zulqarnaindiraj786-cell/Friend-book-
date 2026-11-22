@@ -3,7 +3,7 @@ import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads, MAX_FEED_ENGAGEMENT_PAGE } from './interactions.js';
-import { requestAccountReads, readD1DocumentFields } from './app-documents.js';
+import { requestAccountReads, readD1DocumentFields, toFirestoreFields } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
@@ -2272,13 +2272,31 @@ async function storyEngagement(request,env,uid,now) {
         readRow(db,`users/${uid}`),readRow(db,`users/${owner}`),
         db.prepare('SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?').bind(low,high).first(),
       ]);
-      if(!viewer || !author || !await contentReadAllowed(db,uid,path))return json({error:'Forbidden'},403);
+      const validState=(doc.viewedBy===undefined || Array.isArray(doc.viewedBy))
+        && (doc.reactions===undefined || (doc.reactions && typeof doc.reactions==='object' && !Array.isArray(doc.reactions)));
+      let next,encoded;
+      if(validState) {
+        next={...doc,viewedBy:[...new Set([...(doc.viewedBy||[]),uid])]};
+        if(input.op==='react')next.reactions={...(doc.reactions||{}),[uid]:input.emoji};
+        encoded=JSON.stringify(next);
+      }
       const expiration=typeof doc.expiresAt==='number'?doc.expiresAt:doc.expiresAt?.millis;
+      let authReads;
+      if(viewer?.[canonicalRootSnapshot] && author?.[canonicalRootSnapshot] && validState
+          && encoded.length<=1_800_000 && (!Number.isFinite(expiration) || expiration>now)
+          && (!row[canonicalRootSnapshot] || encoded!==row.document_json)) {
+        // A changing write atomically guards these exact profile snapshots at
+        // commit and retries if either changes. Reuse them for this request's
+        // authorization instead of fetching both profiles twice. No-op requests
+        // keep the fresh authorization reads because they do not commit guards.
+        const viewerFields=toFirestoreFields(viewer.document_json),authorFields=toFirestoreFields(author.document_json);
+        if(!viewerFields || !authorFields)throw new Error('Invalid stored document');
+        authReads=new Map([[`users/${uid}`,viewerFields],[`users/${owner}`,authorFields]]);
+      }
+      if(!viewer || !author || !await contentReadAllowed(db,uid,path,authReads))return json({error:'Forbidden'},403);
       if(Number.isFinite(expiration) && expiration<=now)return json({error:'Story expired'},403);
-      if((doc.viewedBy!==undefined && !Array.isArray(doc.viewedBy)) || (doc.reactions!==undefined && (!doc.reactions || typeof doc.reactions!=='object' || Array.isArray(doc.reactions))))return json({error:'Invalid story'},409);
-      const next={...doc,viewedBy:[...new Set([...(doc.viewedBy||[]),uid])]};
-      if(input.op==='react')next.reactions={...(doc.reactions||{}),[uid]:input.emoji};
-      const encoded=JSON.stringify(next);if(encoded.length>1_800_000)return json({error:'Document too large'},413);
+      if(!validState)return json({error:'Invalid story'},409);
+      if(encoded.length>1_800_000)return json({error:'Document too large'},413);
       // Reopening a story or retrying an identical reaction must not rewrite
       // two indexed documents and temporary guards. Authorization and expiry
       // checks above still run, and legacy-only rows still promote normally.

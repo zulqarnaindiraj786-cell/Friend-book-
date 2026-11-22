@@ -57,6 +57,8 @@ public class D1DocumentStore {
             new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final PendingPushActors pendingNotificationPushes = new PendingPushActors();
+    private static final long NOTIFICATION_PUSH_COALESCE_MS = 750L;
     private final Map<String, DocumentSnapshot> docCache = java.util.Collections.synchronizedMap(
             new java.util.LinkedHashMap<String, DocumentSnapshot>(256, 0.75f, true) {
                 @Override protected boolean removeEldestEntry(Map.Entry<String, DocumentSnapshot> entry) {
@@ -427,7 +429,23 @@ public class D1DocumentStore {
     }
 
     public void refreshInboxFromPush(String type) {
-        notifyCollectionListeners("notifications");
+        final String actor = authenticatedUid();
+        // Combine a short burst of notification pushes without using their
+        // untrusted content as data. The first push starts a fixed timer, so
+        // continuous traffic cannot postpone refresh forever. Each account has
+        // its own pending slot, and separate commits still invalidate immediately.
+        if (pendingNotificationPushes.begin(actor)) {
+            boolean queued = mainHandler.postDelayed(() -> {
+                // Clear before scheduling: a push arriving during this refresh
+                // starts another timer rather than losing an update.
+                pendingNotificationPushes.finish(actor);
+                if (actor.equals(authenticatedUid())) notifyCollectionListeners("notifications");
+            }, NOTIFICATION_PUSH_COALESCE_MS);
+            if (!queued) {
+                pendingNotificationPushes.finish(actor);
+                if (actor.equals(authenticatedUid())) notifyCollectionListeners("notifications");
+            }
+        }
         if ("friend_request".equals(type) || "friend_accept".equals(type) || "friend_accepted".equals(type)) {
             notifyCollectionListeners("friend_requests");
             notifyCollectionListeners("friends");
