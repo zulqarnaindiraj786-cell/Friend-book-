@@ -54,11 +54,31 @@ Consequences that the owner must accept (they follow directly from "no cron"):
 
 ## Proof status
 
-* Static: `npm test` 230/230 with the new regression test.
-* Compiled APK: string scan in the proof workflow.
-* Live traffic: `.github/workflows/presence-cron-proof.yml` tails production for
-  about two minutes and prints aggregate counts of presence-route requests and
-  non-HTTP (cron) invocations. Production cron lines stay non-zero until the
-  Worker is uploaded without `[triggers]`; that upload is a separate decision
-  because the existing deploy workflow applies migration `0086` (the seven-table
-  DROP) in the same run, and that DROP is still awaiting its own backup.
+Static and build proof (run 45028418352, commit on this branch):
+* `npm test` 230/230, including the new scan for `/v1/presence`, `presence`
+  and `onlineDot` in every app source file and Worker runtime file.
+* `:app:assembleDebug` succeeded; the compiled `classes*.dex` contains no
+  `/v1/presence`, no `com/friendbook…presence` class and no `onlineDot`
+  identifier. Nine raw `presence` substrings remain in third-party library
+  strings; the scan fails only on our own identifiers.
+* `wrangler.toml` has no `[triggers]` block and no `crons=`, and `worker.js`
+  exports no `scheduled` handler (checked by importing the Worker in CI).
+
+Deployed cron state:
+* `GET …/workers/scripts/rough-firefly-dd7b/schedules` returned two triggers
+  (`* * * * *`, `*/15 * * * *`) before the change.
+* `PUT` with an empty array cleared them; a re-read immediately after and 75
+  seconds later both returned zero triggers, so no cron can run.
+* A two-minute `wrangler tail` sample after that change reported
+  `cron_invocations: 0`, `other_non_http_events: 0`.
+
+Residual, not fixable from this repository alone:
+* A deployed Worker still runs the previous code until it is uploaded, so
+  `/v1/presence/socket` can still answer (a 403 was sampled). Deleting those
+  routes needs a Worker upload, and the existing deploy workflow applies
+  migration `0086` (the seven-table DROP) in the same run.
+* Installed old APKs keep calling status endpoints; those request lines appear
+  in Cloudflare logs even when the Worker answers 404. Only an app update
+  removes them.
+* Emulator proof of "ChatList open for two minutes" was not possible here: the
+  sandbox has no Android SDK, and the app requires a real login on the emulator.
