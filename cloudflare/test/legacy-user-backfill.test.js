@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {readPlan, promote, statement, planCandidate, classifyRoot, previewRoots} from '../../scripts/loadtest/backfill_legacy_users.mjs';
+import {canReadFriendRequest, canDeleteFriendRequest} from '../social-access.js';
 
 function fixture(t) {
  const db=new DatabaseSync(':memory:');t.after(()=>db.close());
@@ -70,4 +71,28 @@ test('moving preview scans only unshadowed rows, buckets unknown collections, an
  assert.equal((await previewRoots(query,1,1)).truncated,true);
  await assert.rejects(previewRoots(async()=>({results:[],meta:{}})),/accounting/);
  assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents').get().n,1);
+});
+
+test('friend request promotion is bounded, guarded, and retains read/delete authorization',async t=>{
+ const {db,query}=fixture(t);
+ const put=(id,fromUid,toUid)=>db.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)')
+   .run(`friend_requests/${id}`,'friend_requests',id,fromUid,JSON.stringify({id,fromUid,toUid,status:'pending'}),1);
+ put('a','alice','bob'); put('b','carol','dave');
+ const plan=await readPlan(query,'friend_requests');
+ assert.equal(plan.legacy_only,2);
+ for (const p of plan.planned) {
+   const old=JSON.parse(p.source.document_json), now=JSON.parse(p.row.document_json);
+   for(const uid of ['alice','bob','carol','dave','stranger']) {
+     assert.equal(canReadFriendRequest(uid,old),canReadFriendRequest(uid,now));
+     assert.equal(canDeleteFriendRequest(uid,old),canDeleteFriendRequest(uid,now));
+   }
+ }
+ db.prepare('UPDATE friendbook_cf_documents SET updated_at=2 WHERE path=?').run('friend_requests/b');
+ const guarded=statement(plan.planned);
+ assert.equal((await query(guarded.sql,guarded.params)).results.length,0);
+ assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents').get().n,0);
+ const refreshed=await readPlan(query,'friend_requests');
+ assert.deepEqual(await promote(query,refreshed),{before:2,inserted:2,after:0});
+ assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,2);
+ await assert.rejects(readPlan(query,'messages'),/unsupported collection/);
 });

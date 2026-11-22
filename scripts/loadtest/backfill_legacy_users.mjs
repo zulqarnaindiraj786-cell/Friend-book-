@@ -1,4 +1,5 @@
-// Strict, bounded and race-guarded promotion of at most two legacy user rows.
+// Strict, bounded and race-guarded promotion of at most two legacy rows from
+// an explicitly allowlisted root collection. No nested-message cutover.
 // Never logs paths, profile contents, authorization headers, or SQL parameters.
 import { isDeepStrictEqual } from 'node:util';
 import { appDocumentToFirestoreRow } from '../../cloudflare/firestore-documents.js';
@@ -6,18 +7,19 @@ import { toFirestoreFields, toPlainDocument } from '../../cloudflare/app-documen
 
 const INVENTORY = `WITH sample AS MATERIALIZED (
  SELECT path FROM friendbook_cf_documents INDEXED BY idx_friendbook_cf_documents_collection_updated
- WHERE collection='users' LIMIT 1001
+ WHERE collection=? LIMIT 1001
 ) SELECT COUNT(*) AS sampled, COALESCE(SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END),0) AS legacy_only
  FROM sample LEFT JOIN friendbook_cf_firestore_documents f ON f.path=sample.path`;
 const CANDIDATES = `SELECT l.path,l.collection,l.doc_id,l.owner_uid,l.document_json,l.updated_at
  FROM friendbook_cf_documents l INDEXED BY idx_friendbook_cf_documents_collection_updated
- WHERE l.collection='users' AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)
+ WHERE l.collection=? AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)
  LIMIT 3`;
 const FIELDS = ['path','parent_path','collection_id','doc_id','owner_uid','document_json','create_time','update_time'];
 
-export function planCandidate(source) {
-  if (!source || source.collection !== 'users' || typeof source.path !== 'string'
-      || source.path !== `users/${source.doc_id}` || !source.doc_id || source.doc_id.includes('/')
+const PROMOTION_COLLECTIONS = new Set(['users','friend_requests']);
+export function planCandidate(source, collection='users') {
+  if (!PROMOTION_COLLECTIONS.has(collection) || !source || source.collection !== collection || typeof source.path !== 'string'
+      || source.path !== `${collection}/${source.doc_id}` || !source.doc_id || source.doc_id.includes('/')
       || typeof source.owner_uid !== 'string' || typeof source.document_json !== 'string'
       || source.document_json.length > 100_000 || !Number.isSafeInteger(source.updated_at))
     throw Error('unsafe source shape');
@@ -43,32 +45,34 @@ export function planCandidate(source) {
     throw Error(plainEqual ? 'typed field projection differs' : 'plain document projection differs');
   }
   const data=JSON.parse(row.document_json);
-  for (const key of ['followers','following'])
+  if (collection==='users') for (const key of ['followers','following'])
     if (Array.isArray(data[key]) && data[key].length > 20) throw Error('follow-index fanout cap');
   return {source,row};
 }
 
-export async function readPlan(query) {
-  const inventory = (await query(INVENTORY, [])).results;
+export async function readPlan(query, collection='users') {
+  if (!PROMOTION_COLLECTIONS.has(collection)) throw Error('unsupported collection');
+  const inventory = (await query(INVENTORY, [collection])).results;
   if (inventory.length!==1 || !Number.isInteger(inventory[0].sampled) || inventory[0].sampled>=1001
       || !Number.isInteger(inventory[0].legacy_only) || inventory[0].legacy_only<0 || inventory[0].legacy_only>2)
     throw Error('user inventory unsafe');
   const {sampled,legacy_only} = inventory[0];
-  const sources = (await query(CANDIDATES, [])).results;
+  const sources = (await query(CANDIDATES, [collection])).results;
   if (sources.length!==legacy_only) throw Error('inventory changed');
-  const planned = sources.map(planCandidate);
-  return {sampled,legacy_only,planned};
+  const planned = sources.map(source=>planCandidate(source,collection));
+  return {sampled,legacy_only,planned,collection};
 }
 
 // All candidates share a guard evaluated in the same SQL statement as insert.
 // Any changed source or newly created canonical row prevents *all* inserts.
 export function statement(planned) {
-  if (!planned.length || planned.length > 2) throw Error('unsafe plan length');
+  if (!planned.length || planned.length > 2 || !PROMOTION_COLLECTIONS.has(planned[0]?.source?.collection)
+      || planned.some(p=>p.source.collection!==planned[0].source.collection)) throw Error('unsafe plan length');
   const values=[], selections=[], guards=[];
   for (const {source,row} of planned) {
     const slots=FIELDS.map(k => { values.push(row[k]); return `?${values.length}`; });
-    const sourceSlots=['owner_uid','document_json','updated_at'].map(k=>{values.push(source[k]); return `?${values.length}`;});
-    guards.push(`EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=${slots[0]} AND collection='users' AND doc_id=${slots[3]} AND owner_uid=${sourceSlots[0]} AND document_json=${sourceSlots[1]} AND updated_at=${sourceSlots[2]}) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=${slots[0]})`);
+    const sourceSlots=['owner_uid','document_json','updated_at','collection'].map(k=>{values.push(source[k]); return `?${values.length}`;});
+    guards.push(`EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=${slots[0]} AND collection=${sourceSlots[3]} AND doc_id=${slots[3]} AND owner_uid=${sourceSlots[0]} AND document_json=${sourceSlots[1]} AND updated_at=${sourceSlots[2]}) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=${slots[0]})`);
     selections.push(slots.join(','));
   }
   const condition=guards.map(g=>`(${g})`).join(' AND ');
@@ -87,7 +91,7 @@ export async function promote(query, plan) {
     if (got.length!==1 || !FIELDS.every(key=>isDeepStrictEqual(got[0][key],row[key])))
       throw Error('post-insert verification failed');
   }
-  const after=await readPlan(query);
+  const after=await readPlan(query,plan.collection);
   if (after.legacy_only!==0) throw Error('coverage changed during verification');
   return {before:plan.legacy_only, inserted:inserted.length, after:after.legacy_only};
 }
@@ -169,11 +173,12 @@ if (process.argv[1] && import.meta.url===new URL(`file://${process.argv[1]}`).hr
       console.log('::notice:: Moving read-only root preview '+JSON.stringify(result));
       console.log('::warning:: Root preview does not verify nested-chat message coverage or enable cutover.');
     } else {
-      const plan=await readPlan(remote);
-      console.log(`::notice:: Verified candidate plan: sampled=${plan.sampled}, legacy_only_before=${plan.legacy_only}`);
+      const collection=process.argv.includes('--friend-requests')?'friend_requests':'users';
+      const plan=await readPlan(remote,collection);
+      console.log(`::notice:: Verified ${collection} candidate plan: sampled=${plan.sampled}, legacy_only_before=${plan.legacy_only}`);
       if (process.argv.includes('--apply')) {
         const result=await promote(remote,plan);
-        console.log(`::notice:: User backfill verification: legacy_only_before=${result.before}, inserted=${result.inserted}, legacy_only_after=${result.after}`);
+        console.log(`::notice:: ${collection} backfill verification: legacy_only_before=${result.before}, inserted=${result.inserted}, legacy_only_after=${result.after}`);
       } else console.log('::notice:: Read-only preview; no documents changed.');
     }
   } catch (error) {

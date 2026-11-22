@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promotion:
-    if: contains(github.event.head_commit.message, '[legacy-user-preview]') || contains(github.event.head_commit.message, '[legacy-user-backfill]') || contains(github.event.head_commit.message, '[legacy-root-preview]')
+    if: contains(github.event.head_commit.message, '[legacy-user-preview]') || contains(github.event.head_commit.message, '[legacy-user-backfill]') || contains(github.event.head_commit.message, '[legacy-root-preview]') || contains(github.event.head_commit.message, '[legacy-request-preview]') || contains(github.event.head_commit.message, '[legacy-request-backfill]')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -40,6 +40,23 @@ jobs:
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
           node scripts/loadtest/backfill_legacy_users.mjs --preview-roots
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+      - name: Compare bounded friend-request candidates (read-only)
+        if: contains(github.event.head_commit.message, '[legacy-request-preview]') || contains(github.event.head_commit.message, '[legacy-request-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friend-requests
+      - name: Execute bounded friend-request promotion
+        if: contains(github.event.head_commit.message, '[legacy-request-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friend-requests --apply
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
       - name: Execute the explicitly requested, bounded user promotion
         if: contains(github.event.head_commit.message, '[legacy-user-backfill]')
         env:
