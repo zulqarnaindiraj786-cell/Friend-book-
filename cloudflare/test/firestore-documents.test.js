@@ -638,7 +638,8 @@ test('existing friendships are read-only and only visible to their participants 
 
 test('friend acceptance commits only a recipient-authorized pending request once and atomically', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'));sql.exec(readFileSync(new URL('../migrations/0019_trusted_friendships.sql',import.meta.url),'utf8'));
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  let snapshotRereads=0;
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>{if(query==='SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?')snapshotRereads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   for(const uid of ['alice','bob','mallory']) assert.equal((await call(uid,`/v1/firestore/document?path=users/${uid}`,'PUT',{data:{uid,friendsCount:0}})).status,200);
@@ -658,7 +659,9 @@ test('friend acceptance commits only a recipient-authorized pending request once
   const modified=structuredClone(ops); modified[2].updates.friendsCount.value=200;
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:modified})).status,403);
   assert.equal((await call('bob','/v1/firestore/document?path=users/bob','PATCH',{fields:{friendsCount:99}})).status,403);
+  snapshotRereads=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:ops})).status,200);
+  assert.equal(snapshotRereads,0,'canonical acceptance snapshots are guarded without point re-reads');
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/alice').document_json).friendsCount,1);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/bob').document_json).friendsCount,1);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`friend_requests/${id}`).document_json).status,'accepted');
@@ -702,8 +705,9 @@ test('friend acceptance commits only a recipient-authorized pending request once
   };
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,409);
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_trusted_friendships').get().n,1);
-  db.batch=actualBatch;
+  db.batch=actualBatch;snapshotRereads=0;
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:remove})).status,200);
+  assert.equal(snapshotRereads,0,'canonical removal snapshots are guarded without point re-reads');
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_trusted_friendships').get().n,0);
   assert.equal(await hasD1Friendship(db,'bob','alice'),null);
   assert.equal(sql.prepare('SELECT count(*) AS n FROM friendbook_cf_firestore_documents WHERE path=?').get('friends/random1').n,0);

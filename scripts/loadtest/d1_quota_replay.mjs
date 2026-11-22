@@ -269,6 +269,21 @@ await measure('firstFollow',users/2,()=>wave(users/2,async i=>{
     {op:'set',path:`users/${target}`,merge:true,data:{followers:{__fieldValue:'arrayUnion',values:[actor]}}}];
   assert.equal((await batch(actor,operations)).ok,true);
 }));
+// Guarded acceptance and removal preserve duplicate detection and both counters.
+const friendshipPairs=Math.min(users/2,100);
+for(let i=0;i<friendshipPairs;i++)add('friend_requests',`quota${i}`,`user${2*i}`,{fromUid:`user${2*i}`,toUid:`user${2*i+1}`,status:'pending'});
+await measure('friendAcceptance',friendshipPairs,()=>wave(friendshipPairs,async i=>{
+  const a=`user${2*i}`,b=`user${2*i+1}`;
+  await batch(b,[{op:'update',path:`friend_requests/quota${i}`,updates:{status:'accepted'}},
+    {op:'set',path:`friends/quota${i}`,data:{participants:[a,b],createdAt:{__fieldValue:'serverTimestamp'}}},
+    ...[a,b].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:1}}}))]);
+}));
+await measure('unfriend',friendshipPairs,()=>wave(friendshipPairs,async i=>{
+  const a=`user${2*i}`,b=`user${2*i+1}`;
+  await batch(b,[{op:'delete',path:`friends/quota${i}`},
+    ...[a,b].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:-1}}}))]);
+}));
+assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_trusted_friendships WHERE friend_path LIKE 'friends/quota%'").get().n,0);
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 // A busy synthetic legacy post with a small mix of exception encodings.
