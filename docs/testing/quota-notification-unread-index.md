@@ -13,7 +13,7 @@ Simply dropping the shorter index is **not** safe for quota: SQLite can choose t
 
 ## Rollout and rollback
 
-Compatibility Worker deployment 44986601115 and validation 44986601140 succeeded before the migration. Android verification 44986601144 hit a Robolectric Maven-fetch IOException; Android source was unchanged, and the migration deployment must run a fresh verification.
+Compatibility Worker deployment 44986601115 and validation 44986601140 succeeded before the migration. Android verification 44986601144 hit a Robolectric Maven-fetch IOException. Migration deployment 44986770253 then applied the migration and passed read-only connectivity; Worker validation 44986770415 and the fresh Android compile/unit verification 44986770326 succeeded. No signed bundle was built.
 
 Roll back the Worker to `712e1fb` or a newer compatible version. Before running older Worker code that does not pin the replacement index, recreate the old index in a controlled migration, allowing for index-build quota and time:
 
