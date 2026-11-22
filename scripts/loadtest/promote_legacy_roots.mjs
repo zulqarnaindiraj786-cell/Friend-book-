@@ -16,6 +16,9 @@ export const BULK_COLLECTIONS = new Set(['chats', 'messages', 'notifications', '
 
 const FIELDS = ['path', 'parent_path', 'collection_id', 'doc_id', 'owner_uid', 'document_json', 'create_time', 'update_time'];
 const SAFE = new Set(['equivalent_root_only', 'facade_projection_diff']);
+// D1 rejects more than 100 bound variables per statement. Each guarded row
+// binds 13 values (8 canonical columns + 5 source guards), so seven rows fit.
+export const MAX_ROWS_PER_STATEMENT = 7;
 
 // Keyset page over one collection. The composite index (collection, updated_at)
 // avoids a table scan; the NOT EXISTS probe is answered by the canonical
@@ -91,7 +94,7 @@ function differingFields(fromJson, toJson) {
 // its own NOT EXISTS guard, so a concurrent edit or a concurrent canonical
 // write can only skip that single row, never write a stale copy.
 export function batchStatement(planned) {
-  if (!Array.isArray(planned) || !planned.length || planned.length > 100
+  if (!Array.isArray(planned) || !planned.length || planned.length > MAX_ROWS_PER_STATEMENT
       || planned.some(entry => entry?.status !== 'promote' || entry.row.collection_id !== planned[0].row.collection_id))
     throw Error('unsafe plan length');
   const values = [], selections = [], guards = [];
@@ -152,8 +155,8 @@ export async function promoteCollection(query, collection, {
       } else if (prepared[index].facadeChanged) facades++;
     });
     const planned = prepared.filter(entry => entry.status === 'promote');
-    for (let start = 0; start < planned.length; start += 100) {
-      const chunk = planned.slice(start, start + 100);
+    for (let start = 0; start < planned.length; start += MAX_ROWS_PER_STATEMENT) {
+      const chunk = planned.slice(start, start + MAX_ROWS_PER_STATEMENT);
       const action = batchStatement(chunk);
       const done = (await query(action.sql, action.params)).results || [];
       await verifyBatch(query, chunk.filter(entry => done.some(hit => hit.path === entry.row.path)));

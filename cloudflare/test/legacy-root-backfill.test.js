@@ -63,5 +63,6 @@ test('unsafe shapes and stale metadata never get promoted', () => {
   assert.equal(prepare({ ...base, updated_at: 1.5 }).reason, 'unsafe_shape');
   assert.equal(prepare({ ...base, document_json: 'x'.repeat(100_001) }).reason, 'unsafe_shape');
   assert.throws(() => batchStatement([]), /unsafe plan length/);
-  assert.throws(() => batchStatement(Array.from({ length: 101 }, () => prepare(base))), /unsafe plan length/);
+  assert.equal(batchStatement(Array.from({ length: 7 }, () => prepare(base))).params.length, 91);
+  assert.throws(() => batchStatement(Array.from({ length: 8 }, () => prepare(base))), /unsafe plan length/);
 });
