@@ -2956,8 +2956,11 @@ async function livePk(request,db,uid,now) {
   try {
     if (action==='room') {
       const row=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE status='active' AND expires_at>? AND (room_a=? OR room_b=?) LIMIT 1`).bind(now,input.room,input.room).first();
-      if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch') || !await authorizeLiveMedia(db,row.room_b,uid,'watch')
-          || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish') || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish')) return json({status:'idle'});
+      // The four checks belong to one request. Share in-flight room/account
+      // reads only here; the next poll rechecks fresh privacy and ban state.
+      const reads=new Map();
+      if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch',reads) || !await authorizeLiveMedia(db,row.room_b,uid,'watch',reads)
+          || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish',reads) || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish',reads)) return json({status:'idle'});
       const [a,b]=await Promise.all([readRow(db,`users/${row.host_a}`),readRow(db,`users/${row.host_b}`)]);
       const name=r=>r ? String(decodeValue(JSON.parse(r.document_json)).displayName||'').slice(0,200) : '';
       return json({...row,name_a:name(a)||'Host A',name_b:name(b)||'Host B'});

@@ -79,11 +79,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private MessagesAdapter adapter;
     private RecyclerView rv;
     private ListenerRegistration msgReg, userReg, roomReg;
-    private Presence.Handle presence, typingH;
+    private Presence.Handle presence;
     private boolean peerOnline = false;
     private long peerLastSeen = 0L;
-    private boolean typingSent;
-    private long lastTypingPush;
     private boolean initialScrollDone = false;
     private boolean forceScrollBottom = false;
     private boolean unreadResetOnce = false;
@@ -442,15 +440,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 boolean has = s.toString().trim().length() > 0;
                 send.setVisibility(has ? View.VISIBLE : View.GONE);
                 quick.setVisibility(has ? View.GONE : View.VISIBLE);
-                long now = System.currentTimeMillis();
-                if (has && (!typingSent || now - lastTypingPush > 2000)) {
-                    Presence.setTyping(chatId, true);
-                    typingSent = true;
-                    lastTypingPush = now;
-                } else if (!has && typingSent) {
-                    Presence.setTyping(chatId, false);
-                    typingSent = false;
-                }
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -461,11 +450,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (presenceTv == null || isGroupChat || isTeamChat) return;
         if (peerOnlineDot != null) {
             peerOnlineDot.setVisibility(peerOnline ? View.VISIBLE : View.GONE);
-        }
-        if (typingOn) {
-            presenceTv.setText("typing…");
-            presenceTv.setVisibility(View.VISIBLE);
-            return;
         }
         String label = Presence.formatActiveStatus(peerOnline, peerLastSeen);
         if (label.isEmpty()) {
@@ -563,10 +547,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             presence = Presence.watch(peerId, (online, lastSeen) -> {
                 peerOnline = online;
                 peerLastSeen = lastSeen;
-                refreshPresenceText();
-            });
-            typingH = Presence.watchTyping(chatId, Fb.uid(), t -> {
-                typingOn = t;
                 refreshPresenceText();
             });
         }
@@ -809,8 +789,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         });
     }
 
-    private boolean typingOn = false;
-
     @Override protected void onResume() {
         super.onResume();chatVisible=true;receiptFailed.clear();unreadResetOnce=false;markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
     }
@@ -826,8 +804,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();
         if (presence != null) presence.close();
-        if (typingH != null) typingH.close();
-        if (typingSent) Presence.setTyping(chatId, false);
         MessagesAdapter.stopVoice();
         if (recording) { stopRecording(false); }
     }
@@ -1093,7 +1069,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (rawOverride == null && imageUrl == null && input != null) {
             input.setText("");
         }
-        typingSent = false;
 
         com.friendbook.social.d1.documents.DocumentReference msgRef =
                 Fb.db().collection("chats").document(chatId).collection("messages").document();

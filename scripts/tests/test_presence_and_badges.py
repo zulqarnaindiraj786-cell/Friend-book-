@@ -65,9 +65,10 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertIn('timeHandler.postDelayed(deferredOffline, 500L)',stopped)
         self.assertIn('Presence.goOffline()',source.split('private final Runnable deferredOffline',1)[1].split('private final Runnable timeTick',1)[0])
         self.assertIn('PushManager.init(this)',before_lifecycle)
-    def test_online_status_is_off_without_disabling_typing(self):
+    def test_online_status_and_typing_are_off_without_disabling_calls(self):
         gradle=(ROOT/'app/build.gradle').read_text()
         self.assertIn("buildConfigField 'boolean', 'ONLINE_STATUS_ENABLED', 'false'",gradle)
+        self.assertIn("buildConfigField 'boolean', 'TYPING_ENABLED', 'false'",gradle)
         self.assertIn("buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'",gradle)
         source=(JAVA/'core/Presence.java').read_text()
         for name in ['public static void init()', 'public static void goOffline()', 'public static void setActiveStatusVisible(boolean visible)']:
@@ -76,8 +77,15 @@ class PresenceBadgeTest(unittest.TestCase):
         watch=method(source,'public static Handle watchPresence(String uid, PresenceCallback cb)')
         self.assertLess(watch.index('if (!BuildConfig.ONLINE_STATUS_ENABLED)'),watch.index('Fb.db()'))
         self.assertIn('cb.onPresence(false, 0L)',watch)
-        self.assertIn('sendCloudflareTyping(chatId, typing)',method(source,'public static void setTyping(String chatId, boolean typing)'))
-        self.assertIn('fetchCloudflareTyping',method(source,'public static Handle watchTyping('))
+        write=method(source,'public static void setTyping(String chatId, boolean typing)')
+        self.assertLess(write.index('if (!BuildConfig.TYPING_ENABLED) return;'),write.index('Fb.uid()'))
+        typing=method(source,'public static Handle watchTyping(')
+        self.assertLess(typing.index('if (!BuildConfig.TYPING_ENABLED)'),typing.index('Fb.db()'))
+        self.assertIn('cb.accept(false)',typing)
+        chat=(JAVA/'chat/ChatActivity.java').read_text()
+        self.assertNotIn('Presence.setTyping(',chat)
+        self.assertNotIn('Presence.watchTyping(',chat)
+        self.assertIn('startCallSignal',source)
         self.assertIn('BuildConfig.ONLINE_STATUS_ENABLED && u.showActiveStatus', (JAVA/'models/Models.java').read_text())
         self.assertNotIn('Active status (Online green dot)',(JAVA/'settings/SettingsActivity.java').read_text())
     def test_manual_inbox_has_no_background_presence_reads(self):

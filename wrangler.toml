@@ -18,6 +18,8 @@ VIDEO_R2_RETENTION_VERIFIED = "true"
 REALTIME_WS_ENABLED = "true"
 # Green-dot / last-seen presence disabled; chat typing remains enabled.
 ONLINE_STATUS_DISABLED = "true"
+# Typing indicators are disabled; message and call routes remain enabled.
+TYPING_DISABLED = "true"
 CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
 CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
 

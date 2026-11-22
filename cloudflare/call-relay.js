@@ -1,11 +1,12 @@
 import { authorizeCallMedia } from './call-access.js';
-import { accountStatus } from './account-access.js';
 const MAX=98304;
 export class CallRelay {
   constructor(state,env) { this.state=state; this.env=env; }
   async allowed(chat,call,uid) {
-    const status=await accountStatus(this.env.DB,uid);
-    return !status.disabled && !status.suspended && await authorizeCallMedia(this.env.DB,chat,call,uid);
+    // authorizeCallMedia already reads and checks both current accounts,
+    // including bans, suspensions and blocks, on every renewal. A separate
+    // accountStatus lookup would reread the same caller on every heartbeat.
+    return authorizeCallMedia(this.env.DB,chat,call,uid);
   }
   async fetch(request) {
     const {chat,call,uid}=Object.fromEntries(new URL(request.url).searchParams);

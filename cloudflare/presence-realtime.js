@@ -158,6 +158,10 @@ export async function presenceRealtime(request, env, identity) {
       if (!body || typeof body.typing !== 'boolean' || Object.keys(body).some(k=>!['typing','sessionId'].includes(k))
           || (body.sessionId!==undefined && !validId(body.sessionId))) return json({ error: 'Invalid typing state' }, 400);
     }
+    // A disabled indicator returns the same constant for every valid chat ID,
+    // so no chat existence, membership, or activity is disclosed. Avoid all
+    // D1 reads/writes for legacy clients while preserving their response shape.
+    if (env.TYPING_DISABLED === 'true') return json({chatId,typing:false});
     let room;
     try {
       room = await loadChat(env.DB, chatId);

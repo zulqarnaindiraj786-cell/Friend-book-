@@ -332,6 +332,7 @@ public class Presence {
 
     /** Set typing state for current user in a chat (Cloudflare HTTP). */
     public static void setTyping(String chatId, boolean typing) {
+        if (!BuildConfig.TYPING_ENABLED) return;
         String uid = Fb.uid();
         if (uid == null || chatId == null) return;
 
@@ -378,6 +379,10 @@ public class Presence {
     /** Watch whether any OTHER participant in a chat is typing (Cloudflare HTTP polling + Firestore). */
     public static Handle watchTyping(String chatId, String myUid, java.util.function.Consumer<Boolean> cb) {
         Handle h = new Handle();
+        if (!BuildConfig.TYPING_ENABLED) {
+            H.post(() -> { if (!h.closed) cb.accept(false); });
+            return h;
+        }
         final boolean[] fsTyping = {false};
         final boolean[] cfTyping = {false};
 

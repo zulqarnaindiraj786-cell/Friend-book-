@@ -107,6 +107,11 @@ export function createWorker(verify = verifyFirebaseToken) {
       let uid;
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
+      // Disabled typing exposes no account/chat data and cannot mutate state.
+      // Handle it before the account D1 lookup so older polling clients do not
+      // burn rows; signed identity and input validation still apply.
+      if (env.TYPING_DISABLED === 'true' && /^\/v1\/presence\/typing\/[^/]+$/.test(path))
+        return presenceRealtime(request,env,{uid});
       // Keep the own-profile read available so the Android app can detect a ban
       // and sign out, but reject all other operations for disabled accounts.
       const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'

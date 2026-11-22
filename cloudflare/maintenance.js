@@ -64,7 +64,7 @@ async function prunePresence(db, bucket, cutoff) {
   await bucket.put(PRESENCE_CURSOR_KEY,JSON.stringify({v:1,after:[last.last_seen,last.rowid]}));
 }
 
-export async function pruneExpiredRealtime(db, now, bucket, onlineStatusDisabled = false) {
+export async function pruneExpiredRealtime(db, now, bucket, onlineStatusDisabled = false, typingDisabled = false) {
   if (!db) throw new Error('D1 binding missing');
   const cutoff = now - RETENTION_MS;
   // Retain at least one row per uid so old legacy presence cannot reappear.
@@ -72,15 +72,15 @@ export async function pruneExpiredRealtime(db, now, bucket, onlineStatusDisabled
   // checks or typing cleanup; it must not fall back to an unbounded scan.
   const results = await Promise.allSettled([
     ...(onlineStatusDisabled ? [] : [prunePresence(db,bucket,cutoff)]),
-    db.prepare(`DELETE FROM friendbook_cf_typing_sessions WHERE rowid IN (
+    ...(typingDisabled ? [] : [db.prepare(`DELETE FROM friendbook_cf_typing_sessions WHERE rowid IN (
       SELECT rowid FROM friendbook_cf_typing_sessions WHERE updated_at < ? ORDER BY updated_at LIMIT ?
-    )`).bind(cutoff,BATCH_SIZE).run(),
+    )`).bind(cutoff,BATCH_SIZE).run()]),
   ]);
   if (results.some(result => result.status === 'rejected')) throw new Error('Realtime maintenance incomplete');
 }
 
 export async function runMaintenance(env, {now = Date.now(), videoCleanup = retryVideoCleanup, broadcastPush = drainBroadcastPush, report = console.error} = {}) {
-  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now, env.VIDEO_BUCKET, env.ONLINE_STATUS_DISABLED === 'true')], ['temporary-video', () => videoCleanup(env)]];
+  const jobs = [['realtime', () => pruneExpiredRealtime(env.DB, now, env.VIDEO_BUCKET, env.ONLINE_STATUS_DISABLED === 'true', env.TYPING_DISABLED === 'true')], ['temporary-video', () => videoCleanup(env)]];
   if (broadcastPush) jobs.push(['broadcast-push', () => broadcastPush(env,now)]);;
   await Promise.all(jobs.map(async ([job, run]) => {
     try { await run(); }
