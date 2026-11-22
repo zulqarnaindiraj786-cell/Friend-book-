@@ -9,6 +9,7 @@ on:
     paths:
       - '.github/workflows/legacy-roots-backfill.yml'
       - 'scripts/loadtest/promote_legacy_roots.mjs'
+      - 'scripts/loadtest/verify_root_backfill.py'
       - 'cloudflare/test/legacy-root-backfill.test.js'
 permissions:
   contents: read
